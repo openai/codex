@@ -1,7 +1,9 @@
-//! Owns the provisioning pipe and its security descriptor for the listener lifetime.
+//! Owns a provisioning pipe and the sandbox group generation in its deny rule.
+//! Replaces stale listeners only after a response, closing the old pipe before creating another.
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use codex_windows_sandbox::ensure_sandbox_users_group;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
@@ -25,13 +27,38 @@ pub(super) struct ProvisioningListener {
 
 impl ProvisioningListener {
     pub(super) fn open() -> Result<Self> {
+        let pipe_name = codex_windows_sandbox::windows_sandbox_service_pipe_name()?;
+        let _setup_lock =
+            codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+        if crate::installation_record::load()?
+            .and_then(|record| record.runtime)
+            .is_some_and(|runtime| runtime.retiring.is_some())
+        {
+            bail!("interrupted sandbox cleanup requires repair");
+        }
         let sandbox_sid = ensure_sandbox_users_group()?;
-        let (descriptor, pipe) = create_provisioning_pipe(super::PIPE_NAME, &sandbox_sid)?;
+        let (descriptor, pipe) = create_provisioning_pipe(&pipe_name, &sandbox_sid)?;
         Ok(Self {
             pipe,
             sandbox_sid,
             _descriptor: descriptor,
         })
+    }
+
+    pub(super) fn refresh(self) -> Result<Self> {
+        let current_group = {
+            let _setup_lock =
+                codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+            codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
+        };
+        if current_group.is_ok_and(|current| current == self.sandbox_sid) {
+            unsafe { pipes::DisconnectNamedPipe(self.pipe.0) };
+            return Ok(self);
+        }
+        // A stale deny SID was refused before dispatch. Close this first-instance
+        // pipe before rebuilding its descriptor for the current group generation.
+        drop(self);
+        Self::open()
     }
 }
 

@@ -9,11 +9,16 @@ use std::ptr;
 
 use anyhow::Context;
 use anyhow::Result;
+pub(crate) use codex_windows_sandbox::CORE_INSTALLATION_KEY;
 pub(crate) use codex_windows_sandbox::DesktopInstallation;
+pub(crate) use codex_windows_sandbox::INSTALLATION_KEY;
+pub(crate) use codex_windows_sandbox::INSTALLATION_VALUE;
 pub(crate) use codex_windows_sandbox::InstallationRecord;
-pub(crate) use codex_windows_sandbox::load_sandbox_installation as load;
-pub(crate) use codex_windows_sandbox::remove_sandbox_installation as remove;
-pub(crate) use codex_windows_sandbox::save_sandbox_installation as save;
+pub(crate) use codex_windows_sandbox::RuntimeAccountRegistration;
+pub(crate) use codex_windows_sandbox::RuntimeRegistration;
+pub(crate) use codex_windows_sandbox::load_installation as load;
+pub(crate) use codex_windows_sandbox::remove_installation as remove;
+pub(crate) use codex_windows_sandbox::save_installation as save_runtime;
 use codex_windows_sandbox::validate_local_directory_path;
 use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::UI::Shell::GetUserProfileDirectoryW;
@@ -39,4 +44,34 @@ pub(crate) fn read_desktop_installation(
         created_codex_home: home.join(DESKTOP_INSTALLATION_MARKER).is_file(),
         cache_home,
     })
+}
+
+pub(crate) fn load_runtime() -> Result<Option<InstallationRecord>> {
+    Ok(load()?.filter(|record| record.runtime.is_some()))
+}
+
+pub(crate) fn is_current_package_family(record: &InstallationRecord) -> Result<bool> {
+    Ok(record.runtime()?.package_family.eq_ignore_ascii_case(
+        &windows::ApplicationModel::Package::Current()?
+            .Id()?
+            .FamilyName()?
+            .to_string(),
+    ))
+}
+
+pub(crate) fn save(mut record: InstallationRecord) -> Result<InstallationRecord> {
+    let _setup_lock = codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+
+    record.runtime = None;
+    if let Some(current) = load_runtime()? {
+        let family = windows::ApplicationModel::Package::Current()?
+            .Id()?
+            .FamilyName()?;
+        current.admit_owner(&record, &family.to_string())?;
+        // The helper wait may have admitted another account. Preserve fresh Core
+        // state instead of overwriting it with the caller's owner-only snapshot.
+        record.runtime = current.runtime;
+    }
+    save_runtime(&record)?;
+    Ok(record)
 }

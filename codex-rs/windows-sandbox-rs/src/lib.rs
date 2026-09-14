@@ -95,6 +95,34 @@ mod provisioning_client;
 #[cfg(target_os = "windows")]
 mod provisioning_protocol;
 #[cfg(target_os = "windows")]
+mod runtime_ownership;
+#[cfg(target_os = "windows")]
+mod service_identity;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::CORE_INSTALLATION_KEY;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::INSTALLATION_KEY;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::INSTALLATION_VALUE;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::RuntimeAccountRegistration;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::RuntimeRegistration;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::load_installation;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::remove_installation;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use runtime_ownership::save_installation;
+#[cfg(target_os = "windows")]
 mod resolved_permissions;
 #[cfg(target_os = "windows")]
 mod token;
@@ -146,6 +174,8 @@ mod setup_provisioning;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use setup_provisioning::main as setup_helper_main;
+#[cfg(target_os = "windows")]
+pub use setup_provisioning::provision_sandbox_in_process;
 
 #[cfg(target_os = "windows")]
 mod spawn_prep;
@@ -171,12 +201,6 @@ pub(crate) use elevated::runner_pipe;
 pub use installation_record::DesktopInstallation;
 #[cfg(target_os = "windows")]
 pub use installation_record::InstallationRecord;
-#[cfg(target_os = "windows")]
-pub use installation_record::load as load_sandbox_installation;
-#[cfg(target_os = "windows")]
-pub use installation_record::remove as remove_sandbox_installation;
-#[cfg(target_os = "windows")]
-pub use installation_record::save as save_sandbox_installation;
 
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_read_ace;
@@ -248,6 +272,8 @@ pub use helper_materialization::resolve_exe_for_launch;
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_newly_created_users;
+#[cfg(target_os = "windows")]
+pub use identity::logon_existing_sandbox_account;
 #[cfg(target_os = "windows")]
 pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
@@ -335,6 +361,8 @@ pub use provisioning_protocol::PROVISIONING_PROTOCOL_VERSION;
 #[cfg(target_os = "windows")]
 pub use provisioning_protocol::ProvisioningMessage;
 #[cfg(target_os = "windows")]
+pub use provisioning_protocol::SANDBOX_GROUP_CHANGED;
+#[cfg(target_os = "windows")]
 pub use provisioning_protocol::SANDBOX_PROVISIONING_PIPE_NAME;
 #[cfg(target_os = "windows")]
 pub use provisioning_protocol::SandboxProvisioningRequest;
@@ -353,6 +381,15 @@ pub use resolved_permissions::WindowsSandboxTokenMode;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::token_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
+pub use runtime_ownership::APP_CORE_RUNNER_ALIAS;
+#[cfg(target_os = "windows")]
+pub use runtime_ownership::SandboxRuntimeAccount;
+
+#[cfg(target_os = "windows")]
+pub use service_identity::windows_sandbox_service_name;
+#[cfg(target_os = "windows")]
+pub use service_identity::windows_sandbox_service_pipe_name;
+#[cfg(target_os = "windows")]
 pub use setup::OFFLINE_USERNAME;
 #[cfg(target_os = "windows")]
 pub use setup::ONLINE_USERNAME;
@@ -362,6 +399,8 @@ pub use setup::SETUP_VERSION;
 pub use setup::SandboxSetupRequest;
 #[cfg(target_os = "windows")]
 pub use setup::SetupRootOverrides;
+#[cfg(target_os = "windows")]
+pub use setup::SetupRuntime;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_provisioning_setup;
 #[cfg(target_os = "windows")]
@@ -402,6 +441,8 @@ pub use stdio_bridge::forward_sandbox_session_stdio;
 #[doc(hidden)]
 pub use token::LocalSid;
 #[cfg(target_os = "windows")]
+pub use token::TokenGroup;
+#[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_cap_from;
@@ -415,6 +456,8 @@ pub use token::create_workspace_write_token_with_caps_and_user_from;
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
+#[cfg(target_os = "windows")]
+pub use token::token_groups;
 #[cfg(target_os = "windows")]
 pub use token_user::get_user_sid_bytes;
 #[cfg(target_os = "windows")]
@@ -431,6 +474,8 @@ pub use uninstall_windows::PreparedWindowsSandboxCleanup;
 pub use uninstall_windows::clean_up_packaged_windows_sandbox;
 #[cfg(target_os = "windows")]
 pub use uninstall_windows::prepare_packaged_windows_sandbox_cleanup;
+#[cfg(target_os = "windows")]
+pub use uninstall_windows::prepare_packaged_windows_sandbox_cleanup_with_retained_tokens;
 #[cfg(target_os = "windows")]
 pub use wfp::install_wfp_filters_for_account;
 #[cfg(target_os = "windows")]

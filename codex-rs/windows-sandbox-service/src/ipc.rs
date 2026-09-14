@@ -22,8 +22,7 @@ use codex_windows_sandbox::write_provisioning_frame;
 pub(crate) use home::OwnedHandle;
 pub(crate) use home::pin_directory;
 pub(crate) use home::pin_existing_ancestors;
-#[cfg(test)]
-use request::ProvisioningRequest;
+pub(crate) use request::ProvisioningRequest;
 pub(crate) use request::ServiceRequest;
 use request::validate_request;
 use std::mem::size_of;
@@ -39,8 +38,6 @@ use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::System::Pipes as pipes;
 
 use crate::installation_record::InstallationRecord;
-
-pub(crate) const PIPE_NAME: &str = codex_windows_sandbox::SANDBOX_PROVISIONING_PIPE_NAME;
 
 const MAX_REQUEST_BYTES: usize = 4096;
 const MAX_RESPONSE_MESSAGE_BYTES: usize = 512;
@@ -68,19 +65,31 @@ enum PipeConnection {
 pub(crate) fn run(
     shutdown: Arc<AtomicBool>,
     on_ready: impl FnOnce() -> Result<()>,
-    register_installation: impl Fn(InstallationRecord, OwnedHandle) -> Result<InstallationRecord>,
+    on_authenticated_user: impl Fn(
+        InstallationRecord,
+        OwnedHandle,
+        codex_windows_sandbox::SetupRuntime,
+    ) -> Result<InstallationRecord>,
     on_session_change: impl Fn() -> Result<()>,
 ) -> Result<()> {
-    let listener = listener::ProvisioningListener::open()?;
+    if shutdown.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let mut listener = listener::ProvisioningListener::open()?;
     on_ready().context("publish provisioning listener readiness")?;
 
-    while !shutdown.load(Ordering::Acquire) {
+    // Refresh before blocking even if a direct setup claim's zero-byte wake was lost.
+    while refresh_session(&shutdown, &on_session_change)
+        .context("refresh the recorded sandbox owner")?
+    {
         let connection = accept_pipe_connection(listener.pipe.0)?;
-        if shutdown.load(Ordering::Acquire) {
+        // A session refresh can finish cleanup. Never dispatch an already accepted
+        // connection after it stops the listener, including a disconnected wakeup.
+        if !refresh_session(&shutdown, &on_session_change)
+            .context("restore the signed-in user's uninstall listener")?
+        {
             break;
         }
-        // Session-change wakeups close the pipe immediately and can arrive disconnected.
-        on_session_change().context("restore the signed-in user's uninstall listener")?;
         if connection == PipeConnection::Disconnected {
             continue;
         }
@@ -98,12 +107,14 @@ pub(crate) fn run(
             &authorized_process,
             &listener.sandbox_sid,
             &shutdown,
-            &register_installation,
+            &on_authenticated_user,
         );
         let response = match result {
             Ok(response) => response,
+            Err(error) if error.is::<crate::registered_runtime::RegistrationInterrupted>() => {
+                return Err(error);
+            }
             Err(error) if error.is::<ServiceUnavailable>() => {
-                eprintln!("sandbox provisioning service unavailable: {error:#}");
                 SandboxProvisioningResponse::Unavailable
             }
             Err(error) => {
@@ -118,9 +129,22 @@ pub(crate) fn run(
             message: ProvisioningMessage::ProvisionSandboxResponse { payload: response },
         };
         write_response(&listener.pipe, &response, &shutdown)?;
-        unsafe { pipes::DisconnectNamedPipe(listener.pipe.0) };
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        listener = listener.refresh()?;
     }
     Ok(())
+}
+fn refresh_session(
+    shutdown: &AtomicBool,
+    on_session_change: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    if shutdown.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    on_session_change()?;
+    Ok(!shutdown.load(Ordering::Acquire))
 }
 
 /// Sends one frame, then waits briefly for the client to close before disconnecting.
@@ -234,7 +258,11 @@ fn handle_request(
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
     shutdown: &AtomicBool,
-    register_installation: &dyn Fn(InstallationRecord, OwnedHandle) -> Result<InstallationRecord>,
+    on_authenticated_user: &dyn Fn(
+        InstallationRecord,
+        OwnedHandle,
+        codex_windows_sandbox::SetupRuntime,
+    ) -> Result<InstallationRecord>,
 ) -> Result<SandboxProvisioningResponse> {
     let deadline = Instant::now() + REQUEST_IDLE_TIMEOUT;
     let mut request = [0_u8; MAX_REQUEST_BYTES];
@@ -316,7 +344,13 @@ fn handle_request(
         return Err(error)
             .context("requested sandbox settings violate administrator-controlled machine policy");
     }
-    crate::provisioning::run(identity, request, register_installation)
+    crate::provisioning::run(
+        identity,
+        request,
+        sandbox_sid,
+        shutdown,
+        on_authenticated_user,
+    )
 }
 
 fn is_config_parse_error(error: &anyhow::Error) -> bool {

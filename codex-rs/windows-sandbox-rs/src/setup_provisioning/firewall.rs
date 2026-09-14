@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::io::Write;
 
+use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
 use windows::Win32::Foundation::S_OK;
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
@@ -58,25 +59,31 @@ struct BlockRuleSpec<'a> {
     remote_ports: Option<&'a str>,
 }
 
-// Balance successful COM initialization on every return path.
-struct FirewallComApartment;
+// Firewall COM also supports the service's existing MTA. Balance only our own initialization.
+struct FirewallComApartment {
+    initialized: bool,
+}
 
 impl FirewallComApartment {
     fn initialize() -> Result<Self> {
         let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-        if hr.is_err() {
+        if hr.is_err() && hr != RPC_E_CHANGED_MODE {
             return Err(anyhow::Error::new(SetupFailure::new(
                 SetupErrorCode::HelperFirewallComInitFailed,
                 format!("CoInitializeEx failed: {hr:?}"),
             )));
         }
-        Ok(Self)
+        Ok(Self {
+            initialized: hr.is_ok(),
+        })
     }
 }
 
 impl Drop for FirewallComApartment {
     fn drop(&mut self) {
-        unsafe { CoUninitialize() };
+        if self.initialized {
+            unsafe { CoUninitialize() };
+        }
     }
 }
 
@@ -489,6 +496,10 @@ fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
     writeln!(log, "[{ts}] {msg}")?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "firewall_apartment_tests.rs"]
+mod apartment_tests;
 
 #[cfg(test)]
 mod tests {

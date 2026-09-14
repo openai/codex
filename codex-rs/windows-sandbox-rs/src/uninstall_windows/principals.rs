@@ -5,6 +5,7 @@ use std::ptr::null;
 
 use anyhow::Result;
 use anyhow::bail;
+use anyhow::ensure;
 use windows_sys::Win32::NetworkManagement::NetManagement as network;
 
 use crate::setup::OFFLINE_USERNAME;
@@ -47,6 +48,21 @@ impl DisabledSandboxUsers {
         self.users.iter().map(|user| user.sid.as_slice())
     }
 
+    pub(super) fn validate_current(&self) -> Result<()> {
+        for name in [OFFLINE_USERNAME, ONLINE_USERNAME] {
+            let Some(flags) = local_user_flags(name)? else {
+                continue;
+            };
+            let captured = self.users.iter().find(|user| user.name == name);
+            ensure!(
+                captured.is_some_and(|user| resolve_sid(name).is_ok_and(|sid| sid == user.sid))
+                    && flags & network::UF_ACCOUNTDISABLE != 0,
+                "sandbox account changed after being disabled: {name}"
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn restore(&self) -> Result<()> {
         let mut errors = Vec::new();
         for user in &self.users {
@@ -63,6 +79,20 @@ impl DisabledSandboxUsers {
             bail!("{}", errors.join("; "));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl DisabledSandboxUsers {
+    // In-memory admission fixture only; this does not resolve or change a local account.
+    pub(super) fn for_token_test(sid: Vec<u8>) -> Self {
+        Self {
+            users: vec![SandboxUser {
+                name: OFFLINE_USERNAME,
+                original_flags: network::UF_ACCOUNTDISABLE,
+                sid,
+            }],
+        }
     }
 }
 

@@ -1,29 +1,43 @@
-//! Removes one authenticated owner's sandbox resources during package uninstall.
-//! Desktop paths are deleted only while impersonating the owner; native cleanup keeps its order.
+//! Removes one authenticated owner's sandbox resources using prepared native cleanup.
+//! Owner impersonation, directory pins, and registration-aware cleanup order are preserved.
 
 use std::io;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use codex_windows_sandbox::clean_up_packaged_windows_sandbox;
+use codex_windows_sandbox::PreparedWindowsSandboxCleanup;
 use codex_windows_sandbox::resolve_sid;
 use codex_windows_sandbox::revoke_ace;
 
 use super::UserInstallation;
 use super::with_owner_impersonation;
+use crate::installation_record::InstallationRecord;
 
-pub(super) fn clean_up(installation: &mut UserInstallation) -> Result<()> {
+pub(super) fn clean_up(
+    installation: &mut UserInstallation,
+    prepared: &PreparedWindowsSandboxCleanup,
+    runtime: Option<&InstallationRecord>,
+) -> Result<()> {
     crate::service::log_information(
         crate::service::EVENT_CLEANUP_STARTED,
         "sandbox uninstall cleanup started",
     );
-    // A partial uninstall must not let a later install inherit stale directory ownership.
-    crate::installation_record::remove()?;
     let codex_home = installation.codex_home.clone();
-    clean_up_packaged_windows_sandbox(codex_home.as_deref(), || {
-        // Privileged file cleanup is finished; release the guard before owner-scoped removal.
+    // Remove exact grants from the locked cleanup record before native account deletion.
+    if let Some(record) = runtime {
+        crate::registered_runtime::remove_metadata(installation.user_token.0, record)?;
+    }
+    let result = prepared.finish(codex_home.as_deref(), || {
+        // Release once, even when registered cleanup retries its remaining steps.
         installation.directory_guard.take();
+        if let Some(record) = runtime
+            && super::registered::runtime_owner_has_package(record)?
+        {
+            // Only the old sandbox resources are repaired on reinstall. Never remove
+            // the reinstalled app's desktop-created home or runtime cache.
+            return Ok(());
+        }
         let Some(desktop) = &installation.record.desktop_installation else {
             return Ok(());
         };
@@ -38,7 +52,7 @@ pub(super) fn clean_up(installation: &mut UserInstallation) -> Result<()> {
                 }
             };
             if let Some(home) = &codex_home {
-                if desktop.created_codex_home {
+                if desktop.created_codex_home && runtime.is_none() {
                     // Release the home itself so it can be deleted; keep its ancestors pinned.
                     installation.directory_handles.pop();
                     record_error(std::fs::remove_dir_all(home));
@@ -73,8 +87,8 @@ pub(super) fn clean_up(installation: &mut UserInstallation) -> Result<()> {
             );
             Ok(())
         })
-    })
-    .context("remove packaged Windows sandbox resources")?;
+    });
+    result.context("remove packaged Windows sandbox resources")?;
     crate::service::log_information(
         crate::service::EVENT_CLEANUP_FINISHED,
         "sandbox uninstall cleanup finished",

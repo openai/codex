@@ -15,6 +15,11 @@ use windows_sys::Win32::Security as security;
 use windows_sys::Win32::System::Pipes;
 use windows_sys::Win32::System::Threading;
 
+mod registered;
+
+pub(crate) use registered::authorize_setup_runtime;
+#[cfg(test)]
+pub(crate) use registered::require_runtime_package_family;
 #[cfg(debug_assertions)]
 static FOREGROUND_MODE: AtomicBool = AtomicBool::new(false);
 

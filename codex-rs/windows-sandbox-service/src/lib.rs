@@ -4,6 +4,7 @@ use anyhow::Result;
 mod installation_record;
 #[cfg(windows)]
 mod ipc;
+
 #[cfg(windows)]
 mod machine_policy;
 #[cfg(windows)]
@@ -12,6 +13,8 @@ mod package_identity;
 mod package_lifecycle;
 #[cfg(windows)]
 mod provisioning;
+#[cfg(windows)]
+mod registered_runtime;
 #[cfg(windows)]
 mod service;
 

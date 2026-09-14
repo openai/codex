@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_windows_sandbox::DirectoryOpenDisposition;
+use codex_windows_sandbox::SetupRuntime;
 use codex_windows_sandbox::create_directory_guard;
 use codex_windows_sandbox::string_from_sid_bytes;
 use std::ffi::OsString;
@@ -28,6 +29,8 @@ pub(crate) struct ClientIdentity {
     pub(crate) codex_home: PathBuf,
     pub(crate) user_sid: String,
     pub(crate) session_id: u32,
+    // The requested route, authenticated against the held client's installed image.
+    pub(crate) runtime: SetupRuntime,
     pub(crate) token: OwnedHandle,
     pub(crate) desktop_installation: Option<crate::installation_record::DesktopInstallation>,
     // Pins and guards remain live through registration and the provisioning helper.
@@ -74,6 +77,14 @@ fn authenticate_impersonated_client(
     sandbox_sid: &[u8],
     request: &ServiceRequest,
 ) -> Result<ClientIdentity> {
+    // Pin the group generation through identity capture.
+    // Release this lock before the provisioning worker checks machine policy.
+    let _setup_lock = codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+    anyhow::ensure!(
+        codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
+            .is_ok_and(|current| current == sandbox_sid),
+        codex_windows_sandbox::SANDBOX_GROUP_CHANGED
+    );
     if unsafe { pipes::ImpersonateNamedPipeClient(pipe) } == 0 {
         return Err(std::io::Error::last_os_error()).context("impersonate provisioning client");
     }
@@ -130,12 +141,21 @@ fn authenticate_impersonated_client(
     let user_sid = string_from_sid_bytes(&user).map_err(anyhow::Error::msg)?;
     let account = unsafe { codex_windows_sandbox::account_name_from_sid(user.as_ptr() as _) }
         .context("resolve provisioning client account")?;
+    let runtime = crate::package_identity::authorize_setup_runtime(authorized_process, request)?;
     let requested_home = match request {
         ServiceRequest::RegisterInstallation { codex_home } => codex_home,
         ServiceRequest::ProvisionSandbox(request) => &request.codex_home,
     };
     let (codex_home, handles) = match request {
-        ServiceRequest::ProvisionSandbox(_) => prepare_codex_home(requested_home)?,
+        ServiceRequest::ProvisionSandbox(request) => prepare_codex_home(
+            requested_home,
+            runtime,
+            if request.refresh_only {
+                DirectoryOpenDisposition::OpenExisting
+            } else {
+                DirectoryOpenDisposition::OpenOrCreate
+            },
+        )?,
         ServiceRequest::RegisterInstallation { .. } => {
             // Registration must not create the sandbox directories or change their ACLs.
             codex_windows_sandbox::validate_local_directory_path(requested_home)?;
@@ -195,6 +215,7 @@ fn authenticate_impersonated_client(
         codex_home,
         user_sid,
         session_id: session,
+        runtime,
         token,
         desktop_installation,
         directory_handles: handles,

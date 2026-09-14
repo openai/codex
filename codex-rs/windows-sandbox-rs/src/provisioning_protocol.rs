@@ -13,6 +13,9 @@ pub const PROVISIONING_PROTOCOL_VERSION: u8 = 1;
 /// Named pipe used by the machine-wide Windows sandbox provisioning service.
 pub const SANDBOX_PROVISIONING_PIPE_NAME: &str = r"\\.\pipe\OpenAI.CodexSandbox";
 
+/// Pre-dispatch refusal: the caller may reconnect once to the refreshed pipe.
+pub const SANDBOX_GROUP_CHANGED: &str = "sandbox group changed before authentication";
+
 /// Versioned provisioning-service message carried in a length-prefixed JSON frame.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FramedProvisioningMessage {
@@ -42,6 +45,12 @@ pub enum ProvisioningMessage {
 #[serde(deny_unknown_fields)]
 pub struct SandboxProvisioningRequest {
     pub codex_home: String,
+    /// Routing request; the service independently authenticates its installed caller.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub registered_core: bool,
+    /// Refresh an existing registration without creating or repairing sandbox accounts.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_only: bool,
     pub settings: WindowsSandboxProvisioningSettings,
     pub listeners: WindowsSandboxProxyListeners,
 }

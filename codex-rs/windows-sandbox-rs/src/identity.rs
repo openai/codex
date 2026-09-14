@@ -1,3 +1,4 @@
+use crate::SandboxRuntimeAccount;
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
@@ -20,13 +21,19 @@ use crate::winutil::local_user_flags;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::ensure;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::collections::HashMap;
 use std::fs;
+use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
+use windows_sys::Win32::Security::LOGON32_LOGON_INTERACTIVE;
+use windows_sys::Win32::Security::LOGON32_PROVIDER_DEFAULT;
+use windows_sys::Win32::Security::LogonUserW;
 
 #[cfg(test)]
 #[path = "identity_integration_tests.rs"]
@@ -145,6 +152,54 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     let decrypted = dpapi::unprotect(&blob)?;
     let pwd = String::from_utf8(decrypted).context("sandbox password not utf-8")?;
     Ok(pwd)
+}
+
+/// Opens a token for one existing managed account without provisioning or changing it.
+/// The caller must keep the authenticated credential directory pinned and verify
+/// the token's recorded SID, group membership, and non-administrator status.
+pub fn logon_existing_sandbox_account(
+    codex_home: &Path,
+    account: SandboxRuntimeAccount,
+) -> Result<OwnedHandle> {
+    // Unlike the ordinary app-side readers, this service recovery path must
+    // never create diagnostic files beneath an owner-controlled directory.
+    let marker: SetupMarker = serde_json::from_slice(
+        &fs::read(setup_marker_path(codex_home)).context("read sandbox setup marker")?,
+    )
+    .context("parse sandbox setup marker")?;
+    ensure!(
+        marker.version_matches(),
+        "sandbox setup marker is missing or incompatible"
+    );
+    let users: SandboxUsersFile = serde_json::from_slice(
+        &fs::read(sandbox_users_path(codex_home)).context("read sandbox accounts")?,
+    )
+    .context("parse sandbox accounts")?;
+    ensure!(users.version_matches(), "sandbox accounts are incompatible");
+    let record = match account {
+        SandboxRuntimeAccount::Offline => users.offline,
+        SandboxRuntimeAccount::Online => users.online,
+    };
+    ensure!(
+        record.username.eq_ignore_ascii_case(account.username()),
+        "sandbox account record does not match the managed account"
+    );
+    let password = crate::to_wide(decode_password(&record)?);
+    let mut token = 0;
+    if unsafe {
+        LogonUserW(
+            crate::to_wide(account.username()).as_ptr(),
+            crate::to_wide(".").as_ptr(),
+            password.as_ptr(),
+            LOGON32_LOGON_INTERACTIVE,
+            LOGON32_PROVIDER_DEFAULT,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error()).context("log on existing sandbox account");
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(token as _) })
 }
 
 fn select_identity(

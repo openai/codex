@@ -193,7 +193,7 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
 
 /// An owned token group, including attributes such as enabled and deny-only.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct TokenGroup {
+pub struct TokenGroup {
     pub sid: Vec<u8>,
     pub attributes: u32,
 }
@@ -202,7 +202,7 @@ pub(crate) struct TokenGroup {
 ///
 /// # Safety
 /// `token` must remain a valid token handle with `TOKEN_QUERY` access during this call.
-pub(crate) unsafe fn token_groups(token: HANDLE, max_bytes: u32) -> Result<Vec<TokenGroup>> {
+pub unsafe fn token_groups(token: HANDLE, max_bytes: u32) -> Result<Vec<TokenGroup>> {
     let mut needed = 0;
     GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
     ensure!(

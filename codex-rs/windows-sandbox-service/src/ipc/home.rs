@@ -5,6 +5,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_windows_sandbox::DirectoryOpenDisposition;
+use codex_windows_sandbox::SetupRuntime;
 use codex_windows_sandbox::create_directory_guard;
 use codex_windows_sandbox::open_directory_no_reparse;
 use codex_windows_sandbox::to_wide;
@@ -33,7 +34,15 @@ impl Drop for OwnedHandle {
     }
 }
 
-pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<OwnedHandle>)> {
+pub(super) fn prepare_codex_home(
+    requested: &Path,
+    runtime: SetupRuntime,
+    disposition: DirectoryOpenDisposition,
+) -> Result<(PathBuf, Vec<OwnedHandle>)> {
+    let directory_count = match runtime {
+        SetupRuntime::Registered => 3,
+        SetupRuntime::Legacy => 4,
+    };
     let mut handles = Vec::new();
     validate_local_directory_path(requested)?;
     let requested_root = requested
@@ -52,7 +61,7 @@ pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<Owned
     handles.push(pin_directory(
         requested,
         filesystem::FILE_READ_ATTRIBUTES,
-        DirectoryOpenDisposition::OpenOrCreate,
+        disposition,
     )?);
     let home = requested
         .canonicalize()
@@ -76,6 +85,7 @@ pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<Owned
         &sandbox_bin,
     ]
     .into_iter()
+    .take(directory_count)
     .enumerate()
     {
         let mut access = filesystem::FILE_READ_ATTRIBUTES
@@ -84,7 +94,7 @@ pub(super) fn prepare_codex_home(requested: &Path) -> Result<(PathBuf, Vec<Owned
         if index != 0 {
             access |= filesystem::WRITE_DAC;
         }
-        let handle = pin_directory(directory, access, DirectoryOpenDisposition::OpenOrCreate)
+        let handle = pin_directory(directory, access, disposition)
             .map_err(|error| {
                 // Older elevated installs omitted WRITE_DAC; let the interactive helper repair it.
                 if directory == sandbox_bin.as_path()

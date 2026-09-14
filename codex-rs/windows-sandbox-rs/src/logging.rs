@@ -88,6 +88,18 @@ pub fn setup_log_writer(base_dir: &Path) -> Result<File> {
     }
 }
 
+/// Release setup's retained handles under the setup lock, after its writers finish.
+/// Keep the slot initialized so later diagnostics cannot reopen a caller-controlled path.
+pub(crate) fn release_setup_log() -> Result<()> {
+    if let Some(log) = SETUP_LOG.get() {
+        let mut log = log
+            .lock()
+            .map_err(|_| anyhow::anyhow!("setup log lock poisoned"))?;
+        *log = None;
+    }
+    Ok(())
+}
+
 fn append_line(line: &str, base_dir: Option<&Path>) {
     if let Some(log) = SETUP_LOG.get() {
         if let Ok(mut log) = log.lock()
@@ -136,6 +148,54 @@ pub fn log_note(msg: &str, base_dir: Option<&Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn setup_log_releases_handles_without_path_fallback() {
+        const CHILD_ENV: &str = "CODEX_TEST_SETUP_LOG_RELEASE_CHILD";
+        if std::env::var(CHILD_ENV).ok().as_deref() != Some("1") {
+            // SETUP_LOG is process-global; isolate this test from ordinary daily logging.
+            let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+                .args([
+                    "--exact",
+                    "logging::tests::setup_log_releases_handles_without_path_fallback",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("run isolated setup-log test");
+            assert!(output.status.success(), "isolated test failed: {output:?}");
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("setup-log release verified"),
+                "isolated test did not run: {output:?}"
+            );
+            return;
+        }
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let directory = tempdir.path().join(".sandbox");
+        std::fs::create_dir(&directory).expect("create sandbox directory");
+        drop(setup_log_writer(&directory).expect("open retained setup log"));
+        let error =
+            std::fs::remove_dir_all(&directory).expect_err("setup handles prevent deletion");
+        assert_eq!(
+            error.raw_os_error(),
+            Some(windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION as i32)
+        );
+
+        release_setup_log().expect("release setup log");
+        std::fs::remove_dir_all(&directory).expect("delete sandbox after releasing handles");
+        std::fs::create_dir(&directory).expect("recreate caller-controlled directory");
+        release_setup_log().expect("repeated release is harmless");
+        log_note("must not reopen the directory", Some(&directory));
+        assert!(
+            std::fs::read_dir(&directory)
+                .expect("read directory")
+                .next()
+                .is_none()
+        );
+        println!("setup-log release verified");
+    }
 
     #[test]
     fn preview_does_not_panic_on_utf8_boundary() {

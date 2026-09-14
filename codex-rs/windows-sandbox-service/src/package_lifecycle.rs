@@ -1,4 +1,5 @@
 //! Restores owner-scoped uninstall notifications and ties file cleanup to pinned directories.
+//! Registered runtime policy stays in its private module; owner tokens and pins stay here.
 
 use std::cell::RefCell;
 use std::io;
@@ -7,13 +8,14 @@ use std::os::windows::io::IntoRawHandle;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_windows_sandbox::DirectoryOpenDisposition;
+use codex_windows_sandbox::PreparedWindowsSandboxCleanup;
 use codex_windows_sandbox::create_directory_guard;
+use codex_windows_sandbox::prepare_packaged_windows_sandbox_cleanup;
 use codex_windows_sandbox::string_from_sid_bytes;
 use windows::ApplicationModel::Package;
 use windows::ApplicationModel::PackageCatalog;
@@ -36,6 +38,9 @@ use crate::installation_record::InstallationRecord;
 use crate::ipc::OwnedHandle;
 
 mod cleanup;
+mod registered;
+
+pub(crate) use registered::runtime_owner_removed;
 
 struct UserInstallation {
     codex_home: Option<PathBuf>,
@@ -87,7 +92,7 @@ impl PackageLifecycle {
                 .desktop_installation
                 .or(record.desktop_installation);
         }
-        crate::installation_record::save(&record)?;
+        record = crate::installation_record::save(record)?;
         if let Some(installation) = active.as_mut()
             && installation.codex_home.is_some()
         {
@@ -143,6 +148,7 @@ impl PackageLifecycle {
             )?;
             let package_name = self.package_name.clone();
             let uninstalling = Arc::clone(&self.uninstalling);
+            let owner_sid = record.user_sid.clone();
             let token = catalog
                 .PackageUninstalling(&TypedEventHandler::<
                     PackageCatalog,
@@ -151,7 +157,7 @@ impl PackageLifecycle {
                     if let Some(event) = event
                         && event.Package()?.Id()?.FullName()? == package_name
                     {
-                        uninstalling.store(!event.IsComplete()?, Ordering::Release);
+                        registered::on_package_uninstalling(event, &owner_sid, &uninstalling)?;
                     }
                     Ok(())
                 }))
@@ -208,6 +214,11 @@ impl PackageLifecycle {
             return Ok(());
         };
 
+        if record.runtime.is_some()
+            && !crate::installation_record::is_current_package_family(&record)?
+        {
+            return Ok(());
+        }
         let mut raw_token = 0;
         if unsafe { WTSQueryUserToken(session_id, &mut raw_token) } == 0 {
             return Err(io::Error::last_os_error()).context("open the logged-in user's token");
@@ -231,11 +242,29 @@ impl PackageLifecycle {
     }
 
     pub(crate) fn clean_up(&self) -> Result<()> {
+        let _setup_lock =
+            codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+        if let Some(record) = crate::installation_record::load_runtime()? {
+            return registered::clean_up(self, record);
+        }
+        // Preserve the legacy path's ownership retirement before native preparation.
+        crate::installation_record::remove()?;
+        self.clean_up_resources(
+            &prepare_packaged_windows_sandbox_cleanup()?,
+            /*runtime*/ None,
+        )
+    }
+
+    fn clean_up_resources(
+        &self,
+        prepared: &PreparedWindowsSandboxCleanup,
+        runtime: Option<&InstallationRecord>,
+    ) -> Result<()> {
         let mut installation = self.installation.borrow_mut();
         let installation = installation
             .as_mut()
             .context("the authenticated package installation was not recorded")?;
-        cleanup::clean_up(installation)
+        cleanup::clean_up(installation, prepared, runtime)
     }
 }
 

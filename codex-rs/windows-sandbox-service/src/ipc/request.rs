@@ -20,8 +20,10 @@ pub(crate) enum ServiceRequest {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ProvisioningRequest {
-    pub(super) codex_home: PathBuf,
-    pub(super) listeners: WindowsSandboxProxyListeners,
+    pub(crate) codex_home: PathBuf,
+    pub(crate) registered_core: bool,
+    pub(crate) refresh_only: bool,
+    pub(crate) listeners: WindowsSandboxProxyListeners,
     pub(crate) settings: WindowsSandboxProvisioningSettings,
 }
 
@@ -36,6 +38,7 @@ pub(super) fn validate_request(request: &[u8]) -> Result<ServiceRequest> {
     if !reader.is_empty() {
         bail!("provisioning requests must contain exactly one IPC frame");
     }
+
     if frame.version != PROVISIONING_PROTOCOL_VERSION {
         bail!(
             "unsupported provisioning request version: {}",
@@ -53,6 +56,9 @@ pub(super) fn validate_request(request: &[u8]) -> Result<ServiceRequest> {
         ProvisioningMessage::ProvisionSandboxResponse { .. } => bail!("expected a service request"),
     };
     validate_home(&request.codex_home)?;
+    if request.refresh_only && !request.registered_core {
+        bail!("registration refresh requires registered Core");
+    }
     let mut settings = request.settings;
     let mut listeners = request.listeners;
     for ports in [
@@ -76,6 +82,8 @@ pub(super) fn validate_request(request: &[u8]) -> Result<ServiceRequest> {
     }
     Ok(ServiceRequest::ProvisionSandbox(ProvisioningRequest {
         codex_home: PathBuf::from(request.codex_home),
+        registered_core: request.registered_core,
+        refresh_only: request.refresh_only,
         listeners,
         settings,
     }))

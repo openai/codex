@@ -16,10 +16,6 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
-# Temporary until #8415 adds the cleanup implementation that uses these dependencies.
-[package.metadata.cargo-shear]
-ignored = ["base64", "serde_json"]
-
 [dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
@@ -38,6 +34,8 @@ pretty_assertions = { workspace = true }
 version = "0.58"
 features = [
     "ApplicationModel",
+    "Foundation_Collections",
+    "Management_Deployment",
     "Win32_System_WinRT",
 ]
 
@@ -54,12 +52,14 @@ features = [
     "Win32_System_Environment",
     "Win32_System_EventLog",
     "Win32_System_IO",
+    "Win32_System_JobObjects",
     "Win32_System_Memory",
     "Win32_System_Pipes",
     "Win32_System_Registry",
     "Win32_System_RemoteDesktop",
     "Win32_System_Services",
     "Win32_System_SystemServices",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Shell",
 ]

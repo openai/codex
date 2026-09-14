@@ -1,3 +1,4 @@
+pub use crate::runtime_ownership::SetupRuntime;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -350,6 +351,7 @@ fn run_setup_refresh_inner(
         otel: None,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         mode: SetupMode::Full,
+        runtime: SetupRuntime::Legacy,
         refresh_only: true,
     };
     let json = serde_json::to_vec(&payload)?;
@@ -690,6 +692,8 @@ struct ElevationPayload {
     otel: Option<codex_otel::StatsigMetricsSettings>,
     real_user: String,
     mode: SetupMode,
+    #[serde(default, skip_serializing_if = "SetupRuntime::is_legacy")]
+    runtime: SetupRuntime,
     #[serde(default)]
     refresh_only: bool,
 }
@@ -1096,6 +1100,7 @@ fn elevated_provisioning_payload(
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::InteractiveProvision,
+        runtime: SetupRuntime::Legacy,
         refresh_only: false,
     }
 }
@@ -1167,6 +1172,7 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
         otel: codex_otel::global_statsig_metrics_settings(),
         real_user: real_user.to_string(),
         mode: SetupMode::ProvisionOnly,
+        runtime: SetupRuntime::Legacy,
         refresh_only: false,
     };
     run_setup_exe(

@@ -32,8 +32,9 @@ use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
 use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::System::Services;
 
-const SERVICE_NAME: &str = "CodexSandboxService";
 const PROVISIONING_TIMEOUT: Duration = Duration::from_secs(120);
+
+mod group_change;
 
 impl WindowsSandboxProvisioningSettings {
     /// Derives the full firewall settings using the same environment handling as elevated setup.
@@ -113,6 +114,8 @@ pub fn provision_windows_sandbox_via_service(
                     .to_str()
                     .context("sandbox provisioning home is not valid UTF-8")?
                     .to_owned(),
+                registered_core: false,
+                refresh_only: false,
                 settings,
                 listeners,
             },
@@ -178,6 +181,12 @@ fn send_service_request(
         }
         Err(error) => return Err(error),
     };
+    if matches!(&response, crate::SandboxProvisioningResponse::Error { message }
+        if message == crate::SANDBOX_GROUP_CHANGED)
+    {
+        drop(pipe);
+        return group_change::retry(request, deadline);
+    }
     Ok(response)
 }
 
@@ -211,15 +220,16 @@ fn exchange_request(
 }
 
 fn connect(deadline: Instant) -> anyhow::Result<Option<File>> {
+    let pipe_name = crate::windows_sandbox_service_pipe_name()?;
     let open_pipe = || {
         OpenOptions::new()
             .read(true)
             .write(true)
             .custom_flags(SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION)
-            .open(crate::SANDBOX_PROVISIONING_PIPE_NAME)
+            .open(&pipe_name)
     };
 
-    let pipe_name = crate::to_wide(crate::SANDBOX_PROVISIONING_PIPE_NAME);
+    let pipe_name = crate::to_wide(&pipe_name);
     loop {
         match open_pipe() {
             Ok(pipe) => return Ok(Some(pipe)),
@@ -265,7 +275,7 @@ fn verify_server(pipe: HANDLE) -> anyhow::Result<()> {
     }
     let manager = ServiceHandle(manager);
 
-    let service_name = crate::to_wide(SERVICE_NAME);
+    let service_name = crate::to_wide(crate::windows_sandbox_service_name()?);
     let service = unsafe {
         Services::OpenServiceW(
             manager.0,

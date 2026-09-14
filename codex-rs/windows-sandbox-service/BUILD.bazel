@@ -3,5 +3,6 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "windows-sandbox-service",
     binary_test_target_compatible_with = ["@platforms//os:windows"],
+    compile_data = ["src/registered_runtime/removal.ps1"],
     crate_name = "codex_windows_sandbox_service",
 )
