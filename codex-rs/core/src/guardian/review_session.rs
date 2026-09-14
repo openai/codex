@@ -100,8 +100,6 @@ use super::prompt::build_guardian_prompt_items_with_parent_turn;
 use super::review::guardian_review_session_config;
 pub(crate) use super::reviewer_config::build_guardian_review_session_config;
 use codex_guardian_reviewer::run_before_review_deadline;
-#[cfg(test)]
-use codex_guardian_reviewer::run_before_review_deadline_with_cancel;
 use codex_guardian_reviewer::wait_for_guardian_review;
 
 const GUARDIAN_MAX_IMAGE_ITEM_TOKENS: i64 = 10_000;

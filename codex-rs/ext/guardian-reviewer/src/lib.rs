@@ -40,7 +40,7 @@ pub const MAX_REVIEW_ATTEMPTS: i64 = 3;
 pub const REVIEW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
 pub use deadline::run_before_review_deadline;
-pub use deadline::run_before_review_deadline_with_cancel;
+pub(crate) use deadline::run_before_review_deadline_with_cancel;
 pub use pool::ReviewerPool;
 pub use pool::ReviewerRequest;
 pub use pool::ReviewerSession;

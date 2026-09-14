@@ -22,7 +22,7 @@ pub async fn run_before_review_deadline<T>(
     }
 }
 
-pub async fn run_before_review_deadline_with_cancel<T>(
+pub(crate) async fn run_before_review_deadline_with_cancel<T>(
     deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
     cancel_token: &CancellationToken,
@@ -34,3 +34,7 @@ pub async fn run_before_review_deadline_with_cancel<T>(
     }
     result
 }
+
+#[cfg(test)]
+#[path = "deadline_tests.rs"]
+mod tests;
