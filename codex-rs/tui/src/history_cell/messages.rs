@@ -149,8 +149,17 @@ fn build_user_message_lines_with_elements(
     raw_lines
 }
 
-fn remote_image_display_line(style: Style, index: usize) -> Line<'static> {
-    Line::from(local_image_label_text(index)).style(style)
+impl UserHistoryCell {
+    fn image_labels_not_in_message(&self) -> impl Iterator<Item = String> + '_ {
+        (1..=self.remote_image_urls.len())
+            .map(local_image_label_text)
+            .filter(|label| {
+                !self
+                    .text_elements
+                    .iter()
+                    .any(|element| element.placeholder(&self.message) == Some(label.as_str()))
+            })
+    }
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -184,16 +193,13 @@ impl HistoryCell for UserHistoryCell {
             None
         } else {
             Some(plain_hyperlink_lines(adaptive_wrap_lines(
-                self.remote_image_urls
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, _url)| {
-                        remote_image_display_line(element_style, idx.saturating_add(1))
-                    }),
+                self.image_labels_not_in_message()
+                    .map(|label| Line::from(label).style(element_style)),
                 RtOptions::new(usize::from(wrap_width))
                     .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
             )))
-        };
+        }
+        .filter(|lines| !lines.is_empty());
 
         let wrapped_message = if message.is_empty() && text_elements.is_empty() {
             None
@@ -290,16 +296,12 @@ impl HistoryCell for UserHistoryCell {
     fn raw_lines(&self) -> Vec<Line<'static>> {
         let message = sanitize_user_text((&self.message).into());
         let mut lines = raw_lines_from_source(message.as_ref().trim_end_matches(['\r', '\n']));
-        if !self.remote_image_urls.is_empty() {
+        let mut image_labels = self.image_labels_not_in_message().peekable();
+        if image_labels.peek().is_some() {
             if !lines.is_empty() {
                 lines.push(Line::from(""));
             }
-            lines.extend(
-                self.remote_image_urls
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, _url)| Line::from(local_image_label_text(idx.saturating_add(1)))),
-            );
+            lines.extend(image_labels.map(Line::from));
         }
         lines
     }

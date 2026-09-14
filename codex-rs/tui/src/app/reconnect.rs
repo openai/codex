@@ -285,6 +285,7 @@ impl App {
                 self.chat_widget.windows_sandbox_elevated_setup_complete = false;
             }
         }
+        self.chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
         self.chat_widget.set_local_worktree_operations(
             !crate::uses_remote_workspace_or_environment(
                 &self.app_server_target,

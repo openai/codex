@@ -134,6 +134,8 @@ impl ChatWidget {
             initial_user_message,
             status_account_display,
             remote_connection: None,
+            snapshot_local_images: false,
+            pending_image_submission: None,
             local_worktree_operations: true,
             windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
             #[cfg(any(target_os = "windows", test))]
@@ -274,6 +276,7 @@ impl ChatWidget {
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
             last_rendered_user_message_display: None,
+            last_rendered_user_message_client_id: None,
             last_non_retry_error: None,
         };
 

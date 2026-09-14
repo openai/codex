@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use crate::history_cell::ThreadRecapLoadingCell;
+use base64::Engine;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -2457,5 +2458,355 @@ async fn reconnect_holds_only_recovered_input_until_manually_edited() {
             .push_back(UserMessage::from("new follow-up").into());
         assert!(chat.maybe_send_next_queued_input());
         assert_matches!(next_submit_op(&mut ops), Op::UserTurn { .. });
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn image_submission_is_portable_for_new_turns_and_steers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("image.png");
+    // Transport must not apply the helper's default 2048-pixel resize policy.
+    let pixels = image::RgbImage::from_pixel(
+        /*width*/ 3000,
+        /*height*/ 2,
+        image::Rgb([12, 34, 56]),
+    );
+    pixels.save(&path).unwrap();
+    let placeholder = "[Image #1]";
+    let message = UserMessage {
+        local_images: vec![LocalImageAttachment {
+            placeholder: placeholder.into(),
+            path,
+        }],
+        text_elements: vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.into()),
+        )],
+        ..UserMessage::from("[Image #1] describe")
+    };
+    for running in [false, true] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.snapshot_local_images = true;
+        chat.codex_op_target = CodexOpTarget::AppEvent;
+        // Repeated identical submissions each render once, across supported receipt shapes.
+        for (echo_client_id, omit_media) in [(false, false), (true, false), (true, true)] {
+            let mut message = message.clone();
+            if omit_media {
+                message.text.push_str("\u{1b}[31m");
+            }
+            if running {
+                handle_turn_started(&mut chat, "turn");
+            }
+            assert!(
+                chat.submit_user_message_with_shell_escape_policy(
+                    message,
+                    ShellEscapePolicy::Disallow
+                )
+                .is_none()
+            );
+            let mut rendered = Vec::new();
+            let (items, client_user_message_id) = loop {
+                match rx.recv().await.unwrap() {
+                    AppEvent::ImagesPrepared(id) => chat.on_images_prepared(id),
+                    AppEvent::InsertHistoryCell(cell) => {
+                        rendered.push(cell.display_lines(/*width*/ 80))
+                    }
+                    AppEvent::CodexOp(AppCommand::UserTurn {
+                        items,
+                        client_user_message_id,
+                        ..
+                    }) => {
+                        break (items, client_user_message_id);
+                    }
+                    _ => {}
+                }
+            };
+            let [UserInput::Image { url, detail }, UserInput::Text { .. }] = items.as_slice()
+            else {
+                panic!("local image must be portable on the wire");
+            };
+            let (_, encoded) = url.split_once(";base64,").unwrap();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap();
+            assert_eq!(
+                (image::load_from_memory(&bytes).unwrap().to_rgb8(), detail),
+                (pixels.clone(), &None)
+            );
+            let mut receipt = items.clone();
+            if omit_media {
+                receipt.retain(|item| !matches!(item, UserInput::Image { .. }));
+            }
+            for _ in 0..2 {
+                chat.on_committed_user_message(
+                    &receipt,
+                    echo_client_id.then_some(client_user_message_id.as_str()),
+                    /*from_replay*/ false,
+                    "turn",
+                );
+            }
+            rendered.extend(drain_insert_history(&mut rx));
+            assert_eq!(rendered.len(), 1);
+            assert_chatwidget_snapshot!(
+                "portable_image_echo_renders_once",
+                lines_to_single_string(&rendered[0])
+            );
+            assert!(chat.input_queue.pending_steers.is_empty());
+            chat.on_committed_user_message(
+                &items,
+                Some(&client_user_message_id),
+                /*from_replay*/ true,
+                "turn",
+            );
+            let replayed = drain_insert_history(&mut rx);
+            assert_eq!(replayed, rendered);
+            handle_turn_completed(&mut chat, "turn", /*duration_ms*/ None);
+            drain_insert_history(&mut rx);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn image_preparation_failure_restores_full_input_without_submitting() {
+    for (running, oversized) in [(false, false), (true, false), (false, true)] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.snapshot_local_images = true;
+        if running {
+            handle_turn_started(&mut chat, "turn");
+            chat.input_queue
+                .pending_steers
+                .push_back(pending_steer("already sent"));
+        }
+        let pending_steers = chat.input_queue.pending_steers.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("removed.png");
+        let pixels = image::RgbImage::new(/*width*/ 2, /*height*/ 2);
+        pixels.save(&path).unwrap();
+        chat.set_remote_image_urls(vec!["https://example.com/remote.png".into()]);
+        chat.handle_paste(path.display().to_string());
+        chat.handle_paste("describe $file".into());
+        chat.bottom_pane.set_composer_text_with_mention_bindings(
+            chat.bottom_pane.composer_text(),
+            chat.bottom_pane.composer_text_elements(),
+            vec![path.clone()],
+            vec![MentionBinding {
+                sigil: '$',
+                mention: "file".into(),
+                path: "/tmp/skills/file/SKILL.md".into(),
+            }],
+        );
+        let draft = chat.bottom_pane.composer_draft_snapshot();
+        if oversized {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_len(25 * 1024 * 1024)
+                .unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        while let Some(event) = rx.recv().await {
+            if let AppEvent::ImagesPrepared(id) = event {
+                chat.on_images_prepared(id);
+                break;
+            }
+        }
+        assert!(
+            op_rx.try_recv().is_err(),
+            "preparation failure must not emit an operation"
+        );
+        let restored = chat.bottom_pane.composer_draft_snapshot();
+        assert_eq!(
+            (
+                restored.text,
+                restored.text_elements,
+                restored.local_images,
+                restored.remote_image_urls,
+                restored.mention_bindings
+            ),
+            (
+                draft.text,
+                draft.text_elements,
+                draft.local_images,
+                draft.remote_image_urls,
+                draft.mention_bindings
+            ),
+        );
+        assert_eq!(chat.turn_lifecycle.agent_turn_running, running);
+        assert!(!chat.input_queue.user_turn_pending_start);
+        assert_eq!(chat.input_queue.pending_steers, pending_steers);
+        assert!(drain_insert_history(&mut rx).iter().flatten().any(|line| {
+            line.to_string().contains(if oversized {
+                "32 MiB"
+            } else {
+                "Failed to prepare image:"
+            })
+        }));
+        if !running {
+            assert_chatwidget_snapshot!(
+                "image_preparation_restored_input",
+                normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+            );
+        }
+        pixels.save(&path).unwrap();
+        chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        while let Some(event) = rx.recv().await {
+            if let AppEvent::ImagesPrepared(id) = event {
+                chat.on_images_prepared(id);
+                break;
+            }
+        }
+        assert_matches!(next_submit_op(&mut op_rx), Op::UserTurn { .. });
+    }
+}
+
+#[test]
+fn image_preparation_keeps_input_responsive_and_preserves_pending_input() {
+    for scenario in [
+        "thread_switch",
+        "rate_limit_recovery",
+        "model_change",
+        "disconnect",
+        "interrupt",
+        "parent_owned",
+        "external_writer",
+        "escape",
+        "ctrl_c",
+    ] {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(/*val*/ 1)
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (mut chat, mut rx, mut ops) =
+                    make_chatwidget_manual(/*model_override*/ None).await;
+                chat.thread_id = Some(ThreadId::new());
+                chat.snapshot_local_images = true;
+                let dir = tempfile::tempdir().unwrap();
+                let path = dir.path().join("image.png");
+                image::RgbImage::new(/*width*/ 2, /*height*/ 2)
+                    .save(&path)
+                    .unwrap();
+                let message = UserMessage {
+                    local_images: vec![LocalImageAttachment {
+                        placeholder: "[Image #1]".into(),
+                        path,
+                    }],
+                    ..UserMessage::from("describe")
+                };
+                // Occupy the worker so submission and input handling must return before decoding starts.
+                let (release, held) = std::sync::mpsc::channel::<()>();
+                let (started, ready) = tokio::sync::oneshot::channel();
+                let worker = tokio::task::spawn_blocking(move || {
+                    started.send(()).unwrap();
+                    let _ = held.recv();
+                });
+                ready.await.unwrap();
+                chat.submit_user_message(message.clone());
+                chat.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
+                chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+                chat.pre_draw_tick();
+                assert_eq!(chat.bottom_pane.composer_text(), "x");
+                assert_no_submit_op(&mut ops);
+                assert_chatwidget_snapshot!(
+                    "image_preparation_in_progress",
+                    normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+                );
+                chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+                assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
+                assert_no_submit_op(&mut ops);
+                drop(release);
+                worker.await.unwrap();
+                let id = loop {
+                    if let AppEvent::ImagesPrepared(id) = rx.recv().await.unwrap() {
+                        break id;
+                    }
+                };
+                if scenario == "rate_limit_recovery" {
+                    chat.input_queue.rate_limit_recovery_pending = true;
+                    chat.on_images_prepared(id);
+                    assert_eq!(
+                        chat.input_queue
+                            .queued_user_messages
+                            .iter()
+                            .map(|queued| queued.user_message.clone())
+                            .collect::<Vec<_>>(),
+                        vec![message, UserMessage::from("x")],
+                    );
+                } else if scenario == "model_change" {
+                    chat.handle_paste("new draft".into());
+                    let mut models = chat.model_catalog.try_list_models().unwrap();
+                    for model in &mut models {
+                        model
+                            .input_modalities
+                            .retain(|modality| *modality != InputModality::Image);
+                    }
+                    chat.model_catalog = Arc::new(ModelCatalog::new(models));
+                    chat.on_images_prepared(id);
+                    assert_eq!(chat.bottom_pane.composer_text(), "describe\nnew draft");
+                } else if scenario == "escape" || scenario == "ctrl_c" {
+                    chat.on_task_started();
+                    chat.handle_key_event(if scenario == "escape" {
+                        KeyEvent::from(KeyCode::Esc)
+                    } else {
+                        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+                    });
+                    next_interrupt_op(&mut ops);
+                    if scenario == "escape" {
+                        chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+                        assert_eq!(chat.bottom_pane.composer_text(), "describe\nx");
+                    } else {
+                        chat.on_task_complete(
+                            /*last_agent_message*/ None, /*completion*/ None,
+                            /*from_replay*/ false,
+                        );
+                        assert_eq!(chat.input_queue.queued_user_messages.len(), 2);
+                    }
+                    chat.on_images_prepared(id);
+                } else if scenario == "parent_owned" || scenario == "external_writer" {
+                    chat.codex_op_target = CodexOpTarget::AppEvent;
+                    if scenario == "parent_owned" {
+                        chat.set_parent_owned_thread();
+                    } else {
+                        chat.show_external_writer_thread();
+                    }
+                    assert_eq!(chat.bottom_pane.composer_text(), "describe");
+                    chat.on_images_prepared(id);
+                    assert!(drain_insert_history(&mut rx).is_empty());
+                } else if scenario == "interrupt" {
+                    chat.input_queue
+                        .pending_steers
+                        .push_back(pending_steer("earlier"));
+                    chat.on_interrupted_turn(TurnAbortReason::Interrupted);
+                    assert_eq!(chat.bottom_pane.composer_text(), "earlier\ndescribe\nx");
+                    chat.on_images_prepared(id);
+                } else if scenario == "disconnect" {
+                    chat.pause_for_disconnect();
+                    chat.reconnect_failed();
+                    assert_eq!(chat.bottom_pane.composer_text(), "describe");
+                    assert_eq!(
+                        chat.bottom_pane.composer_draft_snapshot().local_images,
+                        message.local_images,
+                    );
+                    assert_chatwidget_snapshot!(
+                        "image_preparation_disconnected",
+                        normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+                    );
+                    chat.on_images_prepared(id);
+                } else {
+                    // A completion already in flight must not submit to a replacement widget/thread.
+                    let saved = chat.capture_thread_input_state().unwrap();
+                    assert_eq!(saved.composer.as_ref().unwrap().text, "describe");
+                    assert_eq!(saved.composer.as_ref().unwrap().local_images.len(), 1);
+                    chat.on_images_prepared(id);
+                }
+                assert_no_submit_op(&mut ops);
+                assert!(chat.pending_image_submission.is_none());
+            });
     }
 }

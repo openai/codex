@@ -828,6 +828,9 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
+            AppEvent::ImagesPrepared(id) => {
+                self.chat_widget.on_images_prepared(id);
+            }
             AppEvent::CodexOp(mut op) => {
                 if let AppCommand::OverrideTurnContext {
                     cwd,

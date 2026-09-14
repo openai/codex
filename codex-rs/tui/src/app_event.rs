@@ -603,6 +603,9 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
 
+    /// A blocking image-preparation worker has finished; payload stays with its widget.
+    ImagesPrepared(Uuid),
+
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
         thread_id: ThreadId,

@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&cell.raw_lines()).join(\"\\n\")"
+---
+[Image #1] describe inline image
