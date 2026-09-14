@@ -240,6 +240,7 @@ async fn sandbox_request_allows_prepared_managed_proxy_port() {
         managed_network: Some(ManagedNetworkSandboxContext {
             loopback_ports: vec![43123],
             allow_local_binding: false,
+            ..Default::default()
         }),
         network_proxy: None,
     };

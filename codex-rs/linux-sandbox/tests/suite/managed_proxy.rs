@@ -36,6 +36,9 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use url::Url;
 
+#[path = "managed_proxy_unix_sockets_tests.rs"]
+mod unix_sockets;
+
 const BWRAP_UNAVAILABLE_ERR: &str = "bubblewrap is unavailable: no system bwrap was found";
 const NETWORK_TIMEOUT_MS: u64 = 4_000;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 8);
@@ -171,7 +174,8 @@ fn linux_sandbox_command(
         permission_profile_json,
     ];
     if allow_network_for_proxy {
-        args.push("--allow-network-for-proxy".to_string());
+        args.push("--managed-network".to_string());
+        args.push("{}".to_string());
     }
     args.push("--".to_string());
     args.extend(command.iter().map(|entry| (*entry).to_string()));

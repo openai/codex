@@ -68,6 +68,7 @@ async fn dedicated_listeners_preserve_http_and_socks_policy_without_restricted_t
             ManagedNetworkSandboxContext {
                 loopback_ports: ports,
                 allow_local_binding: false,
+                ..ManagedNetworkSandboxContext::default()
             }
         );
         assert_eq!(

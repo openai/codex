@@ -483,6 +483,12 @@ pub struct ManagedNetworkSandboxContext {
     /// Whether the command may bind local sockets and exchange loopback traffic.
     #[serde(default)]
     pub allow_local_binding: bool,
+    /// Unix-domain socket paths allowed by the effective managed-network policy.
+    #[serde(default)]
+    pub allow_unix_sockets: Vec<String>,
+    /// Whether the effective policy permits connections to all Unix-domain sockets.
+    #[serde(default)]
+    pub dangerously_allow_all_unix_sockets: bool,
 }
 
 /// Environment-specific managed-network settings prepared for one command launch.
@@ -1133,6 +1139,9 @@ impl NetworkProxy {
             sandbox_context: ManagedNetworkSandboxContext {
                 loopback_ports,
                 allow_local_binding: runtime_settings.allow_local_binding,
+                allow_unix_sockets: runtime_settings.allow_unix_sockets.to_vec(),
+                dangerously_allow_all_unix_sockets: runtime_settings
+                    .dangerously_allow_all_unix_sockets,
             },
         }
     }
@@ -2110,6 +2119,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn prepare_for_optional_environment_preserves_effective_unix_socket_permissions()
+    -> Result<()> {
+        let mut config = NetworkProxyConfig {
+            enabled: true,
+            proxy_url: "http://127.0.0.1:43128".to_string(),
+            socks_url: "http://127.0.0.1:48081".to_string(),
+            allow_local_binding: true,
+            unix_sockets: Some(crate::config::NetworkUnixSocketPermissions {
+                entries: [
+                    (
+                        "/tmp/allowed.sock".to_string(),
+                        crate::config::NetworkUnixSocketPermission::Allow,
+                    ),
+                    (
+                        "/tmp/denied.sock".to_string(),
+                        crate::config::NetworkUnixSocketPermission::Deny,
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }),
+            ..NetworkProxyConfig::default()
+        };
+        let proxy = NetworkProxy::builder()
+            .state(Arc::new(network_proxy_state_for_policy(config.clone())))
+            .managed_by_codex(/*managed_by_codex*/ false)
+            .build()
+            .await?;
+
+        for allow_all in [false, true] {
+            config.dangerously_allow_all_unix_sockets = allow_all;
+            let replacement = crate::state::build_config_state(config.clone(), Default::default())?;
+            proxy.replace_config_state(replacement).await?;
+            let prepared = proxy
+                .prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
+            assert_eq!(
+                prepared.sandbox_context,
+                ManagedNetworkSandboxContext {
+                    loopback_ports: vec![43128, 48081],
+                    allow_local_binding: true,
+                    allow_unix_sockets: if cfg!(target_os = "windows") {
+                        Vec::new()
+                    } else {
+                        vec!["/tmp/allowed.sock".to_string()]
+                    },
+                    dangerously_allow_all_unix_sockets: !cfg!(target_os = "windows") && allow_all,
+                }
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn prepare_for_environment_keeps_env_and_sandbox_ports_in_sync() -> Result<()> {
         #[cfg(target_os = "windows")]
         let _permit = WINDOWS_INGRESS_TEST_LOCK.acquire().await.unwrap();
@@ -2173,6 +2236,7 @@ mod tests {
                 ManagedNetworkSandboxContext {
                     loopback_ports: expected_ports,
                     allow_local_binding: false,
+                    ..ManagedNetworkSandboxContext::default()
                 }
             );
         }

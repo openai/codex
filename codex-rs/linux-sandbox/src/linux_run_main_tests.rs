@@ -5,6 +5,8 @@ use crate::linux_run_main::install_bwrap_signal_forwarders;
 #[cfg(test)]
 use crate::linux_run_main::wait_for_bwrap_child;
 #[cfg(test)]
+use codex_network_proxy::ManagedNetworkSandboxContext;
+#[cfg(test)]
 use codex_protocol::models::PermissionProfile;
 #[cfg(test)]
 use codex_protocol::protocol::FileSystemSandboxPolicy;
@@ -553,17 +555,63 @@ fn run_bwrap_signal_forwarder_test_supervisor() -> ! {
 #[test]
 fn managed_proxy_inner_command_includes_route_spec() {
     let permission_profile = read_only_permission_profile();
-    let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
-        sandbox_policy_cwd: Path::new("/tmp"),
-        command_cwd: Some(Path::new("/tmp/link")),
-        permission_profile: &permission_profile,
-        allow_network_for_proxy: true,
-        proxy_route_spec: Some("{\"routes\":[]}".to_string()),
-        command: vec!["/bin/true".to_string()],
-    });
+    for managed_network in [
+        ManagedNetworkSandboxContext::default(),
+        ManagedNetworkSandboxContext {
+            loopback_ports: vec![8080, 9090],
+            allow_local_binding: true,
+            allow_unix_sockets: vec!["/tmp/daemon.sock".to_string()],
+            dangerously_allow_all_unix_sockets: true,
+        },
+    ] {
+        let args = build_inner_seccomp_command(InnerSeccompCommandArgs {
+            sandbox_policy_cwd: Path::new("/tmp"),
+            command_cwd: Some(Path::new("/tmp/link")),
+            permission_profile: &permission_profile,
+            managed_network: Some(managed_network.clone()),
+            proxy_route_spec: Some("{\"routes\":[]}".to_string()),
+            command: vec!["/bin/true".to_string()],
+        });
 
-    assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
-    assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
+        assert!(args.iter().any(|arg| arg == "--proxy-route-spec"));
+        assert!(args.iter().any(|arg| arg == "{\"routes\":[]}"));
+        let parsed = LandlockCommand::try_parse_from(args)
+            .expect("inner command should preserve the managed network policy");
+        assert_eq!(parsed.managed_network, Some(managed_network));
+    }
+}
+
+#[test]
+fn managed_network_policy_alone_enables_proxy_mode() {
+    let parsed = LandlockCommand::try_parse_from([
+        "codex-linux-sandbox",
+        "--sandbox-policy-cwd",
+        "/tmp",
+        "--managed-network",
+        "{}",
+        "--",
+        "/bin/true",
+    ])
+    .expect("managed network context should enable proxy mode on its own");
+    assert_eq!(
+        parsed.managed_network,
+        Some(ManagedNetworkSandboxContext::default())
+    );
+}
+
+#[test]
+fn malformed_managed_network_policy_is_rejected() {
+    let error = LandlockCommand::try_parse_from([
+        "codex-linux-sandbox",
+        "--sandbox-policy-cwd",
+        "/tmp",
+        "--managed-network",
+        "{\"dangerouslyAllowAllUnixSockets\":\"true\"}",
+        "--",
+        "/bin/true",
+    ])
+    .expect_err("managed network policy should reject a non-boolean grant");
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
 }
 
 #[test]
@@ -573,7 +621,7 @@ fn inner_command_includes_permission_profile_flag() {
         sandbox_policy_cwd: Path::new("/tmp"),
         command_cwd: Some(Path::new("/tmp/link")),
         permission_profile: &permission_profile,
-        allow_network_for_proxy: false,
+        managed_network: None,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
     });
@@ -592,12 +640,15 @@ fn non_managed_inner_command_omits_route_spec() {
         sandbox_policy_cwd: Path::new("/tmp"),
         command_cwd: Some(Path::new("/tmp/link")),
         permission_profile: &permission_profile,
-        allow_network_for_proxy: false,
+        managed_network: None,
         proxy_route_spec: None,
         command: vec!["/bin/true".to_string()],
     });
 
     assert!(!args.iter().any(|arg| arg == "--proxy-route-spec"));
+    let parsed = LandlockCommand::try_parse_from(args)
+        .expect("unmanaged inner command should preserve ordinary sandbox mode");
+    assert_eq!(parsed.managed_network, None);
 }
 
 #[test]
@@ -608,7 +659,7 @@ fn managed_proxy_inner_command_requires_route_spec() {
             sandbox_policy_cwd: Path::new("/tmp"),
             command_cwd: Some(Path::new("/tmp/link")),
             permission_profile: &permission_profile,
-            allow_network_for_proxy: true,
+            managed_network: Some(ManagedNetworkSandboxContext::default()),
             proxy_route_spec: None,
             command: vec!["/bin/true".to_string()],
         })

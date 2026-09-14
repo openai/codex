@@ -777,6 +777,7 @@ fn prepared_managed_network_context_allows_only_its_proxy_ports() {
     let managed_network = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123, 48081],
         allow_local_binding: false,
+        ..Default::default()
     };
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/bin/true".to_string()],

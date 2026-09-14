@@ -962,6 +962,8 @@ mod tests {
             managed_network: Some(ManagedNetworkSandboxContext {
                 loopback_ports: vec![43123, 48081],
                 allow_local_binding: false,
+                allow_unix_sockets: vec!["/tmp/allowed.sock".to_string()],
+                dangerously_allow_all_unix_sockets: true,
             }),
             network_proxy: Some(
                 RemoteNetworkProxyLaunchConfig::new(
@@ -990,6 +992,8 @@ mod tests {
             serde_json::json!({
                 "loopbackPorts": [43123, 48081],
                 "allowLocalBinding": false,
+                "allowUnixSockets": ["/tmp/allowed.sock"],
+                "dangerouslyAllowAllUnixSockets": true,
             })
         );
         assert_eq!(
@@ -1021,6 +1025,52 @@ mod tests {
         assert!(legacy_serialized.get("threadId").is_none());
         assert!(legacy_serialized.get("toolCallId").is_none());
         assert!(legacy_serialized.get("metadata").is_none());
+    }
+
+    #[test]
+    fn exec_params_defaults_legacy_managed_network_unix_socket_policy() {
+        let cwd =
+            PathUri::from_host_native_path(std::env::current_dir().expect("current directory"))
+                .expect("cwd URI");
+        let legacy: ExecParams = serde_json::from_value(serde_json::json!({
+            "processId": "legacy-managed-network",
+            "argv": ["true"],
+            "cwd": cwd,
+            "env": {},
+            "tty": false,
+            "arg0": null,
+            "enforceManagedNetwork": true,
+            "managedNetwork": {
+                "loopbackPorts": [43123],
+                "allowLocalBinding": true,
+            },
+        }))
+        .expect("deserialize legacy managed network context");
+
+        assert_eq!(
+            legacy,
+            ExecParams {
+                process_id: ProcessId::from("legacy-managed-network"),
+                metadata: None,
+                argv: vec!["true".to_string()],
+                cwd,
+                env_policy: None,
+                shell_snapshot: None,
+                env: HashMap::new(),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                sandbox: None,
+                enforce_managed_network: true,
+                managed_network: Some(ManagedNetworkSandboxContext {
+                    loopback_ports: vec![43123],
+                    allow_local_binding: true,
+                    allow_unix_sockets: Vec::new(),
+                    dangerously_allow_all_unix_sockets: false,
+                }),
+                network_proxy: None,
+            }
+        );
     }
 
     #[test]

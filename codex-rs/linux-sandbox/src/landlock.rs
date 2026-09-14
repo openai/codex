@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::error::SandboxErr;
@@ -43,15 +44,15 @@ pub(crate) fn apply_permission_profile_to_current_thread(
     permission_profile: &PermissionProfile,
     cwd: &Path,
     apply_landlock_fs: bool,
-    allow_network_for_proxy: bool,
-    proxy_routed_network: bool,
+    managed_network: Option<&ManagedNetworkSandboxContext>,
+    proxy_routing_active: bool,
 ) -> Result<()> {
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
     let network_seccomp_mode = network_seccomp_mode(
         network_sandbox_policy,
-        allow_network_for_proxy,
-        proxy_routed_network,
+        managed_network.is_some(),
+        proxy_routing_active,
     )
     .or_else(|| {
         // VM sockets can reach host services outside the filesystem sandbox.
@@ -73,7 +74,7 @@ pub(crate) fn apply_permission_profile_to_current_thread(
     }
 
     if let Some(mode) = network_seccomp_mode {
-        install_network_seccomp_filter_on_current_thread(mode)?;
+        install_network_seccomp_filter_on_current_thread(mode, managed_network)?;
     }
 
     if apply_landlock_fs && !file_system_sandbox_policy.has_full_disk_write_access() {
@@ -177,6 +178,7 @@ fn install_filesystem_landlock_rules_on_current_thread(
 /// inherits it.
 fn install_network_seccomp_filter_on_current_thread(
     mode: NetworkSeccompMode,
+    managed_network: Option<&ManagedNetworkSandboxContext>,
 ) -> std::result::Result<(), SandboxErr> {
     fn deny_syscall(rules: &mut BTreeMap<i64, Vec<SeccompRule>>, nr: i64) {
         rules.insert(nr, vec![]); // empty rule vec = unconditional match
@@ -230,12 +232,10 @@ fn install_network_seccomp_filter_on_current_thread(
         }
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated
-            // namespace (used to reach the local TCP bridge) but deny socket()
-            // for all other families, including AF_UNIX. Only AF_UNIX
-            // socketpair() remains available for process-local IPC because it
-            // cannot connect to a socket outside the sandbox or bypass the
-            // bridge.
-            let deny_non_ip_socket = SeccompRule::new(vec![
+            // namespace (used to reach the local TCP bridge). Standalone Unix
+            // sockets require an explicit managed-policy grant; all other
+            // socket families remain denied.
+            let mut denied_socket_conditions = vec![
                 SeccompCondition::new(
                     0,
                     SeccompCmpArgLen::Dword,
@@ -248,7 +248,16 @@ fn install_network_seccomp_filter_on_current_thread(
                     SeccompCmpOp::Ne,
                     libc::AF_INET6 as u64,
                 )?,
-            ])?;
+            ];
+            if managed_network.is_some_and(|context| context.dangerously_allow_all_unix_sockets) {
+                denied_socket_conditions.push(SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_UNIX as u64,
+                )?);
+            }
+            let deny_non_ip_socket = SeccompRule::new(denied_socket_conditions)?;
             let deny_non_unix_socketpair = SeccompRule::new(vec![SeccompCondition::new(
                 0,
                 SeccompCmpArgLen::Dword,

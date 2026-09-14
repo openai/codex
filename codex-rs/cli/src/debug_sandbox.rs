@@ -23,7 +23,6 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::CreateSeatbeltCommandArgsParams;
@@ -364,6 +363,7 @@ async fn run_command_under_sandbox(
         .map(codex_core::config::StartedNetworkProxy::proxy);
     // Proxy containment depends on whether a proxy is active, not whether its
     // policy came from managed requirements.
+    #[cfg(target_os = "macos")]
     let enforce_managed_network = network.is_some();
     let managed_mitm_ca_trust_bundle_path = match network.as_ref() {
         Some(network) => network.managed_mitm_ca_trust_bundle_path(),
@@ -423,13 +423,20 @@ async fn run_command_under_sandbox(
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
             let network_sandbox_policy = runtime_permission_profile.network_sandbox_policy();
+            let (env, managed_network) = if let Some(network) = network.as_ref() {
+                let prepared =
+                    network.prepare_for_optional_environment(env, /*environment_id*/ None)?;
+                (prepared.env, Some(prepared.sandbox_context))
+            } else {
+                (env, None)
+            };
             let args = create_linux_sandbox_command_args_for_permission_profile(
                 command,
                 cwd.as_path(),
                 &runtime_permission_profile,
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
-                allow_network_for_proxy(enforce_managed_network),
+                managed_network.as_ref(),
             );
             spawn_debug_sandbox_child(
                 codex_linux_sandbox_exe,
@@ -438,11 +445,7 @@ async fn run_command_under_sandbox(
                 cwd.to_path_buf(),
                 network_sandbox_policy,
                 env,
-                |env_map| {
-                    if let Some(network) = network.as_ref() {
-                        network.apply_to_env(env_map);
-                    }
-                },
+                |_| {},
             )
             .await?
         }

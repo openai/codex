@@ -530,6 +530,131 @@ fn transform_linux_seccomp_uses_helper_alias_when_launcher_is_not_helper_path() 
     assert_eq!(exec_request.arg0, Some("codex-linux-sandbox".to_string()));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Result<()> {
+    use codex_network_proxy::ConfigReloader;
+    use codex_network_proxy::ConfigReloaderFuture;
+    use codex_network_proxy::ConfigState;
+    use codex_network_proxy::ManagedNetworkSandboxContext;
+    use codex_network_proxy::NetworkProxy;
+    use codex_network_proxy::NetworkProxyConfig;
+    use codex_network_proxy::NetworkProxyConstraints;
+    use codex_network_proxy::NetworkProxyState;
+    use codex_network_proxy::build_config_state;
+    use std::sync::Arc;
+
+    struct TestConfigReloader;
+    impl ConfigReloader for TestConfigReloader {
+        fn source_label(&self) -> String {
+            "sandbox manager test config".to_string()
+        }
+
+        fn maybe_reload(&self) -> ConfigReloaderFuture<'_, Option<ConfigState>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn reload_now(&self) -> ConfigReloaderFuture<'_, ConfigState> {
+            Box::pin(async { Err(anyhow::anyhow!("test config cannot reload")) })
+        }
+    }
+
+    let state = build_config_state(
+        NetworkProxyConfig {
+            enabled: true,
+            dangerously_allow_all_unix_sockets: true,
+            ..Default::default()
+        },
+        NetworkProxyConstraints::default(),
+    )?;
+    let network = NetworkProxy::builder()
+        .state(Arc::new(NetworkProxyState::with_reloader(
+            state,
+            Arc::new(TestConfigReloader),
+        )))
+        .managed_by_codex(/*managed_by_codex*/ false)
+        .build()
+        .await?;
+    let prepared =
+        network.prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;
+    let allow_all = prepared.sandbox_context;
+    let path_only = ManagedNetworkSandboxContext {
+        allow_unix_sockets: vec!["/tmp/daemon.sock".to_string()],
+        ..Default::default()
+    };
+    let denied = ManagedNetworkSandboxContext::default();
+    let cwd = AbsolutePathBuf::current_dir()?;
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    let manager = SandboxManager::new();
+    for (label, context, live_proxy, enforce_managed_network, expected) in [
+        (
+            "missing policy stays managed with restrictive defaults",
+            None,
+            false,
+            true,
+            Some(denied.clone()),
+        ),
+        (
+            "path grant stays restricted",
+            Some(path_only.clone()),
+            false,
+            true,
+            Some(path_only),
+        ),
+        (
+            "prepared allow-all",
+            Some(allow_all.clone()),
+            false,
+            true,
+            Some(allow_all.clone()),
+        ),
+        (
+            "prepared denial overrides live allow-all",
+            Some(denied.clone()),
+            true,
+            true,
+            Some(denied),
+        ),
+        (
+            "live proxy fallback",
+            None,
+            true,
+            true,
+            Some(allow_all.clone()),
+        ),
+        ("no managed network", Some(allow_all), true, false, None),
+    ] {
+        let request = manager.transform(SandboxTransformRequest {
+            command: SandboxCommand {
+                program: "true".into(),
+                args: Vec::new(),
+                cwd: cwd_uri.clone(),
+                env: HashMap::new(),
+                managed_network: context,
+                additional_permissions: None,
+            },
+            permissions: &PermissionProfile::Disabled,
+            sandbox: SandboxType::LinuxSeccomp,
+            enforce_managed_network,
+            environment_id: None,
+            network: live_proxy.then_some(&network),
+            sandbox_policy_cwd: &cwd_uri,
+            sandbox_exe: Some(std::path::Path::new("/tmp/codex-linux-sandbox")),
+            use_legacy_landlock: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+        })?;
+        let transported_context = request
+            .command
+            .windows(2)
+            .find(|args| args[0] == "--managed-network")
+            .map(|args| serde_json::from_str::<ManagedNetworkSandboxContext>(&args[1]))
+            .transpose()?;
+        assert_eq!(transported_context, expected, "{label}");
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_environment() {

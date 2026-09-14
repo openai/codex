@@ -411,6 +411,7 @@ fn managed_network_allows_authorized_loopback_without_lan_or_dns_access() -> Res
     let proxy = ManagedNetworkSandboxContext {
         loopback_ports: vec![43123, 43124],
         allow_local_binding: true,
+        ..Default::default()
     };
     let mut env = HashMap::new();
     create_command_args(CreateMxcCommandArgsParams {
@@ -466,6 +467,7 @@ fn invalid_managed_network_is_rejected_at_both_boundaries() -> Result<()> {
         let proxy = ManagedNetworkSandboxContext {
             loopback_ports,
             allow_local_binding,
+            ..Default::default()
         };
         let mut env = HashMap::new();
         assert!(

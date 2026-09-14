@@ -3,7 +3,6 @@ use crate::bwrap::WSL1_BWRAP_WARNING;
 #[cfg(target_os = "linux")]
 use crate::bwrap::is_wsl1;
 use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
-use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_permission_profile;
 use crate::policy_transforms::effective_permission_profile;
 use crate::policy_transforms::should_require_platform_sandbox;
@@ -496,14 +495,30 @@ impl SandboxManager {
                 let pending = pending_sandboxed_request?;
                 let exe =
                     sandbox_exe.ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
-                let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
+                if enforce_managed_network
+                    && command.managed_network.is_none()
+                    && let Some(network) = network
+                {
+                    let prepared = network
+                        .prepare_for_optional_environment(
+                            std::mem::take(&mut command.env),
+                            environment_id,
+                        )
+                        .map_err(|err| {
+                            SandboxTransformError::EnvironmentNetworkProxy(err.to_string())
+                        })?;
+                    command.env = prepared.env;
+                    command.managed_network = Some(prepared.sandbox_context);
+                }
+                let managed_network =
+                    enforce_managed_network.then(|| command.managed_network.unwrap_or_default());
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &pending
                         .effective_permission_profile
                         .file_system_sandbox_policy(),
                     use_legacy_landlock,
-                    allow_proxy_network,
+                    managed_network.is_some(),
                     is_wsl1(),
                 )?;
                 let mut args = create_linux_sandbox_command_args_for_permission_profile(
@@ -512,7 +527,7 @@ impl SandboxManager {
                     &pending.effective_permission_profile,
                     pending.native_sandbox_policy_cwd.as_path(),
                     use_legacy_landlock,
-                    allow_proxy_network,
+                    managed_network.as_ref(),
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
