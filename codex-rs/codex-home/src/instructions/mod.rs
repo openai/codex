@@ -37,6 +37,7 @@ impl CodexHomeUserInstructionsProvider {
         }
     }
 
+    #[tracing::instrument(name = "instructions.load", skip_all, fields(provider = "global"))]
     async fn load_from_codex_home(&self) -> LoadedUserInstructions {
         let mut warnings = Vec::new();
         for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
