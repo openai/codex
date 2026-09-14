@@ -680,6 +680,7 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_environment()
                 std::ffi::OsString::from(value),
             )
         }),
+        /*registered_core*/ false,
     );
 
     assert_eq!(
@@ -691,6 +692,27 @@ fn transform_for_direct_spawn_windows_preserves_only_wrapper_setup_environment()
             ("SystemRoot".to_string(), r"C:\Windows".to_string()),
         ])
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn wrapper_runtime_selection_uses_the_parent_not_environment_overrides() {
+    for registered_core in [false, true] {
+        let mut env = HashMap::from([("codex_windows_registered_core".into(), "1".into())]);
+        super::add_windows_sandbox_wrapper_setup_env_from_vars(
+            &mut env,
+            [("CODEX_WINDOWS_REGISTERED_CORE".into(), "0".into())],
+            registered_core,
+        );
+        assert_eq!(
+            env,
+            if registered_core {
+                HashMap::from([("CODEX_WINDOWS_REGISTERED_CORE".into(), "1".into())])
+            } else {
+                HashMap::new()
+            }
+        );
+    }
 }
 
 #[cfg(target_os = "windows")]

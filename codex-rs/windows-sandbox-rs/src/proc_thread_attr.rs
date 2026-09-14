@@ -5,7 +5,10 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::InitializeProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
+use windows_sys::Win32::System::Threading::PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY;
 use windows_sys::Win32::System::Threading::UpdateProcThreadAttribute;
+use windows_sys::Win32::System::WindowsProgramming::PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE;
+use windows_sys::Win32::System::WindowsProgramming::PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_OVERRIDE;
 
 const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
 const PROC_THREAD_ATTRIBUTE_JOB_LIST: usize = 0x0002_000D;
@@ -15,6 +18,7 @@ pub struct ProcThreadAttributeList {
     buffer: Vec<u8>,
     handle_list: Vec<HANDLE>,
     job_list: Vec<HANDLE>,
+    desktop_app_policy: Option<Box<u32>>,
 }
 
 impl ProcThreadAttributeList {
@@ -40,6 +44,7 @@ impl ProcThreadAttributeList {
             buffer,
             handle_list: Vec::new(),
             job_list: Vec::new(),
+            desktop_app_policy: None,
         })
     }
 
@@ -78,6 +83,28 @@ impl ProcThreadAttributeList {
         // SAFETY: `value` points to `self.job_list`, which remains alive while
         // the attribute list can reference it, and `size` covers that slice.
         unsafe { self.update(PROC_THREAD_ATTRIBUTE_JOB_LIST, value, size) }
+    }
+
+    pub fn preserve_desktop_app_context(&mut self) -> io::Result<()> {
+        // System shells otherwise leave the package environment and cannot launch
+        // children from its protected directory. Keep the initial child and descendants
+        // inside it, using the caller-provided restricted token and job containment.
+        // Compare compatibility outcomes via codex.windows_sandbox.runner_result.
+        // https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute
+        let policy = self.desktop_app_policy.insert(Box::new(
+            PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_DISABLE_PROCESS_TREE
+                | PROCESS_CREATION_DESKTOP_APP_BREAKAWAY_OVERRIDE,
+        ));
+        let value = std::ptr::from_mut(policy.as_mut()).cast();
+        // SAFETY: the boxed DWORD remains at a stable address through process creation,
+        // even if the attribute list moves. It is released after DeleteProcThreadAttributeList.
+        unsafe {
+            self.update(
+                PROC_THREAD_ATTRIBUTE_DESKTOP_APP_POLICY as usize,
+                value,
+                std::mem::size_of::<u32>(),
+            )
+        }
     }
 
     unsafe fn update(

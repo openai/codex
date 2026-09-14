@@ -33,6 +33,7 @@ fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
         (true, true, "", 0),
         (true, true, "8080,3129", 0),
         (false, false, "8080", 1),
+        (false, false, "", 1),
         (false, true, "3128", 1),
         (true, false, "3128", 1),
     ] {
@@ -73,33 +74,39 @@ fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
                 u8::from(desired_binding).to_string(),
             ),
         ]);
-        let result = require_sandbox_account_with_setup(
-            &SandboxSetupRequest {
-                permissions: &permissions,
-                command_cwd: home.path(),
-                env_map: &env,
-                codex_home: home.path(),
-                proxy_enforced: true,
-            },
-            WindowsSandboxProxySettingsMode::Reconcile,
-            |_, _| {
-                full_setups.set(full_setups.get() + 1);
-                Err(anyhow::anyhow!("full setup intercepted"))
-            },
-            |_| Ok(Some(UF_NORMAL_ACCOUNT)),
-        );
+        let prepare = || {
+            require_sandbox_account_with_setup(
+                &SandboxSetupRequest {
+                    permissions: &permissions,
+                    command_cwd: home.path(),
+                    env_map: &env,
+                    codex_home: home.path(),
+                    proxy_enforced: true,
+                },
+                WindowsSandboxProxySettingsMode::Reconcile,
+                |_, desired| {
+                    full_setups.set(full_setups.get() + 1);
+                    let mut reconciled = marker.clone();
+                    reconciled.proxy_ports = desired.proxy_ports.clone();
+                    reconciled.allow_local_binding = desired.allow_local_binding;
+                    fs::write(
+                        setup_marker_path(home.path()),
+                        serde_json::to_vec(&reconciled)?,
+                    )?;
+                    Ok(())
+                },
+                |_| Ok(Some(UF_NORMAL_ACCOUNT)),
+            )
+        };
+        for _ in 0..2 {
+            let (creds, _) = prepare()?;
+            assert_eq!(
+                (creds.username, creds.password),
+                ("offline".into(), "test-password".into())
+            );
+        }
+        // The second command reuses reconciled settings, including when filtering removed the proxy.
         assert_eq!(full_setups.get(), expected_full_setups);
-        assert_eq!(
-            result
-                .map(|(creds, _)| (creds.username, creds.password))
-                .map_err(|err| err.to_string()),
-            if expected_full_setups == 0 {
-                Ok(("offline".into(), "test-password".into()))
-            } else {
-                Err("full setup intercepted".into())
-            }
-        );
-        assert_eq!(fs::read(setup_marker_path(home.path()))?, marker_bytes);
     }
     Ok(())
 }

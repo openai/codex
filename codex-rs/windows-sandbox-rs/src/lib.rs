@@ -55,6 +55,14 @@ mod acl;
 #[cfg(target_os = "windows")]
 mod allow;
 #[cfg(target_os = "windows")]
+mod app_package;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use app_package::registered_core_needs_refresh;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use app_package::registered_core_requested;
+#[cfg(target_os = "windows")]
 mod audit;
 #[cfg(target_os = "windows")]
 mod cap;
@@ -265,8 +273,6 @@ pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run
 #[cfg(target_os = "windows")]
 pub use file_write::write_file_atomically;
 #[cfg(target_os = "windows")]
-pub use helper_materialization::resolve_current_exe_for_launch;
-#[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_exe_for_launch;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
@@ -352,6 +358,9 @@ pub use process::spawn_process_with_pipes;
 pub use provisioning_client::WindowsSandboxProvisioningOutcome;
 #[cfg(target_os = "windows")]
 pub use provisioning_client::provision_windows_sandbox_via_service;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub use provisioning_client::refresh_registered_core_via_service;
 #[cfg(target_os = "windows")]
 pub use provisioning_client::register_desktop_installation;
 #[cfg(target_os = "windows")]

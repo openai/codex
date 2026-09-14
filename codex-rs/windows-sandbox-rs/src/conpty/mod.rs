@@ -134,9 +134,13 @@ pub fn spawn_conpty_process_as_user(
         job: Some(Arc::clone(&job)),
         _desktop: Some(desktop),
     };
-    let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 2)?;
+    let preserve_app_context = crate::app_package::current_process_is_registered_core_runner()?;
+    let mut attrs = ProcThreadAttributeList::new(2 + u32::from(preserve_app_context))?;
     attrs.set_pseudoconsole(hpc)?;
     attrs.set_job(job.as_raw_handle() as HANDLE)?;
+    if preserve_app_context {
+        attrs.preserve_desktop_app_context()?;
+    }
     si.lpAttributeList = attrs.as_mut_ptr();
 
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };

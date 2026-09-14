@@ -112,9 +112,13 @@ pub unsafe fn create_process_as_user(
         | (None, ConsoleMode::Inherit)
         | (None, ConsoleMode::NoWindow) => 0,
     };
-    let attr_count = if stdio.is_some() { 2 } else { 1 };
+    let preserve_app_context = crate::app_package::current_process_is_registered_core_runner()?;
+    let attr_count = if stdio.is_some() { 2 } else { 1 } + u32::from(preserve_app_context);
     let mut attrs = ProcThreadAttributeList::new(attr_count)?;
     attrs.set_job(job.as_raw_handle() as HANDLE)?;
+    if preserve_app_context {
+        attrs.preserve_desktop_app_context()?;
+    }
 
     let mut si: STARTUPINFOEXW = std::mem::zeroed();
     si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;

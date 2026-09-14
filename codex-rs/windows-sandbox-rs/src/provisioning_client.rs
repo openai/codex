@@ -64,6 +64,10 @@ impl WindowsSandboxProxyListeners {
         if permission_profile.network_sandbox_policy().is_enabled() {
             return Self::default();
         }
+        Self::from_proxy_environment(env_map)
+    }
+
+    pub(crate) fn from_proxy_environment(env_map: &HashMap<String, String>) -> Self {
         let mut listeners = Self::default();
         for value in crate::setup::PROXY_ENV_KEYS
             .iter()
@@ -100,11 +104,44 @@ pub enum WindowsSandboxProvisioningOutcome {
     Unavailable,
 }
 
+enum ProvisioningIntent {
+    Setup,
+    RefreshRegistration,
+}
+
+/// Refreshes only an already-provisioned gated runtime; no helper or setup fallback.
+#[doc(hidden)]
+pub fn refresh_registered_core_via_service(
+    codex_home: &Path,
+    settings: WindowsSandboxProvisioningSettings,
+    listeners: WindowsSandboxProxyListeners,
+) -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
+    anyhow::ensure!(
+        crate::registered_core_requested(),
+        "registered Core is not enabled"
+    );
+    provision(
+        codex_home,
+        settings,
+        listeners,
+        ProvisioningIntent::RefreshRegistration,
+    )
+}
+
 /// Provisions the elevated Windows sandbox through the authenticated packaged service.
 pub fn provision_windows_sandbox_via_service(
     codex_home: &Path,
     settings: WindowsSandboxProvisioningSettings,
     listeners: WindowsSandboxProxyListeners,
+) -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
+    provision(codex_home, settings, listeners, ProvisioningIntent::Setup)
+}
+
+fn provision(
+    codex_home: &Path,
+    settings: WindowsSandboxProvisioningSettings,
+    listeners: WindowsSandboxProxyListeners,
+    intent: ProvisioningIntent,
 ) -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
     let request = crate::FramedProvisioningMessage {
         version: crate::PROVISIONING_PROTOCOL_VERSION,
@@ -114,8 +151,8 @@ pub fn provision_windows_sandbox_via_service(
                     .to_str()
                     .context("sandbox provisioning home is not valid UTF-8")?
                     .to_owned(),
-                registered_core: false,
-                refresh_only: false,
+                registered_core: crate::registered_core_requested(),
+                refresh_only: matches!(intent, ProvisioningIntent::RefreshRegistration),
                 settings,
                 listeners,
             },
@@ -126,11 +163,16 @@ pub fn provision_windows_sandbox_via_service(
         crate::SandboxProvisioningResponse::Ok => {
             Ok(WindowsSandboxProvisioningOutcome::Provisioned)
         }
-        crate::SandboxProvisioningResponse::Unavailable => {
-            Ok(WindowsSandboxProvisioningOutcome::Unavailable)
-        }
+        crate::SandboxProvisioningResponse::Unavailable => service_unavailable(),
         crate::SandboxProvisioningResponse::Error { message } => Err(anyhow!(message)),
     }
+}
+
+fn service_unavailable() -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
+    if crate::registered_core_requested() {
+        bail!("app runtime provisioning service is unavailable; refusing helper fallback");
+    }
+    Ok(WindowsSandboxProvisioningOutcome::Unavailable)
 }
 
 /// Records desktop uninstall ownership without creating or enabling a sandbox.

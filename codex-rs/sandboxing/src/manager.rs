@@ -736,14 +736,24 @@ fn wrap_windows_sandbox_exec_request_for_direct_spawn(
 
 #[cfg(target_os = "windows")]
 fn add_windows_sandbox_wrapper_setup_env(env: &mut HashMap<String, String>) {
-    add_windows_sandbox_wrapper_setup_env_from_vars(env, std::env::vars_os());
+    add_windows_sandbox_wrapper_setup_env_from_vars(
+        env,
+        std::env::vars_os(),
+        codex_windows_sandbox::registered_core_requested(),
+    );
 }
 
 #[cfg(target_os = "windows")]
 fn add_windows_sandbox_wrapper_setup_env_from_vars(
     env: &mut HashMap<String, String>,
     vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    registered_core: bool,
 ) {
+    // This outer helper must use the parent's runtime selection, not shell-policy overrides.
+    env.retain(|key, _| !key.eq_ignore_ascii_case("CODEX_WINDOWS_REGISTERED_CORE"));
+    if registered_core {
+        env.insert("CODEX_WINDOWS_REGISTERED_CORE".into(), "1".into());
+    }
     for (key, value) in vars {
         let key = key.to_string_lossy().into_owned();
         if !WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST

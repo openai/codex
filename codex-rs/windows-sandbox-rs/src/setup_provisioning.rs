@@ -542,7 +542,7 @@ fn real_main(setup_mode: &mut Option<SetupMode>) -> Result<()> {
     let _setup_guard = if payload.mode.provisions_accounts(payload.refresh_only) {
         let guard = acquire_sandbox_setup_lock(INFINITE)?;
         anyhow::ensure!(
-            payload.runtime == SetupRuntime::Legacy,
+            payload.runtime == SetupRuntime::Legacy && !crate::registered_core_requested(),
             "registered Core requires service-owned provisioning"
         );
         anyhow::ensure!(

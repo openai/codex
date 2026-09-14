@@ -129,6 +129,28 @@ pub struct RuntimeAccountRegistration {
     pub alias_path: Option<std::path::PathBuf>,
 }
 
+/// Capture the requesting process identity before elevation, never USERNAME.
+pub(crate) fn current_setup_user() -> Result<String> {
+    use std::os::windows::io::FromRawHandle;
+    use std::os::windows::io::OwnedHandle;
+    use windows_sys::Win32::Security as security;
+    use windows_sys::Win32::System::Threading as threading;
+    let mut token = 0;
+    if unsafe {
+        threading::OpenProcessToken(
+            threading::GetCurrentProcess(),
+            security::TOKEN_QUERY,
+            &mut token,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error()).context("query requesting setup identity");
+    }
+    let _token = unsafe { OwnedHandle::from_raw_handle(token as _) };
+    let sid = unsafe { crate::token::get_user_sid_bytes(token)? };
+    unsafe { crate::winutil::account_name_from_sid(sid.as_ptr() as _) }
+        .context("resolve requesting setup identity")
+}
 /// Core owns its complete record; the old parent is only a fallback before/after Core.
 pub fn load_installation() -> Result<Option<InstallationRecord>> {
     if let Some(record) = crate::installation_record::load_from(CORE_INSTALLATION_KEY)? {

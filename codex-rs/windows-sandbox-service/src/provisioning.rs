@@ -122,6 +122,7 @@ pub(crate) fn run(
         &identity.codex_home,
         &identity.account,
         settings,
+        identity.runtime,
         &retained_handles,
     ) {
         Ok(()) => {

@@ -37,9 +37,8 @@ pub const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
 /// PIPE_ACCESS_OUTBOUND (win32 constant), not exposed in windows-sys 0.52.
 pub const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
 
-/// Resolves the elevated command runner path, preferring the copied helper under
-/// `.sandbox-bin` and falling back to the legacy sibling lookup when needed.
-pub fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
+/// Resolve the installed runner for registered Core; otherwise use the legacy copy path.
+pub fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> anyhow::Result<PathBuf> {
     resolve_command_runner(codex_home, log_dir)
 }
 

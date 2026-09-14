@@ -106,15 +106,17 @@ impl DesktopPolicy {
         network_proxy_restricting_sid: Option<&str>,
     ) -> Result<Self> {
         // Match the complete read override passed by credential setup to the ACL helper.
+        let runtime = crate::setup::current_setup_runtime();
         overrides.read_roots.get_or_insert_with(|| {
             gather_read_roots(
                 request.command_cwd,
                 request.permissions,
                 request.env_map,
                 request.codex_home,
+                runtime,
             )
         });
-        let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+        let (read_roots, write_roots) = build_payload_roots(&request, &overrides, runtime);
         Ok(Self {
             uses_write_capabilities: request
                 .permissions

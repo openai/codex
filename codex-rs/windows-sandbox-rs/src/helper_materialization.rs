@@ -1,4 +1,6 @@
-//! Selects sandbox helper paths; legacy file copying lives in the copy module.
+//! Resolve sandbox helpers and materialize legacy executables with inherited sandbox ACLs.
+//! An explicit registered-runtime request never falls through to copying or PATH lookup;
+//! the service and startup handshake independently verify the installed image.
 
 mod copy;
 use copy::CopyOutcome;
@@ -7,31 +9,27 @@ use copy::copy_from_source_if_needed;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
-
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 
+use crate::app_package::registered_core_requested;
 use crate::logging::log_note;
 use crate::sandbox_bin_dir;
+use crate::setup::SetupRuntime;
 
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
 const COMMAND_RUNNER_EXE: &str = "codex-command-runner.exe";
 pub(crate) const BIN_DIRNAME: &str = "bin";
 pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 
-static HELPER_PATH_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
-
 pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
     sandbox_bin_dir(codex_home)
 }
 
-pub(crate) fn legacy_lookup() -> PathBuf {
+fn legacy_lookup() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(candidate) = bundled_executable_path_for_exe(&exe, COMMAND_RUNNER_EXE)
     {
@@ -40,8 +38,21 @@ pub(crate) fn legacy_lookup() -> PathBuf {
     PathBuf::from(COMMAND_RUNNER_EXE)
 }
 
-pub(crate) fn resolve_command_runner(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
-    match copy_runner_if_needed(codex_home, log_dir) {
+pub(crate) fn resolve_command_runner(codex_home: &Path, log_dir: Option<&Path>) -> Result<PathBuf> {
+    if registered_core_requested() {
+        let exe = std::env::current_exe().context("resolve registered Core helper source")?;
+        let direct_path = exe.with_file_name(COMMAND_RUNNER_EXE);
+        log_note(
+            &format!(
+                "helper launch resolution: using app-contained command-runner path {}",
+                direct_path.display()
+            ),
+            log_dir,
+        );
+        // Missing packaged helpers must fail rather than search PATH or create a copy.
+        return Ok(direct_path);
+    }
+    Ok(match copy_runner_if_needed(codex_home, log_dir) {
         Ok(path) => {
             log_note(
                 &format!(
@@ -63,26 +74,44 @@ pub(crate) fn resolve_command_runner(codex_home: &Path, log_dir: Option<&Path>) 
             );
             fallback
         }
-    }
-}
-
-pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
-    let source = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(_) => return PathBuf::from(fallback_executable),
-    };
-    resolve_exe_for_launch(&source, codex_home)
+    })
 }
 
 pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
+    let runtime = crate::setup::current_setup_runtime();
+    resolve_exe_for_runtime(source, codex_home, runtime)
+}
+
+fn resolve_exe_for_runtime(source: &Path, codex_home: &Path, runtime: SetupRuntime) -> PathBuf {
+    let sandbox_log_dir = crate::sandbox_dir(codex_home);
+    if runtime == SetupRuntime::Registered {
+        log_note(
+            &format!(
+                "helper executable resolution: route=direct source={} selected={}",
+                source.display(),
+                source.display()
+            ),
+            Some(&sandbox_log_dir),
+        );
+        return source.to_path_buf();
+    }
     let Some(file_name) = source.file_name() else {
         return source.to_path_buf();
     };
     let destination = helper_bin_dir(codex_home).join(file_name);
     match copy_from_source_if_needed(source, &destination) {
-        Ok(_) => destination,
+        Ok(_) => {
+            log_note(
+                &format!(
+                    "helper executable resolution: route=materialized source={} selected={}",
+                    source.display(),
+                    destination.display()
+                ),
+                Some(&sandbox_log_dir),
+            );
+            destination
+        }
         Err(err) => {
-            let sandbox_log_dir = crate::sandbox_dir(codex_home);
             log_note(
                 &format!(
                     "helper copy failed for executable: {err:#}; falling back to legacy path {}",
@@ -96,20 +125,9 @@ pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
 }
 
 fn copy_runner_if_needed(codex_home: &Path, log_dir: Option<&Path>) -> Result<PathBuf> {
-    let cache_key = format!("{}|{}", COMMAND_RUNNER_EXE, codex_home.display());
-    if let Some(path) = cached_helper_path(&cache_key) {
-        log_note(
-            &format!(
-                "helper copy: using in-memory cache for command-runner -> {}",
-                path.display()
-            ),
-            log_dir,
-        );
-        return Ok(path);
-    }
-
     let source = sibling_source_path()?;
-    let destination = helper_destination_for_source(codex_home, &source)?;
+    let suffix = helper_version_suffix(&source)?;
+    let destination = helper_bin_dir(codex_home).join(materialized_file_name(&suffix));
     log_note(
         &format!(
             "helper copy: validating command-runner source={} destination={}",
@@ -132,21 +150,7 @@ fn copy_runner_if_needed(codex_home: &Path, log_dir: Option<&Path>) -> Result<Pa
         ),
         log_dir,
     );
-    store_helper_path(cache_key, destination.clone());
     Ok(destination)
-}
-
-fn cached_helper_path(cache_key: &str) -> Option<PathBuf> {
-    let cache = HELPER_PATH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let guard = cache.lock().ok()?;
-    guard.get(cache_key).cloned()
-}
-
-fn store_helper_path(cache_key: String, path: PathBuf) {
-    let cache = HELPER_PATH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut guard) = cache.lock() {
-        guard.insert(cache_key, path);
-    }
 }
 
 fn sibling_source_path() -> Result<PathBuf> {
@@ -184,11 +188,6 @@ pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Op
     find(exe).or_else(|| find(&dunce::canonicalize(exe).ok()?))
 }
 
-fn helper_destination_for_source(codex_home: &Path, source: &Path) -> Result<PathBuf> {
-    let suffix = helper_version_suffix(source)?;
-    Ok(helper_bin_dir(codex_home).join(materialized_file_name(&suffix)))
-}
-
 fn materialized_file_name(suffix: &str) -> String {
     format!("codex-command-runner-{suffix}.exe")
 }
@@ -219,15 +218,15 @@ mod tests {
     use super::BIN_DIRNAME;
     use super::CopyOutcome;
     use super::DEV_BUILD_VERSION_SENTINEL;
-
     use super::RESOURCES_DIRNAME;
     use super::bundled_executable_path_for_exe;
     use super::copy_from_source_if_needed;
-
     use super::dev_build_suffix;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
+    use super::resolve_exe_for_runtime;
+    use crate::setup::SetupRuntime;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -242,6 +241,37 @@ mod tests {
             PathBuf::from(r"C:\Users\example\.codex\.sandbox-bin"),
             helper_bin_dir(codex_home)
         );
+    }
+
+    #[test]
+    fn registered_request_does_not_materialize_or_replace_a_missing_source() {
+        let tmp = TempDir::new().expect("tempdir");
+        let executable = tmp.path().join("codex.exe");
+        let home = tmp.path().join("home");
+        for content in [None, Some(b"fixture".as_slice())] {
+            if let Some(content) = content {
+                fs::write(&executable, content).expect("write source");
+            }
+            assert_eq!(
+                resolve_exe_for_runtime(&executable, &home, SetupRuntime::Registered),
+                executable
+            );
+            assert!(!helper_bin_dir(&home).exists());
+        }
+    }
+
+    #[test]
+    fn legacy_request_materializes_the_same_source() {
+        let tmp = TempDir::new().expect("tempdir");
+        let executable = tmp.path().join("codex.exe");
+        let home = tmp.path().join("home");
+        fs::write(&executable, b"fixture").expect("write source");
+        let destination = helper_bin_dir(&home).join("codex.exe");
+        assert_eq!(
+            resolve_exe_for_runtime(&executable, &home, SetupRuntime::Legacy),
+            destination
+        );
+        assert_eq!(fs::read(destination).expect("read copy"), b"fixture");
     }
 
     #[test]

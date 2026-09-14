@@ -61,6 +61,11 @@ pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     if !marker_ok {
         return false;
     }
+    if crate::registered_core_requested()
+        && !crate::app_package::registered_setup_is_ready(codex_home).unwrap_or(false)
+    {
+        return false;
+    }
     matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
 }
 
@@ -239,9 +244,12 @@ pub fn require_logon_sandbox_creds(
     proxy_enforced: bool,
     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
 ) -> Result<SandboxCreds> {
+    let runtime = crate::setup::current_setup_runtime();
     let needed_read = read_roots_override
         .map(<[PathBuf]>::to_vec)
-        .unwrap_or_else(|| gather_read_roots(command_cwd, permissions, env_map, codex_home));
+        .unwrap_or_else(|| {
+            gather_read_roots(command_cwd, permissions, env_map, codex_home, runtime)
+        });
     let needed_write = write_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots_for_permissions(permissions, command_cwd, env_map));
