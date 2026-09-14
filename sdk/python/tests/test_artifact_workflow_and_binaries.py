@@ -864,7 +864,10 @@ def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> Non
     assert 'platform-tag = "manylinux_2_17_x86_64"' in pyproject
 
 
-def test_stage_runtime_release_rejects_incomplete_package_layout(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_name", ["codex-package.tar.gz", "codex-package"])
+def test_stage_runtime_release_rejects_incomplete_package_layout(
+    tmp_path: Path, source_name: str
+) -> None:
     script = _load_update_script_module()
     package_dir = tmp_path / "codex-package"
     (package_dir / "bin").mkdir(parents=True)
@@ -872,7 +875,69 @@ def test_stage_runtime_release_rejects_incomplete_package_layout(tmp_path: Path)
     _write_package_archive(package_dir, package_archive)
 
     with pytest.raises(RuntimeError, match="Missing Codex package layout entries"):
-        script.stage_python_runtime_package(tmp_path / "runtime-stage", "1.2.3", package_archive)
+        script.stage_python_runtime_package(
+            tmp_path / "runtime-stage", "1.2.3", tmp_path / source_name
+        )
+
+
+def test_stage_runtime_directory_matches_archive(tmp_path: Path) -> None:
+    script = _load_update_script_module()
+    package_dir = _write_fake_codex_package(tmp_path / "codex-package", script)
+    (package_dir / "bin" / script.runtime_binary_name()).chmod(0o755)
+    package_archive = tmp_path / "codex-package.tar.gz"
+    _write_package_archive(package_dir, package_archive)
+
+    staged_trees = []
+    for name, source in [("archive", package_archive), ("directory", package_dir)]:
+        staged = script.stage_python_runtime_package(
+            tmp_path / name, "1.2.3", source, platform_tag="win_amd64"
+        )
+        staged_trees.append(
+            {
+                path.relative_to(staged): (path.read_bytes(), path.stat().st_mode & 0o777)
+                for path in staged.rglob("*")
+                if path.is_file()
+            }
+        )
+
+    assert staged_trees[0] == staged_trees[1]
+    (script.staged_runtime_package_root(tmp_path / "directory") / "codex-package.json").unlink()
+    assert (package_dir / "codex-package.json").is_file()
+
+
+@pytest.mark.parametrize("entry_kind", ["file-link", "directory-link", "fifo"])
+def test_stage_runtime_directory_rejects_non_regular_entries(
+    tmp_path: Path, entry_kind: str
+) -> None:
+    script = _load_update_script_module()
+    package_dir = _write_fake_codex_package(tmp_path / "codex-package", script)
+    entry = package_dir / "codex-resources" / "invalid"
+    if entry_kind == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFOs are not available on this platform")
+        os.mkfifo(entry)
+    else:
+        target = package_dir / ("codex-package.json" if entry_kind == "file-link" else "bin")
+        try:
+            entry.symlink_to(target, target_is_directory=target.is_dir())
+        except OSError:
+            pytest.skip("Symlinks are not available on this platform")
+
+    with pytest.raises(RuntimeError, match="Expected a regular Codex package entry"):
+        script.stage_python_runtime_package(tmp_path / "runtime-stage", "1.2.3", package_dir)
+
+
+@pytest.mark.parametrize("staging_path", ["codex-package", "codex-package/stage", "."])
+def test_stage_runtime_directory_rejects_overlapping_staging(
+    tmp_path: Path, staging_path: str
+) -> None:
+    script = _load_update_script_module()
+    package_dir = _write_fake_codex_package(tmp_path / "codex-package", script)
+
+    with pytest.raises(RuntimeError, match="directories must not overlap"):
+        script.stage_python_runtime_package(tmp_path / staging_path, "1.2.3", package_dir)
+
+    assert (package_dir / "codex-package.json").is_file()
 
 
 def test_runtime_package_layout_is_included_by_wheel_config(
@@ -1111,15 +1176,18 @@ def test_sdk_beta_can_use_a_supported_runtime(
     )
 
 
-def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("source_name", ["codex-package.tar.gz", "codex-package"])
+def test_stage_runtime_stages_package_without_type_generation(
+    tmp_path: Path, source_name: str
+) -> None:
     script = _load_update_script_module()
-    package_archive = _write_fake_codex_package_archive(tmp_path, script)
+    _write_fake_codex_package_archive(tmp_path, script)
     calls: list[str] = []
     args = script.parse_args(
         [
             "stage-runtime",
             str(tmp_path / "runtime-stage"),
-            str(package_archive),
+            str(tmp_path / source_name),
             "--codex-version",
             "rust-v0.116.0-alpha.1",
             "--platform-tag",
@@ -1152,7 +1220,7 @@ def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) ->
 
     script.run_command(args, ops)
 
-    assert calls == ["stage_runtime:0.116.0a1:manylinux_2_17_x86_64:codex-package.tar.gz"]
+    assert calls == [f"stage_runtime:0.116.0a1:manylinux_2_17_x86_64:{source_name}"]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(

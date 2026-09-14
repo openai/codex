@@ -535,23 +535,18 @@ jobs:
 
           # The wheel's Windows support floor predates the native voice
           # runtime's verified device/VC++ prerequisites. Keep it voice-free.
-          wheel_archives="${RUNNER_TEMP}/voice-free-wheel/${{ matrix.target }}"
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
-            --target "${{ matrix.target }}" --bundle primary \
-            --entrypoint-dir "$CARGO_TARGET_DIR/${{ matrix.target }}/release" \
-            --archive-dir "$wheel_archives"
-          python - "$wheel_archives/codex-package-${{ matrix.target }}.tar.gz" <<'PY'
+          wheel_package="${RUNNER_TEMP}/codex-package-${{ matrix.target }}"
+          python - "$wheel_package" <<'PY'
           import sys
-          import tarfile
-          with tarfile.open(sys.argv[1]) as archive:
-              assert not any("codex-resources/voice/" in member.name for member in archive)
+          from pathlib import Path
+          assert not (Path(sys.argv[1]) / "codex-resources" / "voice").exists()
           PY
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
           python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
-            "$wheel_archives/codex-package-${{ matrix.target }}.tar.gz" \
+            "$wheel_package" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
