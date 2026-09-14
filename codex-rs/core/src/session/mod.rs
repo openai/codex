@@ -2247,9 +2247,11 @@ impl Session {
 
     /// Uses the extension-owned reviewer, or the same manager for standalone hosts.
     pub(crate) fn guardian_review_session(&self) -> Arc<GuardianReviewSessionManager> {
-        self.services
-            .thread_extension_data
-            .get_or_init(GuardianReviewSessionManager::default)
+        self.services.thread_extension_data.get_or_init(|| {
+            GuardianReviewSessionManager::new(|context, key, kind, snapshot, cancel| {
+                Box::pin(async move { context.spawn(key, kind, snapshot, cancel).await })
+            })
+        })
     }
 
     pub(crate) async fn emit_turn_started(&self, turn_context: &TurnContext) {

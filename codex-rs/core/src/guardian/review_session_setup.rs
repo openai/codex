@@ -4,10 +4,9 @@
 use super::*;
 use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerRequest;
-use codex_guardian_reviewer::ReviewerSessionFactory;
 use codex_guardian_reviewer::SessionDisposition;
 
-pub(super) struct PreparedGuardianContext {
+pub(crate) struct PreparedGuardianContext {
     parent: Arc<Session>,
     context: GuardianReviewContext,
     config: Config,
@@ -128,14 +127,8 @@ impl PreparedGuardianContext {
     }
 }
 
-impl ReviewerSessionFactory for PreparedGuardianContext {
-    type Session = GuardianReviewSession;
-
-    fn context(&self, previous: Option<&GuardianReviewSession>) -> GuardianReviewSessionReuseKey {
-        self.reuse_key(previous)
-    }
-
-    async fn spawn(
+impl PreparedGuardianContext {
+    pub(crate) async fn spawn(
         &self,
         context: GuardianReviewSessionReuseKey,
         kind: GuardianReviewSessionKind,
@@ -169,15 +162,18 @@ impl ReviewerSessionFactory for PreparedGuardianContext {
 }
 
 pub(super) struct PreparedReview {
-    factory: PreparedGuardianContext,
+    context: Arc<PreparedGuardianContext>,
     params: GuardianReviewSessionParams,
 }
 
 impl ReviewerRequest for PreparedReview {
-    type Factory = PreparedGuardianContext;
+    type Session = GuardianReviewSession;
 
-    fn factory(&self) -> &PreparedGuardianContext {
-        &self.factory
+    fn setup(&self) -> Arc<PreparedGuardianContext> {
+        Arc::clone(&self.context)
+    }
+    fn context(&self, previous: Option<&GuardianReviewSession>) -> GuardianReviewSessionReuseKey {
+        self.context.reuse_key(previous)
     }
     fn deadline(&self) -> tokio::time::Instant {
         self.params.deadline
@@ -228,7 +224,7 @@ pub(crate) async fn run_guardian_review_session(
 pub(super) async fn prepare_review(
     params: GuardianReviewSessionParams,
 ) -> anyhow::Result<PreparedReview> {
-    let factory = PreparedGuardianContext::prepare(
+    let context = PreparedGuardianContext::prepare(
         Arc::clone(&params.parent_session),
         params.parent_context.clone(),
         params.spawn_config.clone(),
@@ -237,19 +233,35 @@ pub(super) async fn prepare_review(
         params.compaction_model_hash.as_deref(),
     )
     .await?;
-    Ok(PreparedReview { factory, params })
+    Ok(PreparedReview {
+        context: Arc::new(context),
+        params,
+    })
 }
 
 pub(crate) fn prewarm_guardian_review_session(
     parent: Arc<Session>,
     turn: Arc<TurnContext>,
 ) -> BoxFuture<'static, anyhow::Result<()>> {
-    // Keep the Session -> Guardian -> Session startup future on the heap.
+    Box::pin(async move {
+        let context = prepare_prewarm(Arc::clone(&parent), turn).await?;
+        let key = context.reuse_key(/*previous*/ None);
+        parent
+            .guardian_review_session()
+            .prewarm(Arc::new(context), key)
+            .await
+    })
+}
+
+pub(super) fn prepare_prewarm(
+    parent: Arc<Session>,
+    turn: Arc<TurnContext>,
+) -> BoxFuture<'static, anyhow::Result<PreparedGuardianContext>> {
     Box::pin(async move {
         let context = GuardianReviewContext::from(turn);
         let config = guardian_review_session_config(&parent, &context).await?;
         let history = parent.clone_history().await;
-        let factory = PreparedGuardianContext::prepare(
+        PreparedGuardianContext::prepare(
             Arc::clone(&parent),
             context,
             config.spawn_config,
@@ -257,7 +269,6 @@ pub(crate) fn prewarm_guardian_review_session(
             &config.node_repl_policy,
             config.compaction_model_hash.as_deref(),
         )
-        .await?;
-        parent.guardian_review_session().prewarm(&factory).await
+        .await
     })
 }

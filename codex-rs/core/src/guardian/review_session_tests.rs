@@ -5,7 +5,6 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::context_manager::ContextManager;
 use codex_guardian_reviewer::ReviewerRequest;
 use codex_guardian_reviewer::ReviewerSession;
-use codex_guardian_reviewer::ReviewerSessionFactory;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::openai_models::AutoReviewMessages;
@@ -73,8 +72,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             .node_repl_auto_review_required,
     )
     .with_node_repl_policy(&params.node_repl_policy);
-    let manager = GuardianReviewSessionManager::default();
-    prewarm_test_session(&manager, reviewer).await;
+    let manager = prewarm_test_session(&params, reviewer).await;
     // Capture the review context, then compact the parent before the reviewer builds its prompt.
     let prepared = setup::prepare_review(params).await.unwrap();
     let checkpoint: ResponseItem = serde_json::from_value(serde_json::json!({
@@ -314,7 +312,7 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
     };
     let prepared = setup::prepare_review(params).await.expect("prepare review");
     let review = prepared
-        .factory()
+        .setup()
         .spawn(
             stale_key,
             GuardianReviewSessionKind::TrunkNew,
@@ -901,8 +899,7 @@ async fn run_review_removes_trunk_when_event_stream_is_broken() {
     )
     .with_environments(params.parent_context.environments())
     .with_node_repl_policy(&params.node_repl_policy);
-    let manager = Arc::new(GuardianReviewSessionManager::default());
-    prewarm_test_session(&manager, review_session).await;
+    let manager = Arc::new(prewarm_test_session(&params, review_session).await);
     let manager_for_review = Arc::clone(&manager);
     let review =
         tokio::spawn(async move { run_guardian_review_session(manager_for_review, params).await });
@@ -1174,32 +1171,22 @@ async fn interrupt_and_drain_turn_ignores_prior_turn_completion() {
 }
 
 // Reuse the existing in-memory reviewer fixture through the production prewarm path.
-async fn prewarm_test_session(pool: &GuardianReviewSessionManager, session: GuardianReviewSession) {
-    struct ReadySession {
-        context: GuardianReviewSessionReuseKey,
-        session: Mutex<Option<GuardianReviewSession>>,
-    }
-    impl codex_guardian_reviewer::ReviewerSessionFactory for ReadySession {
-        type Session = GuardianReviewSession;
-        fn context(
-            &self,
-            _previous: Option<&GuardianReviewSession>,
-        ) -> GuardianReviewSessionReuseKey {
-            self.context.clone()
-        }
-        async fn spawn(
-            &self,
-            _context: GuardianReviewSessionReuseKey,
-            _kind: GuardianReviewSessionKind,
-            _snapshot: Option<GuardianReviewForkSnapshot>,
-            _cancellation: CancellationToken,
-        ) -> anyhow::Result<GuardianReviewSession> {
-            Ok(self.session.lock().await.take().expect("one fixture spawn"))
-        }
-    }
-    let factory = ReadySession {
-        context: session.reuse_key.clone(),
-        session: Mutex::new(Some(session)),
-    };
-    pool.prewarm(&factory).await.unwrap();
+async fn prewarm_test_session(
+    params: &GuardianReviewSessionParams,
+    session: GuardianReviewSession,
+) -> GuardianReviewSessionManager {
+    let key = session.reuse_key.clone();
+    let session = Arc::new(Mutex::new(Some(session)));
+    let pool = GuardianReviewSessionManager::new(move |_, _, _, _, _| {
+        let session = Arc::clone(&session);
+        Box::pin(async move { Ok(session.lock().await.take().expect("one fixture spawn")) })
+    });
+    let context = setup::prepare_prewarm(
+        Arc::clone(&params.parent_session),
+        Arc::clone(params.parent_context.turn()),
+    )
+    .await
+    .unwrap();
+    pool.prewarm(Arc::new(context), key).await.unwrap();
+    pool
 }

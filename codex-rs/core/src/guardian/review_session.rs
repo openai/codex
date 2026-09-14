@@ -882,6 +882,7 @@ impl codex_guardian_reviewer::ReviewerRuntime for GuardianReviewSession {
 mod tests;
 
 impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
+    type Setup = setup::PreparedGuardianContext;
     type Context = GuardianReviewSessionReuseKey;
     type Snapshot = GuardianReviewForkSnapshot;
 

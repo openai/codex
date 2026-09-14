@@ -1,5 +1,5 @@
 //! Owns the reusable reviewer and temporary forks for one parent thread.
-//! The host owns session execution and context construction. Selection stays serialized;
+//! Guardian supplies agent startup; the host supplies captured context. Selection stays serialized;
 //! concurrent reviews fork committed context and shutdown joins every tracked session.
 //! Startup and fork futures stay boxed to bound the orchestration stack frames.
 
@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionKind;
+use codex_extension_api::ExtensionFuture;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
@@ -20,6 +21,7 @@ use crate::run_before_review_deadline_with_cancel;
 /// A host-owned reviewer session. Context and snapshots remain opaque to the pool.
 /// Shutdown must cancel the runtime and await its termination.
 pub trait ReviewerSession: Send + Sync + 'static {
+    type Setup: Send + Sync + 'static;
     type Context: Clone + PartialEq + Send + Sync;
     type Snapshot: Send + Sync;
 
@@ -30,36 +32,21 @@ pub trait ReviewerSession: Send + Sync + 'static {
     fn shutdown(&self) -> impl Future<Output = ()> + Send;
 }
 
-/// Builds a session from one captured parent context. The host must preserve that
-/// context's authority and honor cancellation during spawning, including partial startup.
-pub trait ReviewerSessionFactory: Send + Sync {
+/// Executes one approval on a selected session. The host must drain the submitted
+/// turn before returning Reusable, and must keep the issuing action and permissions bound.
+pub trait ReviewerRequest: Send + Sync {
     type Session: ReviewerSession;
 
+    fn setup(&self) -> Arc<<Self::Session as ReviewerSession>::Setup>;
     fn context(
         &self,
         previous: Option<&Self::Session>,
     ) -> <Self::Session as ReviewerSession>::Context;
-
-    fn spawn(
-        &self,
-        context: <Self::Session as ReviewerSession>::Context,
-        kind: GuardianReviewSessionKind,
-        snapshot: Option<<Self::Session as ReviewerSession>::Snapshot>,
-        cancellation: CancellationToken,
-    ) -> impl Future<Output = anyhow::Result<Self::Session>> + Send;
-}
-
-/// Executes one approval on a selected session. The host must drain the submitted
-/// turn before returning Reusable, and must keep the issuing action and permissions bound.
-pub trait ReviewerRequest: Send + Sync {
-    type Factory: ReviewerSessionFactory;
-
-    fn factory(&self) -> &Self::Factory;
     fn deadline(&self) -> Instant;
     fn cancellation(&self) -> Option<&CancellationToken>;
     fn run(
         &self,
-        session: &<Self::Factory as ReviewerSessionFactory>::Session,
+        session: &Self::Session,
         kind: GuardianReviewSessionKind,
     ) -> impl Future<
         Output = (
@@ -81,7 +68,18 @@ pub enum SessionDisposition {
 pub struct ReviewerPool<S: ReviewerSession> {
     state: Arc<Mutex<PoolState<S>>>,
     cancellation: CancellationToken,
+    spawn: Box<SpawnReviewer<S>>,
 }
+
+type SpawnReviewer<S> = dyn Fn(
+        Arc<<S as ReviewerSession>::Setup>,
+        <S as ReviewerSession>::Context,
+        GuardianReviewSessionKind,
+        Option<<S as ReviewerSession>::Snapshot>,
+        CancellationToken,
+    ) -> ExtensionFuture<'static, anyhow::Result<S>>
+    + Send
+    + Sync;
 
 struct PoolState<S: ReviewerSession> {
     trunk: Option<Arc<Trunk<S>>>,
@@ -93,14 +91,28 @@ struct Trunk<S: ReviewerSession> {
     review_lock: Semaphore,
 }
 
-impl<S: ReviewerSession> Default for ReviewerPool<S> {
-    fn default() -> Self {
+impl<S: ReviewerSession> ReviewerPool<S> {
+    /// Installs Guardian's startup function once. It must finish or clean up partial startup
+    /// even when the caller drops its future, and preserve the supplied cancellation token.
+    pub fn new(
+        spawn: impl Fn(
+            Arc<S::Setup>,
+            S::Context,
+            GuardianReviewSessionKind,
+            Option<S::Snapshot>,
+            CancellationToken,
+        ) -> ExtensionFuture<'static, anyhow::Result<S>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
         Self {
             state: Arc::new(Mutex::new(PoolState {
                 trunk: None,
                 ephemeral_reviews: Vec::new(),
             })),
             cancellation: CancellationToken::new(),
+            spawn: Box::new(spawn),
         }
     }
 }
@@ -117,20 +129,17 @@ impl<S: ReviewerSession> ReviewerPool<S> {
     }
 
     /// Prepares the first reviewer without replacing a review that won the startup race.
-    pub async fn prewarm(
-        &self,
-        factory: &impl ReviewerSessionFactory<Session = S>,
-    ) -> anyhow::Result<()> {
+    pub async fn prewarm(&self, setup: Arc<S::Setup>, context: S::Context) -> anyhow::Result<()> {
         let cancellation = self.cancellation.child_token();
         let guard = cancellation.clone().drop_guard();
-        let session = factory
-            .spawn(
-                factory.context(/*previous*/ None),
-                GuardianReviewSessionKind::TrunkNew,
-                /*snapshot*/ None,
-                cancellation.clone(),
-            )
-            .await?;
+        let session = (self.spawn)(
+            setup,
+            context,
+            GuardianReviewSessionKind::TrunkNew,
+            /*snapshot*/ None,
+            cancellation.clone(),
+        )
+        .await?;
         let mut state = self.state.lock().await;
         if !cancellation.is_cancelled() && state.trunk.is_none() {
             state.trunk = Some(Arc::new(Trunk {
@@ -181,8 +190,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         request: R,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult)
     where
-        R: ReviewerRequest,
-        R::Factory: ReviewerSessionFactory<Session = S>,
+        R: ReviewerRequest<Session = S>,
     {
         let mut spawned_trunk = false;
         let (trunk, context) = match run_before_review_deadline(
@@ -193,9 +201,8 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         .await
         {
             Ok(mut state) => {
-                let context = request
-                    .factory()
-                    .context(state.trunk.as_ref().map(|trunk| trunk.session.as_ref()));
+                let context =
+                    request.context(state.trunk.as_ref().map(|trunk| trunk.session.as_ref()));
                 if let Some(trunk) = state.trunk.as_ref()
                     && trunk.session.context() != &context
                     && trunk.review_lock.try_acquire().is_ok()
@@ -209,12 +216,13 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                         request.deadline(),
                         request.cancellation(),
                         &cancellation,
-                        Box::pin(request.factory().spawn(
+                        (self.spawn)(
+                            request.setup(),
                             context.clone(),
                             GuardianReviewSessionKind::TrunkNew,
                             /*snapshot*/ None,
                             cancellation.clone(),
-                        )),
+                        ),
                     )
                     .await
                     {
@@ -294,20 +302,20 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         snapshot: Option<S::Snapshot>,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult)
     where
-        R: ReviewerRequest,
-        R::Factory: ReviewerSessionFactory<Session = S>,
+        R: ReviewerRequest<Session = S>,
     {
         let cancellation = self.cancellation.child_token();
         let session = match run_before_review_deadline_with_cancel(
             request.deadline(),
             request.cancellation(),
             &cancellation,
-            Box::pin(request.factory().spawn(
+            (self.spawn)(
+                request.setup(),
                 context,
                 GuardianReviewSessionKind::EphemeralForked,
                 snapshot,
                 cancellation.clone(),
-            )),
+            ),
         )
         .await
         {
