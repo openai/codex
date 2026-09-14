@@ -719,39 +719,45 @@ impl TestCodexBuilder {
             .models_manager
             .clone()
             .unwrap_or_else(|| codex_core::build_models_manager(&config, auth_manager.clone()));
-        let thread_manager = ThreadManager::new(
-            &config,
-            auth_manager.clone(),
-            models_manager,
-            codex_core::CodexAppsToolsCache::default(),
-            SessionSource::Exec,
-            Arc::clone(&environment_manager),
-            Arc::clone(&self.extensions),
-            user_instructions_provider,
-            /*analytics_events_client*/ None,
-            codex_core::passthrough_image_store(),
-            Arc::clone(&thread_store),
-            codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
-            installation_id,
-            /*attestation_provider*/ None,
-            /*external_time_provider*/ self.external_time_provider.clone(),
-        );
         let code_mode_host_program = self
             .code_mode_host_program
             .take()
             .or_else(|| codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").ok());
-        let thread_manager = if config.features.enabled(Feature::CodeModeHost)
-            && let Some(code_mode_host_program) = code_mode_host_program
-        {
-            codex_core::test_support::with_code_mode_host_program(
-                thread_manager,
-                code_mode_host_program,
+        let thread_manager = Arc::new_cyclic(|manager| {
+            let mut extensions = self.extensions.to_builder();
+            let guardian = Arc::new(codex_guardian_v2::GuardianReviewerExtension::new(
+                manager.clone(),
+            ));
+            extensions.thread_lifecycle_contributor(guardian);
+            let thread_manager = ThreadManager::new(
                 &config,
-            )
-        } else {
-            thread_manager
-        };
-        let thread_manager = Arc::new(thread_manager);
+                auth_manager.clone(),
+                models_manager,
+                codex_core::CodexAppsToolsCache::default(),
+                SessionSource::Exec,
+                Arc::clone(&environment_manager),
+                Arc::new(extensions.build()),
+                user_instructions_provider,
+                /*analytics_events_client*/ None,
+                codex_core::passthrough_image_store(),
+                Arc::clone(&thread_store),
+                codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
+                installation_id,
+                /*attestation_provider*/ None,
+                /*external_time_provider*/ self.external_time_provider.clone(),
+            );
+            if config.features.enabled(Feature::CodeModeHost)
+                && let Some(code_mode_host_program) = code_mode_host_program
+            {
+                codex_core::test_support::with_code_mode_host_program(
+                    thread_manager,
+                    code_mode_host_program,
+                    &config,
+                )
+            } else {
+                thread_manager
+            }
+        });
         let user_shell_override = self.user_shell_override.clone();
         let client_mcp_extensions = || {
             ClientMcpExtensions::new(

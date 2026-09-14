@@ -76,7 +76,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
     let manager = GuardianReviewSessionManager::default();
     prewarm_test_session(&manager, reviewer).await;
     // Capture the review context, then compact the parent before the reviewer builds its prompt.
-    let prepared = factory::prepare_review(params).await.unwrap();
+    let prepared = setup::prepare_review(params).await.unwrap();
     let checkpoint: ResponseItem = serde_json::from_value(serde_json::json!({
         "type": "compaction", "id": "cmp_new", "encrypted_content": "new-checkpoint"
     }))
@@ -312,9 +312,7 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
         thread_instructions: latest.clone(),
         ..stale_key.clone()
     };
-    let prepared = factory::prepare_review(params)
-        .await
-        .expect("prepare review");
+    let prepared = setup::prepare_review(params).await.expect("prepare review");
     let review = prepared
         .factory()
         .spawn(

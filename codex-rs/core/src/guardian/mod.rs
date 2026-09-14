@@ -19,6 +19,8 @@ mod review;
 mod review_session;
 mod reviewer_config;
 mod runtime;
+#[cfg(test)]
+pub(crate) mod test_host;
 
 use codex_protocol::items::ModelInvocationContext;
 use std::sync::Arc;

@@ -2,10 +2,10 @@
 //! The extension owns review policy and pooling; this module binds runtime operations
 //! to the captured parent action, environments, authorization and context snapshots.
 
-#[path = "review_session_factory.rs"]
-mod factory;
-pub(crate) use factory::prewarm_guardian_review_session;
-pub(crate) use factory::run_guardian_review_session;
+#[path = "review_session_setup.rs"]
+mod setup;
+pub(crate) use setup::prewarm_guardian_review_session;
+pub(crate) use setup::run_guardian_review_session;
 
 #[path = "review_session_threads.rs"]
 mod managed_threads;
@@ -55,7 +55,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::agents_md_manager::SessionInstructions;
-use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ManagedFeatures;
@@ -70,7 +69,6 @@ use crate::image_preparation::ImagePreparationMode;
 use crate::image_preparation::ImageResizeNoticeMode;
 use crate::image_preparation::prepare_response_items;
 use crate::image_preparation::unified_image_budget_enabled;
-use crate::session::GitEnrichmentPolicy;
 use crate::session::SessionIo;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -139,12 +137,6 @@ impl GuardianReviewSessionHost {
     pub fn with_thread_manager(manager: std::sync::Weak<crate::ThreadManager>) -> Self {
         Self {
             managed_threads: Some(managed_threads::ManagedReviewerThreads::new(manager)),
-        }
-    }
-
-    pub fn mark_ready(&self) {
-        if let Some(threads) = &self.managed_threads {
-            threads.mark_ready();
         }
     }
 }

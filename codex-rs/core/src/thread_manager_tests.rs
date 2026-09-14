@@ -1476,6 +1476,47 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
             .is_none()
     );
 
+    // Captured lineage also works for an inline parent with no registry entry.
+    manager.remove_thread(&parent.thread_id).await;
+    let child = manager
+        .start_thread(StartThreadOptions {
+            internal_parent: Some(InternalSessionParent {
+                thread_id: parent.thread_id,
+                auth_manager: Arc::clone(&parent.thread.session.services.auth_manager),
+                agent_control: parent.thread.session.services.agent_control.clone(),
+                originator: reviewer_config.originator.clone(),
+                inherited_instructions: None,
+            }),
+            session_source: Some(SessionSource::Internal(
+                InternalSessionSource::MemoryConsolidation,
+            )),
+            ..StartThreadOptions::new(parent.thread.session.get_config().await.as_ref().clone())
+        })
+        .await
+        .expect("start child without a parent registry entry");
+    let child_config = child.thread.config_snapshot().await;
+    assert_eq!(
+        (
+            child_config.parent_thread_id,
+            child_config.originator,
+            child.thread.session.session_id(),
+        ),
+        (
+            Some(parent.thread_id),
+            reviewer_config.originator,
+            parent.thread.session.session_id(),
+        )
+    );
+    assert!(Arc::ptr_eq(
+        &child.thread.session.services.auth_manager,
+        &parent.thread.session.services.auth_manager
+    ));
+    assert!(manager.list_thread_ids().await.is_empty());
+    parent
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("stop parent");
     manager
         .shutdown_all_threads_bounded(Duration::from_secs(10))
         .await;

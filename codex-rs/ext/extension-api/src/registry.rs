@@ -162,6 +162,28 @@ pub struct ExtensionRegistry<C: Sync> {
 }
 
 impl<C: Sync> ExtensionRegistry<C> {
+    /// Copies the registered contributors into a builder for host-specific additions.
+    pub fn to_builder(&self) -> ExtensionRegistryBuilder<C> {
+        ExtensionRegistryBuilder {
+            registry: Self {
+                event_sink: self.event_sink.clone(),
+                turn_start_admission: self.turn_start_admission.clone(),
+                thread_lifecycle_contributors: self.thread_lifecycle_contributors.clone(),
+                turn_lifecycle_contributors: self.turn_lifecycle_contributors.clone(),
+                config_contributors: self.config_contributors.clone(),
+                token_usage_contributors: self.token_usage_contributors.clone(),
+                skill_invocation_contributors: self.skill_invocation_contributors.clone(),
+                context_contributors: self.context_contributors.clone(),
+                mcp_server_contributors: self.mcp_server_contributors.clone(),
+                turn_input_contributors: self.turn_input_contributors.clone(),
+                tool_contributors: self.tool_contributors.clone(),
+                tool_lifecycle_contributors: self.tool_lifecycle_contributors.clone(),
+                turn_item_contributors: self.turn_item_contributors.clone(),
+                approval_review_contributors: self.approval_review_contributors.clone(),
+            },
+        }
+    }
+
     /// Acquires the host's turn-start permit, or an empty permit for ungated hosts.
     /// A missing permit rejects the start before Core consumes pending input.
     pub fn admit_turn_start(&self) -> Option<Box<dyn Send>> {

@@ -10,7 +10,6 @@ use codex_core::guardian_review::GuardianReviewSessionHost;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
-use codex_extension_api::ThreadReadyInput;
 use codex_extension_api::ThreadStartInput;
 
 /// Owns reviewer state through the same thread manager as the parent conversation.
@@ -37,17 +36,6 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
             input.thread_store.get_or_init(|| {
                 GuardianReviewSessionHost::with_thread_manager(self.thread_manager.clone())
             });
-        })
-    }
-
-    fn on_thread_ready<'a>(
-        &'a self,
-        input: ThreadReadyInput<'a, Config>,
-    ) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move {
-            if let Some(sessions) = input.thread_store.get::<GuardianReviewSessionHost>() {
-                sessions.mark_ready();
-            }
         })
     }
 }

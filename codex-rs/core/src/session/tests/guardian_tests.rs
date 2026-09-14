@@ -223,6 +223,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         config.model_provider.clone(),
     );
     session.services.models_manager = models_manager;
+    crate::guardian::test_host::install(&session, &config);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
@@ -423,6 +424,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .expect("single session ref")
         .services
         .models_manager = models_manager;
+    crate::guardian::test_host::install(&session, &config);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
@@ -549,6 +551,7 @@ async fn guardian_allows_exec_command_additional_permissions_requests_past_polic
         config.model_provider.clone(),
     );
     session.services.models_manager = models_manager;
+    crate::guardian::test_host::install(&session, &config);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
@@ -668,6 +671,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_exec_command_policy_s
         config.model_provider.clone(),
     );
     session.services.models_manager = models_manager;
+    crate::guardian::test_host::install(&session, &config);
     turn_context_raw.config = Arc::clone(&config);
     turn_context_raw.provider = create_model_provider(
         config.model_provider.clone(),
