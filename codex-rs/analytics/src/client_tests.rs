@@ -216,6 +216,7 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
                 subagent_source: None,
                 parent_thread_id: None,
                 tool_name: "search".to_string(),
+                tool_event_type: None,
                 started_at_ms: 1,
                 completed_at_ms: 2,
                 duration_ms: Some(1),

@@ -60,6 +60,7 @@ use crate::events::ThreadArchiveEvent;
 use crate::events::ThreadArchiveEventParams;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ToolEventType;
 use crate::events::ToolItemFailureKind;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
@@ -2569,6 +2570,16 @@ fn enrich_tool_response_event(
     let Some(base) = tool_event_base_mut(event) else {
         return;
     };
+    // A cell association can also describe a separately sampled wait call. Classify
+    // only from evidence about this exact call ID, not its parent or response lineage.
+    base.tool_event_type = match (
+        state.response_ids_by_call_id.contains_key(&base.item_id),
+        state.cell_ids_by_child_call_id.contains_key(&base.item_id),
+    ) {
+        (true, false) => Some(ToolEventType::ModelToolCall),
+        (false, true) => Some(ToolEventType::InnerToolCall),
+        (false, false) | (true, true) => None,
+    };
     if base.cell_id.is_none() {
         base.cell_id = state.cell_ids_by_child_call_id.get(&base.item_id).cloned();
     }
@@ -3034,6 +3045,7 @@ fn tool_item_base(
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),
         tool_name,
+        tool_event_type: None,
         started_at_ms: context.started_at_ms,
         completed_at_ms: context.completed_at_ms,
         // duration_ms reflects item lifecycle observed by app-server. For web

@@ -36,6 +36,7 @@ use crate::events::ReviewTrigger;
 use crate::events::Reviewer;
 use crate::events::ThreadInitializedEvent;
 use crate::events::ThreadInitializedEventParams;
+use crate::events::ToolEventType;
 use crate::events::ToolItemTerminalStatus;
 use crate::events::TrackEventRequest;
 use crate::events::codex_app_metadata;
@@ -1823,6 +1824,7 @@ fn command_execution_event_serializes_expected_shape() {
                 subagent_source: None,
                 parent_thread_id: None,
                 tool_name: "shell".to_string(),
+                tool_event_type: Some(ToolEventType::ModelToolCall),
                 started_at_ms: 123_000,
                 completed_at_ms: 125_000,
                 duration_ms: Some(2000),
@@ -1849,63 +1851,63 @@ fn command_execution_event_serializes_expected_shape() {
     });
 
     let payload = serde_json::to_value(&event).expect("serialize command execution event");
-    assert_eq!(
-        payload,
-        json!({
-            "event_type": "codex_command_execution_event",
-            "event_params": {
-                "model_slug": null,
-                "reasoning_effort": null,
-                "thread_id": "thread-1",
-                "session_id": "session-thread-1",
-                "turn_id": "turn-1",
-                "root_turn_id": "root-turn",
-                "item_id": "item-1",
-                "cell_id": null,
-                "parent_call_id": null,
-                "originating_response_id": null,
-                "subsequent_response_id": null,
-                "app_server_client": {
-                    "product_client_id": "codex_tui",
-                    "client_name": "codex-tui",
-                    "client_version": "1.2.3",
-                    "rpc_transport": "websocket",
-                    "experimental_api_enabled": true
-                },
-                "runtime": {
-                    "codex_rs_version": "0.99.0",
-                    "runtime_os": "macos",
-                    "runtime_os_version": "15.3.1",
-                    "runtime_arch": "aarch64"
-                },
-                "thread_source": "user",
-                "subagent_source": null,
-                "parent_thread_id": null,
-                "tool_name": "shell",
-                "started_at_ms": 123000,
-                "completed_at_ms": 125000,
-                "duration_ms": 2000,
-                "execution_duration_ms": 1900,
-                "review_count": 0,
-                "guardian_review_count": 0,
-                "user_review_count": 0,
-                "final_approval_outcome": "not_needed",
-                "terminal_status": "completed",
-                "failure_kind": null,
-                "requested_additional_permissions": false,
-                "requested_network_access": false,
-                "plugin_id": "sample@openai-curated",
-                "script_path": "scripts/run.py",
-                "command_execution_source": "agent",
-                "exit_code": 0,
-                "command_total_action_count": 4,
-                "command_read_action_count": 1,
-                "command_list_files_action_count": 1,
-                "command_search_action_count": 1,
-                "command_unknown_action_count": 1
-            }
-        })
-    );
+    let mut expected = json!({
+        "event_type": "codex_command_execution_event",
+        "event_params": {
+            "model_slug": null,
+            "reasoning_effort": null,
+            "thread_id": "thread-1",
+            "session_id": "session-thread-1",
+            "turn_id": "turn-1",
+            "root_turn_id": "root-turn",
+            "item_id": "item-1",
+            "cell_id": null,
+            "parent_call_id": null,
+            "originating_response_id": null,
+            "subsequent_response_id": null,
+            "app_server_client": {
+                "product_client_id": "codex_tui",
+                "client_name": "codex-tui",
+                "client_version": "1.2.3",
+                "rpc_transport": "websocket",
+                "experimental_api_enabled": true
+            },
+            "runtime": {
+                "codex_rs_version": "0.99.0",
+                "runtime_os": "macos",
+                "runtime_os_version": "15.3.1",
+                "runtime_arch": "aarch64"
+            },
+            "thread_source": "user",
+            "subagent_source": null,
+            "parent_thread_id": null,
+            "tool_name": "shell",
+            "started_at_ms": 123000,
+            "completed_at_ms": 125000,
+            "duration_ms": 2000,
+            "execution_duration_ms": 1900,
+            "review_count": 0,
+            "guardian_review_count": 0,
+            "user_review_count": 0,
+            "final_approval_outcome": "not_needed",
+            "terminal_status": "completed",
+            "failure_kind": null,
+            "requested_additional_permissions": false,
+            "requested_network_access": false,
+            "plugin_id": "sample@openai-curated",
+            "script_path": "scripts/run.py",
+            "command_execution_source": "agent",
+            "exit_code": 0,
+            "command_total_action_count": 4,
+            "command_read_action_count": 1,
+            "command_list_files_action_count": 1,
+            "command_search_action_count": 1,
+            "command_unknown_action_count": 1
+        }
+    });
+    // Keep this field separate to stay within json!'s macro recursion limit.
+    expected["event_params"]["tool_event_type"] = json!("model_tool_call");
+    assert_eq!(payload, expected);
 }
 
 #[test]
@@ -3182,6 +3184,7 @@ async fn collaborator_tool_events_keep_response_ids_when_completion_races_sampli
                 "origin": params["originating_response_id"],
                 "subsequent": params["subsequent_response_id"],
                 "status": params["terminal_status"],
+                "tool_event_type": params["tool_event_type"],
             }),
             json!({
                 "type": "codex_collab_agent_tool_call_event",
@@ -3189,6 +3192,7 @@ async fn collaborator_tool_events_keep_response_ids_when_completion_races_sampli
                 "origin": "response-1",
                 "subsequent": "response-2",
                 "status": "failed",
+                "tool_event_type": "model_tool_call",
             }),
         );
     }
@@ -3266,6 +3270,7 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
             let event = serde_json::to_value(event).expect("serialize tool event");
             serde_json::json!({
                 "item": event["event_params"]["item_id"],
+                "tool_event_type": event["event_params"]["tool_event_type"],
                 "root": event["event_params"]["root_turn_id"],
                 "cell": event["event_params"]["cell_id"],
                 "parent": event["event_params"]["parent_call_id"],
@@ -3277,10 +3282,131 @@ async fn code_mode_exec_wait_and_child_events_share_cell_and_response_ids() {
     assert_eq!(
         actual,
         vec![
-            serde_json::json!({"item":"exec-1","root":"root-a","cell":"cell-1","parent":null,"origin":"resp-a","subsequent":"resp-b"}),
-            serde_json::json!({"item":"child-1","root":"root-a","cell":"cell-1","parent":"exec-1","origin":"resp-a","subsequent":"resp-b"}),
-            serde_json::json!({"item":"wait-1","root":"root-b","cell":"cell-1","parent":"exec-1","origin":"resp-c","subsequent":"resp-d"}),
+            serde_json::json!({"tool_event_type":"model_tool_call","item":"exec-1","root":"root-a","cell":"cell-1","parent":null,"origin":"resp-a","subsequent":"resp-b"}),
+            serde_json::json!({"tool_event_type":"inner_tool_call","item":"child-1","root":"root-a","cell":"cell-1","parent":"exec-1","origin":"resp-a","subsequent":"resp-b"}),
+            serde_json::json!({"tool_event_type":"model_tool_call","item":"wait-1","root":"root-b","cell":"cell-1","parent":"exec-1","origin":"resp-c","subsequent":"resp-d"}),
         ]
+    );
+}
+
+#[tokio::test]
+async fn tool_event_types_require_exact_unambiguous_call_origin() {
+    for (sampled_ids, child_ids, expected) in [
+        (
+            vec!["command-1", "control-1"],
+            vec![],
+            json!("model_tool_call"),
+        ),
+        (
+            vec![],
+            vec!["command-1", "control-1"],
+            json!("inner_tool_call"),
+        ),
+        (vec![], vec![], json!(null)),
+        (
+            vec!["command-1", "control-1"],
+            vec!["command-1", "control-1"],
+            json!(null),
+        ),
+        (vec!["other-call"], vec!["other-child"], json!(null)),
+    ] {
+        let mut reducer = AnalyticsReducer::default();
+        let mut events = Vec::new();
+        ingest_review_prerequisites(&mut reducer, &mut events).await;
+        ingest_code_mode_facts(
+            &mut reducer,
+            &mut events,
+            [
+                sampling_response("turn-1", "response-1", &sampled_ids),
+                CodeModeToolCallFact::CellStarted {
+                    thread_id: "thread-1".into(),
+                    turn_id: "turn-1".into(),
+                    call_id: "exec-1".into(),
+                    cell_id: "cell-1".into(),
+                },
+            ],
+        )
+        .await;
+        ingest_code_mode_facts(
+            &mut reducer,
+            &mut events,
+            child_ids
+                .into_iter()
+                .map(|call_id| CodeModeToolCallFact::ChildStarted {
+                    thread_id: "thread-1".into(),
+                    turn_id: "turn-1".into(),
+                    call_id: call_id.into(),
+                    cell_id: "cell-1".into(),
+                }),
+        )
+        .await;
+        ingest_completed_command_execution_item(&mut reducer, &mut events, "thread-1", "command-1")
+            .await;
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::ControlToolCall(ControlToolCallFact {
+                    thread_id: "thread-1".into(),
+                    turn_id: "turn-1".into(),
+                    turn_metadata: test_turn_metadata(/*root_turn_id*/ None),
+                    call_id: "control-1".into(),
+                    cell_id: Some("cell-1".into()),
+                    tool_name: "view_image".into(),
+                    started_at_ms: 1_000,
+                    completed_at_ms: 1_042,
+                    status: ControlToolCallStatus::Completed,
+                })),
+                &mut events,
+            )
+            .await;
+        reducer.flush(&mut events);
+        let payload = serde_json::to_value(&events).expect("serialize tool events");
+        assert_eq!(
+            payload
+                .as_array()
+                .expect("events")
+                .iter()
+                .map(|event| json!({
+                    "event": event["event_type"],
+                    "type": event["event_params"]["tool_event_type"],
+                    "status": event["event_params"]["terminal_status"],
+                    "duration": event["event_params"]["duration_ms"],
+                }))
+                .collect::<Vec<_>>(),
+            vec![
+                json!({"event": "codex_command_execution_event", "type": expected, "status": "completed", "duration": 42}),
+                json!({"event": "codex_control_tool_call_event", "type": expected, "status": "completed", "duration": 42}),
+            ],
+        );
+    }
+}
+
+#[tokio::test]
+async fn tool_event_emitted_before_sampling_evidence_keeps_unknown_origin() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+    ingest_review_prerequisites(&mut reducer, &mut events).await;
+    ingest_completed_command_execution_item(&mut reducer, &mut events, "thread-1", "call-1").await;
+    assert_eq!(events.len(), 1);
+    ingest_code_mode_facts(
+        &mut reducer,
+        &mut events,
+        [sampling_response("turn-1", "response-1", &["call-1"])],
+    )
+    .await;
+    reducer.flush(&mut events);
+    let payload = serde_json::to_value(&events).expect("serialize tool events");
+    assert_eq!(
+        payload
+            .as_array()
+            .expect("events")
+            .iter()
+            .map(|event| json!({
+                "item": event["event_params"]["item_id"],
+                "type": event["event_params"]["tool_event_type"],
+                "origin": event["event_params"]["originating_response_id"],
+            }))
+            .collect::<Vec<_>>(),
+        vec![json!({"item": "call-1", "type": null, "origin": null})],
     );
 }
 
@@ -4030,6 +4156,17 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
         )
         .await;
 
+    ingest_code_mode_facts(
+        &mut reducer,
+        &mut events,
+        [CodeModeToolCallFact::SamplingResponseCompleted {
+            thread_id: "thread-subagent".into(),
+            turn_id: "turn-subagent".into(),
+            response_id: "response-subagent".into(),
+            tool_call_ids: vec!["item-1".into(), "exec-1".into()],
+        }],
+    )
+    .await;
     reducer
         .ingest(
             AnalyticsFact::Notification(Box::new(ServerNotification::ItemStarted(
@@ -4093,11 +4230,12 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
             .map(|event| json!({
                 "turn_id": event["event_params"]["turn_id"],
                 "root_turn_id": event["event_params"]["root_turn_id"],
+                "tool_event_type": event["event_params"]["tool_event_type"],
             }))
             .collect::<Vec<_>>(),
         vec![
-            json!({"turn_id": "turn-subagent", "root_turn_id": "child-causal-root"}),
-            json!({"turn_id": "turn-subagent", "root_turn_id": "child-causal-root"}),
+            json!({"turn_id": "turn-subagent", "root_turn_id": "child-causal-root", "tool_event_type": "model_tool_call"}),
+            json!({"turn_id": "turn-subagent", "root_turn_id": "child-causal-root", "tool_event_type": "model_tool_call"}),
         ]
     );
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
@@ -5544,8 +5682,9 @@ async fn turn_event_counts_completed_tool_items() {
         mcp_tool_call_item(McpToolCallStatus::Completed, Some(2)),
         ThreadItem::DynamicToolCall {
             id: "dynamic-1".to_string(),
-            namespace: None,
-            tool: "render".to_string(),
+            // A name collision with code-mode exec must not change the event boundary.
+            namespace: Some("custom".to_string()),
+            tool: "exec".to_string(),
             arguments: json!({}),
             status: DynamicToolCallStatus::Completed,
             content_items: None,
@@ -5661,22 +5800,31 @@ async fn turn_event_counts_completed_tool_items() {
                 event["event_params"]["root_turn_id"]
                     .as_str()
                     .expect("tool item event root turn ID"),
+                event["event_params"]["tool_event_type"].as_str(),
             )
         })
         .collect::<Vec<_>>();
     assert_eq!(
         emitted_tool_events,
         [
-            "codex_command_execution_event",
-            "codex_file_change_event",
-            "codex_mcp_tool_call_event",
-            "codex_dynamic_tool_call_event",
-            "codex_web_search_event",
-            "codex_image_generation_event",
-            "codex_collab_agent_tool_call_event",
-            "codex_control_tool_call_event",
+            ("codex_command_execution_event", None),
+            ("codex_file_change_event", None),
+            ("codex_mcp_tool_call_event", None),
+            ("codex_dynamic_tool_call_event", None),
+            ("codex_web_search_event", None),
+            ("codex_image_generation_event", None),
+            ("codex_collab_agent_tool_call_event", None),
+            ("codex_control_tool_call_event", None),
         ]
-        .map(|event_type| (event_type, "session-thread-2", "turn-2", "root-ancestor"))
+        .map(|(event_type, tool_event_type)| {
+            (
+                event_type,
+                "session-thread-2",
+                "turn-2",
+                "root-ancestor",
+                tool_event_type,
+            )
+        })
         .to_vec()
     );
 
