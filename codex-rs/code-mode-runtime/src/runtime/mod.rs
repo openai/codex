@@ -103,7 +103,9 @@ pub(crate) fn spawn_runtime(
         stored_values,
     };
 
+    let runtime_handle = tokio::runtime::Handle::current();
     spawn_supervised_runtime_thread(event_tx.clone(), task_failure_handler, move || {
+        let _runtime_guard = runtime_handle.enter();
         run_runtime(
             config,
             event_tx,
@@ -511,5 +513,71 @@ await new Promise(() => {});
         runtime_control_tx
             .send(RuntimeControlCommand::Terminate)
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn timers_release_tasks_when_cleared_or_the_cell_finishes() {
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (_runtime_tx, _runtime_control_tx, _runtime_terminate_handle) = spawn_runtime(
+            HashMap::new(),
+            execute_request(
+                r#"
+clearTimeout(setTimeout(() => text("cancelled"), 3_600_000));
+await new Promise((resolve) => setTimeout(resolve, 3_600_000));
+text("done");
+setTimeout(() => text("late"), 3_600_000);
+"#,
+            ),
+            event_tx,
+            PendingRuntimeMode::Continue,
+            /*task_failure_handler*/ None,
+        )
+        .unwrap();
+
+        loop {
+            match tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+            {
+                Some(RuntimeEvent::Pending) => break,
+                Some(_) => {}
+                None => panic!("runtime closed before the timer was pending"),
+            }
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(
+            tokio::runtime::Handle::current()
+                .metrics()
+                .num_alive_tasks(),
+            1
+        );
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(3_600)).await;
+        tokio::time::resume();
+
+        let mut output = Vec::new();
+        while let Some(event) = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("timer runtime should finish")
+        {
+            match event {
+                RuntimeEvent::ContentItem(item) => output.push(item),
+                RuntimeEvent::Result { error_text, .. } => assert_eq!(error_text, None),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            output,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string()
+            }]
+        );
+        tokio::task::yield_now().await;
+        assert_eq!(
+            tokio::runtime::Handle::current()
+                .metrics()
+                .num_alive_tasks(),
+            0
+        );
     }
 }

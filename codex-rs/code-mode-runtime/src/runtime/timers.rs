@@ -1,5 +1,6 @@
-use std::thread;
 use std::time::Duration;
+
+use tokio_util::task::AbortOnDropHandle;
 
 use super::RuntimeCommand;
 use super::RuntimeState;
@@ -7,6 +8,8 @@ use super::value::value_to_error_text;
 
 pub(super) struct ScheduledTimeout {
     callback: v8::Global<v8::Function>,
+    // Clearing the timeout or dropping the isolate also cancels its sleep.
+    _task: AbortOnDropHandle<()>,
 }
 
 pub(super) fn schedule_timeout(
@@ -33,13 +36,18 @@ pub(super) fn schedule_timeout(
     let timeout_id = state.next_timeout_id;
     state.next_timeout_id = state.next_timeout_id.saturating_add(1);
     let runtime_command_tx = state.runtime_command_tx.clone();
-    state
-        .pending_timeouts
-        .insert(timeout_id, ScheduledTimeout { callback });
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(delay_ms));
+    let sleep = tokio::time::sleep(Duration::from_millis(delay_ms));
+    let task = tokio::spawn(async move {
+        sleep.await;
         let _ = runtime_command_tx.send(RuntimeCommand::TimeoutFired { id: timeout_id });
     });
+    state.pending_timeouts.insert(
+        timeout_id,
+        ScheduledTimeout {
+            callback,
+            _task: AbortOnDropHandle::new(task),
+        },
+    );
 
     Ok(timeout_id)
 }
