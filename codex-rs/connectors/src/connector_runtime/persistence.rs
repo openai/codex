@@ -5,7 +5,6 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -65,6 +64,7 @@ pub(crate) fn load_cached_connector_runtime_for_identity<T: ConnectorRuntimePayl
             tools: cache.tools,
             refreshed_at: modified_at,
             generation: 0,
+            tools_version: 0,
         },
     )
 }
@@ -207,7 +207,7 @@ fn write_codex_apps_cache_file(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CodexAppsToolsDiskCache<T> {
     schema_version: u8,
-    tools: Vec<T>,
+    tools: Arc<[T]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,9 +232,10 @@ pub(crate) fn write_cached_codex_apps_tools_for_test<T>(
     T: ConnectorRuntimePayload,
 {
     let snapshot = ConnectorRuntimeSnapshot {
-        tools: tools.to_vec(),
+        tools: tools.into(),
         refreshed_at: SystemTime::now(),
         generation: 0,
+        tools_version: 0,
     };
     cache_context
         .entry
@@ -251,7 +252,7 @@ where
     T: ConnectorRuntimePayload,
 {
     load_cached_connector_runtime_for_identity(&cache_context.entry.identity)
-        .map(|snapshot| snapshot.tools)
+        .map(|snapshot| snapshot.tools.to_vec())
 }
 
 #[cfg(test)]
@@ -263,9 +264,10 @@ where
     T: ConnectorRuntimePayload,
 {
     let snapshot = ConnectorRuntimeSnapshot {
-        tools: tools.to_vec(),
+        tools: tools.into(),
         refreshed_at: SystemTime::now(),
         generation: 0,
+        tools_version: 0,
     };
     write_cached_connector_runtime(cache_context, &snapshot)
 }

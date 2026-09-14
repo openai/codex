@@ -631,6 +631,56 @@ fn contexts_for_different_identities_keep_isolated_snapshots() {
 }
 
 #[test]
+fn live_provider_reuses_equal_tools_only_within_its_scope() {
+    let manager = ConnectorRuntimeManager::<TestTool>::new_without_cache();
+    let context = manager.context(
+        PathBuf::from("unused"),
+        ConnectorRuntimeContextKey::personal(
+            /*account_id*/ None, /*chatgpt_user_id*/ None,
+        ),
+    );
+    let first = context
+        .clone()
+        .with_live_scope("endpoint".into())
+        .with_live_scope("capabilities".into());
+    let second = context
+        .clone()
+        .with_live_scope("endpoint".into())
+        .with_live_scope("capabilities".into());
+    let other = context
+        .clone()
+        .with_live_scope("other-endpoint".into())
+        .with_live_scope("capabilities".into());
+    let tools = vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "search")];
+    let publish = |context: &ConnectorRuntimeContext<TestTool>| {
+        context.publish_runtime_if_newest_accepted(
+            context.begin_fetch(ConnectorRuntimeFetchSource::Startup),
+            &create_test_server_info("Apps"),
+            tools.clone(),
+        )
+    };
+    let original = publish(&first);
+    let repeated = publish(&second);
+    let separate = publish(&other);
+    assert!(Arc::ptr_eq(
+        &original.shared_tools(),
+        &repeated.shared_tools()
+    ));
+    assert_eq!(original.tools_version(), repeated.tools_version());
+    assert!(!Arc::ptr_eq(
+        &original.shared_tools(),
+        &separate.shared_tools()
+    ));
+    drop(first);
+    drop(second);
+    let restarted = context
+        .with_live_scope("endpoint".into())
+        .with_live_scope("capabilities".into());
+    assert!(restarted.current_snapshot().is_some());
+    assert!(restarted.subscribe().unwrap().borrow().is_none());
+}
+
+#[test]
 fn oversized_tools_cache_is_ignored_during_initial_load() {
     let codex_home = tempdir().expect("tempdir");
     let context = create_codex_apps_tools_cache_context(

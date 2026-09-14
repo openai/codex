@@ -6,12 +6,16 @@
 //! owned by the connector metadata store, not by this module.
 //! Live catalog subscriptions publish only successful fetches from a matching
 //! discovery scope, never disk snapshots or another scope's discovery winner.
+//! Equivalent live contexts share one current catalog. Each fetch still contacts
+//! the server; equal definitions retain their established storage and ordering.
+//! Providers expire with their last context.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -34,15 +38,21 @@ use self::persistence::tools_cache_path;
 
 const MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC: &str = "codex.mcp.tools.cache_publish.duration_ms";
 
-type LiveCatalog<T> = watch::Sender<Option<Arc<ConnectorRuntimeSnapshot<T>>>>;
+/// The current immutable tools for matching discovery inputs.
+struct CatalogProvider<T> {
+    scope: Vec<String>,
+    updates: watch::Sender<Option<Arc<ConnectorRuntimeSnapshot<T>>>>,
+}
 
 /// Values stored in the connector runtime's persisted tool snapshot.
 ///
 /// The runtime uses the connector-owned Codex Apps cache layout for every
-/// serializable, cloneable payload.
-pub trait ConnectorRuntimePayload: Clone + Serialize + DeserializeOwned {}
+/// serializable, cloneable payload. Equality determines whether fresh results can
+/// retain the previous storage and tool version, so it must include all metadata
+/// that affects readers or prepared calls.
+pub trait ConnectorRuntimePayload: Clone + PartialEq + Serialize + DeserializeOwned {}
 
-impl<T> ConnectorRuntimePayload for T where T: Clone + Serialize + DeserializeOwned {}
+impl<T> ConnectorRuntimePayload for T where T: Clone + PartialEq + Serialize + DeserializeOwned {}
 
 /// The account and workspace identity of a connector runtime catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -96,14 +106,24 @@ pub fn connector_runtime_cache_path(codex_home: &Path, auth: Option<&CodexAuth>)
 /// intentionally applied by readers rather than persisted in this snapshot.
 #[derive(Debug, Clone)]
 pub struct ConnectorRuntimeSnapshot<T> {
-    tools: Vec<T>,
+    tools: Arc<[T]>,
     refreshed_at: SystemTime,
     generation: u64,
+    tools_version: u64,
 }
 
 impl<T> ConnectorRuntimeSnapshot<T> {
     pub fn tools(&self) -> &[T] {
         &self.tools
+    }
+
+    pub fn shared_tools(&self) -> Arc<[T]> {
+        Arc::clone(&self.tools)
+    }
+
+    /// Advances only when tool definitions change, so equal refreshes preserve prepared calls.
+    pub fn tools_version(&self) -> u64 {
+        self.tools_version
     }
 
     pub fn refreshed_at(&self) -> SystemTime {
@@ -182,7 +202,7 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeManager<T> {
 /// Handle to one shared account/workspace connector runtime.
 pub struct ConnectorRuntimeContext<T: ConnectorRuntimePayload> {
     entry: Arc<ConnectorRuntimeEntry<T>>,
-    live_catalog: Option<LiveCatalog<T>>,
+    live_catalog: Option<Arc<CatalogProvider<T>>>,
 }
 
 impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeContext<T> {
@@ -196,21 +216,42 @@ impl<T: ConnectorRuntimePayload> Clone for ConnectorRuntimeContext<T> {
 
 impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
     /// Groups executable catalogs by equivalent discovery inputs within this account/home.
-    /// The caller must include the endpoint, auth configuration and listing protocol in `scope`.
+    /// Include transport/auth, requested capabilities, and initialization results.
+    /// Calling this again refines the existing scope; it does not replace it.
     /// Account-wide discovery reads are unaffected.
     pub fn with_live_scope(mut self, scope: String) -> Self {
-        self.live_catalog = Some(
-            lock_unpoisoned(&self.entry.live_catalogs)
-                .entry(scope)
-                .or_insert_with(|| watch::channel(None).0)
-                .clone(),
-        );
+        let mut scope_parts = self
+            .live_catalog
+            .as_ref()
+            .map(|catalog| catalog.scope.clone())
+            .unwrap_or_default();
+        scope_parts.push(scope);
+        let mut catalogs = lock_unpoisoned(&self.entry.live_catalogs);
+        catalogs.retain(|_, catalog| catalog.strong_count() > 0);
+        let catalog = catalogs.entry(scope_parts.clone()).or_default();
+        self.live_catalog = Some(catalog.upgrade().unwrap_or_else(|| {
+            let provider = Arc::new(CatalogProvider {
+                scope: scope_parts,
+                updates: watch::channel(None).0,
+            });
+            *catalog = Arc::downgrade(&provider);
+            provider
+        }));
+        drop(catalogs);
+        self
+    }
+
+    /// Detaches a server that opts out of live catalog sharing, including publication.
+    pub fn without_live_scope(mut self) -> Self {
+        self.live_catalog = None;
         self
     }
 
     /// Subscribes to accepted live tools without refetching or waiting for other clients.
     pub fn subscribe(&self) -> Option<watch::Receiver<Option<Arc<ConnectorRuntimeSnapshot<T>>>>> {
-        self.live_catalog.as_ref().map(watch::Sender::subscribe)
+        self.live_catalog
+            .as_ref()
+            .map(|catalog| catalog.updates.subscribe())
     }
 
     pub fn current_snapshot(&self) -> Option<Arc<ConnectorRuntimeSnapshot<T>>> {
@@ -249,7 +290,7 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
 
     pub fn current_tools(&self) -> Option<Vec<T>> {
         self.current_snapshot()
-            .map(|snapshot| snapshot.tools.clone())
+            .map(|snapshot| snapshot.tools.to_vec())
     }
 
     pub fn publish_runtime_if_newest_accepted(
@@ -283,13 +324,26 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
     ) -> Arc<ConnectorRuntimeSnapshot<T>> {
         let publish_start = Instant::now();
         let mut last_accepted_generation = lock_unpoisoned(&self.entry.last_accepted_generation);
+        let prior = self
+            .live_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.updates.borrow().clone());
+        let (tools, tools_version) = match prior {
+            Some(prior)
+                if prior.generation < ticket.generation && prior.tools() == tools.as_slice() =>
+            {
+                (prior.shared_tools(), prior.tools_version)
+            }
+            _ => (tools.into(), ticket.generation),
+        };
         let snapshot = Arc::new(ConnectorRuntimeSnapshot {
             tools,
+            tools_version,
             refreshed_at: SystemTime::now(),
             generation: ticket.generation,
         });
         if let Some(live_catalog) = &self.live_catalog {
-            live_catalog.send_if_modified(|current| {
+            live_catalog.updates.send_if_modified(|current| {
                 if current
                     .as_ref()
                     .is_some_and(|current| current.generation >= ticket.generation)
@@ -336,7 +390,7 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
     ) -> Vec<T> {
         self.publish_runtime_if_newest_accepted(ticket, server_info, tools)
             .tools
-            .clone()
+            .to_vec()
     }
 }
 
@@ -367,7 +421,7 @@ struct ConnectorRuntimeEntry<T: ConnectorRuntimePayload> {
     current_snapshot: ArcSwapOption<ConnectorRuntimeSnapshot<T>>,
     next_fetch_generation: AtomicU64,
     last_accepted_generation: Mutex<u64>,
-    live_catalogs: Mutex<HashMap<String, LiveCatalog<T>>>,
+    live_catalogs: Mutex<HashMap<Vec<String>, Weak<CatalogProvider<T>>>>,
 }
 
 impl<T: ConnectorRuntimePayload> ConnectorRuntimeEntry<T> {

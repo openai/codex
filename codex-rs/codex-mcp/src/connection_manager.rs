@@ -352,8 +352,7 @@ impl McpConnectionSet {
             let shares_codex_apps_tools_cache = is_host_owned_codex_apps
                 && should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
-                // Tools/list has no thread selection or UI capabilities. Only equivalent
-                // transport/auth and listing settings may share executable Apps tools.
+                // Only equivalent discovery inputs may share executable Apps tools.
                 let mut transport = configured_config.transport.clone();
                 if let McpServerTransportConfig::StreamableHttp {
                     http_headers: Some(headers),
