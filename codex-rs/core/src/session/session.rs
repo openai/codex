@@ -962,7 +962,8 @@ impl Session {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>(LiveThreadInitGuard::new(/*live_thread*/ None))
             } else {
-                let live_thread = match &initial_history {
+                let mut guard = LiveThreadInitGuard::default();
+                match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                         let params = CreateThreadParams {
                             session_id,
@@ -1008,10 +1009,13 @@ impl Session {
                                 Arc::clone(&thread_store),
                                 params,
                                 items,
+                                &mut guard,
                             )
                             .await?
                         } else {
-                            LiveThread::create(Arc::clone(&thread_store), params).await?
+                            guard
+                                .acquire(LiveThread::create(Arc::clone(&thread_store), params))
+                                .await?
                         }
                     }
                     InitialHistory::Resumed(resumed_history) => {
@@ -1030,16 +1034,17 @@ impl Session {
                                 },
                             },
                         };
-                        LiveThread::resume(
-                            Arc::clone(&thread_store),
-                            session_configuration.history_mode,
-                            params,
-                        )
-                        .await?
+                        guard
+                            .acquire(LiveThread::resume(
+                                Arc::clone(&thread_store),
+                                session_configuration.history_mode,
+                                params,
+                            ))
+                            .await?
                     }
                 };
                 // The completed result can wait in join! while the other startup work is pending.
-                Ok(LiveThreadInitGuard::new(Some(live_thread)))
+                Ok(guard)
             }
         }
         .instrument(info_span!(
@@ -1125,8 +1130,9 @@ impl Session {
             error!("failed to initialize thread persistence: {e:#}");
             e
         })?;
+        let live_thread = live_thread_init.as_ref().cloned();
         let session_result: anyhow::Result<Arc<Self>> = async {
-            let rollout_path = if let Some(live_thread) = live_thread_init.as_ref() {
+            let rollout_path = if let Some(live_thread) = live_thread.as_ref() {
                 live_thread.local_rollout_path().await?
             } else {
                 None
@@ -1390,7 +1396,7 @@ impl Session {
                 otel.name = "session_init.plugin_skill_warmup",
             ));
             let thread_name_lookup =
-                thread_title_from_thread_store(live_thread_init.as_ref(), &thread_store, thread_id)
+                thread_title_from_thread_store(live_thread.as_ref(), &thread_store, thread_id)
                     .instrument(info_span!(
                         "session_init.thread_name_lookup",
                         otel.name = "session_init.thread_name_lookup",
@@ -1625,7 +1631,7 @@ impl Session {
                 managed_network_requirements_configured,
                 network_approval: Arc::clone(&network_approval),
                 state_db: state_db_ctx.clone(),
-                live_thread: live_thread_init.as_ref().cloned(),
+                live_thread: live_thread.clone(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,

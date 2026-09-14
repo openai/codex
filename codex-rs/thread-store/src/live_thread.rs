@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
 use crate::ThreadStoreError;
+use crate::ThreadStoreFuture;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
 use crate::thread_metadata_sync::ThreadMetadataSync;
@@ -41,18 +43,49 @@ pub struct LiveThread {
     persistence_telemetry: RolloutPersistenceTelemetry,
 }
 
-/// Owns a live thread while session initialization is still fallible.
+/// Owns persistence acquisition and its live thread while initialization is still fallible.
 ///
 /// If initialization returns early after persistence has been opened, dropping this guard discards
 /// the live writer without forcing lazy in-memory state to become durable. Call [`commit`] once the
-/// session owns the live thread for normal operation.
+/// session owns the live thread for normal operation. Cancellation leaves an in-flight acquisition
+/// owned by the guard: cleanup waits for it to finish before discarding any acquired writer.
+#[derive(Default)]
 pub struct LiveThreadInitGuard {
     live_thread: Option<LiveThread>,
+    acquiring: Option<ThreadStoreFuture<'static, LiveThread>>,
 }
 
 impl LiveThreadInitGuard {
     pub fn new(live_thread: Option<LiveThread>) -> Self {
-        Self { live_thread }
+        Self {
+            live_thread,
+            acquiring: None,
+        }
+    }
+
+    /// Retains the operation even if the caller stops waiting. Store operations may install a
+    /// writer before returning or delegate to another runtime, so they cannot simply be dropped.
+    pub async fn acquire(
+        &mut self,
+        acquisition: impl Future<Output = ThreadStoreResult<LiveThread>> + Send + 'static,
+    ) -> ThreadStoreResult<LiveThread> {
+        assert!(self.live_thread.is_none() && self.acquiring.is_none());
+        self.acquiring = Some(Box::pin(acquisition));
+        self.finish_acquisition().await?;
+        self.live_thread
+            .clone()
+            .ok_or_else(|| ThreadStoreError::Internal {
+                message: "persistence acquisition returned no live thread".to_owned(),
+            })
+    }
+
+    async fn finish_acquisition(&mut self) -> ThreadStoreResult<()> {
+        if let Some(acquiring) = self.acquiring.as_mut() {
+            let result = acquiring.await;
+            self.acquiring = None;
+            self.live_thread = Some(result?);
+        }
+        Ok(())
     }
 
     pub fn as_ref(&self) -> Option<&LiveThread> {
@@ -64,6 +97,7 @@ impl LiveThreadInitGuard {
     }
 
     pub async fn discard(&mut self) {
+        let _ = self.finish_acquisition().await;
         let Some(live_thread) = self.live_thread.take() else {
             return;
         };
@@ -75,15 +109,23 @@ impl LiveThreadInitGuard {
 
 impl Drop for LiveThreadInitGuard {
     fn drop(&mut self) {
-        let Some(live_thread) = self.live_thread.take() else {
+        if self.live_thread.is_none() && self.acquiring.is_none() {
             return;
-        };
+        }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             warn!("failed to discard thread persistence for failed session init: no Tokio runtime");
             return;
         };
+        let acquiring = self.acquiring.take();
+        let live_thread = self.live_thread.take();
         handle.spawn(async move {
-            if let Err(err) = live_thread.discard().await {
+            let live_thread = match acquiring {
+                Some(acquiring) => acquiring.await.ok(),
+                None => live_thread,
+            };
+            if let Some(live_thread) = live_thread
+                && let Err(err) = live_thread.discard().await
+            {
                 warn!("failed to discard thread persistence for failed session init: {err}");
             }
         });
@@ -116,6 +158,7 @@ impl LiveThread {
         thread_store: Arc<dyn ThreadStore>,
         mut params: CreateThreadParams,
         inherited_model_context: &[RolloutItem],
+        guard: &mut LiveThreadInitGuard,
     ) -> ThreadStoreResult<Self> {
         let persisted_prefix_item_count =
             persisted_rollout_items(inherited_model_context, params.history_mode).len();
@@ -129,18 +172,10 @@ impl LiveThread {
                     message: "inherited model context is too large".to_string(),
                 })?,
         );
-        let live_thread = Self::create(thread_store, params).await?;
-        if let Err(err) = live_thread
+        let live_thread = guard.acquire(Self::create(thread_store, params)).await?;
+        live_thread
             .persist_appended_items(inherited_model_context)
-            .await
-        {
-            if let Err(discard_err) = live_thread.discard().await {
-                warn!(
-                    "failed to discard thread persistence after inherited context append failed: {discard_err}"
-                );
-            }
-            return Err(err);
-        }
+            .await?;
         Ok(live_thread)
     }
 

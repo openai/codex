@@ -733,6 +733,8 @@ impl ThreadStore for LocalThreadStore {
 
 #[cfg(test)]
 mod tests {
+    #[path = "acquisition_tests.rs"]
+    mod acquisition_tests;
     use std::sync::Arc;
 
     use codex_protocol::ThreadId;
@@ -1014,13 +1016,16 @@ mod tests {
             })
         };
 
+        let mut guard = crate::LiveThreadInitGuard::default();
         let live_thread = LiveThread::create_with_inherited_model_context(
             store,
             params,
             &[turn_context("parent-model", AskForApproval::Never)],
+            &mut guard,
         )
         .await
         .expect("create live thread with inherited context");
+        guard.commit();
         live_thread
             .persist(PersistContext::Standard)
             .await
