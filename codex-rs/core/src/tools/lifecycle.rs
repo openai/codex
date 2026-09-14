@@ -29,7 +29,10 @@ pub(crate) async fn notify_tool_start(
     let thread_store = &invocation.session.services.thread_extension_data;
     let conversation_history = invocation.session.conversation_history_snapshot().await;
     let root_turn_id = invocation.turn.turn_metadata_state.root_turn_id();
-    let originating_item_id = invocation.originating_item_id().await;
+    let originating_item_id = invocation
+        .originating_call()
+        .await
+        .and_then(|origin| origin.item_id);
 
     for contributor in contributors {
         contributor

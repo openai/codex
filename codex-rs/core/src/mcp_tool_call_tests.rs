@@ -27,6 +27,7 @@ use codex_config::types::McpServerToolConfig;
 use codex_features::Features;
 use codex_hooks::HooksConfig;
 use codex_model_provider::create_model_provider;
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
@@ -1770,22 +1771,30 @@ async fn codex_apps_auth_elicitation_enabled_by_default_requests_elicitation() {
 
 #[test]
 fn mcp_tool_call_ids_are_added_to_request_meta() {
-    let item_id = ResponseItemId::from_server("fc-live".to_string());
+    let origin = crate::tools::context::ToolCallOrigin {
+        item_id: Some(ResponseItemId::from_server("fc-live".to_string())),
+        window_id: "thread-live:2".to_string(),
+    };
 
     assert_eq!(
         with_mcp_tool_call_ids_meta(
             Some(serde_json::json!({
                 "source": "test-client",
                 "threadId": "stale-thread",
+                "sessionId": "stale-session",
+                "windowId": "stale-window",
                 "itemId": "stale-item",
             })),
             "thread-live",
-            Some(&item_id),
+            "session-live",
+            Some(&origin),
         ),
         Some(serde_json::json!({
             "source": "test-client",
             "threadId": "thread-live",
+            "sessionId": "session-live",
             "itemId": "fc-live",
+            "windowId": "thread-live:2",
         }))
     );
 
@@ -1793,10 +1802,12 @@ fn mcp_tool_call_ids_are_added_to_request_meta() {
         with_mcp_tool_call_ids_meta(
             /*meta*/ None,
             "thread-live",
-            /*originating_item_id*/ None,
+            "session-live",
+            /*originating_call*/ None,
         ),
         Some(serde_json::json!({
             "threadId": "thread-live",
+            "sessionId": "session-live",
         }))
     );
 
@@ -1804,7 +1815,8 @@ fn mcp_tool_call_ids_are_added_to_request_meta() {
         with_mcp_tool_call_ids_meta(
             Some(serde_json::json!("invalid-meta")),
             "thread-live",
-            /*originating_item_id*/ None,
+            "session-live",
+            /*originating_call*/ None,
         ),
         Some(serde_json::json!("invalid-meta"))
     );

@@ -189,17 +189,17 @@ impl CodeModeService {
     pub(crate) fn mark_cell_ready_for_dispatch(
         &self,
         cell_id: &codex_code_mode::CellId,
-        originating_item_id: Option<codex_protocol::ResponseItemId>,
+        originating_call: Option<crate::tools::context::ToolCallOrigin>,
     ) {
         self.dispatch_broker
-            .mark_cell_ready_for_dispatch(cell_id, originating_item_id);
+            .mark_cell_ready_for_dispatch(cell_id, originating_call);
     }
 
-    pub(crate) fn cell_originating_item_id(
+    pub(crate) fn cell_originating_call(
         &self,
         cell_id: &codex_code_mode::CellId,
-    ) -> Option<codex_protocol::ResponseItemId> {
-        self.dispatch_broker.cell_originating_item_id(cell_id)
+    ) -> Option<crate::tools::context::ToolCallOrigin> {
+        self.dispatch_broker.cell_originating_call(cell_id)
     }
 
     pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {

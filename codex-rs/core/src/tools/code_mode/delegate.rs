@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Weak;
 
+use crate::tools::context::ToolCallOrigin;
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSessionDelegate;
@@ -10,7 +11,6 @@ use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
@@ -49,8 +49,10 @@ pub(super) struct CodeModeCellDelegate {
 
 struct CellDispatchGate {
     ready: watch::Sender<bool>,
-    // Keep the original exec item when later waits resume this cell.
-    originating_item_id: Option<ResponseItemId>,
+    // Callbacks may create the gate before exec attaches its origin. None means
+    // no origin is attached; Some retains the original item and window across
+    // waits, even if the best-effort item lookup found no ID.
+    originating_call: Option<ToolCallOrigin>,
 }
 
 impl CodeModeDispatchBroker {
@@ -68,7 +70,7 @@ impl CodeModeDispatchBroker {
     pub(super) fn mark_cell_ready_for_dispatch(
         &self,
         cell_id: &CellId,
-        originating_item_id: Option<ResponseItemId>,
+        originating_call: Option<ToolCallOrigin>,
     ) {
         let ready = {
             let mut dispatch_gates = self
@@ -79,20 +81,20 @@ impl CodeModeDispatchBroker {
                 .entry(cell_id.clone())
                 .or_insert_with(|| CellDispatchGate {
                     ready: watch::channel(false).0,
-                    originating_item_id: None,
+                    originating_call: None,
                 });
-            gate.originating_item_id = originating_item_id;
+            gate.originating_call = originating_call;
             gate.ready.clone()
         };
         ready.send_replace(true);
     }
 
-    pub(super) fn cell_originating_item_id(&self, cell_id: &CellId) -> Option<ResponseItemId> {
+    pub(super) fn cell_originating_call(&self, cell_id: &CellId) -> Option<ToolCallOrigin> {
         self.dispatch_gates
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(cell_id)
-            .and_then(|gate| gate.originating_item_id.clone())
+            .and_then(|gate| gate.originating_call.clone())
     }
 
     pub(super) fn close_cell(&self, cell_id: &CellId) {
@@ -258,7 +260,7 @@ fn dispatch_gate(
         .entry(cell_id.clone())
         .or_insert_with(|| CellDispatchGate {
             ready: watch::channel(false).0,
-            originating_item_id: None,
+            originating_call: None,
         })
         .ready
         .clone()

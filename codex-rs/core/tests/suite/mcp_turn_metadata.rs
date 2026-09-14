@@ -612,6 +612,14 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
         Some(&json!(originating_item_id))
     );
     assert_eq!(
+        apps_tool_call.pointer("/params/_meta/sessionId"),
+        Some(&json!(test.session_configured.session_id))
+    );
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/windowId"),
+        Some(&response_body["client_metadata"]["x-codex-window-id"])
+    );
+    assert_eq!(
         apps_tool_call
             .pointer("/params/_meta/x-codex-turn-metadata/user_input_requested_during_turn"),
         (!strict_auto_review).then_some(&json!(true))

@@ -1600,6 +1600,137 @@ fn result_metadata_apps_builder(base_url: String, account_email: &str) -> TestCo
         })
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_mcp_metadata_keeps_originating_window_after_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let apps_server = mount_result_metadata_app(
+        &server, /*result_metadata*/ None, /*is_error*/ false,
+    )
+    .await?;
+    let (reached_tx, reached_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let control = Arc::new(ResultMetadataTestControl {
+        server: Mutex::new(McpServerContribution::HostedApps {
+            config: Box::new(codex_apps_mcp_server_config(
+                &apps_server.chatgpt_base_url,
+                /*apps_mcp_product_sku*/ None,
+                /*originator*/ None,
+            )),
+        }),
+        gate: Mutex::new(Some((reached_tx, release_rx))),
+    });
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(control);
+    let mut builder =
+        result_metadata_apps_builder(apps_server.chatgpt_base_url, "user@example.com")
+            .with_model("test-gpt-5.1-codex")
+            .with_extensions(Arc::new(extensions.build()));
+    let test = builder.build_with_auto_env(&server).await?;
+    let originating_item_id = "ctc_before_compaction";
+    let mut exec_call = ev_custom_tool_call(
+        "call-exec",
+        "exec",
+        &format!(
+            r#"const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith("{RESULT_METADATA_TOOL}"));
+const pending = tools[tool.name]({{}});
+yield_control();
+await pending;
+await tools[tool.name]({{}});
+text("done");"#,
+        ),
+    );
+    exec_call["item"]["id"] = serde_json::json!(originating_item_id);
+    let started =
+        responses::mount_sse_once(&server, sse(vec![exec_call, ev_completed("resp-start")])).await;
+    let yielded = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-start", "waiting"),
+            ev_completed("resp-yield"),
+        ]),
+    )
+    .await;
+    test.submit_turn("Start an MCP call in code mode").await?;
+    tokio::time::timeout(Duration::from_secs(10), reached_rx).await??;
+    let first_items = custom_tool_output_items(&yielded.single_request(), "call-exec");
+    let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
+    let originating_window_id =
+        started.single_request().body_json()["client_metadata"]["x-codex-window-id"].clone();
+    assert!(originating_window_id.is_string());
+
+    let compact = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {"type": "compaction", "encrypted_content": "compacted history"},
+            }),
+            ev_completed("resp-compact"),
+        ]),
+    )
+    .await;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        compact
+            .single_request()
+            .inputs_of_type("compaction_trigger")
+            .len(),
+        1
+    );
+
+    let resumed = responses::mount_function_call_agent_response(
+        &server,
+        "call-wait",
+        &serde_json::json!({"cell_id": cell_id, "yield_time_ms": 10_000}).to_string(),
+        "wait",
+    )
+    .await;
+    release_tx.send(()).unwrap();
+    test.submit_turn("Finish the code-mode cell").await?;
+    let resumed_request = resumed.function_call.single_request();
+    assert_ne!(
+        resumed_request.body_json()["client_metadata"]["x-codex-window-id"],
+        originating_window_id
+    );
+    assert!(
+        resumed_request
+            .input()
+            .iter()
+            .all(|item| item["call_id"] != "call-exec")
+    );
+    assert!(
+        function_tool_output_items(&resumed.completion.single_request(), "call-wait")
+            .iter()
+            .any(|item| item["text"] == "done")
+    );
+    let calls = recorded_apps_tool_calls(&server).await;
+    assert_eq!(calls.len(), 2);
+    for call in calls {
+        let meta = &call["params"]["_meta"];
+        assert_eq!(
+            serde_json::json!({
+                "sessionId": meta["sessionId"],
+                "threadId": meta["threadId"],
+                "itemId": meta["itemId"],
+                "windowId": meta["windowId"],
+            }),
+            serde_json::json!({
+                "sessionId": test.session_configured.session_id,
+                "threadId": test.session_configured.thread_id,
+                "itemId": originating_item_id,
+                "windowId": originating_window_id,
+            }),
+        );
+    }
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
 fn assert_result_metadata_call(
     output: &Value,
     arguments: &Value,
@@ -2390,6 +2521,10 @@ if (!tool) {
     assert!(
         apps_tool_calls.iter().any(|call| {
             call.pointer("/params/_meta/itemId") == Some(&serde_json::json!(originating_item_id))
+                && call.pointer("/params/_meta/sessionId")
+                    == Some(&serde_json::json!(test.session_configured.session_id))
+                && call.pointer("/params/_meta/windowId")
+                    == Some(&first_body["client_metadata"]["x-codex-window-id"])
         }),
         "the nested MCP call should inherit its code cell's originating Responses item"
     );

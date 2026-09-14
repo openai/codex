@@ -16,6 +16,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::tools::ApprovalContext;
+use crate::tools::context::ToolCallOrigin;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::lifecycle::process_mcp_tool_result;
 use crate::tools::sandboxing::ApprovalAction;
@@ -41,7 +42,6 @@ use codex_mcp::ToolInfo;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
-use codex_protocol::ResponseItemId;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
 use codex_protocol::items::McpToolCallItem;
@@ -123,7 +123,7 @@ pub(crate) async fn handle_mcp_tool_call(
     step_context: &Arc<StepContext>,
     cancellation_token: &CancellationToken,
     call_id: String,
-    originating_item_id: Option<ResponseItemId>,
+    originating_call: Option<ToolCallOrigin>,
     tool_info: &ToolInfo,
     prepared_call: Option<PreparedMcpCall>,
     hook_tool_name: HookToolName,
@@ -294,7 +294,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &sess,
                     step_context.as_ref(),
                     &call_id,
-                    originating_item_id.as_ref(),
+                    originating_call.as_ref(),
                     invocation,
                     prepared_call,
                     metadata,
@@ -368,7 +368,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &sess,
         step_context.as_ref(),
         &call_id,
-        originating_item_id.as_ref(),
+        originating_call.as_ref(),
         invocation,
         prepared_call,
         metadata,
@@ -431,7 +431,7 @@ async fn handle_approved_mcp_tool_call(
     sess: &Arc<Session>,
     step_context: &StepContext,
     call_id: &str,
-    originating_item_id: Option<&ResponseItemId>,
+    originating_call: Option<&ToolCallOrigin>,
     invocation: McpInvocation,
     prepared_call: PreparedMcpCall,
     metadata: McpToolApprovalMetadata,
@@ -512,7 +512,8 @@ async fn handle_approved_mcp_tool_call(
                     let request_meta = with_mcp_tool_call_ids_meta(
                         request_meta,
                         &sess.thread_id.to_string(),
-                        originating_item_id,
+                        &sess.session_id().to_string(),
+                        originating_call,
                     );
                     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
                         step_context,
@@ -1183,6 +1184,8 @@ const MCP_TOOL_LINK_ID_META_KEY: &str = "link_id";
 const MCP_TOOL_LINK_IS_IMPLICIT_META_KEY: &str = "link_is_implicit";
 const MCP_TOOL_PLUGIN_ID_META_KEY: &str = "plugin_id";
 const MCP_TOOL_ITEM_ID_META_KEY: &str = "itemId";
+const MCP_TOOL_SESSION_ID_META_KEY: &str = "sessionId";
+const MCP_TOOL_WINDOW_ID_META_KEY: &str = "windowId";
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 const MCP_TOOL_CONNECTED_ACCOUNT_EMAIL_META_KEY: &str = "connected_account_email";
 const MCP_TOOL_RESOURCE_URI_META_KEY: &str = "resource_uri";
@@ -1328,7 +1331,8 @@ fn build_confirmation_policies_request_meta(
 fn with_mcp_tool_call_ids_meta(
     meta: Option<serde_json::Value>,
     thread_id: &str,
-    originating_item_id: Option<&ResponseItemId>,
+    session_id: &str,
+    originating_call: Option<&ToolCallOrigin>,
 ) -> Option<serde_json::Value> {
     let mut map = match meta {
         Some(serde_json::Value::Object(map)) => map,
@@ -1339,7 +1343,17 @@ fn with_mcp_tool_call_ids_meta(
         MCP_TOOL_THREAD_ID_META_KEY.to_string(),
         serde_json::Value::String(thread_id.to_string()),
     );
-    if let Some(item_id) = originating_item_id {
+    map.insert(
+        MCP_TOOL_SESSION_ID_META_KEY.to_string(),
+        serde_json::Value::String(session_id.to_string()),
+    );
+    if let Some(origin) = originating_call {
+        map.insert(
+            MCP_TOOL_WINDOW_ID_META_KEY.to_string(),
+            serde_json::Value::String(origin.window_id.clone()),
+        );
+    }
+    if let Some(item_id) = originating_call.and_then(|origin| origin.item_id.as_ref()) {
         map.insert(
             MCP_TOOL_ITEM_ID_META_KEY.to_string(),
             serde_json::Value::String(item_id.to_string()),
