@@ -5219,11 +5219,13 @@ name = "codex-windows-sandbox-service"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "codex-cloud-config",
  "codex-config",
  "codex-core",
  "codex-windows-sandbox",
  "pretty_assertions",
+ "serde_json",
  "tokio",
  "toml 0.9.11+spec-1.1.0",
  "windows 0.58.0",

@@ -16,12 +16,18 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+# Temporary until #8415 adds the cleanup implementation that uses these dependencies.
+[package.metadata.cargo-shear]
+ignored = ["base64", "serde_json"]
+
 [dependencies]
 anyhow = { workspace = true }
+base64 = { workspace = true }
 codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-windows-sandbox = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 toml = { workspace = true }
 
