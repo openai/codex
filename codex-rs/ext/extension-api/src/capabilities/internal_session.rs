@@ -1,9 +1,11 @@
+use std::future::Future;
+use std::pin::Pin;
+
 use codex_protocol::ThreadId;
 
-use super::agent::AgentSpawnFuture;
-
 /// Future returned by one host-owned internal-session spawning request.
-pub type InternalSessionSpawnFuture<'a, T, E> = AgentSpawnFuture<'a, T, E>;
+pub type InternalSessionSpawnFuture<'a, T, E> =
+    Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
 
 /// Constructor-injected host helper for extensions that need private internal sessions.
 ///

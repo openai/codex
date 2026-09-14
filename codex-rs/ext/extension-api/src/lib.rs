@@ -8,8 +8,6 @@ mod user_instructions;
 
 pub use session_isolation::SessionIsolation;
 
-pub use capabilities::AgentSpawnFuture;
-pub use capabilities::AgentSpawner;
 pub use capabilities::ConversationHistorySnapshot;
 pub use capabilities::ExtensionEventSink;
 pub use capabilities::ExtensionMetrics;
