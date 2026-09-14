@@ -159,11 +159,9 @@ async fn test_review_session() -> (
             cancel_token: CancellationToken::new(),
             reuse_key,
             state: Mutex::new(GuardianReviewState {
-                prior_review_count: 0,
-                last_reviewed_transcript_cursor: None,
+                conversation: ConversationState::default(),
                 last_admitted_node_repl_response_sequence: 0,
                 pending_node_repl_evidence_admission: None,
-                last_committed_fork_snapshot: None,
             }),
         },
         tx_event,
@@ -929,11 +927,12 @@ async fn run_review_on_reused_session_waits_for_submitted_turn() {
     let (review_session, tx_event, rx_sub) = test_review_session().await;
     {
         let mut state = review_session.state.lock().await;
-        state.prior_review_count = 1;
-        state.last_reviewed_transcript_cursor = Some(GuardianTranscriptCursor {
-            parent_history_version: 0,
-            transcript_entry_count: 0,
-        });
+        state
+            .conversation
+            .complete_review(GuardianTranscriptCursor {
+                parent_history_version: 0,
+                transcript_entry_count: 0,
+            });
     }
     let params = test_review_params().await;
 

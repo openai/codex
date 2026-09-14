@@ -1,9 +1,13 @@
-//! Owns synchronous Guardian review policy independently of the host session runtime.
+//! Owns Guardian conversation bookkeeping and synchronous review policy independently
+//! of the host session runtime.
 //! The host supplies review attempts and enforces the resulting decision on the bound action.
 
 mod assessment;
 mod circuit_breaker;
 mod completion;
+mod conversation;
+pub use conversation::ConversationCheckpoint;
+pub use conversation::ConversationState;
 mod deadline;
 mod execution;
 mod feedback;

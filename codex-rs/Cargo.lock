@@ -3567,6 +3567,7 @@ dependencies = [
  "codex-extension-api",
  "codex-features",
  "codex-feedback",
+ "codex-guardian-context",
  "codex-mcp",
  "codex-otel",
  "codex-protocol",

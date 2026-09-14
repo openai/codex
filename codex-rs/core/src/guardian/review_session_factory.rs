@@ -84,27 +84,24 @@ impl ReviewerSessionFactory for PreparedSession {
         if matches!(kind, GuardianReviewSessionKind::EphemeralForked) {
             config.ephemeral = true;
         }
-        let (
-            initial_history,
-            prior_review_count,
-            initial_transcript_cursor,
-            last_admitted_node_repl_response_sequence,
-        ) = match snapshot {
-            Some(snapshot) => (
-                Some(snapshot.initial_history),
-                snapshot.prior_review_count,
-                snapshot.last_reviewed_transcript_cursor,
-                snapshot.last_admitted_node_repl_response_sequence,
-            ),
-            None => (
-                self.parent_compaction.clone().map(|item| {
-                    InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())])
-                }),
-                0,
-                None,
-                0,
-            ),
-        };
+        let (initial_history, conversation, last_admitted_node_repl_response_sequence) =
+            match snapshot {
+                Some(snapshot) => {
+                    let (conversation, history) = ConversationState::fork(snapshot);
+                    (
+                        Some(history.initial_history),
+                        conversation,
+                        history.last_admitted_node_repl_response_sequence,
+                    )
+                }
+                None => (
+                    self.parent_compaction.clone().map(|item| {
+                        InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())])
+                    }),
+                    ConversationState::default(),
+                    0,
+                ),
+            };
         let (session, io) = match &self.host.managed_threads {
             Some(threads) => {
                 threads
@@ -147,11 +144,9 @@ impl ReviewerSessionFactory for PreparedSession {
             cancel_token: cancellation,
             reuse_key: context,
             state: Mutex::new(GuardianReviewState {
-                prior_review_count,
-                last_reviewed_transcript_cursor: initial_transcript_cursor,
+                conversation,
                 last_admitted_node_repl_response_sequence,
                 pending_node_repl_evidence_admission: None,
-                last_committed_fork_snapshot: None,
             }),
         })
     }

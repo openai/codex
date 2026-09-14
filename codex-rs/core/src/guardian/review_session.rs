@@ -25,6 +25,8 @@ use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_analytics::GuardianReviewSessionAnalyticsParams;
 use codex_analytics::GuardianReviewSessionKind;
 use codex_extension_api::Instructions;
+use codex_guardian_reviewer::ConversationCheckpoint;
+use codex_guardian_reviewer::ConversationState;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
@@ -92,6 +94,7 @@ use super::feedback::record_failed_review;
 use super::prompt::BUNDLED_GUARDIAN_POLICY;
 use super::prompt::GUARDIAN_TRANSCRIPT_START;
 use super::prompt::GuardianPromptMode;
+#[cfg(test)]
 use super::prompt::GuardianTranscriptCursor;
 use super::prompt::build_guardian_prompt_items_with_parent_turn;
 use super::review::guardian_review_session_config;
@@ -161,11 +164,9 @@ pub(crate) struct GuardianReviewSession {
 }
 
 struct GuardianReviewState {
-    prior_review_count: usize,
-    last_reviewed_transcript_cursor: Option<GuardianTranscriptCursor>,
+    conversation: ConversationState<GuardianReviewHistory>,
     last_admitted_node_repl_response_sequence: u64,
     pending_node_repl_evidence_admission: Option<PendingNodeReplEvidenceAdmission>,
-    last_committed_fork_snapshot: Option<GuardianReviewForkSnapshot>,
 }
 
 struct PendingNodeReplEvidenceAdmission {
@@ -191,12 +192,12 @@ fn token_usage_delta(start: &TokenUsage, end: &TokenUsage) -> TokenUsage {
     }
 }
 
-/// Committed context used to seed a private reviewer fork.
+type GuardianReviewForkSnapshot = ConversationCheckpoint<GuardianReviewHistory>;
+
+/// Host-owned history and admitted evidence used to seed a private reviewer fork.
 #[derive(Clone)]
-pub struct GuardianReviewForkSnapshot {
+pub struct GuardianReviewHistory {
     initial_history: InitialHistory,
-    prior_review_count: usize,
-    last_reviewed_transcript_cursor: Option<GuardianTranscriptCursor>,
     last_admitted_node_repl_response_sequence: u64,
 }
 
@@ -364,8 +365,8 @@ async fn run_review_on_session(
     let (prior_review_count, had_prior_context) = {
         let state = review_session.state.lock().await;
         (
-            state.prior_review_count,
-            state.last_reviewed_transcript_cursor.is_some(),
+            state.conversation.completed_review_count(),
+            state.conversation.cursor().is_some(),
         )
     };
     let mut analytics_result =
@@ -471,12 +472,13 @@ async fn run_review_on_session(
         let mut state = review_session.state.lock().await;
         state.pending_node_repl_evidence_admission = None;
         if !reviewer_has_full_transcript {
-            state.last_reviewed_transcript_cursor = None;
+            state.conversation.reset_transcript();
             state.last_admitted_node_repl_response_sequence = 0;
         }
 
         let prompt_mode = state
-            .last_reviewed_transcript_cursor
+            .conversation
+            .cursor()
             .map_or(GuardianPromptMode::Full, |cursor| {
                 GuardianPromptMode::Delta { cursor }
             });
@@ -720,8 +722,7 @@ async fn run_review_on_session(
             ));
         }
         let mut state = review_session.state.lock().await;
-        state.prior_review_count = state.prior_review_count.saturating_add(1);
-        state.last_reviewed_transcript_cursor = Some(transcript_cursor);
+        state.conversation.complete_review(transcript_cursor);
     }
     let budget_exhausted = review_session
         .session
@@ -907,21 +908,17 @@ impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
     }
 
     async fn snapshot(&self) -> Option<GuardianReviewForkSnapshot> {
-        self.state.lock().await.last_committed_fork_snapshot.clone()
+        self.state.lock().await.conversation.snapshot().cloned()
     }
 
     async fn commit_snapshot(&self) {
         match load_rollout_items_for_fork(&self.session).await {
             Ok(Some(items)) if !items.is_empty() => {
                 let mut state = self.state.lock().await;
-                let prior_review_count = state.prior_review_count;
-                let last_reviewed_transcript_cursor = state.last_reviewed_transcript_cursor;
                 let last_admitted_node_repl_response_sequence =
                     state.last_admitted_node_repl_response_sequence;
-                state.last_committed_fork_snapshot = Some(GuardianReviewForkSnapshot {
+                state.conversation.commit_snapshot(GuardianReviewHistory {
                     initial_history: InitialHistory::Forked(items),
-                    prior_review_count,
-                    last_reviewed_transcript_cursor,
                     last_admitted_node_repl_response_sequence,
                 });
             }
@@ -953,8 +950,8 @@ impl GuardianReviewSession {
 impl GuardianReviewSession {
     pub(crate) async fn committed_fork_rollout_items_for_test(&self) -> Option<Vec<RolloutItem>> {
         let state = self.state.lock().await;
-        let snapshot = state.last_committed_fork_snapshot.as_ref()?;
-        match &snapshot.initial_history {
+        let snapshot = state.conversation.snapshot()?;
+        match &snapshot.history().initial_history {
             InitialHistory::Forked(items) => Some(items.clone()),
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Resumed(_) => None,
         }

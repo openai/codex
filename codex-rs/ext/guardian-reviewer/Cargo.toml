@@ -18,6 +18,7 @@ codex-analytics = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
+codex-guardian-context = { workspace = true }
 codex-mcp = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
