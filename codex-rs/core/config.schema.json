@@ -383,6 +383,10 @@
     },
     "AutoReviewToml": {
       "properties": {
+        "experimental_policy_template": {
+          "description": "Experimental full Guardian prompt template containing the tenant policy placeholder.",
+          "type": "string"
+        },
         "policy": {
           "description": "Additional policy instructions inserted into the guardian prompt.",
           "type": "string"

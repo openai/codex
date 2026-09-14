@@ -8232,29 +8232,38 @@ async fn load_config_uses_requirements_guardian_policy_config() -> std::io::Resu
 }
 
 #[test]
-fn config_toml_deserializes_auto_review_policy() {
+fn config_toml_deserializes_auto_review_policy_and_template() {
     let cfg = toml::from_str::<ConfigToml>(
         r#"
 [auto_review]
 policy = "Use the user-configured guardian policy."
+experimental_policy_template = "Configured template: {{ tenant_policy_config }}"
 "#,
     )
     .expect("TOML deserialization should succeed");
 
+    let auto_review = cfg.auto_review.as_ref().expect("auto-review config");
     assert_eq!(
-        cfg.auto_review
-            .as_ref()
-            .and_then(|auto_review| auto_review.policy.as_deref()),
-        Some("Use the user-configured guardian policy.")
+        (
+            auto_review.policy.as_deref(),
+            auto_review.experimental_policy_template.as_deref(),
+        ),
+        (
+            Some("Use the user-configured guardian policy."),
+            Some("Configured template: {{ tenant_policy_config }}"),
+        )
     );
 }
 
 #[tokio::test]
-async fn load_config_uses_auto_review_guardian_policy_config() -> std::io::Result<()> {
+async fn load_config_uses_auto_review_guardian_policy_config_and_template() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
         auto_review: Some(AutoReviewToml {
             policy: Some("  Use the user-configured guardian policy.  ".to_string()),
+            experimental_policy_template: Some(
+                "  Configured template: {{ tenant_policy_config }}  ".to_string(),
+            ),
         }),
         ..Default::default()
     };
@@ -8270,8 +8279,14 @@ async fn load_config_uses_auto_review_guardian_policy_config() -> std::io::Resul
     .await?;
 
     assert_eq!(
-        config.guardian_policy_config.as_deref(),
-        Some("Use the user-configured guardian policy.")
+        (
+            config.guardian_policy_config.as_deref(),
+            config.guardian_policy_template.as_deref(),
+        ),
+        (
+            Some("Use the user-configured guardian policy."),
+            Some("Configured template: {{ tenant_policy_config }}"),
+        )
     );
 
     Ok(())
@@ -8292,6 +8307,7 @@ async fn requirements_guardian_policy_beats_auto_review() -> std::io::Result<()>
     let cfg = ConfigToml {
         auto_review: Some(AutoReviewToml {
             policy: Some("Use the user-configured guardian policy.".to_string()),
+            experimental_policy_template: None,
         }),
         ..Default::default()
     };
@@ -8322,6 +8338,7 @@ async fn load_config_ignores_empty_auto_review_guardian_policy_config() -> std::
     let cfg = ConfigToml {
         auto_review: Some(AutoReviewToml {
             policy: Some("   ".to_string()),
+            experimental_policy_template: None,
         }),
         ..Default::default()
     };

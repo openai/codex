@@ -213,6 +213,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         base_instructions_provenance: None,
         developer_instructions: None,
         guardian_policy_config: None,
+        guardian_policy_template: None,
         include_permissions_instructions: false,
         include_apps_instructions: false,
         include_collaboration_mode_instructions: false,

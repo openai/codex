@@ -153,6 +153,8 @@ async fn guardian_session_inherits_parent_http_fallback(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let configured_policy = "Use the task-configured Guardian policy.";
+    let configured_template = "You are judging one planned coding-agent action.\nConfigured template: {{ tenant_policy_config }}";
     let server = start_mock_server().await;
     let websocket_fallback = Mock::given(method("GET"))
         .and(path_regex(".*/responses$"))
@@ -205,6 +207,8 @@ async fn guardian_session_inherits_parent_http_fallback(
             config.model_provider.stream_max_retries = Some(1);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::User;
+            config.guardian_policy_config = Some(configured_policy.to_string());
+            config.guardian_policy_template = Some(configured_template.to_string());
         });
     let test = builder.build_with_auto_env(&server).await?;
 
@@ -247,6 +251,10 @@ async fn guardian_session_inherits_parent_http_fallback(
             request.body_json()["client_metadata"]["x-openai-subagent"].as_str() == Some("guardian")
         })
         .expect("Guardian reviewer inference request");
+    assert!(
+        guardian_request
+            .body_contains_text("Configured template: Use the task-configured Guardian policy.")
+    );
     assert_eq!(guardian_request.path(), expected_guardian_path);
     let credits_enabled = expected_guardian_path.ends_with("/guardian");
     let body = guardian_request.body_json();

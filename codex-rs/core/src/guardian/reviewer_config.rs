@@ -47,8 +47,10 @@ pub fn build_guardian_review_session_config(
     }
     let catalog_auto_review = model_messages.and_then(|messages| messages.auto_review.as_ref());
     let tenant_policy_config = parent_config.resolve_guardian_policy(model_messages);
-    let policy_template = catalog_auto_review
-        .and_then(|messages| messages.policy_template.as_deref())
+    let policy_template = parent_config
+        .guardian_policy_template
+        .as_deref()
+        .or_else(|| catalog_auto_review.and_then(|messages| messages.policy_template.as_deref()))
         .unwrap_or(BUNDLED_GUARDIAN_POLICY_TEMPLATE);
     guardian_config.base_instructions = Some(guardian_policy_prompt_with_config_and_template(
         tenant_policy_config,
