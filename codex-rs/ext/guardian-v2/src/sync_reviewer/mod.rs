@@ -1,18 +1,31 @@
-//! Installs the synchronous reviewer independently of async scorer startup.
-//! Reviewer policy and pool state live in the extension; core supplies context and runtime handles.
+//! Runs Guardian agents through ThreadManager and owns their background tasks.
+//! Context stays in the temporary core adapter. Parent stop joins all reviewer
+//! work before the parent closes its history, including partial startup.
 
 use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::guardian_review::GuardianReviewSessionHost;
+use codex_core::config::Constrained;
+use codex_core::guardian_review::GuardianReviewSession;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::SessionIsolation;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadReadyInput;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ThreadStopInput;
+use codex_guardian_reviewer::ReviewerPool;
+use codex_guardian_reviewer::ReviewerTasks;
+use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::InternalSessionSource;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 
-/// Owns reviewer state through the same thread manager as the parent conversation.
+/// Owns reviewer agents through the same thread manager as the parent conversation.
 #[derive(Clone, Debug)]
 pub struct GuardianExtension {
     thread_manager: Weak<ThreadManager>,
@@ -33,9 +46,135 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
             if input.session_source.is_internal() {
                 return;
             }
+            let manager = self.thread_manager.clone();
+            let runtime = input.thread_store.get_or_init(ReviewerTasks::default);
             input.thread_store.get_or_init(|| {
-                GuardianReviewSessionHost::with_thread_manager(self.thread_manager.clone())
+                ReviewerPool::<GuardianReviewSession>::new(
+                    move |context, key, kind, snapshot, cancel| {
+                        let manager = manager.clone();
+                        let runtime = Arc::clone(&runtime);
+                        Box::pin(async move {
+                            let history_reset = context.history_reset.clone();
+                            // Register before checking cancellation so parent stop also joins
+                            // a spawn racing with shutdown.
+                            let _task = runtime.tasks.token();
+                            anyhow::ensure!(
+                                !runtime.cancellation.is_cancelled()
+                                    && !cancel.is_cancelled()
+                                    && !history_reset.is_cancelled(),
+                                "Guardian is stopping"
+                            );
+                            let manager = manager.upgrade().ok_or_else(|| {
+                                anyhow::anyhow!("thread manager is no longer available")
+                            })?;
+                            let (mut options, state) = context.thread_options(snapshot).await;
+                            if matches!(
+                                kind,
+                                codex_analytics::GuardianReviewSessionKind::EphemeralForked
+                            ) {
+                                options.config.ephemeral = true;
+                            }
+                            options.config.permissions.approval_policy =
+                                Constrained::allow_only(AskForApproval::Never);
+                            options.session_source =
+                                Some(SessionSource::Internal(InternalSessionSource::Guardian));
+                            options.thread_source = Some(ThreadSource::GuardianReview);
+                            options
+                                .thread_extension_init
+                                .insert(SessionIsolation::Isolated);
+                            let parent_cancel = runtime.cancellation.clone();
+                            let session_cancel = cancel.clone();
+                            let until = async move {
+                                let _cancel_on_exit = cancel.clone().drop_guard();
+                                tokio::select! {
+                                    _ = cancel.cancelled() => {}
+                                    _ = history_reset.cancelled() => {}
+                                    _ = parent_cancel.cancelled() => {}
+                                }
+                            };
+                            let spawned = manager
+                                .start_thread_until(options, until, &runtime.tasks)
+                                .await?;
+                            Ok(context
+                                .bind_thread(&spawned.thread, key, state, session_cancel)
+                                .await)
+                        })
+                    },
+                )
             });
+        })
+    }
+
+    fn on_thread_ready<'a>(
+        &'a self,
+        input: ThreadReadyInput<'a, Config>,
+    ) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if input.session_source.is_internal()
+                || !matches!(
+                    input.config.permissions.approval_policy.value(),
+                    AskForApproval::OnRequest | AskForApproval::Granular(_)
+                )
+                || input.config.approvals_reviewer != ApprovalsReviewer::AutoReview
+            {
+                return;
+            }
+            let Some(runtime) = input.thread_store.get::<ReviewerTasks>() else {
+                return;
+            };
+            let task = runtime.tasks.token();
+            if runtime.cancellation.is_cancelled() {
+                return;
+            }
+            let Some(manager) = self.thread_manager.upgrade() else {
+                return;
+            };
+            let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+                return;
+            };
+            let Ok(parent) = manager.get_thread(thread_id).await else {
+                return;
+            };
+            let Some(pool) = input
+                .thread_store
+                .get::<ReviewerPool<GuardianReviewSession>>()
+            else {
+                return;
+            };
+            let cancel = runtime.cancellation.clone();
+            tokio::spawn(async move {
+                let _task = task;
+                let prepare = async {
+                    let context =
+                        codex_core::guardian_review::prepare_review_prewarm(&parent).await?;
+                    let key = context.reuse_key(/*previous*/ None);
+                    pool.prewarm(Arc::new(context), key).await
+                };
+                tokio::select! {
+                    _ = cancel.cancelled() => {}
+                    result = prepare => {
+                        if let Err(error) = result {
+                            tracing::warn!("failed to prewarm Guardian reviewer: {error:#}");
+                        }
+                    }
+                }
+            });
+        })
+    }
+
+    fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(runtime) = input.thread_store.get::<ReviewerTasks>() {
+                runtime.cancellation.cancel();
+                if let Some(pool) = input
+                    .thread_store
+                    .get::<ReviewerPool<GuardianReviewSession>>()
+                {
+                    pool.shutdown().await;
+                }
+                runtime.tasks.close();
+                runtime.tasks.wait().await;
+            }
         })
     }
 }

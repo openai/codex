@@ -34,6 +34,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     ) -> Result<PreparedApproval, ReviewDecision> {
         let super::super::runtime::ReviewRuntime {
             session,
+            history_reset: _,
             context,
             review_id,
             request,
@@ -204,20 +205,26 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             review_evidence,
         } = prepared;
         let session = Arc::clone(&self.session);
-        if session.guardian_context_mode == GuardianContextMode::ThreadOwned
-            && matches!(&outcome, GuardianReviewOutcome::Completed(assessment) if assessment.outcome == GuardianAssessmentOutcome::Allow)
-            && (root_authorization_version
-                != session
-                    .services
-                    .agent_control
-                    .root_user_authorization(session.thread_id)
-                    .await
-                    .map(|snapshot| snapshot.authorization_version)
-                || user_message_revision
+        if matches!(&outcome, GuardianReviewOutcome::Completed(assessment) if assessment.outcome == GuardianAssessmentOutcome::Allow)
+            && ((session.guardian_context_mode == GuardianContextMode::ThreadOwned
+                && (root_authorization_version
                     != session
-                        .conversation_history_snapshot()
+                        .services
+                        .agent_control
+                        .root_user_authorization(session.thread_id)
                         .await
-                        .user_message_revision())
+                        .map(|snapshot| snapshot.authorization_version)
+                    || user_message_revision
+                        != session
+                            .conversation_history_snapshot()
+                            .await
+                            .user_message_revision()))
+                || self.history_reset.is_cancelled()
+                || self
+                    .options
+                    .external_cancel
+                    .as_ref()
+                    .is_some_and(CancellationToken::is_cancelled))
         {
             // A completed approval cannot outlive the owning-session or root evidence
             // it evaluated, including when either changed before prompt construction.

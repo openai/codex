@@ -75,7 +75,7 @@ pub struct ThreadIdleInput<'a> {
     pub thread_store: &'a ExtensionData,
 }
 
-/// Input supplied when the host stops a thread runtime.
+/// Input supplied during runtime teardown, before persistent history closes.
 pub struct ThreadStopInput<'a> {
     /// Store scoped to the host session runtime.
     pub session_store: &'a ExtensionData,

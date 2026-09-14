@@ -252,30 +252,6 @@ async fn test_review_params() -> GuardianReviewSessionParams {
 }
 
 #[tokio::test]
-async fn spawned_guardian_session_preserves_windows_sandbox_proxy_settings() {
-    let params = test_review_params().await;
-    let manager = params.parent_session.guardian_review_session();
-    prewarm_guardian_review_session(
-        params.parent_session,
-        Arc::clone(params.parent_context.turn()),
-    )
-    .await
-    .expect("initialize Guardian session");
-    let mode = manager
-        .trunk()
-        .await
-        .expect("Guardian session")
-        .session
-        .windows_sandbox_proxy_settings_mode;
-
-    assert_eq!(
-        mode,
-        codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve
-    );
-    manager.shutdown().await;
-}
-
-#[tokio::test]
 async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
     let mut params = test_review_params().await;
     let latest = Some(Instructions {
@@ -310,17 +286,16 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
         thread_instructions: latest.clone(),
         ..stale_key.clone()
     };
+    let manager = params
+        .parent_session
+        .guardian_review_session()
+        .expect("Guardian pool installed");
     let prepared = setup::prepare_review(params).await.expect("prepare review");
-    let review = prepared
-        .setup()
-        .spawn(
-            stale_key,
-            GuardianReviewSessionKind::TrunkNew,
-            /*snapshot*/ None,
-            CancellationToken::new(),
-        )
+    manager
+        .prewarm(prepared.setup(), stale_key)
         .await
         .expect("spawn reviewer after instruction update");
+    let review = manager.trunk().await.expect("prewarmed reviewer");
 
     assert_eq!(review.reuse_key, expected_key);
     assert_eq!(review.session.inherited_instructions().await.thread, latest);

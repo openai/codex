@@ -2245,13 +2245,11 @@ impl Session {
             ));
     }
 
-    /// Uses the extension-owned reviewer, or the same manager for standalone hosts.
-    pub(crate) fn guardian_review_session(&self) -> Arc<GuardianReviewSessionManager> {
-        self.services.thread_extension_data.get_or_init(|| {
-            GuardianReviewSessionManager::new(|context, key, kind, snapshot, cancel| {
-                Box::pin(async move { context.spawn(key, kind, snapshot, cancel).await })
-            })
-        })
+    /// Returns the reviewer pool installed by the Guardian extension.
+    pub(crate) fn guardian_review_session(&self) -> Option<Arc<GuardianReviewSessionManager>> {
+        self.services
+            .thread_extension_data
+            .get::<GuardianReviewSessionManager>()
     }
 
     pub(crate) async fn emit_turn_started(&self, turn_context: &TurnContext) {
@@ -4391,6 +4389,15 @@ impl Session {
     pub(crate) async fn clone_history(&self) -> ContextManager {
         let state = self.state.lock().await;
         state.clone_history()
+    }
+
+    /// Captures the history lifetime without exposing mutable session state.
+    pub(crate) async fn history_reset(&self) -> (u64, CancellationToken) {
+        let state = self.state.lock().await;
+        (
+            state.history.reset_version,
+            state.history_reset.child_token(),
+        )
     }
 
     pub(crate) async fn conversation_history_snapshot(

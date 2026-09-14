@@ -13,12 +13,14 @@ doctest = false
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-api = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
 codex-guardian-context = { workspace = true }
+codex-guardian-reviewer = { workspace = true }
 codex-history = { workspace = true }
 codex-http-client = { workspace = true }
 codex-login = { workspace = true }
@@ -33,7 +35,6 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-anyhow = { workspace = true }
 codex-model-provider-info = { workspace = true }
 core_test_support = { workspace = true }
 pretty_assertions = { workspace = true }

@@ -3,10 +3,16 @@
 
 use std::sync::Arc;
 
+use codex_extension_api::SessionIsolation;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadSource;
 
+use super::GuardianReviewSessionManager;
 use crate::config::Config;
+use crate::config::Constrained;
 use crate::session::session::Session;
 
 pub(crate) fn install(session: &Session, config: &Config) {
@@ -29,7 +35,44 @@ pub(crate) fn install(session: &Session, config: &Config) {
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     ));
-    let host = super::GuardianReviewSessionHost::with_thread_manager(Arc::downgrade(&manager));
-    session.services.thread_extension_data.insert(host);
-    session.services.thread_extension_data.insert(manager);
+    session
+        .services
+        .thread_extension_data
+        .insert(GuardianReviewSessionManager::new(
+            move |context, key, kind, snapshot, cancel| {
+                let manager = Arc::clone(&manager);
+                Box::pin(async move {
+                    let history_reset = context.history_reset.clone();
+                    let (mut options, state) = context.thread_options(snapshot).await;
+                    if matches!(
+                        kind,
+                        codex_analytics::GuardianReviewSessionKind::EphemeralForked
+                    ) {
+                        options.config.ephemeral = true;
+                    }
+                    options.config.permissions.approval_policy =
+                        Constrained::allow_only(AskForApproval::Never);
+                    options.session_source =
+                        Some(SessionSource::Internal(InternalSessionSource::Guardian));
+                    options.thread_source = Some(ThreadSource::GuardianReview);
+                    options
+                        .thread_extension_init
+                        .insert(SessionIsolation::Isolated);
+                    let session_cancel = cancel.clone();
+                    let until = async move {
+                        let _cancel_on_exit = cancel.clone().drop_guard();
+                        tokio::select! {
+                            _ = cancel.cancelled() => {}
+                            _ = history_reset.cancelled() => {}
+                        }
+                    };
+                    let spawned = manager
+                        .start_thread_until(options, until, &tokio_util::task::TaskTracker::new())
+                        .await?;
+                    Ok(context
+                        .bind_thread(&spawned.thread, key, state, session_cancel)
+                        .await)
+                })
+            },
+        ));
 }

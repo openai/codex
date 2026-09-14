@@ -12,7 +12,6 @@ use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
 use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
 use crate::guardian::prompt::guardian_policy_prompt_with_config_and_template;
 use crate::guardian::review::guardian_review_session_config;
-use crate::guardian::review::routes_approval_to_guardian_with_reviewer;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;
 use crate::session::turn_context::TurnContext;
@@ -2592,6 +2591,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     .await;
     let committed_rollout_items = session
         .guardian_review_session()
+        .expect("Guardian pool installed")
         .trunk()
         .await
         .expect("reviewer")
@@ -2927,6 +2927,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
 
     session
         .guardian_review_session()
+        .expect("Guardian pool installed")
         .trunk()
         .await
         .expect("reviewer")
@@ -4254,4 +4255,19 @@ async fn review_approval_request(
     )
     .await
     .expect("Guardian should handle the request")
+}
+
+/// Whether this turn should route allowed approval prompts through the guardian
+/// reviewer instead of surfacing them to the user. ARC may still block actions
+/// earlier in the flow.
+fn routes_approval_to_guardian(turn: &crate::session::turn_context::TurnContext) -> bool {
+    routes_approval_to_guardian_with_reviewer(turn, turn.config.approvals_reviewer)
+}
+
+/// Whether an approval with its own reviewer selection should be routed through guardian.
+fn routes_approval_to_guardian_with_reviewer(
+    turn: &crate::session::turn_context::TurnContext,
+    approvals_reviewer: ApprovalsReviewer,
+) -> bool {
+    routes_approval_policy_to_guardian(turn.approval_policy(), approvals_reviewer)
 }

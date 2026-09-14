@@ -308,12 +308,12 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         sess.mcp_refresh.close();
         sess.services.mcp_runtime.shutdown().await;
     }
-    sess.guardian_review_session().shutdown().await;
 
     crate::hook_runtime::run_session_end_hooks(sess).await;
+    emit_thread_stop_lifecycle(sess).await;
 }
 
-pub(super) async fn emit_thread_stop_lifecycle(sess: &Session) {
+async fn emit_thread_stop_lifecycle(sess: &Session) {
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_stop(codex_extension_api::ThreadStopInput {
@@ -337,8 +337,6 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         i64::try_from(turn_count).unwrap_or(0),
         &[],
     );
-
-    emit_thread_stop_lifecycle(sess.as_ref()).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -607,7 +605,6 @@ pub(super) async fn submission_loop(
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
         shutdown_session_runtime(&sess).await;
-        emit_thread_stop_lifecycle(sess.as_ref()).await;
         if let Some(live_thread) = sess.live_thread()
             && let Err(err) = live_thread.shutdown().await
         {

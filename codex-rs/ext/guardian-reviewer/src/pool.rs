@@ -18,6 +18,14 @@ use crate::GuardianReviewSessionOutcome;
 use crate::run_before_review_deadline;
 use crate::run_before_review_deadline_with_cancel;
 
+/// Background work owned by Guardian for one parent runtime.
+/// Stop cancels the work and joins this tracker before the parent closes its history.
+#[derive(Default)]
+pub struct ReviewerTasks {
+    pub tasks: tokio_util::task::TaskTracker,
+    pub cancellation: CancellationToken,
+}
+
 /// A host-owned reviewer session. Context and snapshots remain opaque to the pool.
 /// Shutdown must cancel the runtime and await its termination.
 pub trait ReviewerSession: Send + Sync + 'static {

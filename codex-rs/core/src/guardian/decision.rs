@@ -54,10 +54,35 @@ pub(crate) async fn decide_approval(
     review_id: String,
     request: impl Into<ReviewAction>,
     reasons: ApprovalRequestReasons,
-    options: GuardianReviewOptions,
+    mut options: GuardianReviewOptions,
 ) -> Option<ReviewDecision> {
+    let runtime = session
+        .services
+        .thread_extension_data
+        .get::<codex_guardian_reviewer::ReviewerTasks>();
+    let _task = runtime.as_ref().map(|runtime| runtime.tasks.token());
+    if runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.cancellation.is_cancelled())
+    {
+        return Some(ReviewDecision::Abort);
+    }
     let context = context.into();
     let request = request.into();
+    let (_, history_reset) = session.history_reset().await;
+    let cancellation = match options.external_cancel.take() {
+        Some(external) => crate::exec::cancel_when_either(external, history_reset.clone()),
+        None => history_reset.child_token(),
+    };
+    let _cancel_on_drop = cancellation.clone().drop_guard();
+    let review_cancellation = match runtime.as_ref() {
+        Some(runtime) => {
+            crate::exec::cancel_when_either(runtime.cancellation.clone(), cancellation.clone())
+        }
+        None => cancellation.clone(),
+    };
+    let _review_cancel_on_drop = review_cancellation.clone().drop_guard();
+    options.external_cancel = Some(review_cancellation.clone());
     let turn = context.turn();
     let live_config = session.get_config().await;
     let requirements = live_config.config_layer_stack.requirements();
@@ -109,6 +134,7 @@ pub(crate) async fn decide_approval(
     };
     let runtime = codex_guardian_reviewer::SynchronousReview::new(ReviewRuntime {
         session: Arc::clone(&session),
+        history_reset: history_reset.clone(),
         context: context.clone(),
         review_id: review_id.clone(),
         request: request.clone(),
@@ -148,7 +174,7 @@ pub(crate) async fn decide_approval(
         )),
         synchronous_reviewer: &runtime,
     };
-    match session.services.extensions.decide_approval(&input).await {
+    let decision = match session.services.extensions.decide_approval(&input).await {
         Some(ApprovalDecision::Reviewed(decision)) => Some(decision),
         Some(ApprovalDecision::Allow) if !require_fresh_review => {
             let request = match request.validate(&context) {
@@ -193,5 +219,14 @@ pub(crate) async fn decide_approval(
         None | Some(ApprovalDecision::AskUser) => {
             runtime.review(GuardianReviewReason::Policy).await
         }
+    };
+    // Enforce cancellation after extension callbacks too, including cached decisions.
+    if history_reset.is_cancelled()
+        || cancellation.is_cancelled()
+        || review_cancellation.is_cancelled()
+    {
+        Some(ReviewDecision::Abort)
+    } else {
+        decision
     }
 }

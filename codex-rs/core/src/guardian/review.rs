@@ -102,21 +102,6 @@ pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Whether this turn should route allowed approval prompts through the guardian
-/// reviewer instead of surfacing them to the user. ARC may still block actions
-/// earlier in the flow.
-pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
-    routes_approval_to_guardian_with_reviewer(turn, turn.config.approvals_reviewer)
-}
-
-/// Whether an approval with its own reviewer selection should be routed through guardian.
-pub(crate) fn routes_approval_to_guardian_with_reviewer(
-    turn: &TurnContext,
-    approvals_reviewer: ApprovalsReviewer,
-) -> bool {
-    routes_approval_policy_to_guardian(turn.approval_policy(), approvals_reviewer)
-}
-
 /// Whether an exact approval policy and reviewer should route through Guardian.
 pub(crate) fn routes_approval_policy_to_guardian(
     approval_policy: AskForApproval,
@@ -333,6 +318,14 @@ async fn run_guardian_review_session_before_deadline(
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    let Some(pool) = session.guardian_review_session() else {
+        return (
+            GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(anyhow::anyhow!(
+                "Guardian extension is not installed for this thread"
+            ))),
+            GuardianReviewAnalyticsResult::without_session(),
+        );
+    };
     let session_config = match guardian_review_session_config(session.as_ref(), &context).await {
         Ok(session_config) => session_config,
         Err(err) => {
@@ -344,7 +337,7 @@ async fn run_guardian_review_session_before_deadline(
     };
     let (session_outcome, session_analytics_result) =
         Box::pin(super::review_session::run_guardian_review_session(
-            session.guardian_review_session(),
+            pool,
             GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_context: context.clone(),

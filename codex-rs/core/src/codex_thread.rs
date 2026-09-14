@@ -692,7 +692,7 @@ impl CodexThread {
 
     pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
         self.session
-            .guardian_review_session()
+            .guardian_review_session()?
             .trunk()
             .await?
             .rollout_path()

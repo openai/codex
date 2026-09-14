@@ -1021,12 +1021,12 @@ impl Session {
                 self.features.enabled(Feature::Personality),
             )
             .await;
-        self.services
-            .thread_extension_data
-            .insert(model_info.clone());
-
         let multi_agent_version = match multi_agent_runtime {
             TurnMultiAgentRuntime::ResolveAndStore => {
+                // A background preview must not overwrite a newer turn's model metadata.
+                self.services
+                    .thread_extension_data
+                    .insert(model_info.clone());
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
             }
             TurnMultiAgentRuntime::Preview => per_turn_config.multi_agent_version_for_model(

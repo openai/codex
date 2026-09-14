@@ -4,11 +4,9 @@
 
 #[path = "review_session_setup.rs"]
 mod setup;
-pub(crate) use setup::prewarm_guardian_review_session;
+pub use setup::PreparedGuardianContext;
+pub use setup::prepare_review_prewarm;
 pub(crate) use setup::run_guardian_review_session;
-
-#[path = "review_session_threads.rs"]
-mod managed_threads;
 
 #[path = "review_session_context.rs"]
 mod context_policy;
@@ -126,26 +124,11 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) deadline: tokio::time::Instant,
 }
 
-/// Host capability used to spawn private reviewer runtimes for this parent.
-/// The extension owns pooling; this adapter keeps the existing context and runtime paths.
-#[derive(Default)]
-pub struct GuardianReviewSessionHost {
-    managed_threads: Option<managed_threads::ManagedReviewerThreads>,
-}
-
-impl GuardianReviewSessionHost {
-    pub fn with_thread_manager(manager: std::sync::Weak<crate::ThreadManager>) -> Self {
-        Self {
-            managed_threads: Some(managed_threads::ManagedReviewerThreads::new(manager)),
-        }
-    }
-}
-
 pub(crate) type GuardianReviewSessionManager =
     codex_guardian_reviewer::ReviewerPool<GuardianReviewSession>;
 
 /// Opaque host session handle. Its state belongs to the existing context builder.
-pub(crate) struct GuardianReviewSession {
+pub struct GuardianReviewSession {
     session: Arc<Session>,
     io: SessionIo,
     cancel_token: CancellationToken,
@@ -153,7 +136,8 @@ pub(crate) struct GuardianReviewSession {
     state: Mutex<GuardianReviewState>,
 }
 
-struct GuardianReviewState {
+/// Opaque conversation progress retained while ThreadManager starts a reviewer.
+pub struct GuardianReviewState {
     conversation: ConversationState<GuardianReviewHistory>,
     last_admitted_node_repl_response_sequence: u64,
     pending_node_repl_evidence_admission: Option<PendingNodeReplEvidenceAdmission>,
@@ -882,7 +866,7 @@ impl codex_guardian_reviewer::ReviewerRuntime for GuardianReviewSession {
 mod tests;
 
 impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
-    type Setup = setup::PreparedGuardianContext;
+    type Setup = PreparedGuardianContext;
     type Context = GuardianReviewSessionReuseKey;
     type Snapshot = GuardianReviewForkSnapshot;
 

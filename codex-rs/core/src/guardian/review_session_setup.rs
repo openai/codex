@@ -1,4 +1,4 @@
-//! Prepares opaque session inputs for the extension-owned reviewer pool.
+//! Captures the context used by Guardian before and after it starts a reviewer agent.
 //! Context selection and assembly stay on the existing path pending its replacement.
 
 use super::*;
@@ -6,14 +6,14 @@ use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerRequest;
 use codex_guardian_reviewer::SessionDisposition;
 
-pub(crate) struct PreparedGuardianContext {
+pub struct PreparedGuardianContext {
     parent: Arc<Session>,
     context: GuardianReviewContext,
     config: Config,
     context_policy: ReviewContextPolicy,
     key: GuardianReviewSessionReuseKey,
     parent_compaction: Option<ResponseItem>,
-    host: Arc<GuardianReviewSessionHost>,
+    pub history_reset: CancellationToken,
 }
 
 impl PreparedGuardianContext {
@@ -25,6 +25,11 @@ impl PreparedGuardianContext {
         node_repl_policy: &GuardianNodeReplPolicy,
         compaction_model_hash: Option<&str>,
     ) -> anyhow::Result<Self> {
+        let (reset_version, history_reset) = parent.history_reset().await;
+        // Preparation may have raced with a history reset before capturing the reviewer context.
+        if reset_version != history.reset_version {
+            history_reset.cancel();
+        }
         let context_policy =
             ReviewContextPolicy::for_context(parent.guardian_context_mode, &config.features);
         let root_authorization_version = context_policy.root_authorization_version(&parent).await;
@@ -40,10 +45,6 @@ impl PreparedGuardianContext {
         .with_node_repl_policy(node_repl_policy);
         key.root_authorization_version = root_authorization_version;
         key.parent_reset_version = history.reset_version;
-        let host = parent
-            .services
-            .thread_extension_data
-            .get_or_init(GuardianReviewSessionHost::default);
         Ok(Self {
             parent,
             context,
@@ -51,13 +52,16 @@ impl PreparedGuardianContext {
             context_policy,
             key,
             parent_compaction,
-            host,
+            history_reset,
         })
     }
 }
 
 impl PreparedGuardianContext {
-    fn reuse_key(&self, previous: Option<&GuardianReviewSession>) -> GuardianReviewSessionReuseKey {
+    pub fn reuse_key(
+        &self,
+        previous: Option<&GuardianReviewSession>,
+    ) -> GuardianReviewSessionReuseKey {
         let mut key = self.key.clone();
         if self.context_policy != ReviewContextPolicy::ThreadOwned
             && self.parent_compaction.is_none()
@@ -70,12 +74,21 @@ impl PreparedGuardianContext {
         key
     }
 
-    /// Returns captured parent inputs; Guardian selects the agent's identity and lifecycle.
-    async fn thread_options(
+    /// Moves fork history into startup options and retains only its context bookkeeping.
+    /// Guardian selects the agent's identity and lifecycle.
+    pub async fn thread_options(
         &self,
-        initial_history: Option<InitialHistory>,
-    ) -> crate::StartThreadOptions {
-        let initial_history = initial_history.or_else(|| {
+        snapshot: Option<GuardianReviewForkSnapshot>,
+    ) -> (crate::StartThreadOptions, GuardianReviewState) {
+        let (conversation, history) = snapshot.map(ConversationState::fork).unzip();
+        let state = GuardianReviewState {
+            conversation: conversation.unwrap_or_default(),
+            last_admitted_node_repl_response_sequence: history.as_ref().map_or(0, |history| {
+                history.last_admitted_node_repl_response_sequence
+            }),
+            pending_node_repl_evidence_admission: None,
+        };
+        let initial_history = history.map(|history| history.initial_history).or_else(|| {
             self.parent_compaction
                 .clone()
                 .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())]))
@@ -86,7 +99,7 @@ impl PreparedGuardianContext {
             .services
             .model_client
             .responses_websocket_enabled();
-        crate::StartThreadOptions {
+        let options = crate::StartThreadOptions {
             internal_parent: Some(crate::thread_manager::InternalSessionParent {
                 thread_id: self.parent.thread_id(),
                 auth_manager: Arc::clone(&self.parent.services.auth_manager),
@@ -99,24 +112,40 @@ impl PreparedGuardianContext {
             inherited_environments: Some(self.context.environments().clone()),
             client_mcp_extensions: self.parent.services.client_mcp_extensions.clone(),
             ..crate::StartThreadOptions::new(config)
-        }
+        };
+        (options, state)
     }
 
     /// Binds context bookkeeping to an agent that Guardian has already started.
-    async fn bind_session(
+    pub async fn bind_thread(
         &self,
-        session: Arc<Session>,
-        io: SessionIo,
+        thread: &crate::CodexThread,
         context: GuardianReviewSessionReuseKey,
         state: GuardianReviewState,
         cancellation: CancellationToken,
     ) -> GuardianReviewSession {
+        let session = Arc::clone(&thread.session);
+        let io = SessionIo {
+            tx_sub: thread.io.tx_sub.clone(),
+            rx_event: thread.io.rx_event.clone(),
+            agent_status: thread.io.agent_status.clone(),
+            session_loop_termination: thread.io.session_loop_termination.clone(),
+        };
         let inherited = session.inherited_instructions().await;
         let context = GuardianReviewSessionReuseKey {
             user_instructions: inherited.user,
             thread_instructions: inherited.thread,
             ..context
         };
+        crate::session::emit_subagent_session_started(
+            &self.parent.services.analytics_events_client,
+            self.parent.app_server_client_metadata().await,
+            session.session_id(),
+            session.thread_id(),
+            Some(self.parent.thread_id()),
+            session.thread_config_snapshot().await,
+            SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_owned()),
+        );
         GuardianReviewSession {
             session,
             io,
@@ -124,40 +153,6 @@ impl PreparedGuardianContext {
             reuse_key: context,
             state: Mutex::new(state),
         }
-    }
-}
-
-impl PreparedGuardianContext {
-    pub(crate) async fn spawn(
-        &self,
-        context: GuardianReviewSessionReuseKey,
-        kind: GuardianReviewSessionKind,
-        snapshot: Option<GuardianReviewForkSnapshot>,
-        cancellation: CancellationToken,
-    ) -> anyhow::Result<GuardianReviewSession> {
-        let (conversation, history) = snapshot.map(ConversationState::fork).unzip();
-        let state = GuardianReviewState {
-            conversation: conversation.unwrap_or_default(),
-            last_admitted_node_repl_response_sequence: history.as_ref().map_or(0, |history| {
-                history.last_admitted_node_repl_response_sequence
-            }),
-            pending_node_repl_evidence_admission: None,
-        };
-        let mut options = self
-            .thread_options(history.map(|history| history.initial_history))
-            .await;
-        if matches!(kind, GuardianReviewSessionKind::EphemeralForked) {
-            options.config.ephemeral = true;
-        }
-        let threads = self.host.managed_threads.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Guardian extension is not installed for this thread")
-        })?;
-        let (session, io) = threads
-            .spawn(&self.parent, options, cancellation.clone())
-            .await?;
-        Ok(self
-            .bind_session(session, io, context, state, cancellation)
-            .await)
     }
 }
 
@@ -239,18 +234,16 @@ pub(super) async fn prepare_review(
     })
 }
 
-pub(crate) fn prewarm_guardian_review_session(
-    parent: Arc<Session>,
-    turn: Arc<TurnContext>,
-) -> BoxFuture<'static, anyhow::Result<()>> {
-    Box::pin(async move {
-        let context = prepare_prewarm(Arc::clone(&parent), turn).await?;
-        let key = context.reuse_key(/*previous*/ None);
-        parent
-            .guardian_review_session()
-            .prewarm(Arc::new(context), key)
-            .await
-    })
+/// Captures the same startup context used by the existing prompt builder.
+/// The caller owns scheduling, cancellation, and the reviewer pool.
+pub async fn prepare_review_prewarm(
+    parent: &crate::CodexThread,
+) -> anyhow::Result<PreparedGuardianContext> {
+    let turn = parent
+        .session
+        .new_startup_prewarm_turn_with_sub_id(crate::session::INITIAL_SUBMIT_ID.to_owned())
+        .await;
+    prepare_prewarm(Arc::clone(&parent.session), turn).await
 }
 
 pub(super) fn prepare_prewarm(

@@ -2203,6 +2203,8 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         .await;
     model_info.slug = "protected-model".to_owned();
     thread_store.insert(model_info);
+    // A late prewarm preview must leave the active model's review requirements intact.
+    let _ = codex_core::guardian_review::prepare_review_prewarm(&test.codex).await?;
     let authorization = ScoreAuthorization::current(&test.codex).await;
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()

@@ -28,6 +28,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_output_truncation::TruncationPolicy;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 /// Runtime request effort, initially unset and established by prewarm or sampling.
@@ -72,6 +73,8 @@ pub(crate) struct SessionState {
     /// Persisted origin of the session base instructions, when known.
     pub(crate) base_instructions_provenance: Option<BaseInstructionsProvenance>,
     pub(crate) history: ContextManager,
+    /// Cancels work bound to discarded history. Appends and compaction preserve it.
+    pub(crate) history_reset: CancellationToken,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
     pub(crate) server_reasoning_included: bool,
@@ -117,6 +120,7 @@ impl SessionState {
             session_configuration,
             base_instructions_provenance: None,
             history,
+            history_reset: CancellationToken::new(),
             latest_rate_limits: None,
             latest_token_usage_record: None,
             server_reasoning_included: false,
@@ -174,10 +178,11 @@ impl SessionState {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
-        self.history.replace(items);
-        self.history
-            .set_reference_context_item(reference_context_item);
-        self.auto_compact_window.clear_prefill();
+        self.replace_annotated_history(
+            items.into_iter().map(ResponseItemEnvelope::new).collect(),
+            reference_context_item,
+            HistoryReplacement::Reset,
+        );
     }
 
     pub(crate) fn replace_annotated_history(
@@ -188,7 +193,10 @@ impl SessionState {
     ) {
         match replacement {
             HistoryReplacement::Compaction => self.history.replace_compacted(items),
-            HistoryReplacement::Reset => self.history.replace_annotated(items),
+            HistoryReplacement::Reset => {
+                self.history.replace_annotated(items);
+                std::mem::take(&mut self.history_reset).cancel();
+            }
         }
         self.history
             .set_reference_context_item(reference_context_item);

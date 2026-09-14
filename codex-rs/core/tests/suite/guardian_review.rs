@@ -1052,6 +1052,19 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
         .await
         .expect("guardian trunk rollout path");
     test.codex.shutdown_and_wait().await?;
+    // Parent stop joins ThreadManager cleanup through the real extension registration.
+    assert!(
+        test.codex
+            .thread_extension_data()
+            .get::<codex_guardian_reviewer::ReviewerTasks>()
+            .expect("Guardian tasks")
+            .tasks
+            .is_empty()
+    );
+    assert!(matches!(
+        test.thread_store.flush_thread(guardian_thread_id).await,
+        Err(codex_thread_store::ThreadStoreError::ThreadNotFound { .. })
+    ));
     let guardian_rollout = fs::read_to_string(guardian_rollout_path)?
         .lines()
         .map(codex_rollout::parse_rollout_line)

@@ -3596,6 +3596,7 @@ dependencies = [
  "codex-extension-api",
  "codex-features",
  "codex-guardian-context",
+ "codex-guardian-reviewer",
  "codex-history",
  "codex-http-client",
  "codex-login",

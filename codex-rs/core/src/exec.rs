@@ -254,12 +254,16 @@ pub(crate) fn cancel_when_either(
     first: CancellationToken,
     second: CancellationToken,
 ) -> CancellationToken {
-    let combined = CancellationToken::new();
+    let combined = first.child_token();
+    if combined.is_cancelled() || second.is_cancelled() {
+        combined.cancel();
+        return combined;
+    }
     let cancel = combined.clone();
     tokio::spawn(async move {
         tokio::select! {
-            _ = first.cancelled() => {}
             _ = second.cancelled() => {}
+            _ = cancel.cancelled() => {}
         }
         cancel.cancel();
     });

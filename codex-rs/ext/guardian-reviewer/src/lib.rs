@@ -44,6 +44,7 @@ pub(crate) use deadline::run_before_review_deadline_with_cancel;
 pub use pool::ReviewerPool;
 pub use pool::ReviewerRequest;
 pub use pool::ReviewerSession;
+pub use pool::ReviewerTasks;
 pub use pool::SessionDisposition;
 
 pub use review::ReviewHost;
