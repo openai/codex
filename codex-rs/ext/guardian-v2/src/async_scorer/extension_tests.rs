@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::SystemTime;
 
 use anyhow::Result;
 use codex_core::config::Config;
@@ -67,9 +66,7 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use super::GuardianV2Extension;
-use super::GuardianV2ScoreProgress;
-
+use crate::async_scorer::authorization::ScoreAuthorization;
 use crate::async_scorer::config::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::config::GuardianV2Config;
@@ -86,6 +83,7 @@ use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::MODEL;
 use crate::async_scorer::sampler::tests::ProxyPrewarmLimit;
 use crate::async_scorer::sampler::tests::proxy_websocket_servers_with_http;
+use crate::async_scorer::score::GuardianV2ScoreProgress;
 use crate::async_scorer::transcript::MAX_MESSAGE_ENTRY_TOKENS;
 use crate::async_scorer::transcript::MAX_TOOL_ENTRY_TOKENS;
 use crate::async_scorer::transcript::truncate_entry;
@@ -447,41 +445,6 @@ impl ConversationHistorySnapshot for TestConversationHistory {
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
         Box::new(self.0.iter())
     }
-}
-
-#[test]
-fn fail_closed_score_preserves_classification_order() {
-    let thread_store = ExtensionData::new("thread-1");
-    let newer_sampled_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
-    let newest_sampled_at = newer_sampled_at + Duration::from_secs(1);
-    let newer_score = SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-        call_id: None,
-        action: None,
-        sampled_at: Some(newer_sampled_at.into()),
-    };
-    thread_store.insert(newer_score.clone());
-
-    GuardianV2Extension::record_fail_closed_score(&thread_store, SystemTime::UNIX_EPOCH);
-    assert_eq!(
-        thread_store.get::<SecurityRiskScore>().as_deref(),
-        Some(&newer_score)
-    );
-
-    GuardianV2Extension::record_fail_closed_score(&thread_store, newest_sampled_at);
-    let fail_closed_score = SecurityRiskScore {
-        scores: BTreeMap::from([("action_risk".to_owned(), 1.0)]),
-        call_id: None,
-        action: None,
-        sampled_at: Some(newest_sampled_at.into()),
-    };
-    assert!(!thread_store.insert_if(newer_score.clone(), |previous| {
-        previous.is_none_or(|previous| previous.sampled_at < newer_score.sampled_at)
-    }));
-    assert_eq!(
-        thread_store.get::<SecurityRiskScore>().as_deref(),
-        Some(&fail_closed_score)
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2240,7 +2203,7 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
         .await;
     model_info.slug = "protected-model".to_owned();
     thread_store.insert(model_info);
-    let authorization = super::ScoreAuthorization::current(&test.codex).await;
+    let authorization = ScoreAuthorization::current(&test.codex).await;
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
@@ -2435,7 +2398,7 @@ async fn assert_compaction_approval_policy(thread_context_enabled: bool) -> Resu
         fixture.test.codex.guardian_authorization_version().await,
         authorization
     );
-    let score_authorization = super::ScoreAuthorization::current(&fixture.test.codex).await;
+    let score_authorization = ScoreAuthorization::current(&fixture.test.codex).await;
     *thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("score progress")

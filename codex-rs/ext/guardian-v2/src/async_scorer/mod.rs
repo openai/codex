@@ -1,12 +1,15 @@
 mod action;
 mod approval;
 mod authorization;
+mod classification;
 mod config;
 mod coverage;
 mod extension;
 mod metrics;
+mod observation;
 mod parent_compaction;
 mod sampler;
+mod score;
 mod startup;
 mod transcript;
 mod truncation;
