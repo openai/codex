@@ -576,7 +576,10 @@ jobs:
           #   codex-<target>.zip
           # Variables in the single-quoted script expand in the child shell.
           # shellcheck disable=SC2016
-          printf '%s\0' "$dest"/* |
+          # Start larger binaries first so both workers stay busy.
+          find "$dest" -maxdepth 1 -type f -printf '%s %p\0' |
+            sort -z -nr |
+            cut -z -d ' ' -f 2- |
             xargs -0 -n1 -P2 bash -c '
             set -euo pipefail
             f=$1
