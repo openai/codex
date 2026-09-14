@@ -1,7 +1,7 @@
 //! Paste-burst detection for terminals without bracketed paste.
 //!
 //! On some platforms (notably Windows), pastes often arrive as a rapid stream of
-//! `KeyCode::Char` and `KeyCode::Enter` key events rather than as a single "paste" event.
+//! `KeyCode::Char`, `KeyCode::Enter`, and `KeyCode::Tab` key events rather than as a single "paste" event.
 //! In that mode, the composer needs to:
 //!
 //! - Prevent transient UI side effects (e.g. toggles bound to `?`) from triggering on pasted text.
@@ -26,8 +26,8 @@
 //!   [`PasteBurst::on_plain_char_no_hold`] (non-ASCII/IME).
 //! - If the decision indicates buffering, the caller appends to `PasteBurst.buffer` via
 //!   [`PasteBurst::append_char_to_buffer`].
-//! - On Enter, [`PasteBurst::append_newline_if_active`] promotes a held first character into
-//!   the active buffer before appending the newline.
+//! - On Enter or Tab, [`PasteBurst::append_control_char_if_active`] promotes a held first character
+//!   into the active buffer before appending the newline or tab and refreshing the idle timeout.
 //! - On a UI tick, call [`PasteBurst::flush_if_due`]. If it returns [`FlushResult::Typed`], insert
 //!   that char as normal typing. If it returns [`FlushResult::Paste`], treat the returned string as
 //!   an explicit paste.
@@ -50,7 +50,7 @@
 //!   A non-empty buffer is treated as "in burst context" even if `active` has been cleared.
 //! - `pending_first_char`: a single held ASCII char used for flicker suppression. The caller must
 //!   not render this char until it joins a burst through `BeginBufferFromPending` or
-//!   `append_newline_if_active`, or flushes as a normal typed char (`FlushResult::Typed`).
+//!   `append_control_char_if_active`, or flushes as a normal typed char (`FlushResult::Typed`).
 //! - `last_plain_char_time`/`consecutive_plain_char_burst`: the timing/count heuristic for
 //!   "paste-like" streams.
 //! - `burst_window_until`: the Enter suppression window ("Enter inserts newline") that outlives the
@@ -321,18 +321,19 @@ impl PasteBurst {
         }
     }
 
-    /// While bursting: accumulate a newline into the buffer instead of
-    /// submitting the textarea.
+    /// Accumulate a newline or tab into the burst instead of invoking a shortcut.
+    /// A held first character is promoted into the buffer before the control character.
     ///
-    /// Returns true if a newline was appended (we are in a burst context),
+    /// Returns true if the character was appended (we are in a burst context),
     /// false otherwise.
-    pub fn append_newline_if_active(&mut self, now: Instant) -> bool {
+    pub fn append_control_char_if_active(&mut self, ch: char, now: Instant) -> bool {
         if self.is_active() {
             if let Some((held, _)) = self.pending_first_char.take() {
                 self.buffer.push(held);
             }
             self.active = true;
-            self.buffer.push('\n');
+            self.buffer.push(ch);
+            self.last_plain_char_time = Some(now);
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
             true
         } else {

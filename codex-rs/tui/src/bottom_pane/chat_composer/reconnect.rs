@@ -20,7 +20,10 @@ impl ChatComposer {
         if !self.draft.disable_paste_burst
             && self.draft.paste_burst.is_active()
             && !in_slash_context
-            && self.draft.paste_burst.append_newline_if_active(now)
+            && self
+                .draft
+                .paste_burst
+                .append_control_char_if_active('\n', now)
         {
             return true;
         }

@@ -167,7 +167,7 @@
 //! # Non-bracketed Paste Bursts
 //!
 //! On some terminals (especially on Windows), pastes arrive as a rapid sequence of
-//! `KeyCode::Char` and `KeyCode::Enter` key events instead of a single paste event.
+//! `KeyCode::Char`, `KeyCode::Enter`, and `KeyCode::Tab` key events instead of a single paste event.
 //!
 //! To avoid misinterpreting these bursts as real typing (and to prevent transient UI effects like
 //! shortcut overlays toggling on a pasted `?`), we feed text-producing character events (plain,
@@ -198,6 +198,8 @@
 //!   input to either buffer it or insert normally.
 //! - [`ChatComposer::handle_non_ascii_char`]: handles the non-ASCII/IME path without holding the
 //!   first char, while still allowing paste detection via retro-capture.
+//! - Unmodified Tab joins detected bursts, including short Unicode prefixes, before popup dispatch.
+//!   Expired bursts are flushed first so manual Tab keeps its normal shortcut behavior.
 //! - [`ChatComposer::flush_paste_burst_if_due`]/[`ChatComposer::handle_paste_burst_flush`]: called
 //!   from UI ticks to turn a pending burst into either an explicit paste (`handle_paste`) or a
 //!   normal typed character.
@@ -313,6 +315,7 @@ mod draft_state;
 mod footer_state;
 mod history_search;
 mod inline_input;
+mod paste_input;
 mod popup_state;
 mod reconnect;
 mod slash_input;
@@ -2046,6 +2049,10 @@ impl ChatComposer {
             return self.begin_history_search();
         }
 
+        if self.handle_paste_tab(key_event, Instant::now()) {
+            return (InputResult::None, true);
+        }
+
         let result = match &mut self.popups.active {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
@@ -3701,7 +3708,10 @@ impl ChatComposer {
         if matches!(input.code, KeyCode::Enter)
             && !self.draft.disable_paste_burst
             && self.draft.paste_burst.is_active()
-            && self.draft.paste_burst.append_newline_if_active(now)
+            && self
+                .draft
+                .paste_burst
+                .append_control_char_if_active('\n', now)
         {
             return (InputResult::None, true);
         }
@@ -5078,6 +5088,10 @@ mod effort_tests;
 #[cfg(test)]
 #[path = "chat_composer/embedded_input_tests.rs"]
 mod embedded_input_tests;
+
+#[cfg(test)]
+#[path = "chat_composer/paste_tests.rs"]
+mod paste_tests;
 
 #[cfg(test)]
 #[path = "chat_composer/snapshot_tests.rs"]
