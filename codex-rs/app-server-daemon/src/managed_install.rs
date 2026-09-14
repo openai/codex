@@ -14,19 +14,63 @@ use tokio::fs;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-/// Returns the packaged executable when present, otherwise an existing legacy executable.
-/// If neither exists, returns the expected packaged path on Windows and preserves the
-/// historical legacy fallback on Unix. This is path selection, not existence validation:
-/// launch operations reject a missing executable separately, while commands such as
-/// stop can still run after the managed install has been removed.
+/// Dedicated daemon packages take precedence over standalone installations.
+/// Preserve legacy launch state, including logs left after a daemon is stopped;
+/// settings, installer selections, and lock files alone do not prove a prior launch.
+pub(crate) fn package_root(codex_home: &Path) -> PathBuf {
+    let dedicated = codex_home.join("packages/app-server-daemon");
+    if !matches!(dedicated.join("current").symlink_metadata(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return dedicated;
+    }
+    let state = codex_home.join("app-server-daemon");
+    for (package, artifacts) in [
+        (
+            "app-server-daemon",
+            [
+                crate::DAEMON_PID_FILE_NAME,
+                "daemon.stderr.log",
+                crate::DAEMON_UPDATE_PID_FILE_NAME,
+                "daemon-updater.stderr.log",
+            ],
+        ),
+        (
+            "standalone",
+            [
+                crate::LEGACY_PID_FILE_NAME,
+                "app-server.stderr.log",
+                crate::LEGACY_UPDATE_PID_FILE_NAME,
+                "app-server-updater.stderr.log",
+            ],
+        ),
+    ] {
+        if artifacts.iter().any(|name| {
+            !matches!(state.join(name).symlink_metadata(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+        }) {
+            return codex_home.join("packages").join(package);
+        }
+    }
+    // Retain CLI installs until the next stage adds dedicated package seeding.
+    let standalone = codex_home.join("packages/standalone");
+    if !matches!(standalone.join("current").symlink_metadata(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return standalone;
+    }
+    dedicated
+}
+
+/// Resolve both packaged and legacy binaries without requiring a valid install.
 pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
-    let current = codex_home
-        .join("packages")
-        .join("standalone")
-        .join("current");
+    let root = package_root(codex_home);
+    let current = root.join("current");
     let packaged = current.join("bin").join(managed_codex_file_name());
     let legacy = current.join(managed_codex_file_name());
-    if packaged.is_file() || (cfg!(windows) && !legacy.is_file()) {
+    if packaged.is_file()
+        || !legacy.is_file() && (cfg!(windows) || root.ends_with("app-server-daemon"))
+    {
         packaged
     } else {
         legacy
@@ -35,7 +79,7 @@ pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
 
 /// Only latest-channel stable releases may run the public latest-version updater.
 pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) -> bool {
-    let standalone = codex_home.join("packages/standalone");
+    let standalone = package_root(codex_home);
     let Ok(releases) = std::fs::canonicalize(standalone.join("releases")) else {
         return false;
     };
@@ -48,9 +92,15 @@ pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) 
     let Some(release_name) = release.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
+    // GNU packages can seed the new directory; retain legacy updater eligibility.
+    if standalone.ends_with("standalone") && release_name.ends_with("-gnu") {
+        return false;
+    }
     let targets = [
         "aarch64-apple-darwin",
         "x86_64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-musl",
         "x86_64-unknown-linux-musl",
         "aarch64-pc-windows-msvc",
@@ -74,13 +124,19 @@ pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) 
 
 /// Older managed binaries can serve app-server requests without owning an updater.
 pub(crate) async fn supports_daemon_update_loop(codex_bin: &Path) -> bool {
+    supports_daemon_command(codex_bin, &["pid-update-loop", "--help"]).await
+}
+
+/// Probe an internal daemon command without running a long-lived process.
+pub(crate) async fn supports_daemon_command(codex_bin: &Path, args: &[&str]) -> bool {
     let mut command = Command::new(codex_bin);
     #[cfg(windows)]
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     timeout(
         Duration::from_secs(5),
         command
-            .args(["app-server", "daemon", "pid-update-loop", "--help"])
+            .args(["app-server", "daemon"])
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

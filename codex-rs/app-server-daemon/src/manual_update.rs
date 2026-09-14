@@ -126,7 +126,7 @@ pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
 
 const UNSUPPORTED_MESSAGE: &str = "This command requires a CLI-managed daemon and a stable latest-channel standalone install; update this installation with its owning installer.";
 
-async fn unsupported(daemon: &Daemon) -> Result<UpdateOutput> {
+pub(super) async fn unsupported(daemon: &Daemon) -> Result<UpdateOutput> {
     let managed_codex_path = daemon.current_managed_codex_bin()?;
     Ok(UpdateOutput {
         status: UpdateStatus::Unsupported,

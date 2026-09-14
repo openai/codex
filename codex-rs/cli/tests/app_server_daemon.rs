@@ -44,6 +44,10 @@ impl TestDaemon {
             PathBuf::from("releases").join(release_name),
             standalone.join("current"),
         )?;
+        // Model a daemon that was previously launched and is currently stopped.
+        let state = home.path().join("app-server-daemon");
+        std::fs::create_dir(&state)?;
+        std::fs::write(state.join("app-server.stderr.log"), b"")?;
         Ok(Self {
             home,
             codex,
@@ -119,6 +123,29 @@ fn wait_for_exit(pid: u32) -> Result<()> {
 }
 
 #[test]
+fn package_ownership_check_does_not_start_an_updater() -> Result<()> {
+    let daemon = TestDaemon::new()?;
+    let output = daemon
+        .command()
+        .args([
+            "app-server",
+            "daemon",
+            "pid-update-loop",
+            "--check-package-ownership",
+        ])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "ownership check failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let state = daemon.home.path().join("app-server-daemon");
+    assert!(!state.join("app-server-updater.pid").exists());
+    assert!(!state.join("daemon-updater.pid").exists());
+    Ok(())
+}
+
+#[test]
 fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
     let daemon = TestDaemon::new()?;
     assert_eq!(daemon.lifecycle("start")?["status"], "started");
@@ -139,6 +166,22 @@ fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
     assert_eq!(daemon.lifecycle("restart")?["status"], "restarted");
     assert_ne!(daemon.pid("app-server.pid")?, backend_pid);
     assert_eq!(daemon.pid("app-server-updater.pid")?, replacement_pid);
+    daemon.lifecycle("stop")?;
+    assert!(
+        !daemon
+            .home
+            .path()
+            .join("app-server-daemon/app-server.pid")
+            .exists()
+    );
+    assert_eq!(daemon.lifecycle("start")?["status"], "started");
+    assert!(
+        !daemon
+            .home
+            .path()
+            .join("packages/app-server-daemon")
+            .exists()
+    );
     Ok(())
 }
 

@@ -809,7 +809,11 @@ enum AppServerDaemonSubcommand {
 
     /// [internal] Run the detached pid-backed standalone updater loop.
     #[clap(hide = true)]
-    PidUpdateLoop,
+    PidUpdateLoop {
+        /// Check support for daemon-owned packages without starting the updater.
+        #[arg(long, hide = true)]
+        check_package_ownership: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -1392,10 +1396,6 @@ async fn cli_main(
                     AppServerDaemonSubcommand::Restart => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
                     }
-                    AppServerDaemonSubcommand::Update => {
-                        let output = codex_app_server_daemon::update().await?;
-                        println!("{}", serde_json::to_string(&output)?);
-                    }
                     AppServerDaemonSubcommand::EnableRemoteControl => {
                         print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
                             .await?;
@@ -1412,7 +1412,13 @@ async fn cli_main(
                     AppServerDaemonSubcommand::Version => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Version).await?;
                     }
-                    AppServerDaemonSubcommand::PidUpdateLoop => {
+                    AppServerDaemonSubcommand::PidUpdateLoop {
+                        check_package_ownership: true,
+                    } => return Ok(()),
+                    AppServerDaemonSubcommand::Update
+                    | AppServerDaemonSubcommand::PidUpdateLoop {
+                        check_package_ownership: false,
+                    } => {
                         let cli_overrides = root_config_overrides
                             .parse_overrides()
                             .map_err(anyhow::Error::msg)?;
@@ -1422,7 +1428,14 @@ async fn cli_main(
                             .await
                             .map_err(anyhow::Error::from);
                         let http_client_factory = updater_http_client_factory(config);
-                        codex_app_server_daemon::run_pid_update_loop(http_client_factory).await?;
+                        if matches!(daemon_cli.subcommand, AppServerDaemonSubcommand::Update) {
+                            let output =
+                                codex_app_server_daemon::update(http_client_factory).await?;
+                            println!("{}", serde_json::to_string(&output)?);
+                        } else {
+                            codex_app_server_daemon::run_pid_update_loop(http_client_factory)
+                                .await?;
+                        }
                     }
                 },
                 Some(AppServerSubcommand::Proxy(proxy_cli)) => {
@@ -2643,7 +2656,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             }
             AppServerDaemonSubcommand::Stop => "app-server daemon stop",
             AppServerDaemonSubcommand::Version => "app-server daemon version",
-            AppServerDaemonSubcommand::PidUpdateLoop => "app-server daemon pid-update-loop",
+            AppServerDaemonSubcommand::PidUpdateLoop { .. } => "app-server daemon pid-update-loop",
         },
         Some(AppServerSubcommand::Proxy(_)) => "app-server proxy",
         Some(AppServerSubcommand::GenerateTs(_)) => "app-server generate-ts",

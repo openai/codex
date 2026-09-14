@@ -903,9 +903,15 @@ $codexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
 } else {
     $env:CODEX_HOME
 }
-$standaloneRoot = Join-Path $codexHome "packages\standalone"
+$daemonOnly = $env:CODEX_INSTALL_DAEMON_ONLY -eq "1"
+$standaloneRoot = Join-Path $codexHome $(if ($daemonOnly) { "packages\app-server-daemon" } else { "packages\standalone" })
 $releasesDir = Join-Path $standaloneRoot "releases"
 $currentDir = Join-Path $standaloneRoot "current"
+$deferSelection = $env:CODEX_INSTALL_DEFER_SELECTION -eq "1"
+if ($deferSelection) {
+    if (-not $daemonOnly) { throw "Deferred selection requires a daemon-only installation." }
+    $currentDir = Join-Path $standaloneRoot ".migration-current"
+}
 $autoUpdateVersion = Join-Path $standaloneRoot "auto-update-version"
 $lockPath = Join-Path $standaloneRoot "install.lock"
 
@@ -933,7 +939,7 @@ if (-not [string]::IsNullOrWhiteSpace($currentVersion) -and $currentVersion -ne 
 Write-Step "Detected platform: $platformLabel"
 Write-Step "Resolved version: $resolvedVersion"
 
-$conflictingInstall = Get-ConflictingInstall -VisibleBinDir $visibleBinDir
+$conflictingInstall = if ($daemonOnly) { $null } else { Get-ConflictingInstall -VisibleBinDir $visibleBinDir }
 $oldStandaloneBackup = $null
 
 $checksumAsset = "codex-package_SHA256SUMS"
@@ -949,6 +955,7 @@ $guardRejected = $false
 try {
     Invoke-WithInstallLock -LockPath $lockPath -Script {
         $updaterRecord = Join-Path $codexHome "app-server-daemon\app-server-updater.pid"
+        if ($daemonOnly) { $updaterRecord = Join-Path $codexHome "app-server-daemon\daemon-updater.pid" }
         $oldUpdaterParent = $false
         if ($Release -eq "latest" -and $env:CODEX_INSTALL_IF_LATEST -ne "1" -and (Test-Path -LiteralPath $updaterRecord)) {
             $updaterPid = $null
@@ -997,6 +1004,7 @@ try {
 
         if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target -Layout $installLayout)) {
             if (Test-Path -LiteralPath $releaseDir) {
+                if ($daemonOnly) { throw "Refusing to overwrite existing daemon release $releaseDir." }
                 Write-WarningStep "Found incomplete existing release at $releaseDir. Reinstalling."
             }
 
@@ -1058,6 +1066,9 @@ try {
         }
 
         New-Item -ItemType Directory -Force -Path $standaloneRoot | Out-Null
+        if ($deferSelection -and (Get-Item -LiteralPath (Join-Path $standaloneRoot "current") -Force -ErrorAction SilentlyContinue)) {
+            throw "A dedicated daemon is already selected; retry the update."
+        }
         Ensure-Junction -LinkPath $currentDir -TargetPath $releaseDir -InstallerOwnedTargetPrefix $releasesDir
         if ($Release -eq "latest") {
             $tempMarker = "$autoUpdateVersion.tmp.$PID"
@@ -1069,6 +1080,7 @@ try {
             }
         }
 
+        if ($daemonOnly) { return }
         $visibleParent = Split-Path -Parent $visibleBinDir
         $currentBinDir = if ($installLayout -eq "Package") {
             Join-Path $currentDir "bin"
@@ -1096,7 +1108,7 @@ try {
 } finally {
     Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
 }
-if ($guardRejected) { return }
+if ($guardRejected -or $daemonOnly) { return }
 
 Maybe-HandleConflictingInstall -Conflict $conflictingInstall
 

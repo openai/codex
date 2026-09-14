@@ -55,6 +55,16 @@ pub(super) async fn background_server_check(config: &Config) -> DoctorCheck {
         "update-loop pid file",
         &state_dir.join(UPDATE_PID_FILE_NAME),
     );
+    push_file_detail(
+        &mut details,
+        "dedicated pid file",
+        &state_dir.join("daemon.pid"),
+    );
+    push_file_detail(
+        &mut details,
+        "dedicated update-loop pid file",
+        &state_dir.join("daemon-updater.pid"),
+    );
     push_configured_updater(&mut details, &state_dir.join(SETTINGS_FILE_NAME));
 
     let socket_path = match codex_app_server::app_server_control_socket_path(&config.codex_home) {
@@ -322,6 +332,7 @@ mod tests {
                 detail.starts_with("automatic updates:")
                     || detail.starts_with("update interval:")
                     || detail.starts_with("update-loop pid file:")
+                    || detail.starts_with("dedicated")
             })
             .map(|detail| {
                 detail

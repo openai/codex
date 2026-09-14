@@ -4,6 +4,7 @@ set -eu
 
 RELEASE="${CODEX_RELEASE:-latest}"
 NON_INTERACTIVE="${CODEX_NON_INTERACTIVE:-false}"
+DAEMON_ONLY="${CODEX_INSTALL_DAEMON_ONLY:-0}"
 DEFAULT_PREFER_RELEASES_OPENAI_COM="true"
 PREFER_RELEASES_OPENAI_COM="${CODEX_INSTALLER_USE_RELEASES_OPENAI_COM:-$DEFAULT_PREFER_RELEASES_OPENAI_COM}"
 RELEASES_BASE_URL="https://releases.openai.com/codex"
@@ -17,8 +18,18 @@ BIN_PATH="$BIN_DIR/codex"
 CODE_MODE_HOST_BIN_PATH="$BIN_DIR/codex-code-mode-host"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 STANDALONE_ROOT="$CODEX_HOME_DIR/packages/standalone"
+if [ "$DAEMON_ONLY" = "1" ]; then
+  STANDALONE_ROOT="$CODEX_HOME_DIR/packages/app-server-daemon"
+fi
 RELEASES_DIR="$STANDALONE_ROOT/releases"
 CURRENT_LINK="$STANDALONE_ROOT/current"
+if [ "${CODEX_INSTALL_DEFER_SELECTION:-0}" = "1" ]; then
+  if [ "$DAEMON_ONLY" != "1" ]; then
+    echo "Deferred selection requires a daemon-only installation." >&2
+    exit 1
+  fi
+  CURRENT_LINK="$STANDALONE_ROOT/.migration-current"
+fi
 AUTO_UPDATE_VERSION="$STANDALONE_ROOT/auto-update-version"
 LOCK_FILE="$STANDALONE_ROOT/install.lock"
 LOCK_DIR="$STANDALONE_ROOT/install.lock.d"
@@ -742,7 +753,7 @@ cleanup_stale_install_artifacts() {
   find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -name '.staging.*' -exec rm -rf {} +
   find "$STANDALONE_ROOT" -mindepth 1 -maxdepth 1 -name '.current.*' -exec rm -f {} +
 
-  if [ -d "$BIN_DIR" ]; then
+  if [ "$DAEMON_ONLY" != "1" ] && [ -d "$BIN_DIR" ]; then
     find "$BIN_DIR" -mindepth 1 -maxdepth 1 -name '.codex.*' -exec rm -f {} +
   fi
 }
@@ -1140,7 +1151,9 @@ fi
 step "Detected platform: $platform_label"
 step "Resolved version: $resolved_version"
 
-detect_conflicting_install
+if [ "$DAEMON_ONLY" != "1" ]; then
+  detect_conflicting_install
+fi
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -1154,7 +1167,15 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 acquire_install_lock
+if [ "${CODEX_INSTALL_DEFER_SELECTION:-0}" = "1" ] &&
+  { [ -e "$STANDALONE_ROOT/current" ] || [ -L "$STANDALONE_ROOT/current" ]; }; then
+  echo "A dedicated daemon is already selected; retry the update." >&2
+  exit 1
+fi
 updater_record="$CODEX_HOME_DIR/app-server-daemon/app-server-updater.pid"
+if [ "$DAEMON_ONLY" = "1" ]; then
+  updater_record="$CODEX_HOME_DIR/app-server-daemon/daemon-updater.pid"
+fi
 old_updater_parent="false"
 if [ "${CODEX_INSTALL_IF_LATEST:-}" != "1" ] && [ -f "$updater_record" ]; then
   updater_pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$updater_record" | head -n 1)"
@@ -1197,6 +1218,10 @@ cleanup_stale_install_artifacts
 
 if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$install_layout"; then
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
+    if [ "$DAEMON_ONLY" = "1" ]; then
+      echo "Refusing to overwrite existing daemon release $release_dir." >&2
+      exit 1
+    fi
     warn "Found incomplete existing release at $release_dir; reinstalling."
   fi
 
@@ -1230,6 +1255,10 @@ if [ "$RELEASE" = "latest" ]; then
   mv -f "$AUTO_UPDATE_VERSION.tmp.$$" "$AUTO_UPDATE_VERSION"
 else
   rm -f "$AUTO_UPDATE_VERSION"
+fi
+if [ "$DAEMON_ONLY" = "1" ]; then
+  release_install_lock
+  exit 0
 fi
 update_visible_command "$release_dir"
 add_to_path

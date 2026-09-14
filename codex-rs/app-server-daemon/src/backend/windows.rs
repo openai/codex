@@ -1,6 +1,7 @@
 //! Windows process identity and file locks. Keep a process handle across shutdown
 //! so PID reuse can never redirect forced termination to a different process.
 //! Managed servers must not elevate ordinary clients sharing the account's socket.
+//! Installer jobs contain extraction processes when an update is cancelled.
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
@@ -244,6 +245,18 @@ pub(crate) fn try_lock_file(file: &tokio::fs::File) -> Result<bool> {
 // Keep installer descendants bounded by the updater's lifetime, while allowing
 // app-server launches and successor updaters to break away from this job.
 pub(crate) fn updater_job() -> Result<OwnedHandle> {
+    process_job(unsafe { GetCurrentProcess() })
+}
+
+/// Called before writing the installer script, while PowerShell is waiting on stdin.
+pub(crate) fn installer_job(child: &tokio::process::Child) -> Result<OwnedHandle> {
+    let process = child
+        .raw_handle()
+        .context("installer process handle is unavailable")?;
+    process_job(process as isize)
+}
+
+fn process_job(process: isize) -> Result<OwnedHandle> {
     let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
     if job == 0 {
         return Err(io::Error::last_os_error()).context("failed to create updater job");
@@ -260,7 +273,7 @@ pub(crate) fn updater_job() -> Result<OwnedHandle> {
             std::mem::size_of_val(&limits) as u32,
         )
     } == 0
-        || unsafe { AssignProcessToJobObject(job, GetCurrentProcess()) } == 0
+        || unsafe { AssignProcessToJobObject(job, process) } == 0
     {
         return Err(io::Error::last_os_error())
             .context("failed to contain updater installer processes");
