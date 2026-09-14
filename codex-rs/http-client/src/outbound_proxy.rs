@@ -18,6 +18,7 @@ use tokio::sync::Semaphore;
 
 use http::HeaderValue;
 
+use crate::NetworkPolicy;
 use crate::chatgpt_cloudflare_cookies::ChatGptCookieStore;
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
@@ -166,11 +167,13 @@ impl fmt::Debug for OutboundProxyRoute {
 pub struct HttpClientFactory {
     outbound_proxy_policy: OutboundProxyPolicy,
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
+    network_policy: NetworkPolicy,
 }
 
 impl PartialEq for HttpClientFactory {
     fn eq(&self, other: &Self) -> bool {
         self.outbound_proxy_policy == other.outbound_proxy_policy
+            && self.network_policy == other.network_policy
             && self
                 .chatgpt_cookie_store
                 .as_ref()
@@ -188,6 +191,7 @@ impl fmt::Debug for HttpClientFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpClientFactory")
             .field("outbound_proxy_policy", &self.outbound_proxy_policy)
+            .field("network_policy", &self.network_policy)
             .finish()
     }
 }
@@ -198,7 +202,18 @@ impl HttpClientFactory {
         Self {
             outbound_proxy_policy,
             chatgpt_cookie_store: None,
+            network_policy: NetworkPolicy::unmanaged(),
         }
+    }
+
+    /// Carries the account/configuration owner's application policy into every transport.
+    pub fn with_network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.network_policy = policy;
+        self
+    }
+
+    pub fn network_policy(&self) -> &NetworkPolicy {
+        &self.network_policy
     }
 
     /// Adds process-scoped cookies to requests made by ChatGPT cookie-store clients.
