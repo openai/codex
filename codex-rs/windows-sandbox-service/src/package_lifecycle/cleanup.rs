@@ -23,7 +23,7 @@ pub(super) fn clean_up(installation: &mut UserInstallation) -> Result<()> {
     let codex_home = installation.codex_home.clone();
     clean_up_packaged_windows_sandbox(codex_home.as_deref(), || {
         // Privileged file cleanup is finished; release the guard before owner-scoped removal.
-        installation.directory_handles.pop();
+        installation.directory_guard.take();
         let Some(desktop) = &installation.record.desktop_installation else {
             return Ok(());
         };

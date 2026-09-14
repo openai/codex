@@ -1,8 +1,6 @@
 //! Binds provisioning requests to the packaged Codex client and its Windows user.
 
 use std::io;
-use std::mem::size_of;
-use std::ptr;
 #[cfg(debug_assertions)]
 use std::sync::atomic::AtomicBool;
 #[cfg(debug_assertions)]
@@ -14,12 +12,8 @@ use anyhow::bail;
 use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security as security;
-use windows_sys::Win32::Storage::Packaging::Appx;
 use windows_sys::Win32::System::Pipes;
 use windows_sys::Win32::System::Threading;
-
-const MAX_PACKAGE_FAMILY_LENGTH: usize = 256;
-const MAX_TOKEN_USER_BYTES: usize = 4096;
 
 #[cfg(debug_assertions)]
 static FOREGROUND_MODE: AtomicBool = AtomicBool::new(false);
@@ -58,15 +52,11 @@ pub(crate) fn authorize_client_process(pipe: HANDLE) -> Result<AuthorizedClientP
     }
     let process = OwnedHandle(process);
 
-    let client_family = package_family_name(
-        |length, buffer| unsafe { Appx::GetPackageFamilyName(process.0, length, buffer) },
-        "provisioning client",
-    )?;
-
-    let service_family = package_family_name(
-        |length, buffer| unsafe { Appx::GetCurrentPackageFamilyName(length, buffer) },
-        "provisioning service",
-    )?;
+    let client_family = unsafe { codex_windows_sandbox::process_package_family(process.0) }
+        .context("read provisioning client package identity")?;
+    let service_family =
+        unsafe { codex_windows_sandbox::process_package_family(Threading::GetCurrentProcess()) }
+            .context("read provisioning service package identity")?;
     match client_family {
         Some(client_family) => match service_family.as_deref() {
             Some(service_family) if client_family != service_family => {
@@ -104,93 +94,15 @@ pub(crate) fn authorize_client(
             .context("open the provisioning client process token");
     }
     let process_token = OwnedHandle(process_token);
-    let process_user = token_user(process_token.0).context("read the client process user")?;
-    let impersonated_user =
-        token_user(client_token).context("read the impersonated client user")?;
-    let process_sid = unsafe {
-        ptr::read_unaligned(process_user.as_ptr().cast::<security::TOKEN_USER>())
-            .User
-            .Sid
-    };
-    let impersonated_sid = unsafe {
-        ptr::read_unaligned(impersonated_user.as_ptr().cast::<security::TOKEN_USER>())
-            .User
-            .Sid
-    };
-    if process_sid.is_null()
-        || impersonated_sid.is_null()
-        || unsafe { security::EqualSid(process_sid, impersonated_sid) } == 0
-    {
+    let process_user = unsafe { codex_windows_sandbox::get_user_sid_bytes(process_token.0) }
+        .context("read the client process user")?;
+    let impersonated_user = unsafe { codex_windows_sandbox::get_user_sid_bytes(client_token) }
+        .context("read the impersonated client user")?;
+    if process_user != impersonated_user {
         bail!("provisioning client process does not belong to the impersonated user");
     }
 
     Ok(())
-}
-
-fn package_family_name(
-    mut query: impl FnMut(*mut u32, *mut u16) -> u32,
-    subject: &str,
-) -> Result<Option<String>> {
-    let mut length = 0;
-    let status = query(&mut length, ptr::null_mut());
-    if status == foundation::APPMODEL_ERROR_NO_PACKAGE {
-        return Ok(None);
-    }
-    if status != foundation::ERROR_INSUFFICIENT_BUFFER {
-        return Err(io::Error::from_raw_os_error(status as i32))
-            .with_context(|| format!("query the {subject} package family"));
-    }
-    if length == 0 || length as usize > MAX_PACKAGE_FAMILY_LENGTH {
-        bail!("the {subject} package family has an invalid length");
-    }
-
-    let mut buffer = vec![0_u16; length as usize];
-    let status = query(&mut length, buffer.as_mut_ptr());
-    if status != foundation::ERROR_SUCCESS {
-        return Err(io::Error::from_raw_os_error(status as i32))
-            .with_context(|| format!("read the {subject} package family"));
-    }
-
-    let value = buffer
-        .get(..length as usize)
-        .context("the package-family API returned an invalid length")?;
-    let Some((&0, value)) = value.split_last() else {
-        bail!("the {subject} package family is not null-terminated");
-    };
-    if value.is_empty() || value.contains(&0) {
-        bail!("the {subject} package family is malformed");
-    }
-    Ok(Some(
-        String::from_utf16(value).context("the package family contains invalid UTF-16")?,
-    ))
-}
-
-pub(crate) fn token_user(token: HANDLE) -> Result<Vec<u8>> {
-    let mut length = 0;
-    unsafe {
-        security::GetTokenInformation(token, security::TokenUser, ptr::null_mut(), 0, &mut length)
-    };
-    if length < size_of::<security::TOKEN_USER>() as u32 || length as usize > MAX_TOKEN_USER_BYTES {
-        bail!("the Windows token returned an invalid user identity length");
-    }
-
-    let mut buffer = vec![0_u8; length as usize];
-    if unsafe {
-        security::GetTokenInformation(
-            token,
-            security::TokenUser,
-            buffer.as_mut_ptr().cast(),
-            length,
-            &mut length,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error()).context("read the Windows token user");
-    }
-    if length < size_of::<security::TOKEN_USER>() as u32 || length as usize > buffer.len() {
-        bail!("the Windows token returned a malformed user identity");
-    }
-    Ok(buffer)
 }
 
 #[cfg(debug_assertions)]

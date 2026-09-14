@@ -13,7 +13,6 @@ use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::BorrowedHandle;
 use std::os::windows::io::IntoRawHandle;
 use std::path::PathBuf;
-use std::ptr;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security as security;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
@@ -44,13 +43,12 @@ pub(super) fn authenticate_client(
     std::thread::scope(|scope| {
         scope
             .spawn(|| {
-                if unsafe { pipes::ImpersonateNamedPipeClient(pipe) } == 0 {
-                    return Err(std::io::Error::last_os_error())
-                        .context("impersonate provisioning client");
-                }
-
-                let identity =
-                    authenticate_impersonated_client(authorized_process, sandbox_sid, request)?;
+                let identity = authenticate_impersonated_client(
+                    pipe,
+                    authorized_process,
+                    sandbox_sid,
+                    request,
+                )?;
                 let policy_result = match request {
                     // Registration does not provision resources or change sandbox policy.
                     ServiceRequest::RegisterInstallation { .. } => Ok(()),
@@ -71,10 +69,14 @@ pub(super) fn authenticate_client(
 }
 
 fn authenticate_impersonated_client(
+    pipe: HANDLE,
     authorized_process: &crate::package_identity::AuthorizedClientProcess,
     sandbox_sid: &[u8],
     request: &ServiceRequest,
 ) -> Result<ClientIdentity> {
+    if unsafe { pipes::ImpersonateNamedPipeClient(pipe) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("impersonate provisioning client");
+    }
     let mut raw_token = 0;
     if unsafe {
         threading::OpenThreadToken(
@@ -123,44 +125,11 @@ fn authenticate_impersonated_client(
         bail!("sandbox accounts cannot request provisioning");
     }
 
-    let mut length = 0;
-    unsafe {
-        security::GetTokenInformation(
-            token.0,
-            security::TokenUser,
-            ptr::null_mut(),
-            0,
-            &mut length,
-        )
-    };
-    if length < size_of::<security::TOKEN_USER>() as u32 {
-        return Err(std::io::Error::last_os_error()).context("size provisioning client identity");
-    }
-    let mut user = vec![0_u8; length as usize];
-    if unsafe {
-        security::GetTokenInformation(
-            token.0,
-            security::TokenUser,
-            user.as_mut_ptr().cast(),
-            length,
-            &mut length,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error()).context("read provisioning client identity");
-    }
-    let sid = unsafe { ptr::read_unaligned(user.as_ptr().cast::<security::TOKEN_USER>()) }
-        .User
-        .Sid;
-    let sid_length = unsafe { security::GetLengthSid(sid) };
-    if sid_length == 0 {
-        return Err(std::io::Error::last_os_error()).context("size provisioning client SID");
-    }
-    let user_sid = string_from_sid_bytes(unsafe {
-        std::slice::from_raw_parts(sid.cast::<u8>(), sid_length as usize)
-    })
-    .map_err(anyhow::Error::msg)?;
-    let account = account_name(sid)?;
+    let user = unsafe { codex_windows_sandbox::get_user_sid_bytes(token.0) }
+        .context("read provisioning client identity")?;
+    let user_sid = string_from_sid_bytes(&user).map_err(anyhow::Error::msg)?;
+    let account = unsafe { codex_windows_sandbox::account_name_from_sid(user.as_ptr() as _) }
+        .context("resolve provisioning client account")?;
     let requested_home = match request {
         ServiceRequest::RegisterInstallation { codex_home } => codex_home,
         ServiceRequest::ProvisionSandbox(request) => &request.codex_home,
@@ -230,32 +199,4 @@ fn authenticate_impersonated_client(
         desktop_installation,
         directory_handles: handles,
     })
-}
-
-fn account_name(sid: *mut c_void) -> Result<String> {
-    let mut name = [0_u16; 256];
-    let mut domain = [0_u16; 256];
-    let mut name_length = name.len() as u32;
-    let mut domain_length = domain.len() as u32;
-    let mut account_type: security::SID_NAME_USE = 0;
-    if unsafe {
-        security::LookupAccountSidW(
-            std::ptr::null(),
-            sid,
-            name.as_mut_ptr(),
-            &mut name_length,
-            domain.as_mut_ptr(),
-            &mut domain_length,
-            &mut account_type,
-        )
-    } == 0
-    {
-        return Err(std::io::Error::last_os_error()).context("resolve provisioning client name");
-    }
-    if account_type != security::SidTypeUser || domain_length == 0 {
-        bail!("provisioning client is not a named Windows user");
-    }
-    let name = String::from_utf16(&name[..name_length as usize])?;
-    let domain = String::from_utf16(&domain[..domain_length as usize])?;
-    Ok(format!("{domain}\\{name}"))
 }

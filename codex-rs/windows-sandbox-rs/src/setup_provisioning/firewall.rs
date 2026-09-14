@@ -58,6 +58,28 @@ struct BlockRuleSpec<'a> {
     remote_ports: Option<&'a str>,
 }
 
+// Balance successful COM initialization on every return path.
+struct FirewallComApartment;
+
+impl FirewallComApartment {
+    fn initialize() -> Result<Self> {
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        if hr.is_err() {
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallComInitFailed,
+                format!("CoInitializeEx failed: {hr:?}"),
+            )));
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for FirewallComApartment {
+    fn drop(&mut self) {
+        unsafe { CoUninitialize() };
+    }
+}
+
 pub fn ensure_offline_proxy_allowlist(
     offline_sid: &str,
     proxy_ports: &[u16],
@@ -66,15 +88,9 @@ pub fn ensure_offline_proxy_allowlist(
 ) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
-    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    if hr.is_err() {
-        return Err(anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperFirewallComInitFailed,
-            format!("CoInitializeEx failed: {hr:?}"),
-        )));
-    }
+    let _apartment = FirewallComApartment::initialize()?;
 
-    let result = unsafe {
+    unsafe {
         (|| -> Result<()> {
             let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)
                 .map_err(|err| {
@@ -154,26 +170,15 @@ pub fn ensure_offline_proxy_allowlist(
             }
             Ok(())
         })()
-    };
-
-    unsafe {
-        CoUninitialize();
     }
-    result
 }
 
 pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
-    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    if hr.is_err() {
-        return Err(anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperFirewallComInitFailed,
-            format!("CoInitializeEx failed: {hr:?}"),
-        )));
-    }
+    let _apartment = FirewallComApartment::initialize()?;
 
-    let result = unsafe {
+    unsafe {
         (|| -> Result<()> {
             let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)
                 .map_err(|err| {
@@ -221,12 +226,7 @@ pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> 
             )?;
             Ok(())
         })()
-    };
-
-    unsafe {
-        CoUninitialize();
     }
-    result
 }
 
 fn remove_rule_if_present(

@@ -85,6 +85,8 @@ mod logging;
 #[cfg(target_os = "windows")]
 mod no_reparse_dir;
 #[cfg(target_os = "windows")]
+mod package_identity;
+#[cfg(target_os = "windows")]
 mod path_normalization;
 #[cfg(target_os = "windows")]
 mod process;
@@ -303,6 +305,8 @@ pub use no_reparse_dir::open_directory_no_reparse;
 #[cfg(target_os = "windows")]
 pub use no_reparse_dir::validate_local_directory_path;
 #[cfg(target_os = "windows")]
+pub use package_identity::process_package_family;
+#[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
 pub use process::ConsoleMode;
@@ -412,6 +416,8 @@ pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
+pub use token_user::get_user_sid_bytes;
+#[cfg(target_os = "windows")]
 pub use unified_exec::WindowsSandboxSessionRequest;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_profile;
@@ -439,6 +445,8 @@ pub use windows_impl::run_windows_sandbox_capture_with_filesystem_overrides;
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 pub use winutil::SANDBOX_USERS_GROUP;
+#[cfg(target_os = "windows")]
+pub use winutil::account_name_from_sid;
 #[cfg(target_os = "windows")]
 pub use winutil::ensure_sandbox_users_group;
 #[cfg(target_os = "windows")]

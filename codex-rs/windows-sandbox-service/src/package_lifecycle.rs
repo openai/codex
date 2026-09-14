@@ -39,8 +39,9 @@ mod cleanup;
 
 struct UserInstallation {
     codex_home: Option<PathBuf>,
-    // Ancestors, home, then a guard that prevents in-place junction conversion.
+    // Ancestors and home remain pinned until owner-scoped cleanup finishes.
     directory_handles: Vec<OwnedHandle>,
+    directory_guard: Option<OwnedHandle>,
     record: InstallationRecord,
     user_token: OwnedHandle,
     catalog: PackageCatalog,
@@ -98,6 +99,7 @@ impl PackageLifecycle {
         let saved_record = record.clone();
         with_owner_impersonation(user_token.0, || {
             let mut directory_handles = Vec::new();
+            let mut directory_guard = None;
             let codex_home = match crate::ipc::pin_existing_ancestors(
                 &record.codex_home,
                 &mut directory_handles,
@@ -114,7 +116,7 @@ impl PackageLifecycle {
                     filesystem::FILE_READ_ATTRIBUTES,
                     DirectoryOpenDisposition::OpenExisting,
                 )?);
-                directory_handles.push(OwnedHandle(guard.into_raw_handle() as HANDLE));
+                directory_guard = Some(OwnedHandle(guard.into_raw_handle() as HANDLE));
                 Ok(())
             }) {
                 Ok(()) => Some(record.codex_home.clone()),
@@ -132,6 +134,7 @@ impl PackageLifecycle {
             if let Some(installation) = active.as_mut() {
                 installation.codex_home = codex_home;
                 installation.directory_handles = directory_handles;
+                installation.directory_guard = directory_guard;
                 installation.record = record;
                 return Ok(());
             }
@@ -158,6 +161,7 @@ impl PackageLifecycle {
             active.replace(UserInstallation {
                 codex_home,
                 directory_handles,
+                directory_guard,
                 record,
                 user_token,
                 catalog,
@@ -209,18 +213,8 @@ impl PackageLifecycle {
             return Err(io::Error::last_os_error()).context("open the logged-in user's token");
         }
         let token = crate::ipc::OwnedHandle(raw_token);
-        let user = crate::package_identity::token_user(token.0)?;
-        let sid = unsafe { std::ptr::read_unaligned(user.as_ptr().cast::<security::TOKEN_USER>()) }
-            .User
-            .Sid;
-        let sid_length = unsafe { security::GetLengthSid(sid) };
-        if sid_length == 0 {
-            return Err(io::Error::last_os_error()).context("read the logged-in user's SID");
-        }
-        let user_sid = string_from_sid_bytes(unsafe {
-            std::slice::from_raw_parts(sid.cast::<u8>(), sid_length as usize)
-        })
-        .map_err(anyhow::Error::msg)?;
+        let user = unsafe { codex_windows_sandbox::get_user_sid_bytes(token.0) }?;
+        let user_sid = string_from_sid_bytes(&user).map_err(anyhow::Error::msg)?;
         ensure!(
             user_sid == record.user_sid,
             "logged-in user does not match the recorded sandbox owner"
@@ -245,10 +239,10 @@ impl PackageLifecycle {
     }
 }
 
-fn with_owner_impersonation(
+pub(crate) fn with_owner_impersonation<T>(
     user_token: HANDLE,
-    operation: impl FnOnce() -> Result<()>,
-) -> Result<()> {
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     if unsafe { security::ImpersonateLoggedOnUser(user_token) } == 0 {
         return Err(io::Error::last_os_error()).context("impersonate the sandbox owner");
     }
