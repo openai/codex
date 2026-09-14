@@ -82,6 +82,20 @@ fn sandbox_with_network_proxy_allows_explicit_loopback_access() -> Result<()> {
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Closing with unread request bytes can reset the connection and yield a 502.
+                    stream.set_nonblocking(false)?;
+                    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        let bytes_read = std::io::Read::read(&mut stream, &mut buffer)?;
+                        if bytes_read == 0 || request.len() + bytes_read > 64 * 1024 {
+                            return Err(std::io::Error::other(
+                                "incomplete or oversized loopback request headers",
+                            ));
+                        }
+                        request.extend_from_slice(&buffer[..bytes_read]);
+                    }
                     std::io::Write::write_all(
                         &mut stream,
                         b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",

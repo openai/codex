@@ -4,9 +4,13 @@ use std::time::Duration;
 
 use codex_config::AppToolApproval;
 use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
+use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
+use codex_config::McpServerDisabledReason;
+use codex_config::McpServerIdpOAuthConfig;
 use codex_config::McpServerToolConfig;
 use codex_config::McpServerTransportConfig;
+use codex_config::types::PluginMcpServerEmaAuthConfig;
 use codex_protocol::mcp_policy::EnvironmentMcpPolicy;
 use codex_protocol::mcp_policy::PluginMcpRequirements;
 use codex_utils_path_uri::PathUri;
@@ -114,6 +118,138 @@ fn plugin_host_root_is_retained_in_catalog_identity() {
     };
     assert_eq!(attribution.host_root(), Some(&original_root));
     assert!(!original.has_same_servers(&replacement));
+}
+
+#[test]
+fn ema_policy_survives_rebuilds_and_rebinds_materialized_servers() {
+    let idp = McpServerIdpOAuthConfig {
+        issuer: "https://idp.example".to_string(),
+        client_id: "enterprise-client".to_string(),
+    };
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.enable_ema(idp.clone());
+    let enabled_empty = builder.build();
+    assert!(!enabled_empty.has_same_servers(&ResolvedMcpCatalog::default()));
+
+    let mut builder = enabled_empty.to_builder();
+    let mut config = server("https://resource.example/mcp");
+    config.auth = McpServerAuth::EmaAuth;
+    builder.register(McpServerRegistration::from_config(
+        "enterprise".to_string(),
+        config,
+    ));
+    let original = builder.build();
+    assert!(original.has_same_servers(&original.to_builder().build()));
+
+    let mut servers = original.configured_servers();
+    let config = servers.get_mut("enterprise").expect("EMA server");
+    let McpServerTransportConfig::StreamableHttp { url, .. } = &mut config.transport else {
+        panic!("expected HTTP server");
+    };
+    *url = "https://resource.example/revised".to_string();
+    let materialized = original.with_materialized_servers(servers);
+    let config = materialized
+        .server("enterprise")
+        .expect("materialized EMA server")
+        .config();
+    let registration = config
+        .ema_registration()
+        .expect("finalized EMA registration");
+    assert_eq!(
+        (
+            config.enabled,
+            registration.idp(),
+            registration.server_url()
+        ),
+        (true, &idp, "https://resource.example/revised")
+    );
+
+    let mut builder = ResolvedMcpCatalog::builder();
+    builder.register(McpServerRegistration::from_config(
+        "enterprise".to_string(),
+        config.clone(),
+    ));
+    let denied = builder.build();
+    let config = denied
+        .server("enterprise")
+        .expect("denied EMA server")
+        .config();
+    assert_eq!((config.enabled, config.ema_registration()), (false, None));
+}
+
+#[test]
+fn rejected_plugin_ema_registration_does_not_veto_hosted_apps() {
+    let idp = McpServerIdpOAuthConfig {
+        issuer: "https://idp.example".to_string(),
+        client_id: "enterprise-client".to_string(),
+    };
+    for (url, resource) in [
+        ("https://other.example/mcp", "https://resource.example"),
+        ("https://resource.example/mcp", " "),
+    ] {
+        for initially_enabled in [true, false] {
+            let mut rejected = server(url);
+            rejected.enabled = initially_enabled;
+            let policy = PluginMcpServerEmaAuthConfig {
+                url: "https://resource.example/mcp".to_string(),
+                client_id: "resource-client".to_string(),
+                authorization_server_issuer: "https://as.example".to_string(),
+                scopes: Vec::new(),
+                resource: resource.to_string(),
+            };
+            policy.apply(&mut rejected);
+            assert!(rejected.resolve_ema_registration(&idp).is_err());
+            assert_eq!(
+                (
+                    rejected.enabled,
+                    rejected.auth.clone(),
+                    rejected.ema_registration()
+                ),
+                (false, McpServerAuth::EmaAuth, None),
+            );
+            assert_eq!(
+                rejected.disabled_reason,
+                initially_enabled.then_some(McpServerDisabledReason::EmaRegistration),
+            );
+
+            let mut builder = ResolvedMcpCatalog::builder();
+            builder.enable_ema(idp.clone());
+            builder.register(McpServerRegistration::from_plugin(
+                CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                plugin("plugin@test"),
+                /*plugin_order*/ 0,
+                rejected.clone(),
+            ));
+            let catalog = builder.build();
+            assert_eq!(
+                catalog.server(CODEX_APPS_MCP_SERVER_NAME).unwrap().config(),
+                &rejected,
+            );
+
+            let materialized = catalog.with_materialized_servers(catalog.configured_servers());
+            for catalog in [catalog, materialized] {
+                let mut builder = catalog.to_builder();
+                let mut expected = server("https://chatgpt.com/mcp");
+                builder.register(McpServerRegistration::from_hosted_apps(
+                    "apps",
+                    /*contribution_order*/ 0,
+                    expected.clone(),
+                ));
+                expected.enabled = initially_enabled;
+                assert_eq!(
+                    builder.build().server(CODEX_APPS_MCP_SERVER_NAME),
+                    Some(&ResolvedMcpServer {
+                        source: McpServerSource::Extension {
+                            id: "apps".to_string(),
+                            host_owned_apps: true,
+                        },
+                        config: expected,
+                        protocol_mode: None,
+                    }),
+                );
+            }
+        }
+    }
 }
 
 #[test]

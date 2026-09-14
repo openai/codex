@@ -28,6 +28,102 @@ fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
 }
 
 #[tokio::test]
+async fn ema_policy_overlays_native_and_agent_plugins_without_changing_endpoints() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let policy_config = r#"
+        [plugins."sample@test".mcp_servers.example]
+        enabled = true
+        [plugins."sample@test".mcp_servers.example.ema_auth]
+        url = "https://resource.example/mcp"
+        client_id = "resource-client"
+        authorization_server_issuer = "https://as.example"
+        resource = "https://resource.example"
+        scopes = ["tools"]
+    "#;
+    let stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::EnterpriseManaged {
+                id: "ema-policy".to_string(),
+                name: "EMA policy".to_string(),
+            },
+            toml::from_str(policy_config).expect("managed policy toml"),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid trusted policy stack");
+    let policies = configured_plugins_from_stack(&stack, temp_dir.path())
+        .remove("sample@test")
+        .expect("configured plugin")
+        .mcp_servers;
+
+    for (name, manifest_path, manifest, mcp_path, mcp) in [
+        (
+            "native",
+            ".codex-plugin/plugin.json",
+            r#"{"name":"native"}"#,
+            ".mcp.json",
+            r#"{"mcpServers":{"example":{"url":"https://resource.example/mcp"}}}"#,
+        ),
+        (
+            "agent",
+            "plugin.json",
+            r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"agent"}"#,
+            "mcp.json",
+            r#"{"$schema":"https://agent-plugins.org/schemas/1.0.0/mcp.schema.json","mcpServers":{"example":{"type":"streamable-http","url":"https://resource.example/mcp"}}}"#,
+        ),
+    ] {
+        for endpoint in [
+            "https://resource.example/mcp",
+            "https://resource.example/mcp/other",
+            "https://resource.example/mcp?tenant=other",
+            "https://other.example/mcp",
+        ] {
+            let root = temp_dir.path().join(name);
+            write_file(&root.join(manifest_path), manifest);
+            write_file(
+                &root.join(mcp_path),
+                &mcp.replace("https://resource.example/mcp", endpoint),
+            );
+            let declared = load_plugin_mcp_servers(&root, /*auth_mode*/ None).await;
+            let transport = declared["example"].transport.clone();
+            let installed = load_plugin_mcp_servers_with_policy(
+                &root,
+                /*auth_mode*/ None,
+                Some(&policies),
+            )
+            .await;
+            let mut selected = declared;
+            apply_configured_plugin_mcp_server_policies(&policies, &mut selected);
+            assert_eq!(installed, selected);
+            let server = &selected["example"];
+            assert_eq!(server.transport, transport);
+            assert_eq!(server.enabled, endpoint == "https://resource.example/mcp");
+            assert_eq!(server.auth, codex_config::McpServerAuth::EmaAuth);
+            assert_eq!(
+                server.oauth,
+                Some(codex_config::McpServerOAuthConfig {
+                    client_id: Some("resource-client".into()),
+                    authorization_server_issuer: Some("https://as.example".into()),
+                    ema_registration_error: (endpoint != "https://resource.example/mcp")
+                        .then_some("plugin endpoint does not match its EMA registration"),
+                    ..Default::default()
+                })
+            );
+            assert_eq!(
+                server.oauth_resource.as_deref(),
+                Some("https://resource.example")
+            );
+            assert_eq!(
+                server.scopes.as_deref(),
+                Some(["tools".to_string()].as_slice())
+            );
+            assert_eq!(server.oauth_idp(), None);
+        }
+    }
+}
+
+#[tokio::test]
 async fn agent_plugin_overlay_apps_are_not_runtime_active() {
     let temp_dir = TempDir::new().expect("tempdir");
     let plugin_root = temp_dir.path().join("plugin");

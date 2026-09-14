@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use codex_config::ConfigLayerStack;
 use codex_config::Constrained;
+use codex_config::McpEnterpriseManagedAuthConfig;
 use codex_config::McpServerAuth;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
@@ -127,6 +128,9 @@ pub struct McpConfig {
     pub apps_mcp_product_sku: Option<String>,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
+    /// Trusted enterprise IdP inherited after normal catalog and policy resolution.
+    pub mcp_enterprise_managed_auth: Option<McpEnterpriseManagedAuthConfig>,
+    pub xaa_enabled: bool,
     /// Preferred credential store for MCP OAuth tokens.
     pub mcp_oauth_credentials_store_mode: OAuthCredentialsStoreMode,
     /// OAuth refresh ownership selected for new MCP connections.

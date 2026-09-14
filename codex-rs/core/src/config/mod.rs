@@ -835,6 +835,9 @@ pub struct Config {
     /// Definition for MCP servers that Codex can reach out to for tool calls.
     pub mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
 
+    /// Trusted IdP shared by all permitted EMA MCP registrations.
+    pub mcp_enterprise_managed_auth: Option<McpEnterpriseManagedAuthConfig>,
+
     /// When present, only these MCP servers omit the legacy `mcp__` namespace prefix.
     pub non_prefixed_mcp_tool_servers: Option<Vec<String>>,
 
@@ -1706,6 +1709,11 @@ impl Config {
         additional_plugin_registrations: impl IntoIterator<Item = McpServerRegistration>,
     ) -> McpConfig {
         let mut catalog = ResolvedMcpCatalog::builder();
+        if self.features.enabled(Feature::UseXaa)
+            && let Some(auth) = &self.mcp_enterprise_managed_auth
+        {
+            catalog.enable_ema(auth.idp.clone());
+        }
         for (plugin_order, plugin) in loaded_plugins
             .plugins()
             .iter()
@@ -1749,6 +1757,9 @@ impl Config {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
             codex_home: self.codex_home.to_path_buf(),
+            mcp_enterprise_managed_auth: self.mcp_enterprise_managed_auth.clone(),
+            xaa_enabled: self.features.enabled(Feature::UseXaa)
+                && self.mcp_enterprise_managed_auth.is_some(),
             mcp_oauth_credentials_store_mode: self.mcp_oauth_credentials_store_mode,
             oauth_refresh_mode: if self.features.enabled(Feature::McpOAuthRefreshCoordination) {
                 McpOAuthRefreshMode::Coordinated
@@ -1822,33 +1833,8 @@ impl Config {
         &self,
         refreshed_config: &Config,
     ) -> std::io::Result<Self> {
-        let mut layers = refreshed_config
-            .config_layer_stack
-            .all_layers_low_to_high()
-            .filter(|layer| !is_session_layer(&layer.name))
-            .cloned()
-            .collect::<Vec<_>>();
-        layers.extend(
-            self.config_layer_stack
-                .all_layers_low_to_high()
-                .filter(|layer| is_session_layer(&layer.name))
-                .cloned(),
-        );
-        layers.sort_by_key(|layer| layer.name.precedence());
-
-        let config_layer_stack = ConfigLayerStack::new(
-            layers,
-            refreshed_config.config_layer_stack.requirements().clone(),
-            refreshed_config
-                .config_layer_stack
-                .requirements_toml()
-                .clone(),
-        )?
-        .with_user_and_project_exec_policy_rules_ignored(
-            refreshed_config
-                .config_layer_stack
-                .ignore_user_and_project_exec_policy_rules(),
-        );
+        let config_layer_stack =
+            self.layer_stack_preserving_session(&refreshed_config.config_layer_stack)?;
         let cfg: ConfigToml = config_layer_stack
             .effective_config()
             .try_into()
@@ -1871,6 +1857,33 @@ impl Config {
             config_layer_stack,
         )
         .await
+    }
+
+    fn layer_stack_preserving_session(
+        &self,
+        refreshed_layers: &ConfigLayerStack,
+    ) -> std::io::Result<ConfigLayerStack> {
+        let mut layers = refreshed_layers
+            .all_layers_low_to_high()
+            .filter(|layer| !is_session_layer(&layer.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        layers.extend(
+            self.config_layer_stack
+                .all_layers_low_to_high()
+                .filter(|layer| is_session_layer(&layer.name))
+                .cloned(),
+        );
+        layers.sort_by_key(|layer| layer.name.precedence());
+
+        Ok(ConfigLayerStack::new(
+            layers,
+            refreshed_layers.requirements().clone(),
+            refreshed_layers.requirements_toml().clone(),
+        )?
+        .with_user_and_project_exec_policy_rules_ignored(
+            refreshed_layers.ignore_user_and_project_exec_policy_rules(),
+        ))
     }
 
     /// This is the preferred way to create an instance of [Config].
@@ -3291,7 +3304,7 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
-        let _ = McpEnterpriseManagedAuthConfig::resolve(
+        let mcp_enterprise_managed_auth = McpEnterpriseManagedAuthConfig::resolve(
             &config_layer_stack,
             cfg.mcp_enterprise_managed_auth.as_ref(),
             &cfg.mcp_servers,
@@ -4170,6 +4183,7 @@ impl Config {
             },
             mcp_servers,
             non_prefixed_mcp_tool_servers,
+            mcp_enterprise_managed_auth,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: resolve_mcp_oauth_credentials_store_mode(

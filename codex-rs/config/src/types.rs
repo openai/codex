@@ -981,6 +981,34 @@ pub struct PluginMcpServerEmaAuthConfig {
     pub resource: String,
 }
 
+impl PluginMcpServerEmaAuthConfig {
+    pub fn apply(&self, server: &mut McpServerConfig) {
+        let registration_error = if self.resource.trim().is_empty() {
+            Some("plugin EMA registration requires a resource")
+        } else if !server.matches_requirement(&crate::McpServerRequirement::Identity {
+            identity: crate::McpServerIdentity::Url {
+                url: self.url.clone(),
+            },
+        }) {
+            Some("plugin endpoint does not match its EMA registration")
+        } else {
+            None
+        };
+        if registration_error.is_some() && server.enabled {
+            server.enabled = false;
+            server.disabled_reason = Some(crate::McpServerDisabledReason::EmaRegistration);
+        }
+        server.auth = McpServerAuth::EmaAuth;
+        let oauth = server.oauth.get_or_insert_default();
+        oauth.client_id = Some(self.client_id.clone());
+        oauth.authorization_server_issuer = Some(self.authorization_server_issuer.clone());
+        server.scopes = Some(self.scopes.clone());
+        oauth.ema_registration = None;
+        oauth.ema_registration_error = registration_error;
+        server.oauth_resource = Some(self.resource.clone());
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct MarketplaceConfig {
