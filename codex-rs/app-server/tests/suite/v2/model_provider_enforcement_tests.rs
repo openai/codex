@@ -60,7 +60,8 @@ async fn provider_requirement_changes_reject_inputs_to_existing_threads(
         },
     ]])
     .await;
-    let other = MockServer::start().await;
+    // Use a dedicated server because this test asserts that no traffic reaches it.
+    let other = MockServer::builder().start().await;
     let home = TempDir::new()?;
     MockResponsesConfig::new(gateway.uri())
         .enable_feature(codex_features::Feature::Goals)
@@ -245,12 +246,14 @@ base_url = "{}/v1"
         assert_eq!(error.error, expected_error);
     }
     assert_eq!(gateway.requests().await.len(), 1);
+    let other_requests = other.received_requests().await.expect("recorded requests");
     assert!(
-        other
-            .received_requests()
-            .await
-            .expect("recorded requests")
-            .is_empty()
+        other_requests.is_empty(),
+        "unexpected requests to replacement provider: {:?}",
+        other_requests
+            .iter()
+            .map(|request| (request.method.as_str(), request.url.path()))
+            .collect::<Vec<_>>()
     );
     gateway.shutdown().await;
     Ok(())
