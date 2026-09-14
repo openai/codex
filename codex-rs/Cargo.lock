@@ -3298,6 +3298,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "codex-file-system",
+ "codex-mxc-sandbox",
  "codex-network-proxy",
  "codex-protocol",
  "codex-shell-command",

@@ -217,6 +217,10 @@ impl EnvironmentInfo {
 
     /// Returns information about the current local exec-server process.
     pub fn local() -> Self {
+        #[cfg(windows)]
+        let windows_mxc = codex_mxc_sandbox::is_available();
+        #[cfg(not(windows))]
+        let windows_mxc = false;
         let cwd = std::env::current_dir().ok();
         let temporary_directories = Self::local_temporary_directories_with_cwd(cwd.as_deref());
         let normalize_temp_path = |path: std::ffi::OsString| {
@@ -246,7 +250,7 @@ impl EnvironmentInfo {
                 http_header_env_vars: true,
                 sandboxed_file_streaming: true,
                 shell_snapshot_v2: cfg!(unix),
-                windows_mxc: false,
+                windows_mxc,
             },
         }
     }

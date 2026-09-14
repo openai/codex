@@ -22,5 +22,8 @@ codex-utils-path-uri = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
 
+[target.'cfg(windows)'.dependencies]
+codex-mxc-sandbox = { workspace = true }
+
 [dev-dependencies]
 pretty_assertions = { workspace = true }

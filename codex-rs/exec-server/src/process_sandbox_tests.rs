@@ -133,29 +133,17 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
     let mut params = params;
     params.sandbox.as_mut().unwrap().windows_sandbox_level =
         codex_protocol::config_types::WindowsSandboxLevel::Mxc;
-    for (tty, managed, message) in [
-        (false, false, "native MXC is unavailable on this executor"),
-        (
-            true,
-            false,
-            "MXC currently supports ordinary pipe launches only",
-        ),
-        (false, true, "MXC managed networking is not supported yet"),
-    ] {
-        params.tty = tty;
-        params.enforce_managed_network = managed;
-        let error = prepare_exec_request(
-            &params,
-            HashMap::new(),
-            Some(&runtime_paths),
-            /*network_policy_decider*/ None,
-            /*network_policy_audit_observer*/ None,
-        )
-        .await
-        .err()
-        .expect("unsupported MXC must fail closed");
-        assert_eq!(error.message, message);
-    }
+    let error = prepare_exec_request(
+        &params,
+        HashMap::new(),
+        Some(&runtime_paths),
+        /*network_policy_decider*/ None,
+        /*network_policy_audit_observer*/ None,
+    )
+    .await
+    .err()
+    .expect("unsupported MXC must fail closed");
+    assert_eq!(error.message, "native MXC is unavailable on this executor");
 }
 
 #[cfg(unix)]

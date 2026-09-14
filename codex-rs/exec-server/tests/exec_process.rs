@@ -1297,6 +1297,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
 async fn assert_remote_windows_sandbox_process_write(
     windows_sandbox_level: WindowsSandboxLevel,
     expected_sandbox_type: codex_sandboxing::SandboxType,
+    tty: bool,
 ) -> Result<()> {
     if !selected_windows_sandbox_available(windows_sandbox_level) {
         eprintln!("skipping MXC enforcement test: native MXC is unavailable on this host");
@@ -1332,8 +1333,8 @@ async fn assert_remote_windows_sandbox_process_write(
             shell_snapshot: None,
             env_policy: /*env_policy*/ None,
             env: Default::default(),
-            tty: false,
-            pipe_stdin: true,
+            tty,
+            pipe_stdin: !tty,
             arg0: None,
             sandbox: Some(sandbox),
             enforce_managed_network: false,
@@ -1347,7 +1348,8 @@ async fn assert_remote_windows_sandbox_process_write(
     };
     assert_eq!(session.sandbox_type, Some(expected_sandbox_type));
 
-    let write_response = session.process.write(b"hello\n".to_vec()).await?;
+    let input = if tty { b"hello\r" } else { b"hello\n" };
+    let write_response = session.process.write(input.to_vec()).await?;
     assert_eq!(write_response.status, WriteStatus::Accepted);
     let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
@@ -1766,13 +1768,21 @@ async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()
 
 #[test_case(
     WindowsSandboxLevel::RestrictedToken,
-    codex_sandboxing::SandboxType::WindowsRestrictedToken;
+    codex_sandboxing::SandboxType::WindowsRestrictedToken,
+    false;
     "restricted_token"
 )]
 #[test_case(
     WindowsSandboxLevel::Mxc,
-    codex_sandboxing::SandboxType::WindowsMxc;
-    "mxc"
+    codex_sandboxing::SandboxType::WindowsMxc,
+    false;
+    "mxc_pipe"
+)]
+#[test_case(
+    WindowsSandboxLevel::Mxc,
+    codex_sandboxing::SandboxType::WindowsMxc,
+    true;
+    "mxc_conpty"
 )]
 #[cfg_attr(not(windows), ignore = "Windows-only exec-server sandbox process test")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1780,8 +1790,10 @@ async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()
 async fn remote_windows_sandbox_process_accepts_process_write(
     windows_sandbox_level: WindowsSandboxLevel,
     expected_sandbox_type: codex_sandboxing::SandboxType,
+    tty: bool,
 ) -> Result<()> {
-    assert_remote_windows_sandbox_process_write(windows_sandbox_level, expected_sandbox_type).await
+    assert_remote_windows_sandbox_process_write(windows_sandbox_level, expected_sandbox_type, tty)
+        .await
 }
 
 #[test_case(false ; "local")]

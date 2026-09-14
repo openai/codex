@@ -187,9 +187,10 @@ async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor
         .default_environment()
         .context("direct executor environment should be installed")?;
 
+    let expected_info = EnvironmentInfo::local();
     assert_eq!(
         timeout(TEST_TIMEOUT, environment.force_info()).await??,
-        EnvironmentInfo::local()
+        expected_info
     );
     let files = tempfile::tempdir()?;
     let large_file_path = files.path().join("large-response.bin");
@@ -340,7 +341,7 @@ async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor
         ));
         assert_eq!(
             timeout(TEST_TIMEOUT, environment.force_info()).await??,
-            EnvironmentInfo::local()
+            expected_info
         );
 
         let recovered_read = timeout(Duration::from_secs(5), pending_read)
