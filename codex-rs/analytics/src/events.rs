@@ -12,6 +12,7 @@ use crate::facts::CompactionReason;
 use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
+use crate::facts::ElicitationType;
 use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::ImagePreparationMetadata;
@@ -859,6 +860,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_error_present: bool,
     pub(crate) plugin_id: Option<String>,
     pub(crate) connector_id: Option<String>,
+    pub(crate) elicitation_type: Option<ElicitationType>,
 }
 
 #[derive(Serialize)]
@@ -968,9 +970,16 @@ pub(crate) struct CodexAppMentionedEventRequest {
 }
 
 #[derive(Serialize)]
+pub(crate) struct CodexAppUsedMetadata {
+    #[serde(flatten)]
+    pub(crate) app: CodexAppMetadata,
+    pub(crate) elicitation_type: Option<ElicitationType>,
+}
+
+#[derive(Serialize)]
 pub(crate) struct CodexAppUsedEventRequest {
     pub(crate) event_type: &'static str,
-    pub(crate) event_params: CodexAppMetadata,
+    pub(crate) event_params: CodexAppUsedMetadata,
 }
 
 #[derive(Serialize)]

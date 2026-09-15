@@ -49,15 +49,16 @@ use crate::events::TrackEventRequest;
 #[cfg(debug_assertions)]
 use crate::events::codex_artifact_operation_event_request;
 use crate::facts::AnalyticsFact;
+use crate::facts::AppInvocation;
 #[cfg(debug_assertions)]
 use crate::facts::ArtifactOperation;
 #[cfg(debug_assertions)]
 use crate::facts::ArtifactOperationLifecycle;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::ElicitationType;
 use crate::facts::InvocationType;
 use crate::facts::PluginMeasurementRow;
 use crate::facts::PluginMeasurementsInput;
-#[cfg(debug_assertions)]
 use crate::facts::TrackEventsContext;
 use crate::reducer::MAX_PLUGIN_MEASUREMENTS_PER_BATCH;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
@@ -235,6 +236,7 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
             mcp_error_present: false,
             plugin_id: plugin_id.map(str::to_string),
             connector_id: None,
+            elicitation_type: None,
         },
     })
 }
@@ -911,6 +913,55 @@ async fn flush_is_noop_when_analytics_is_disabled() {
     ));
     assert!(client.queue.is_none());
     client.flush().await;
+}
+
+#[test]
+fn app_used_preserves_first_classification_and_emits_again_next_turn() {
+    let (client, mut receiver) = client_with_receiver();
+    let tracking = TrackEventsContext {
+        model_slug: "gpt-5".to_string(),
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        product_client_id: "codex_desktop".to_string(),
+    };
+    for (turn_id, elicitation_type) in [
+        ("turn-1", Some(ElicitationType::AuthOrLink)),
+        ("turn-1", None),
+        ("turn-2", None),
+    ] {
+        client.track_app_used(
+            TrackEventsContext {
+                turn_id: turn_id.to_string(),
+                ..tracking.clone()
+            },
+            AppInvocation {
+                connector_id: Some("calendar".to_string()),
+                app_name: Some("Calendar".to_string()),
+                invocation_type: Some(InvocationType::Implicit),
+            },
+            elicitation_type,
+        );
+    }
+    for (turn_id, elicitation_type) in [
+        ("turn-1", Some(ElicitationType::AuthOrLink)),
+        ("turn-2", None),
+    ] {
+        let Ok(AnalyticsEventsQueueMessage::Fact(input)) = receiver.try_recv() else {
+            panic!("expected app-used analytics fact");
+        };
+        let AnalyticsFact::Custom(CustomAnalyticsFact::AppUsed(input)) = *input else {
+            panic!("expected app-used analytics fact");
+        };
+        assert_eq!(
+            (
+                input.tracking.turn_id.as_str(),
+                input.app.connector_id.as_deref(),
+                input.elicitation_type,
+            ),
+            (turn_id, Some("calendar"), elicitation_type)
+        );
+    }
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }
 
 #[test]

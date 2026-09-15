@@ -1090,6 +1090,7 @@ async fn maybe_track_codex_app_used(
             app_name,
             invocation_type: Some(invocation_type),
         },
+        /*elicitation_type*/ None,
     );
 }
 

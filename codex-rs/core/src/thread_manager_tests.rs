@@ -235,6 +235,7 @@ async fn thread_analytics_opt_out_overrides_shared_client() {
                     app_name: None,
                     invocation_type: None,
                 },
+                /*elicitation_type*/ None,
             );
             services.analytics_events_client.flush().await;
         }
