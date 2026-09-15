@@ -140,7 +140,15 @@ impl AnalyticsView {
             format!(
                 "tab/1–{} section · {}{navigation}\n{}{}R refresh · {}/{} scroll · {} back · q close",
                 self.visible_sections().len(),
-                if self.zoomed { "z dashboard · " } else { "" },
+                if self.section == Section::Chats && !self.business() && !self.zoomed {
+                    "s sort · "
+                } else if self.section == Section::Chats && !self.business() {
+                    "s sort · z dashboard · "
+                } else if self.zoomed {
+                    "z dashboard · "
+                } else {
+                    ""
+                },
                 if show_range { "r 7/30d · " } else { "" },
                 if self.group_options().len() < 2 {
                     ""

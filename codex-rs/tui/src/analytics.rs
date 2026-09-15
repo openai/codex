@@ -20,6 +20,8 @@ mod render;
 mod report_data;
 mod sections;
 mod styles;
+mod task_panel;
+mod tasks;
 #[cfg(test)]
 #[path = "analytics/test_support.rs"]
 mod test_support;
@@ -49,6 +51,8 @@ pub(crate) struct AnalyticsView {
     model_names: std::collections::HashMap<String, String>,
     sections: SectionStates,
     chats: Load<chats::Chats>,
+    tasks: Load<tasks::Chats>,
+    chat_metric: usize,
     plan: plan::State,
     show_zero_credit_groups: bool,
     account: Load<codex_protocol::account::PlanType>,
@@ -78,6 +82,8 @@ impl AnalyticsView {
             model_names: std::collections::HashMap::new(),
             sections: SectionStates(std::array::from_fn(|_| SectionState::default())),
             chats: Load::Unavailable,
+            tasks: Load::Unavailable,
+            chat_metric: 0,
             plan: plan::State::default(),
             show_zero_credit_groups: false,
             account: Load::Unavailable,
@@ -137,6 +143,7 @@ impl AnalyticsView {
         }
         self.sections[Section::Chats].detail = None;
         self.chats = Load::Unavailable;
+        self.tasks = Load::Unavailable;
         self.plan.report = Load::Unavailable;
         self.reports_started = false;
         self.token_model = None;
@@ -168,6 +175,7 @@ impl AnalyticsView {
             section.history = Load::Unavailable;
         }
         self.chats = Load::Unavailable;
+        self.tasks = Load::Unavailable;
         self.plan.report = Load::Unavailable;
         self.account = Load::Unavailable;
         self.live = None;
@@ -254,7 +262,11 @@ impl AnalyticsView {
     }
 
     fn row_count(&self) -> usize {
-        if self.section == Section::Chats {
+        if self.section == Section::Chats && !self.business() {
+            self.tasks
+                .ready()
+                .map_or(/*default*/ 0, |chats| chats.rows.len())
+        } else if self.section == Section::Chats {
             self.chats
                 .ready()
                 .map_or(/*default*/ 0, |chats| chats.rows.len())
@@ -389,6 +401,19 @@ impl AnalyticsView {
             self.plan_action(action);
             return;
         }
+        if self.section == Section::Chats
+            && !self.business()
+            && key_hint::plain(KeyCode::Char('s')).is_press(key)
+        {
+            let metrics = self.task_metrics();
+            let index = metrics
+                .iter()
+                .position(|metric| *metric == self.task_metric())
+                .unwrap_or_default();
+            self.chat_metric = metrics[(index + 1) % metrics.len()];
+            self.sections[Section::Chats].detail = None;
+            return;
+        }
         if matches!(
             self.section,
             Section::Plugins | Section::Activity | Section::Skills
@@ -398,14 +423,19 @@ impl AnalyticsView {
             return;
         }
         if self.section == Section::Chats
-            && self.business()
             && matches!(action, Some(ListAction::Accept | ListAction::MoveRight))
-            && self
-                .chats
-                .ready()
-                .and_then(|chats| chats.rows.get(self.sections[Section::Chats].cursor))
-                .and_then(|chat| chat.usage.as_ref())
-                .is_none()
+            && if self.business() {
+                self.chats
+                    .ready()
+                    .and_then(|chats| chats.rows.get(self.sections[Section::Chats].cursor))
+                    .and_then(|chat| chat.usage.as_ref())
+                    .is_none()
+            } else {
+                self.task_rows()
+                    .get(self.sections[Section::Chats].cursor)
+                    .and_then(|chat| task_panel::available(chat))
+                    .is_none()
+            }
         {
             return;
         }
@@ -463,6 +493,7 @@ impl AnalyticsView {
                         }
                     }
                     self.chats = Load::Unavailable;
+                    self.tasks = Load::Unavailable;
                     self.plan.report = Load::Unavailable;
                     self.account = Load::Unavailable;
                     self.connection = None;

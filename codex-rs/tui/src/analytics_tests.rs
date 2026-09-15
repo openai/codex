@@ -7,6 +7,9 @@ mod dashboard;
 #[path = "analytics/account_layout_tests.rs"]
 mod account_layout;
 
+#[path = "analytics/consumer_refresh_tests.rs"]
+mod consumer_refresh;
+
 #[path = "analytics/tool_panel_tests.rs"]
 mod tools_panel;
 

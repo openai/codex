@@ -38,6 +38,7 @@ pub(crate) mod analytics;
 mod chatgpt_turn_cost;
 pub(crate) mod plan_history;
 mod rate_limit_resets;
+pub(crate) mod task_usage;
 mod thread_usage;
 pub(crate) mod turn_usage;
 

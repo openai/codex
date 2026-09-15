@@ -81,6 +81,7 @@ impl AnalyticsView {
             section.history.poll();
         }
         self.chats.poll();
+        self.tasks.poll();
         self.plan.poll();
         self.account.poll();
         self.start_reports();
@@ -95,6 +96,11 @@ impl AnalyticsView {
             .is_some_and(|choice| choice >= self.group_options().len())
         {
             self.group_picker = None;
+        }
+        if let Some(chats) = self.tasks.ready() {
+            self.sections[Section::Chats].cursor = self.sections[Section::Chats]
+                .cursor
+                .min(chats.rows.len().saturating_sub(/*rhs*/ 1));
         }
         if let Some(chats) = self.chats.ready() {
             self.sections[Section::Chats].cursor = self.sections[Section::Chats]
@@ -145,12 +151,14 @@ impl AnalyticsView {
                 Section::Activity,
                 Section::Plugins,
                 Section::Skills,
+                Section::Chats,
             ],
             Some(AccountKind::Consumer) => &[
                 Section::Usage,
                 Section::Activity,
                 Section::Plugins,
                 Section::Skills,
+                Section::Chats,
             ],
             Some(AccountKind::Business | AccountKind::Enterprise)
                 if super::models::thread_usage_supported(self.account.ready().copied()) =>
@@ -216,7 +224,15 @@ impl AnalyticsView {
             let live = std::sync::Arc::clone(live);
             self.plan.report = Load::start(async move { live.plan_history().await }, frame.clone());
         }
-        if visible.contains(&Section::Chats) {
+        if visible.contains(&Section::Chats) && !self.business() {
+            if let (Some((_, handle, frame)), Some(live)) = (&self.connection, &self.live) {
+                self.tasks = Load::start_with_timeout(
+                    super::tasks::read(handle.clone(), std::sync::Arc::clone(live)),
+                    frame.clone(),
+                    std::time::Duration::from_secs(/*secs*/ 120),
+                );
+            }
+        } else if visible.contains(&Section::Chats) {
             self.chats =
                 if let (Some((_, handle, frame)), Some(live)) = (&self.connection, &self.live) {
                     Load::start_with_timeout(

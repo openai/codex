@@ -1,11 +1,11 @@
 ---
 source: tui/src/analytics/plan_tests.rs
-assertion_line: 53
+assertion_line: 56
 expression: "output.join(\"\\n\")"
 ---
 "  Analytics  ·  Live account                                                                                            "
 "                                                                                                                        "
-"  1 Total usage history  [2 Plan usage history]  3 Messages  4 Plugins called  5 Skills used                            "
+"  1 Total usage history  [2 Plan usage history]  3 Messages  4 Plugins called  5 Skills used  6 Top chats               "
 "                                                                                                                        "
 "  ▎ Plan usage history                                                                                      By feature  "
 "  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  "
@@ -31,13 +31,13 @@ expression: "output.join(\"\\n\")"
 "                                                                                                                        "
 "                                                                                                                        "
 "                                                                                                                        "
-"  tab/1–5 section · z dashboard · ←/→ window · ↑/↓ period · enter details                                               "
+"  tab/1–6 section · z dashboard · ←/→ window · ↑/↓ period · enter details                                               "
 "  g group · R refresh · pgup/pgdn scroll · esc back · q close                                                           "
 
 "  Analytics  ·  Live account                              "
 "                                                          "
 "  Total usage history  [Plan usage history]  Messages     "
-"  Plugins called  Skills used                             "
+"  Plugins called  Skills used  Top chats                  "
 "                                                          "
 "  ▎ Plan usage history                        By feature  "
 "  ──────────────────────────────────────────────────────  "
@@ -60,7 +60,7 @@ expression: "output.join(\"\\n\")"
 "                                                          "
 "                                                          "
 "                                                          "
-"  tab/1–5 section · z dashboard · ←/→ window · ↑/↓        "
+"  tab/1–6 section · z dashboard · ←/→ window · ↑/↓        "
 "  period · enter details                                  "
 "  g group · R refresh · pgup/pgdn scroll · esc back · q   "
 "  close                                                   "

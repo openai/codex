@@ -47,4 +47,12 @@ pub use client::plan_history::PlanLimitDimension;
 pub use client::plan_history::PlanLimitHistory;
 pub use client::plan_history::PlanLimitPeriod;
 pub use client::plan_history::PlanLimitValue;
+
+pub use client::task_usage::TaskCredits;
+pub use client::task_usage::TaskUsage;
+pub use client::task_usage::TaskUsageAmounts;
+pub use client::task_usage::TaskUsageGroup;
+pub use client::task_usage::TaskUsageResponse;
+pub use client::task_usage::TaskUsageStatus;
+pub use client::task_usage::TaskUsageThread;
 pub use codex_backend_openapi_models::models::analytics as analytics_models;

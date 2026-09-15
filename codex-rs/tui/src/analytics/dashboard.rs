@@ -113,6 +113,9 @@ impl AnalyticsView {
                             .lines,
                         ),
                         Section::Plan => content.extend(self.plan_lines(inner_width).0),
+                        Section::Chats if !self.business() => {
+                            content.extend(self.task_lines(inner_width).0)
+                        }
                         Section::Chats => {
                             content.push(
                                 "30d active · lifetime credits"

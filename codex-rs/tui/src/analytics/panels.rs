@@ -84,7 +84,11 @@ impl AnalyticsView {
             selection = lines.len() + detail.start..lines.len() + detail.end;
             lines.extend(plan);
         } else if section == Section::Chats {
-            let (chats, detail) = self.chat_lines(width);
+            let (chats, detail) = if self.business() {
+                self.chat_lines(width)
+            } else {
+                self.task_lines(width)
+            };
             selection = lines.len() + detail.start..lines.len() + detail.end;
             lines.extend(chats);
         } else {

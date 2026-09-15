@@ -1,5 +1,6 @@
 ---
 source: tui/src/analytics_tests.rs
+assertion_line: 74
 expression: tools
 ---
 "  Analytics  ·  Live account                              "
@@ -19,6 +20,6 @@ expression: tools
 "  │ ● Testing                                        4 │  "
 "  │ ● Code review                                    3 │  "
 "  │                                                    │  "
-"  tab/1–4 section · enter/z maximize                      "
+"  tab/1–5 section · enter/z maximize                      "
 "  r 7/30d · R refresh · pgup/pgdn scroll · esc back · q   "
 "  close                                                   "

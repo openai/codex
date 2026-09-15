@@ -1,11 +1,12 @@
 ---
 source: tui/src/analytics_tests.rs
+assertion_line: 573
 expression: selected_day
 ---
 "  Analytics  ·  Live account                                                                        "
 "  [7d]  30d  ·  Aug 27–Sep 2, 2026                                                                  "
 "                                                                                                    "
-"  [1 Total usage history]  2 Messages  3 Plugins called  4 Skills used                              "
+"  [1 Total usage history]  2 Messages  3 Plugins called  4 Skills used  5 Top chats                 "
 "                                                                                                    "
 "  ▎ Total usage history                                                                   By model  "
 "  ────────────────────────────────────────────────────────────────────────────────────────────────  "
@@ -38,5 +39,5 @@ expression: selected_day
 "  ● Remote Other                                      2.1%                                          "
 "  … 3 more                                            0.0%                                          "
 "                                                                                                    "
-"  tab/1–4 section · z dashboard · ←/→ day · enter details                                           "
+"  tab/1–5 section · z dashboard · ←/→ day · enter details                                           "
 "  r 7/30d · g group · R refresh · pgup/pgdn scroll · esc back · q close                             "
