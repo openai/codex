@@ -18,6 +18,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -906,7 +907,9 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
             &test,
             vec![
                 UserInput::Image {
-                    image_url: image_url.clone(),
+                    image: ImageReference::Inline {
+                        image_url: image_url.clone(),
+                    },
                     detail: None,
                 },
                 UserInput::Audio {

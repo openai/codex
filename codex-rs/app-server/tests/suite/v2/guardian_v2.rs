@@ -25,6 +25,7 @@ use axum::routing::post;
 use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ImageReference;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -1031,7 +1032,9 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     }
     if mixed_evidence {
         turn_input.push(UserInput::Image {
-            url: EVIDENCE_IMAGE.to_owned(),
+            image: ImageReference::Inline {
+                url: EVIDENCE_IMAGE.to_owned(),
+            },
             detail: None,
         });
     }

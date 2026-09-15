@@ -23,6 +23,7 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::items::AgentMessageDelivery;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -382,7 +383,9 @@ async fn astra_kickoff_with_skills_plugins_and_remote_compaction() -> Result<()>
         .start_or_steer_turn(TurnInputRequest::user_input(vec![
             text("Check the final kickoff brief and attached sketch with $final-check and $calendar:agenda."),
             UserInput::Image {
-                image_url: format!("data:image/png;base64,{ONE_PIXEL_PNG_BASE64}"),
+                image: ImageReference::Inline {
+                    image_url: format!("data:image/png;base64,{ONE_PIXEL_PNG_BASE64}"),
+                },
                 detail: None,
             },
             selected_skill("final-check", &skills.final_check),

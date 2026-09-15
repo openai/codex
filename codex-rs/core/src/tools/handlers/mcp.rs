@@ -367,7 +367,10 @@ impl CoreToolRuntime for McpHandler {
                         load_data_url_for_prompt_uncached(&image_url, PromptImageMode::Original)
                             .ok()?;
                         captured_image_bytes = next_image_bytes;
-                        Some(UserInput::Image { image_url, detail })
+                        Some(UserInput::Image {
+                            image: codex_protocol::models::ImageReference::Inline { image_url },
+                            detail,
+                        })
                     }
                     _ => None,
                 }

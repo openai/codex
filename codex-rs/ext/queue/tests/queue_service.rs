@@ -29,6 +29,7 @@ use codex_extension_api::TurnStartAdmission;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -825,7 +826,9 @@ async fn local_attachments_are_snapshotted_before_enqueue_and_update() -> anyhow
     let expected_queued_input = user_input_with_media(
         "queued attachments",
         UserInput::Image {
-            image_url: TINY_PNG_DATA_URL.to_string(),
+            image: ImageReference::Inline {
+                image_url: TINY_PNG_DATA_URL.to_string(),
+            },
             detail: Some(ImageDetail::Original),
         },
         UserInput::Audio {
@@ -865,7 +868,9 @@ async fn local_attachments_are_snapshotted_before_enqueue_and_update() -> anyhow
     let expected_edited_input = user_input_with_media(
         "edited attachments",
         UserInput::Image {
-            image_url: TINY_PNG_DATA_URL.to_string(),
+            image: ImageReference::Inline {
+                image_url: TINY_PNG_DATA_URL.to_string(),
+            },
             detail: Some(ImageDetail::High),
         },
         UserInput::Audio {

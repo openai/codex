@@ -11,6 +11,7 @@ use codex_core::context::InternalModelContextFragment;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
@@ -328,7 +329,9 @@ async fn guardian_authorization_revision_survives_compaction_not_user_input() ->
     .await;
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Image {
-            image_url: "data:image/png;base64,not-an-image".to_owned(),
+            image: ImageReference::Inline {
+                image_url: "data:image/png;base64,not-an-image".to_owned(),
+            },
             detail: None,
         }]))
         .await?;

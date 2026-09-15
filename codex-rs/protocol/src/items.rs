@@ -7,6 +7,7 @@ use crate::memory_citation::MemoryCitation;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputBody;
 use crate::models::ImageDetail;
+use crate::models::ImageReference;
 use crate::models::MessagePhase;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
@@ -554,7 +555,10 @@ impl UserMessageItem {
         self.content
             .iter()
             .filter_map(|c| match c {
-                UserInput::Image { image_url, .. } => Some(image_url.clone()),
+                UserInput::Image {
+                    image: ImageReference::Inline { image_url },
+                    ..
+                } => Some(image_url.clone()),
                 _ => None,
             })
             .collect()
@@ -565,7 +569,10 @@ impl UserMessageItem {
             self.content
                 .iter()
                 .filter_map(|c| match c {
-                    UserInput::Image { detail, .. } => Some(*detail),
+                    UserInput::Image {
+                        image: ImageReference::Inline { .. },
+                        detail,
+                    } => Some(*detail),
                     _ => None,
                 })
                 .collect(),
@@ -615,7 +622,7 @@ impl UserMessageItem {
     }
 }
 
-fn trim_trailing_default_image_details(
+pub(crate) fn trim_trailing_default_image_details(
     mut details: Vec<Option<ImageDetail>>,
 ) -> Vec<Option<ImageDetail>> {
     while matches!(details.last(), Some(None)) {

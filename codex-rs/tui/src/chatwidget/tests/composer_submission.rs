@@ -2,6 +2,7 @@ use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use crate::history_cell::ThreadRecapLoadingCell;
 use base64::Engine;
+use codex_app_server_protocol::ImageReference;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -640,7 +641,9 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     assert_eq!(
         items[0],
         UserInput::Image {
-            url: remote_url.clone(),
+            image: ImageReference::Inline {
+                url: remote_url.clone(),
+            },
             detail: None,
         }
     );
@@ -727,7 +730,9 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     assert_eq!(
         items,
         vec![UserInput::Image {
-            url: remote_url.clone(),
+            image: ImageReference::Inline {
+                url: remote_url.clone(),
+            },
             detail: None,
         }]
     );
@@ -2157,7 +2162,9 @@ fn user_message_display_from_inputs_matches_flattened_user_message_shape() {
             text_elements: vec![TextElement::new((0..5).into(), /*placeholder*/ None).into()],
         },
         UserInput::Image {
-            url: "https://example.com/remote.png".to_string(),
+            image: ImageReference::Inline {
+                url: "https://example.com/remote.png".to_string(),
+            },
             detail: None,
         },
         UserInput::LocalImage {
@@ -2522,7 +2529,13 @@ async fn image_submission_is_portable_for_new_turns_and_steers() {
                     _ => {}
                 }
             };
-            let [UserInput::Image { url, detail }, UserInput::Text { .. }] = items.as_slice()
+            let [
+                UserInput::Image {
+                    image: ImageReference::Inline { url },
+                    detail,
+                },
+                UserInput::Text { .. },
+            ] = items.as_slice()
             else {
                 panic!("local image must be portable on the wire");
             };

@@ -3,7 +3,6 @@
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ImageReference;
 pub use codex_utils_string::approx_bytes_for_tokens;
 pub use codex_utils_string::approx_token_count;
 pub use codex_utils_string::approx_tokens_from_byte_count;
@@ -91,15 +90,12 @@ pub fn formatted_truncate_text_content_items_with_policy(
         text: formatted_truncate_text(&combined, policy),
     }];
     out.extend(items.iter().filter_map(|item| match item {
-        FunctionCallOutputContentItem::InputImage {
-            image: ImageReference::Inline { image_url },
-            detail,
-        } => Some(FunctionCallOutputContentItem::InputImage {
-            image: ImageReference::Inline {
-                image_url: image_url.clone(),
-            },
-            detail: *detail,
-        }),
+        FunctionCallOutputContentItem::InputImage { image, detail } => {
+            Some(FunctionCallOutputContentItem::InputImage {
+                image: image.clone(),
+                detail: *detail,
+            })
+        }
         FunctionCallOutputContentItem::InputAudio { audio_url } => {
             Some(FunctionCallOutputContentItem::InputAudio {
                 audio_url: audio_url.clone(),
@@ -163,14 +159,9 @@ pub fn truncate_function_output_items_with_policy(
                     remaining_budget = 0;
                 }
             }
-            FunctionCallOutputContentItem::InputImage {
-                image: ImageReference::Inline { image_url },
-                detail,
-            } => {
+            FunctionCallOutputContentItem::InputImage { image, detail } => {
                 out.push(FunctionCallOutputContentItem::InputImage {
-                    image: ImageReference::Inline {
-                        image_url: image_url.clone(),
-                    },
+                    image: image.clone(),
                     detail: *detail,
                 });
             }

@@ -232,7 +232,9 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
         .start_or_steer_turn(
             TurnInputRequest::user_input(vec![
                 UserInput::Image {
-                    image_url: image_url.clone(),
+                    image: ImageReference::Inline {
+                        image_url: image_url.clone(),
+                    },
                     detail: None,
                 },
                 UserInput::Text {
@@ -285,6 +287,83 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
     };
 
     assert_eq!(strip_response_item_id(strip_metadata(actual)), expected);
+
+    Ok(())
+}
+
+/// Core must forward an opaque file ID and persist that same reference in canonical history.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_image_passes_through_request_and_rollout() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-file"),
+            ev_assistant_message("msg-file", "done"),
+            ev_completed("resp-file"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![
+            UserInput::Image {
+                image: ImageReference::File {
+                    file_id: "file_123".to_string(),
+                },
+                detail: None,
+            },
+            UserInput::Text {
+                text: "file-backed image".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock.single_request();
+    assert!(request.input().iter().any(|item| {
+        item.get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| {
+                content.iter().any(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("input_image")
+                        && item.get("file_id").and_then(Value::as_str) == Some("file_123")
+                })
+            })
+    }));
+
+    test.codex.shutdown_and_wait().await?;
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout_text = read_rollout_text(&rollout_path).await?;
+    let actual = find_user_message_with_image(&rollout_text)
+        .expect("expected user message with file image in rollout");
+    assert_eq!(
+        strip_response_item_id(strip_metadata(actual)),
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputImage {
+                    image: ImageReference::File {
+                        file_id: "file_123".to_string(),
+                    },
+                    detail: Some(DEFAULT_IMAGE_DETAIL),
+                },
+                ContentItem::InputText {
+                    text: "file-backed image".to_string(),
+                },
+            ],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+    );
 
     Ok(())
 }
@@ -379,7 +458,9 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
     resumed
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Image {
-            image_url: original_image_url.clone(),
+            image: ImageReference::Inline {
+                image_url: original_image_url.clone(),
+            },
             detail: Some(ImageDetail::High),
         }]))
         .await?;

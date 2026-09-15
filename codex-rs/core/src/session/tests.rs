@@ -11306,7 +11306,9 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
             text_elements: vec![text_element.clone()],
         },
         UserInput::Image {
-            image_url: image_url.clone(),
+            image: ImageReference::Inline {
+                image_url: image_url.clone(),
+            },
             detail: Some(ImageDetail::High),
         },
     ];

@@ -1488,7 +1488,9 @@ async fn interrupt_during_mcp_startup_preserves_user_input_in_history(
         unreachable!("read_only_user_turn creates user input");
     };
     content.push(UserInput::Image {
-        image_url: OPENAI_PNG.to_string(),
+        image: ImageReference::Inline {
+            image_url: OPENAI_PNG.to_string(),
+        },
         detail: Some(ImageDetail::High),
     });
     fixture.codex.start_or_steer_turn(input).await?;

@@ -16,6 +16,7 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::UserMessageImageKind;
 use codex_rollout::CompactedItem;
 use codex_rollout::RetainedContextEntry;
 use codex_rollout::RetainedInputSource;
@@ -489,22 +490,39 @@ fn explicit_event_turn_id(event: &EventMsg) -> Option<&str> {
 fn user_response_matches_event(content: &[ContentItem], event: &UserMessageEvent) -> bool {
     let mut text = String::new();
     let mut images = Vec::new();
+    let mut file_ids = Vec::new();
+    let mut image_order = Vec::new();
     let mut audio = Vec::new();
     for item in content {
         match item {
             ContentItem::InputText { text: item_text } => text.push_str(item_text),
-            ContentItem::InputImage {
-                image: ImageReference::Inline { image_url },
-                ..
-            } => images.push(image_url.as_str()),
+            ContentItem::InputImage { image, .. } => match image {
+                ImageReference::Inline { image_url } => {
+                    image_order.push(UserMessageImageKind::Inline);
+                    images.push(image_url.as_str());
+                }
+                ImageReference::File { file_id } => {
+                    image_order.push(UserMessageImageKind::File);
+                    file_ids.push(file_id.as_str());
+                }
+            },
             ContentItem::InputAudio { audio_url } => audio.push(audio_url.as_str()),
             ContentItem::OutputText { .. } => return false,
         }
     }
     text == event.message
+        && (!event.has_complete_image_order() || image_order == event.image_order)
         && images
             == event
                 .images
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        && file_ids
+            == event
+                .file_ids
                 .as_deref()
                 .unwrap_or_default()
                 .iter()

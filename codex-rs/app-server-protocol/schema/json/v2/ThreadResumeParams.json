@@ -154,6 +154,18 @@
               ],
               "title": "ImageUrlContentItem",
               "type": "object"
+            },
+            {
+              "properties": {
+                "file_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ],
+              "title": "FileIdContentItem",
+              "type": "object"
             }
           ],
           "properties": {
@@ -271,6 +283,18 @@
                 "image_url"
               ],
               "title": "ImageUrlFunctionCallOutputContentItem",
+              "type": "object"
+            },
+            {
+              "properties": {
+                "file_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_id"
+              ],
+              "title": "FileIdFunctionCallOutputContentItem",
               "type": "object"
             }
           ],

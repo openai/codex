@@ -105,6 +105,10 @@ impl SectionCost {
                 self.image_bytes = self.image_bytes.saturating_add(image_url.len());
                 self.image_count = self.image_count.saturating_add(1);
             }
+            ContentItem::InputImage {
+                image: ImageReference::File { .. },
+                ..
+            } => {}
             ContentItem::InputAudio { audio_url } => {
                 // Guardian currently has no audio contributor. Count a future opaque
                 // payload conservatively until its consumer supplies modality costs.

@@ -193,6 +193,12 @@ fn truncate_function_output_items_with_policy_discards_empty_text() {
             },
             detail: Some(DEFAULT_IMAGE_DETAIL),
         },
+        FunctionCallOutputContentItem::InputImage {
+            image: ImageReference::File {
+                file_id: "file_123".to_string(),
+            },
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
         FunctionCallOutputContentItem::InputAudio {
             audio_url: "audio:one".to_string(),
         },
@@ -271,6 +277,12 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_med
         FunctionCallOutputContentItem::InputAudio {
             audio_url: "audio:one".to_string(),
         },
+        FunctionCallOutputContentItem::InputImage {
+            image: ImageReference::File {
+                file_id: "file_123".to_string(),
+            },
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        },
         FunctionCallOutputContentItem::InputText {
             text: "ijkl".to_string(),
         },
@@ -297,6 +309,12 @@ fn formatted_truncate_text_content_items_with_policy_merges_text_and_appends_med
             },
             FunctionCallOutputContentItem::InputAudio {
                 audio_url: "audio:one".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: "file_123".to_string(),
+                },
+                detail: Some(DEFAULT_IMAGE_DETAIL),
             },
             FunctionCallOutputContentItem::InputImage {
                 image: ImageReference::Inline { image_url: "img:two".to_string() },

@@ -95,6 +95,10 @@ impl ComposedContext {
                     image: ImageReference::Inline { image_url },
                     detail,
                 } => admit(image_url, detail),
+                ContentItem::InputImage {
+                    image: ImageReference::File { .. },
+                    ..
+                } => false,
                 _ => true,
             });
         }
@@ -281,6 +285,10 @@ fn retain_content(
                     image: ImageReference::Inline { image_url },
                     ..
                 } => image_url.len(),
+                ContentItem::InputImage {
+                    image: ImageReference::File { .. },
+                    ..
+                } => 0,
                 ContentItem::InputAudio { audio_url } => audio_url.len(),
             };
             truncations.push(TruncationObservation {

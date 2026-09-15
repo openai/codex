@@ -8,6 +8,7 @@ use codex_utils_image::data_url_from_bytes;
 use codex_utils_image::load_for_prompt_bytes;
 
 use crate::models::ImageDetail;
+use crate::models::ImageReference;
 use crate::user_input::UserInput;
 
 /// Maximum accepted decoded byte length for prompt audio inputs.
@@ -29,7 +30,9 @@ pub fn snapshot_local_user_input(input: &mut UserInput) -> io::Result<()> {
             let file_bytes = read_bounded_local_media(path, MAX_PROMPT_IMAGE_INPUT_BYTES, "image")?;
             let image = load_for_prompt_bytes(path, file_bytes, mode).map_err(io::Error::other)?;
             *input = UserInput::Image {
-                image_url: image.into_data_url(),
+                image: ImageReference::Inline {
+                    image_url: image.into_data_url(),
+                },
                 detail: image_detail,
             };
         }

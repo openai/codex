@@ -4,6 +4,7 @@
 
 use super::*;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::snapshot_local_user_input;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use tokio::sync::oneshot;
@@ -149,7 +150,11 @@ fn prepare_images(
                     return Err(too_large());
                 }
                 snapshot_local_user_input(&mut input)?;
-                if let CoreUserInput::Image { image_url, .. } = &input {
+                if let CoreUserInput::Image {
+                    image: ImageReference::Inline { image_url },
+                    ..
+                } = &input
+                {
                     remaining_image_bytes = remaining_image_bytes
                         .checked_sub(image_url.len())
                         .ok_or_else(too_large)?;

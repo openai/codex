@@ -14,6 +14,7 @@ use codex_login::auth::BedrockApiKeyAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
@@ -278,11 +279,15 @@ async fn responses_lite_prepares_images() -> Result<()> {
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![
             UserInput::Image {
-                image_url: image_url.to_string(),
+                image: ImageReference::Inline {
+                    image_url: image_url.to_string(),
+                },
                 detail: Some(ImageDetail::Original),
             },
             UserInput::Image {
-                image_url: remote_image_url.to_string(),
+                image: ImageReference::Inline {
+                    image_url: remote_image_url.to_string(),
+                },
                 detail: Some(ImageDetail::High),
             },
         ]))

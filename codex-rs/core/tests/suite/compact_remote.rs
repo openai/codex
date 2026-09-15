@@ -17,6 +17,7 @@ use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::AgentPath;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
@@ -637,10 +638,12 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
             let mut bytes = std::io::Cursor::new(Vec::new());
             image.write_to(&mut bytes, image::ImageFormat::Png)?;
             Ok(UserInput::Image {
-                image_url: format!(
-                    "data:image/png;base64,{}",
-                    BASE64_STANDARD.encode(bytes.get_ref())
-                ),
+                image: ImageReference::Inline {
+                    image_url: format!(
+                        "data:image/png;base64,{}",
+                        BASE64_STANDARD.encode(bytes.get_ref())
+                    ),
+                },
                 detail: Some(codex_protocol::models::ImageDetail::Original),
             })
         })
@@ -714,7 +717,11 @@ async fn remote_compact_v2_charges_retained_images_to_token_budget(
         };
         let mut expected_images = prepared_images[dropped..].to_vec();
         if cycle == 2 {
-            let UserInput::Image { image_url, .. } = &image_inputs[7] else {
+            let UserInput::Image {
+                image: ImageReference::Inline { image_url },
+                ..
+            } = &image_inputs[7]
+            else {
                 unreachable!()
             };
             expected_images.push(image_url.clone());

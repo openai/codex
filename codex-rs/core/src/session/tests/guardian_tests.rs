@@ -40,6 +40,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::SandboxErr;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::AskForApproval;
@@ -235,7 +236,9 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         .thread_extension_data
         .get_or_init(crate::context::NodeReplReviewEvidence::default);
     let image = UserInput::Image {
-        image_url: image_url.to_string(),
+        image: ImageReference::Inline {
+            image_url: image_url.to_string(),
+        },
         detail: None,
     };
     evidence.record("js", "cell", "image", vec![image]);

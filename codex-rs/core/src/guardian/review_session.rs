@@ -534,7 +534,9 @@ async fn run_review_on_session(
                         };
                         let mut prepared = vec![
                             ResponseInputItem::from(vec![UserInput::Image {
-                                image_url: image_url.to_owned(),
+                                image: ImageReference::Inline {
+                                    image_url: image_url.to_owned(),
+                                },
                                 detail: *detail,
                             }])
                             .into(),

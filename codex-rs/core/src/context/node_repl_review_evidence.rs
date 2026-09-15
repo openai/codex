@@ -63,7 +63,14 @@ impl NodeReplReviewResponse {
             .saturating_add(self.items.iter().fold(0_usize, |bytes, item| {
                 bytes.saturating_add(match item {
                     Text { text, .. } => text.len(),
-                    Image { image_url, .. } => image_url.len(),
+                    Image {
+                        image: ImageReference::Inline { image_url },
+                        ..
+                    } => image_url.len(),
+                    Image {
+                        image: ImageReference::File { file_id },
+                        ..
+                    } => file_id.len(),
                     _ => 0,
                 })
             }))
@@ -116,14 +123,15 @@ impl NodeReplReviewEvidence {
             .iter()
             .flat_map(|response| &response.items)
             .filter_map(|item| match item {
-                Image { image_url, detail } if seen_images.insert(image_url) => {
-                    Some(ContentItem::InputImage {
-                        image: ImageReference::Inline {
-                            image_url: image_url.clone(),
-                        },
-                        detail: *detail,
-                    })
-                }
+                Image {
+                    image: ImageReference::Inline { image_url },
+                    detail,
+                } if seen_images.insert(image_url) => Some(ContentItem::InputImage {
+                    image: ImageReference::Inline {
+                        image_url: image_url.clone(),
+                    },
+                    detail: *detail,
+                }),
                 _ => None,
             })
             .collect()

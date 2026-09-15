@@ -1,3 +1,4 @@
+use codex_protocol::models::ImageReference;
 use codex_protocol::user_input::UserInput;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use pretty_assertions::assert_eq;
@@ -15,7 +16,18 @@ fn text_input(text: &str) -> UserInput {
 
 fn image_input(image_url: &str) -> UserInput {
     UserInput::Image {
-        image_url: image_url.to_string(),
+        image: ImageReference::Inline {
+            image_url: image_url.to_string(),
+        },
+        detail: None,
+    }
+}
+
+fn file_image_input(file_id: &str) -> UserInput {
+    UserInput::Image {
+        image: ImageReference::File {
+            file_id: file_id.to_string(),
+        },
         detail: None,
     }
 }
@@ -119,6 +131,36 @@ fn evidence_preserves_tail_text_after_oversized_image_response() {
         .render_inputs();
     assert_eq!(inputs.len(), 6);
     assert!(rendered_text(&inputs).contains("FINAL IMPORTANT"));
+}
+
+#[test]
+fn file_backed_images_are_retained_but_omitted_from_guardian_views() {
+    let evidence = NodeReplReviewEvidence::default();
+    let file_id = format!("file_{}", "x".repeat(4_096));
+    let items = vec![text_input("visible"), file_image_input(&file_id)];
+
+    evidence.record("browser", "cell", "file", items.clone());
+
+    let snapshot = evidence.snapshot_since(/*reviewed_sequence*/ 0).unwrap();
+    assert_eq!(snapshot.responses.len(), 1);
+    assert_eq!(snapshot.responses[0].items, items);
+    assert!(snapshot.responses[0].has_images());
+    assert!(snapshot.responses[0].retained_bytes() >= file_id.len());
+    assert_eq!(evidence.images(), Vec::new());
+
+    let rendered = snapshot
+        .context(NodeReplReviewEvidenceMode::Multimodal)
+        .render_inputs();
+    assert!(rendered_text(&rendered).contains("visible"));
+    assert!(!rendered.iter().any(|item| {
+        matches!(
+            item,
+            UserInput::Image {
+                image: ImageReference::File { .. },
+                ..
+            }
+        )
+    }));
 }
 
 #[test]

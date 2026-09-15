@@ -24,6 +24,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::ToolName;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ToolResultLogConfig;
+use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -143,7 +144,9 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
                 text_elements: Vec::new(),
             },
             UserInput::Image {
-                image_url: "https://example.com/image.png".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
                 detail: None,
             },
             UserInput::LocalImage {

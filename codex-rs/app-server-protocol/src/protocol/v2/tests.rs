@@ -29,6 +29,7 @@ use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermiss
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference as CoreImageReference;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
@@ -3037,7 +3038,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 text_elements: Vec::new(),
             },
             CoreUserInput::Image {
-                image_url: "https://example.com/image.png".to_string(),
+                image: CoreImageReference::Inline {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
                 detail: Some(ImageDetail::Original),
             },
             CoreUserInput::LocalImage {
@@ -3072,7 +3075,9 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                     text_elements: Vec::new(),
                 },
                 UserInput::Image {
-                    url: "https://example.com/image.png".to_string(),
+                    image: ImageReference::Inline {
+                        url: "https://example.com/image.png".to_string(),
+                    },
                     detail: Some(ImageDetail::Original),
                 },
                 UserInput::LocalImage {
@@ -3609,16 +3614,84 @@ fn mcp_tool_call_app_context_serializes_missing_mixed_version_fields_as_null() {
     );
 }
 
+/// Keeps the existing URL form stable while exposing file-backed images as `fileId`.
+#[test]
+fn user_input_image_references_round_trip_with_stable_wire_shapes() {
+    let cases = [
+        (
+            UserInput::Image {
+                image: ImageReference::Inline {
+                    url: "data:image/png;base64,AAA".to_string(),
+                },
+                detail: Some(ImageDetail::High),
+            },
+            json!({
+                "type": "image",
+                "url": "data:image/png;base64,AAA",
+                "detail": "high",
+            }),
+        ),
+        (
+            UserInput::Image {
+                image: ImageReference::File {
+                    file_id: "file_123".to_string(),
+                },
+                detail: Some(ImageDetail::Original),
+            },
+            json!({
+                "type": "image",
+                "fileId": "file_123",
+                "detail": "original",
+            }),
+        ),
+    ];
+
+    for (input, wire_value) in cases {
+        assert_eq!(
+            serde_json::to_value(&input).expect("user input should serialize"),
+            wire_value,
+        );
+        assert_eq!(
+            serde_json::from_value::<UserInput>(wire_value).expect("user input should deserialize"),
+            input,
+        );
+    }
+}
+
+/// Preserves durable file identity in both directions at the Core boundary.
+#[test]
+fn file_image_user_input_converts_both_directions() {
+    let app_server_input = UserInput::Image {
+        image: ImageReference::File {
+            file_id: "file_123".to_string(),
+        },
+        detail: Some(ImageDetail::High),
+    };
+    let core_input = CoreUserInput::Image {
+        image: CoreImageReference::File {
+            file_id: "file_123".to_string(),
+        },
+        detail: Some(ImageDetail::High),
+    };
+
+    assert_eq!(app_server_input.clone().into_core(), core_input);
+    assert_eq!(UserInput::from(core_input), app_server_input);
+}
+
 #[test]
 fn user_input_into_core_preserves_media_fields() {
     assert_eq!(
         UserInput::Image {
-            url: "https://example.com/image.png".to_string(),
+            image: ImageReference::Inline {
+                url: "https://example.com/image.png".to_string(),
+            },
             detail: Some(ImageDetail::Original),
         }
         .into_core(),
         CoreUserInput::Image {
-            image_url: "https://example.com/image.png".to_string(),
+            image: CoreImageReference::Inline {
+                image_url: "https://example.com/image.png".to_string(),
+            },
             detail: Some(ImageDetail::Original),
         }
     );

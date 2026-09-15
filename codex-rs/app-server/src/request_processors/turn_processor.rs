@@ -3,12 +3,13 @@ use super::*;
 use codex_agent_extension::AgentInvocation;
 use codex_agent_extension::AgentRun;
 use codex_agent_extension::AgentRunner;
+use codex_app_server_protocol::ImageReference as V2ImageReference;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ImageReference;
+use codex_protocol::models::ImageReference as CoreImageReference;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 use codex_protocol::protocol::TurnSettingsUpdate;
@@ -24,7 +25,10 @@ pub(super) fn validate_user_input_image_urls(
     if input.iter().any(|item| {
         matches!(
             item,
-            V2UserInput::Image { url, .. } if is_remote_image_url(url)
+            V2UserInput::Image {
+                image: V2ImageReference::Inline { url },
+                ..
+            } if is_remote_image_url(url)
         )
     }) {
         return Err(invalid_request(REMOTE_IMAGE_URL_ERROR));
@@ -37,7 +41,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
         ResponseItem::Message { content, .. } => content.iter().any(|item| {
             matches!(
                 item,
-                ContentItem::InputImage { image: ImageReference::Inline { image_url }, .. } if is_remote_image_url(image_url)
+                ContentItem::InputImage { image: CoreImageReference::Inline { image_url }, .. } if is_remote_image_url(image_url)
             )
         }),
         ResponseItem::FunctionCallOutput { output, .. }
@@ -46,7 +50,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
                 content.iter().any(|item| {
                     matches!(
                         item,
-                        FunctionCallOutputContentItem::InputImage { image: ImageReference::Inline { image_url }, .. }
+                        FunctionCallOutputContentItem::InputImage { image: CoreImageReference::Inline { image_url }, .. }
                             if is_remote_image_url(image_url)
                     )
                 })

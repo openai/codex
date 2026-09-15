@@ -13,6 +13,7 @@ use codex_history::ResumedHistory;
 use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::ImageReference;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -441,7 +442,9 @@ async fn guardian_history_survives_compaction_and_eviction_but_not_legacy_rollba
                     text_elements: Vec::new(),
                 },
                 UserInput::Image {
-                    image_url: image_url.clone(),
+                    image: ImageReference::Inline {
+                        image_url: image_url.clone(),
+                    },
                     detail: None,
                 },
             ]))

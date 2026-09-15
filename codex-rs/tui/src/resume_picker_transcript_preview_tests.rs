@@ -4,6 +4,7 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ImageReference;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SortDirection;
@@ -362,9 +363,11 @@ async fn transcript_preview_for_history_mode(
             }
         } else {
             UserInput::Image {
-                url: String::from(
-                    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-                ),
+                image: ImageReference::Inline {
+                    url: String::from(
+                        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+                    ),
+                },
                 detail: None,
             }
         };

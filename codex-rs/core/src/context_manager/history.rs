@@ -930,6 +930,7 @@ static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option
     });
 
 fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
+    // TODO(kc) Account for file-backed image size after its token-cost contract is defined.
     match item {
         ResponseItem::Message { content, .. } => content
             .iter()
@@ -941,6 +942,10 @@ fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
                     image: ImageReference::Inline { image_url },
                     detail,
                 } => estimate_image_bytes(image_url, *detail),
+                ContentItem::InputImage {
+                    image: ImageReference::File { .. },
+                    ..
+                } => 0,
                 ContentItem::InputAudio { audio_url } => estimate_audio_bytes(audio_url),
             })
             .fold(0i64, i64::saturating_add),
@@ -1147,6 +1152,10 @@ fn estimate_function_output_bytes(output: &FunctionCallOutputBody) -> i64 {
                     image: ImageReference::Inline { image_url },
                     detail,
                 } => estimate_image_bytes(image_url, *detail),
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::File { .. },
+                    ..
+                } => 0,
                 FunctionCallOutputContentItem::InputAudio { audio_url } => {
                     estimate_audio_bytes(audio_url)
                 }

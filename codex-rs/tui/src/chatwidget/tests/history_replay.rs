@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_event::HistoryLookupResponse;
+use codex_app_server_protocol::ImageReference;
 use codex_app_server_protocol::NetworkAccess;
 use codex_app_server_protocol::SandboxPolicy;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -523,7 +524,9 @@ async fn replayed_user_message_preserves_remote_image_urls() {
                 text_elements: Vec::new(),
             },
             AppServerUserInput::Image {
-                url: remote_image_urls[0].clone(),
+                image: ImageReference::Inline {
+                    url: remote_image_urls[0].clone(),
+                },
                 detail: None,
             },
         ],
@@ -783,7 +786,9 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
         &mut chat,
         "user-1",
         vec![AppServerUserInput::Image {
-            url: remote_image_urls[0].clone(),
+            image: ImageReference::Inline {
+                url: remote_image_urls[0].clone(),
+            },
             detail: None,
         }],
         ReplayKind::ResumeInitialMessages,

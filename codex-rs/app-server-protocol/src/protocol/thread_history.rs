@@ -11,6 +11,7 @@ use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
+use crate::protocol::v2::ImageReference;
 use crate::protocol::v2::McpToolCallAppContext;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
@@ -54,6 +55,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::UserMessageImageKind;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
@@ -1511,11 +1513,59 @@ impl ThreadHistoryBuilder {
                     .collect(),
             });
         }
-        if let Some(images) = &payload.images {
+        let has_complete_image_order = payload.has_complete_image_order();
+        if has_complete_image_order {
+            let mut inline_index = 0;
+            let mut file_index = 0;
+            for image_kind in &payload.image_order {
+                let (image, detail) = match image_kind {
+                    UserMessageImageKind::Inline => {
+                        let Some(image) = payload
+                            .images
+                            .as_deref()
+                            .and_then(|images| images.get(inline_index))
+                        else {
+                            continue;
+                        };
+                        let detail = payload.image_details.get(inline_index).copied().flatten();
+                        inline_index += 1;
+                        (ImageReference::Inline { url: image.clone() }, detail)
+                    }
+                    UserMessageImageKind::File => {
+                        let Some(file_id) = payload
+                            .file_ids
+                            .as_deref()
+                            .and_then(|file_ids| file_ids.get(file_index))
+                        else {
+                            continue;
+                        };
+                        let detail = payload.file_id_details.get(file_index).copied().flatten();
+                        file_index += 1;
+                        (
+                            ImageReference::File {
+                                file_id: file_id.clone(),
+                            },
+                            detail,
+                        )
+                    }
+                };
+                content.push(UserInput::Image { image, detail });
+            }
+        } else if let Some(images) = &payload.images {
             for (idx, image) in images.iter().enumerate() {
                 content.push(UserInput::Image {
-                    url: image.clone(),
+                    image: ImageReference::Inline { url: image.clone() },
                     detail: payload.image_details.get(idx).copied().flatten(),
+                });
+            }
+        }
+        if !has_complete_image_order && let Some(file_ids) = &payload.file_ids {
+            for (idx, file_id) in file_ids.iter().enumerate() {
+                content.push(UserInput::Image {
+                    image: ImageReference::File {
+                        file_id: file_id.clone(),
+                    },
+                    detail: payload.file_id_details.get(idx).copied().flatten(),
                 });
             }
         }
@@ -1824,7 +1874,9 @@ mod tests {
                         text_elements: Vec::new(),
                     },
                     UserInput::Image {
-                        url: "https://example.com/one.png".into(),
+                        image: ImageReference::Inline {
+                            url: "https://example.com/one.png".into(),
+                        },
                         detail: None,
                     }
                 ],
@@ -1999,6 +2051,9 @@ mod tests {
                 message: "inspect these".into(),
                 images: Some(vec!["https://example.com/image.png".into()]),
                 image_details: vec![Some(ImageDetail::Original)],
+                file_ids: Some(vec!["file_123".into()]),
+                file_id_details: vec![Some(ImageDetail::High)],
+                image_order: vec![UserMessageImageKind::File, UserMessageImageKind::Inline],
                 local_images: vec![local_image_path.clone()],
                 local_image_details: vec![Some(ImageDetail::Original)],
                 audio: Some(vec!["https://example.com/audio.mp3".into()]),
@@ -2021,7 +2076,15 @@ mod tests {
                         text_elements: Vec::new(),
                     },
                     UserInput::Image {
-                        url: "https://example.com/image.png".into(),
+                        image: ImageReference::File {
+                            file_id: "file_123".into(),
+                        },
+                        detail: Some(ImageDetail::High),
+                    },
+                    UserInput::Image {
+                        image: ImageReference::Inline {
+                            url: "https://example.com/image.png".into(),
+                        },
                         detail: Some(ImageDetail::Original),
                     },
                     UserInput::LocalImage {
@@ -2033,6 +2096,43 @@ mod tests {
                     },
                     UserInput::LocalAudio {
                         path: local_audio_path,
+                    },
+                ],
+            }
+        );
+    }
+
+    /// Incomplete ordering metadata must not drop references from the legacy split arrays.
+    #[test]
+    fn incomplete_image_order_falls_back_to_legacy_order() {
+        let events = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                images: Some(vec!["https://example.com/image.png".into()]),
+                file_ids: Some(vec!["file_123".into()]),
+                image_order: vec![UserMessageImageKind::File],
+                ..Default::default()
+            },
+        ))];
+
+        let turns = build_turns_from_rollout_items(&events);
+
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::UserMessage {
+                id: "item-1".into(),
+                client_id: None,
+                content: vec![
+                    UserInput::Image {
+                        image: ImageReference::Inline {
+                            url: "https://example.com/image.png".into(),
+                        },
+                        detail: None,
+                    },
+                    UserInput::Image {
+                        image: ImageReference::File {
+                            file_id: "file_123".into(),
+                        },
+                        detail: None,
                     },
                 ],
             }

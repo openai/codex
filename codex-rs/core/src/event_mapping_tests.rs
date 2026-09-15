@@ -110,11 +110,11 @@ fn parses_user_message_with_text_and_two_images() {
                     text_elements: Vec::new(),
                 },
                 UserInput::Image {
-                    image_url: img1,
+                    image: ImageReference::Inline { image_url: img1 },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 UserInput::Image {
-                    image_url: img2,
+                    image: ImageReference::Inline { image_url: img2 },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
             ];
@@ -122,6 +122,49 @@ fn parses_user_message_with_text_and_two_images() {
         }
         other => panic!("expected TurnItem::UserMessage, got {other:?}"),
     }
+}
+
+/// Canonical user-message events must retain opaque file IDs for durable thread history.
+#[test]
+fn parses_user_message_with_file_image() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: "file_123".to_string(),
+                },
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+            ContentItem::InputText {
+                text: "describe it".to_string(),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let turn_item = parse_turn_item(&item).expect("expected user message turn item");
+
+    let TurnItem::UserMessage(user) = turn_item else {
+        panic!("expected TurnItem::UserMessage");
+    };
+    assert_eq!(
+        user.content,
+        vec![
+            UserInput::Image {
+                image: ImageReference::File {
+                    file_id: "file_123".to_string(),
+                },
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+            UserInput::Text {
+                text: "describe it".to_string(),
+                text_elements: Vec::new(),
+            },
+        ]
+    );
 }
 
 #[test]
@@ -158,7 +201,7 @@ fn skips_local_image_label_text() {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
                 UserInput::Image {
-                    image_url,
+                    image: ImageReference::Inline { image_url },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 UserInput::Text {
@@ -287,7 +330,7 @@ fn skips_unnamed_image_label_text() {
         TurnItem::UserMessage(user) => {
             let expected_content = vec![
                 UserInput::Image {
-                    image_url,
+                    image: ImageReference::Inline { image_url },
                     detail: Some(DEFAULT_IMAGE_DETAIL),
                 },
                 UserInput::Text {

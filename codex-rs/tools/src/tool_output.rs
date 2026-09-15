@@ -220,13 +220,12 @@ fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue 
                     | codex_protocol::models::ContentItem::OutputText { text } => {
                         FunctionCallOutputContentItem::InputText { text }
                     }
-                    codex_protocol::models::ContentItem::InputImage {
-                        image: ImageReference::Inline { image_url },
-                        detail,
-                    } => FunctionCallOutputContentItem::InputImage {
-                        image: ImageReference::Inline { image_url },
-                        detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
-                    },
+                    codex_protocol::models::ContentItem::InputImage { image, detail } => {
+                        FunctionCallOutputContentItem::InputImage {
+                            image,
+                            detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
+                        }
+                    }
                     codex_protocol::models::ContentItem::InputAudio { audio_url } => {
                         FunctionCallOutputContentItem::InputAudio { audio_url }
                     }
@@ -260,6 +259,10 @@ fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) ->
                     image: ImageReference::Inline { image_url },
                     ..
                 } if !image_url.trim().is_empty() => Some(image_url.clone()),
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::File { file_id },
+                    ..
+                } if !file_id.trim().is_empty() => Some(file_id.clone()),
                 FunctionCallOutputContentItem::InputAudio { audio_url }
                     if !audio_url.trim().is_empty() =>
                 {
@@ -274,3 +277,7 @@ fn content_items_to_code_mode_result(items: &[FunctionCallOutputContentItem]) ->
             .join("\n"),
     )
 }
+
+#[cfg(test)]
+#[path = "tool_output_tests.rs"]
+mod tests;

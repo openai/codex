@@ -20,6 +20,8 @@ use codex_protocol::mcp::McpResourceOrigin;
 use codex_protocol::mcp::McpResourceOriginCheckpoint;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -39,6 +41,8 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::UserMessageImageKind;
+use codex_protocol::user_input::UserInput;
 use codex_rollout::CompactedItem;
 use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutItem;
@@ -318,12 +322,21 @@ async fn list_active_summary_turns(store: &LocalThreadStore, thread_id: ThreadId
 async fn migration_publishes_canonical_projected_history_and_is_idempotent() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
+    let user_event = UserMessageEvent {
+        message: "first question".to_string(),
+        images: Some(vec!["https://example.com/image.png".to_string()]),
+        image_details: vec![Some(ImageDetail::Original)],
+        file_ids: Some(vec!["file_123".to_string()]),
+        file_id_details: vec![Some(ImageDetail::High)],
+        image_order: vec![UserMessageImageKind::File, UserMessageImageKind::Inline],
+        ..Default::default()
+    };
     let path = write_rollout(
         home.path(),
         thread_id,
         SessionSource::Cli,
         vec![
-            user_message("first question"),
+            RolloutItem::EventMsg(EventMsg::UserMessage(user_event)),
             agent_message("first answer"),
         ],
     );
@@ -355,6 +368,32 @@ async fn migration_publishes_canonical_projected_history_and_is_idempotent() {
             .count(),
         2
     );
+    let user_item = lines.iter().find_map(|line| match &line.item {
+        RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::UserMessage(item),
+            ..
+        })) => Some(item),
+        _ => None,
+    });
+    let expected_content = vec![
+        UserInput::Text {
+            text: "first question".to_string(),
+            text_elements: Vec::new(),
+        },
+        UserInput::Image {
+            image: ImageReference::File {
+                file_id: "file_123".to_string(),
+            },
+            detail: Some(ImageDetail::High),
+        },
+        UserInput::Image {
+            image: ImageReference::Inline {
+                image_url: "https://example.com/image.png".to_string(),
+            },
+            detail: Some(ImageDetail::Original),
+        },
+    ];
+    assert_eq!(user_item.map(|item| &item.content), Some(&expected_content));
 
     let turns = list_active_summary_turns(&store, thread_id).await;
     assert_eq!(turns.turns.len(), 1);
@@ -847,13 +886,36 @@ async fn migration_drops_trailing_context_when_rollback_arrives_before_next_turn
 async fn migration_coalesces_response_first_user_message_rollback_boundary() {
     let home = TempDir::new().expect("create Codex home");
     let thread_id = ThreadId::new();
+    let file_id = "file_123".to_string();
+    let response = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "remove question".to_string(),
+            },
+            ContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: file_id.clone(),
+                },
+                detail: None,
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let event = UserMessageEvent {
+        message: "remove question".to_string(),
+        file_ids: Some(vec![file_id]),
+        ..Default::default()
+    };
     let path = write_rollout(
         home.path(),
         thread_id,
         SessionSource::Cli,
         vec![
-            rollout_response_item(input_response_message("user", "remove question")),
-            user_message("remove question"),
+            rollout_response_item(response),
+            RolloutItem::EventMsg(EventMsg::UserMessage(event)),
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
                 num_turns: 1,
             })),

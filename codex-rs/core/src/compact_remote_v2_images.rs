@@ -25,6 +25,10 @@ pub(super) fn content_item_token_count(item: &ContentItem) -> usize {
             image_url, *detail,
         )))
         .unwrap_or(usize::MAX),
+        ContentItem::InputImage {
+            image: ImageReference::File { .. },
+            ..
+        } => 0,
         ContentItem::InputAudio { .. } => 0,
     }
 }

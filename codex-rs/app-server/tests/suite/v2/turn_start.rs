@@ -34,6 +34,7 @@ use codex_app_server_protocol::CyberAccessProgram;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangePatchUpdatedNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
+use codex_app_server_protocol::ImageReference as V2ImageReference;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -267,7 +268,15 @@ async fn turn_start_omits_notification_media_without_changing_model_input() -> R
                         text_elements: Vec::new(),
                     },
                     V2UserInput::Image {
-                        url: TINY_PNG_DATA_URL.to_string(),
+                        image: V2ImageReference::Inline {
+                            url: TINY_PNG_DATA_URL.to_string(),
+                        },
+                        detail: None,
+                    },
+                    V2UserInput::Image {
+                        image: V2ImageReference::File {
+                            file_id: "file_123".to_string(),
+                        },
                         detail: None,
                     },
                 ],
@@ -315,6 +324,8 @@ async fn turn_start_omits_notification_media_without_changing_model_input() -> R
                     content[0]["type"].as_str(),
                     Some("text" | "input_text")
                 ));
+                assert!(content[0].get("fileId").is_none());
+                assert!(content[0].get("file_id").is_none());
                 user_message_notifications.push(notification.method);
             }
         }
@@ -332,8 +343,17 @@ async fn turn_start_omits_notification_media_without_changing_model_input() -> R
     );
 
     let model_input_images = received_response_input_images(&server).await?;
-    assert_eq!(model_input_images.len(), 1);
-    assert_eq!(model_input_images[0]["image_url"], TINY_PNG_DATA_URL);
+    assert_eq!(model_input_images.len(), 2);
+    assert!(
+        model_input_images
+            .iter()
+            .any(|image| image["image_url"] == TINY_PNG_DATA_URL)
+    );
+    assert!(
+        model_input_images
+            .iter()
+            .any(|image| image["file_id"] == "file_123")
+    );
 
     Ok(())
 }
@@ -1393,7 +1413,9 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
                 thread_id: thread.id.clone(),
                 client_user_message_id: None,
                 input: vec![V2UserInput::Image {
-                    url: TINY_PNG_DATA_URL.to_string(),
+                    image: V2ImageReference::Inline {
+                        url: TINY_PNG_DATA_URL.to_string(),
+                    },
                     detail: None,
                 }],
                 turn_trigger: Some("user".to_string()),
