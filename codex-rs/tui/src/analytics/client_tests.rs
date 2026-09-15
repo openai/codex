@@ -1,6 +1,7 @@
 //! Account-scoped authentication and request identity regression coverage.
 
 use super::*;
+use crate::analytics::sections::Section;
 use crate::legacy_core::config::ConfigBuilder;
 use base64::Engine;
 use codex_config::LoaderOverrides;
@@ -762,4 +763,59 @@ async fn invalid_cached_breakdowns_are_evicted_before_retry() {
     );
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
     server.verify().await;
+}
+
+pub(in crate::analytics) async fn connected_view(
+    server: &MockServer,
+    plan: &str,
+) -> (
+    tempfile::TempDir,
+    crate::AppServerSession,
+    crate::analytics::AnalyticsView,
+) {
+    let (home, live) = live(server, plan).await;
+    let config = Arc::clone(&live.config);
+    let app_server = crate::start_embedded_app_server_for_picker(&config)
+        .await
+        .unwrap();
+    let mut view =
+        crate::analytics::AnalyticsView::new(crate::keymap::RuntimeKeymap::defaults().list);
+    view.open(
+        app_server.request_handle(),
+        crate::tui::FrameRequester::test_dummy(),
+        Vec::new(),
+        config,
+    );
+    (home, app_server, view)
+}
+
+#[tokio::test]
+async fn live_account_identity_is_visible_and_closing_aborts_pending_loads() {
+    let server = MockServer::start().await;
+    let (_home, live) = live(&server, "plus").await;
+    live.session().await.unwrap();
+    let mut view =
+        crate::analytics::AnalyticsView::new(crate::keymap::RuntimeKeymap::defaults().list);
+    view.live = Some(Arc::new(live));
+    view.sections[Section::Usage].history =
+        super::super::data::Load::Error("Couldn't load usage. Press R to retry.".into());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        /*width*/ 100, /*height*/ 24,
+    ))
+    .unwrap();
+    terminal
+        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+        .unwrap();
+    insta::assert_snapshot!(terminal.backend().to_string());
+    let (draw_tx, _) = tokio::sync::broadcast::channel(/*capacity*/ 1);
+    let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel::<()>();
+    view.sections[Section::Usage].history = super::super::data::Load::start(
+        async move {
+            let _cancelled = cancelled_tx;
+            std::future::pending().await
+        },
+        crate::tui::FrameRequester::new(draw_tx),
+    );
+    view.cancel_loads();
+    assert!(cancelled_rx.await.is_err());
 }

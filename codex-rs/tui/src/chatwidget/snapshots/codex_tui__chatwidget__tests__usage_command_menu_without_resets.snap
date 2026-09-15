@@ -6,6 +6,7 @@ expression: "render_bottom_popup(&chat, 80)"
   View account usage or redeem an earned reset.
 
 › 1. Show usage                View recent account token usage.
+  2. Explore analytics         Browse account usage and activity.
      Redeem usage limit reset  No usage limit resets available.
 
   Press enter to confirm or esc to go back

@@ -84,7 +84,7 @@ pub(crate) struct BacktrackSelection {
 }
 
 impl App {
-    /// Route overlay events while the transcript overlay is active.
+    /// Route overlay events, reserving backtracking for the transcript overlay.
     ///
     /// If backtrack preview is active, Esc / Left steps selection, Right steps forward, Enter
     /// confirms. Otherwise, Esc begins preview mode and all other events are forwarded to the
@@ -95,6 +95,10 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<bool> {
+        if !matches!(self.overlay, Some(Overlay::Transcript(_))) {
+            self.overlay_forward_event(tui, event)?;
+            return Ok(true);
+        }
         self.handle_legacy_transcript_event(tui, app_server, event)
     }
 
@@ -159,7 +163,7 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    /// Close transcript overlay and restore normal UI.
+    /// Close the current overlay and restore normal UI, retaining Analytics navigation state.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
@@ -170,7 +174,10 @@ impl App {
                 self.history_line_wrap_policy(),
             );
         }
-        self.overlay = None;
+        if let Some(Overlay::Analytics(mut view)) = self.overlay.take() {
+            view.cancel_loads();
+            self.retained_analytics = Some(view);
+        }
         if self.pending_thread_usage_history_refresh
             && let Err(err) = self.refresh_thread_usage_history_tail(tui)
         {

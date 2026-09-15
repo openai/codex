@@ -1,0 +1,28 @@
+---
+source: tui/src/analytics/client_tests.rs
+expression: terminal.backend().to_string()
+---
+"  Analytics  ·  Live account · analytics@example.test · account-a                                   "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"  No history has been reported.                                                                     "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"  R refresh · esc back · q close                                                                    "

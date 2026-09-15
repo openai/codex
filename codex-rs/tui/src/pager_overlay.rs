@@ -58,6 +58,7 @@ use scrolling::render_offset_content;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
+    Analytics(Box<crate::analytics::AnalyticsView>),
 }
 
 impl Overlay {
@@ -85,6 +86,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
+            Overlay::Analytics(o) => o.handle_event(tui, event),
         }
     }
 
@@ -92,6 +94,7 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
+            Overlay::Analytics(o) => o.is_done,
         }
     }
 }

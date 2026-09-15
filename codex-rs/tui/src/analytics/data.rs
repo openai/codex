@@ -101,13 +101,6 @@ impl<T: Send + 'static> Load<T> {
     }
 }
 
-pub(super) fn error(error: codex_app_server_client::TypedRequestError) -> String {
-    match error {
-        codex_app_server_client::TypedRequestError::Server { source, .. } => source.message,
-        _ => "Couldn't load analytics. Press R to retry.".into(),
-    }
-}
-
 /// Keep tiny refunds visible while avoiding noise on ordinary credit amounts.
 pub(super) fn amount(value: f64) -> String {
     if value == 0.0 {
@@ -152,32 +145,6 @@ pub(super) fn credit_amount(value: f64) -> String {
         Some((_, fraction)) if fraction.len() == 1 => format!("{formatted}0"),
         Some(_) => formatted,
     }
-}
-
-/// Format integer millionths without floating-point rounding or hiding tiny adjustments.
-pub(super) fn credits(micros: i64) -> String {
-    let magnitude = micros.unsigned_abs();
-    if magnitude > 0 && magnitude < 10_000 {
-        let fractional = format!("{magnitude:06}");
-        return format!(
-            "{}0.{}",
-            if micros < 0 { "-" } else { "" },
-            fractional.trim_end_matches('0')
-        );
-    }
-    let cents = (magnitude + 5_000) / 10_000;
-    let mut whole = (cents / 100).to_string();
-    let digits = whole.len();
-    for index in (1..digits).rev() {
-        if (digits - index).is_multiple_of(/*rhs*/ 3) {
-            whole.insert(index, ',');
-        }
-    }
-    format!(
-        "{}{whole}.{:02}",
-        if micros < 0 { "-" } else { "" },
-        cents % 100
-    )
 }
 
 pub(super) fn date(date: &str) -> String {

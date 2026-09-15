@@ -102,11 +102,6 @@ pub(crate) use codex_app_server_client::legacy_core;
 pub(crate) use worktree_startup::ManagedTuiWorktree;
 
 mod additional_dirs;
-// Removed when the final stack layer connects Analytics to /usage.
-#[expect(
-    dead_code,
-    reason = "analytics is being introduced in independently tested stack layers"
-)]
 mod analytics;
 mod app;
 mod app_backtrack;

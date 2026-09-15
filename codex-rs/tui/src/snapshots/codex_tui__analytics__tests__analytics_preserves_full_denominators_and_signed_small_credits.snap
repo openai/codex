@@ -1,0 +1,32 @@
+---
+source: tui/src/analytics_tests.rs
+expression: "task.into_iter().chain(credits).map(|line|\nline.to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+▎ Total usage history                    By turn start
+──────────────────────────────────────────────────────
+Total usage · relative units
+All usage by how each turn started
+
+ 100                                             100
+        —      —      —      —      —      —    ▄▄▄▄
+   0 ─────────────────────────────────────────────────
+                                                  ▲
+     Aug 27 Aug 28 Aug 29 Aug 30 Aug 31  Sep 1  Sep 2
+
+Sep 2 · 100 usage units
+● Goals                                          30.0%
+  Credits usage history                     By product
+──────────────────────────────────────────────────────
+-0.000004 credits
+
+  0.000004
+             —     —     —     —     —     —
+         0 ───────────────────────────────────────────
+                                                ████
+ -0.000004                                      ████
+                                             -0.000004
+                                                  ▲
+            27    28    29    30    31     1      2
+
+Sep 2 · -0.000004 credits
+● CLI                                        -0.000004

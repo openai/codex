@@ -1,0 +1,73 @@
+---
+source: tui/src/analytics_tests.rs
+expression: "screens.join(\"\\n\\n\")"
+---
+▎ Credits usage history                     By product
+──────────────────────────────────────────────────────
+13,079.44 credits
+
+ 15,000        ▄▄▄▄
+               ████
+        0.00   ████    —    ▁▁▁▁   ▁▁▁▁  ▁▁▁▁   ▁▁▁▁
+      0 ──────────────────────────────────────────────
+          ▲
+         27     28    29     30    31      1      2
+
+──────────────────────────────────────────────────────
+Aug 27 · No activity (0)
+Product                                        Credits
+● Desktop app                                     0.00
+● CLI                                             0.00
+● IDE extension                                   0.00
+● Web                                             0.00
+
+▎ Credits usage history                     By product
+──────────────────────────────────────────────────────
+13,079.44 credits
+             12,746.44
+ 15,000        ▄▄▄▄
+               ████
+          0    ████    —    ▁▁▁▁   ▁▁▁▁  ▁▁▁▁   ▁▁▁▁
+      0 ──────────────────────────────────────────────
+                 ▲
+         27     28    29     30    31      1      2
+
+──────────────────────────────────────────────────────
+Aug 28 · 12746.441206 credits
+Product                                        Credits
+● Desktop app                             12746.441206
+● CLI                                                0
+● IDE extension                                      0
+● Web                                                0
+
+▎ Credits usage history                     By product
+──────────────────────────────────────────────────────
+13,079.44 credits
+
+ 15,000        ▄▄▄▄
+               ████
+          0    ████    —    ▁▁▁▁   ▁▁▁▁  ▁▁▁▁   ▁▁▁▁
+      0 ──────────────────────────────────────────────
+                       ▲
+         27     28    29     30    31      1      2
+
+──────────────────────────────────────────────────────
+Aug 29 · Not reported
+Product                                        Credits
+● Desktop app                                        —
+● CLI                                                —
+● IDE extension                                      —
+● Web                                                —
+
+▎ Credits usage history                     By product
+──────────────────────────────────────────────────────
+0.00 credits
+No activity reported in this range.
+
+──────────────────────────────────────────────────────
+Aug 29 · Not reported
+Product                                        Credits
+
+▎ Credits usage history                     By product
+──────────────────────────────────────────────────────
+No data reported for this range.

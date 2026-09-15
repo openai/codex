@@ -1,0 +1,19 @@
+---
+source: tui/src/analytics_tests.rs
+expression: panels
+---
+▎ Total usage history                       By feature
+──────────────────────────────────────────────────────
+Loading…
+
+  Plugins called
+──────────────────────────────────────────────────────
+No history has been reported.
+
+  Credits usage history                     By product
+──────────────────────────────────────────────────────
+Couldn't load credits. Press R to retry.
+
+  Messages                                    By model
+──────────────────────────────────────────────────────
+No data reported for this range.
