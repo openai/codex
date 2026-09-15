@@ -72,10 +72,13 @@ pub(crate) use self::delivery::MessageDeliveryError;
 pub(crate) use self::delivery::MessageDeliveryMode;
 pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
+pub(crate) use self::interrupt::AgentInterruptError;
+pub(crate) use self::interrupt::AgentInterruptOutcome;
 use self::residency::V2Residency;
 
 mod delivery;
 mod execution;
+mod interrupt;
 mod legacy;
 mod residency;
 mod service_tier;

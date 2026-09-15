@@ -12,7 +12,6 @@ use crate::tools::handlers::multi_agents_common::*;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
-use codex_protocol::AgentPath;
 use codex_protocol::items::CollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallItem;
 use codex_protocol::items::CollabAgentToolCallStatus;
