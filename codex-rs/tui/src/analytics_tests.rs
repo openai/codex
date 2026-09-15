@@ -227,6 +227,18 @@ fn analytics_credit_display_retains_integer_precision() {
         .map(str::to_string)
     );
     assert_eq!(
+        [0, -4, 999_999_999, 19_350_041_555, i64::MIN, i64::MAX].map(data::credits),
+        [
+            "0.00",
+            "-0.000004",
+            "1,000.00",
+            "19,350.04",
+            "-9,223,372,036,854.78",
+            "9,223,372,036,854.78"
+        ]
+        .map(str::to_string)
+    );
+    assert_eq!(
         [
             12_746.441206,
             -1_000.125,
@@ -606,4 +618,58 @@ fn analytics_empty_turns_keep_geometry_and_disable_details() {
         view.sections[Section::Activity].detail = None;
     }
     insta::assert_snapshot!(snapshots.join("\n"));
+}
+
+#[path = "analytics/chat_panel_tests.rs"]
+mod chats_table;
+
+#[test]
+fn analytics_details_reflow_and_keep_focus() {
+    let mut view = fixture::view(models::AccountKind::Enterprise);
+    view.chats = Load::Ready(fixture::chats());
+    press(&mut view, KeyCode::Char('z'));
+    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Enter);
+    assert!(view.zoomed);
+    press(&mut view, KeyCode::Enter);
+    let wide = screen(&mut view, /*width*/ 120, /*height*/ 42);
+    view.follow_selection = true;
+    let narrow = screen(&mut view, /*width*/ 58, /*height*/ 20);
+    assert!(narrow.contains("Q3 planning analysis") && narrow.contains("GPT-5.6-Sol"));
+    insta::assert_snapshot!(format!("{wide}\n{narrow}"));
+    let before = (
+        view.section,
+        view.sections.0.each_ref().map(|state| state.cursor),
+        view.sections.0.each_ref().map(|state| state.detail),
+    );
+    press(&mut view, KeyCode::PageDown);
+    screen(&mut view, /*width*/ 58, /*height*/ 20);
+    assert_eq!(
+        (
+            view.section,
+            view.sections.0.each_ref().map(|state| state.cursor),
+            view.sections.0.each_ref().map(|state| state.detail)
+        ),
+        before
+    );
+    press(&mut view, KeyCode::Tab);
+    press(&mut view, KeyCode::Char('5'));
+    assert_eq!(
+        (
+            view.section,
+            view.sections.0.each_ref().map(|state| state.cursor),
+            view.sections.0.each_ref().map(|state| state.detail)
+        ),
+        before
+    );
+    press(&mut view, KeyCode::Esc);
+    assert_eq!(
+        (
+            view.is_done,
+            view.sections.0.each_ref().map(|state| state.detail)
+        ),
+        (false, [None; 6])
+    );
+    press(&mut view, KeyCode::Esc);
+    assert!(view.is_done);
 }

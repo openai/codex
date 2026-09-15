@@ -139,6 +139,42 @@ pub(super) fn history(
     }
 }
 
+pub(super) fn chats() -> super::chats::Chats {
+    use codex_backend_client::ThreadUsage;
+    use codex_backend_client::ThreadUsageBreakdownGroup;
+    super::chats::Chats {
+        rows: [
+            ("Q3 planning analysis", 120),
+            ("Refactor billing usage", 113),
+            ("Other usage", 109),
+            ("Launch readiness review", 85),
+            ("Plan the week", 0),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (title, credits))| super::chats::Chat {
+            title: title.into(),
+            usage: Some(ThreadUsage {
+                thread_id: format!("test-{index}"),
+                estimated_usage_credits_micros: credits * 1_000_000,
+                estimated_usage_usd_micros: None,
+                groups: vec![ThreadUsageBreakdownGroup {
+                    model: Some("GPT-5.6-Sol".into()),
+                    reasoning_effort: Some("high".into()),
+                    speed: Some("standard".into()),
+                    estimated_usage_credits_micros: credits * 1_000_000,
+                    net_new_input_tokens: None,
+                    cached_input_tokens: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    total_tokens: None,
+                }],
+            }),
+        })
+        .collect(),
+    }
+}
+
 pub(super) fn tokens(range: usize, grouping: usize) -> super::models::AccountAnalyticsHistory {
     let response = serde_json::json!({"data_freshness_ts":"2026-09-02T16:00:00Z", "data":
         daily(Section::Usage, range).into_iter().enumerate().map(|(index, total)| serde_json::json!({
@@ -164,7 +200,14 @@ pub(super) fn tokens(range: usize, grouping: usize) -> super::models::AccountAna
 pub(super) fn view(kind: super::models::AccountKind) -> super::AnalyticsView {
     let mut view = super::AnalyticsView::new(crate::keymap::RuntimeKeymap::defaults().list);
     view.end_date = END_DATE;
-    view.account = super::data::Load::Ready(kind);
+    view.account = super::data::Load::Ready(match kind {
+        super::models::AccountKind::Consumer => codex_protocol::account::PlanType::Plus,
+        super::models::AccountKind::Business => codex_protocol::account::PlanType::Team,
+        super::models::AccountKind::Enterprise => {
+            codex_protocol::account::PlanType::EnterpriseCbpUsageBased
+        }
+        super::models::AccountKind::Unknown => codex_protocol::account::PlanType::Unknown,
+    });
     view.start_reports();
     seed_reports(&mut view);
     view
@@ -173,6 +216,9 @@ pub(super) fn view(kind: super::models::AccountKind) -> super::AnalyticsView {
 /// Populate explicit report state after a test chooses its account, period, and grouping.
 pub(super) fn seed_reports(view: &mut super::AnalyticsView) {
     use super::data::Load;
+    if view.business() {
+        view.chats = Load::Ready(chats());
+    }
     for section in view.visible_sections() {
         if let Some(report) = section.report() {
             let range = view.ranges[view.range_group(*section) as usize];

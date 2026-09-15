@@ -2,6 +2,8 @@
 //! A maximized section and an overview share bounded report loads, selection, and inline details.
 
 mod chart;
+mod chat_panel;
+mod chats;
 mod client;
 mod dashboard;
 mod data;
@@ -44,7 +46,9 @@ use sections::SectionStates;
 pub(crate) struct AnalyticsView {
     model_names: std::collections::HashMap<String, String>,
     sections: SectionStates,
-    account: Load<models::AccountKind>,
+    chats: Load<chats::Chats>,
+    show_zero_credit_groups: bool,
+    account: Load<codex_protocol::account::PlanType>,
     reports_started: bool,
     connection: Option<(
         std::sync::Arc<crate::legacy_core::config::Config>,
@@ -70,6 +74,8 @@ impl AnalyticsView {
         let mut view = Self {
             model_names: std::collections::HashMap::new(),
             sections: SectionStates(std::array::from_fn(|_| SectionState::default())),
+            chats: Load::Unavailable,
+            show_zero_credit_groups: false,
             account: Load::Unavailable,
             reports_started: false,
             connection: None,
@@ -87,6 +93,7 @@ impl AnalyticsView {
             is_done: false,
         };
         view.sections[Section::Usage].group = 1;
+        view.sections[Section::Chats].cursor = 0;
         view.sections[Section::Activity].group = 2;
         view.refresh();
         view
@@ -120,12 +127,24 @@ impl AnalyticsView {
         for section in &mut self.sections.0 {
             section.history = Load::Unavailable;
         }
+        self.sections[Section::Chats].detail = None;
+        self.chats = Load::Unavailable;
         self.reports_started = false;
         self.token_model = None;
         self.account = if let (Some((_, _, frame)), Some(live)) = (&self.connection, &self.live) {
             let live = std::sync::Arc::clone(live);
             Load::start(
-                async move { live.session().await.map(|session| Some(session.kind)) },
+                async move {
+                    live.session().await.map(|session| {
+                        Some(
+                            session
+                                .backend
+                                .account()
+                                .plan_type
+                                .unwrap_or(codex_protocol::account::PlanType::Unknown),
+                        )
+                    })
+                },
                 frame.clone(),
             )
         } else {
@@ -139,6 +158,7 @@ impl AnalyticsView {
         for section in &mut self.sections.0 {
             section.history = Load::Unavailable;
         }
+        self.chats = Load::Unavailable;
         self.account = Load::Unavailable;
         self.live = None;
         self.connection = None;
@@ -184,7 +204,7 @@ impl AnalyticsView {
             Section::Usage => &[0, 2],
             Section::Credits => self.live.as_ref().map_or(&[0], |live| live.credit_groups()),
             Section::Activity => &[2, 0],
-            Section::Plugins | Section::Skills => &[],
+            Section::Plugins | Section::Skills | Section::Chats => &[],
         }
     }
 
@@ -205,6 +225,7 @@ impl AnalyticsView {
             Section::Credits => "Credits usage history",
             Section::Activity => "Messages",
             Section::Skills => "Skills used",
+            Section::Chats => "Top chats",
         }
     }
 
@@ -221,7 +242,11 @@ impl AnalyticsView {
     }
 
     fn row_count(&self) -> usize {
-        if self.ranges[self.range_group(self.section) as usize] == 0 {
+        if self.section == Section::Chats {
+            self.chats
+                .ready()
+                .map_or(/*default*/ 0, |chats| chats.rows.len())
+        } else if self.ranges[self.range_group(self.section) as usize] == 0 {
             7
         } else {
             30
@@ -283,6 +308,13 @@ impl AnalyticsView {
             self.refresh();
             return;
         }
+        if self.section == Section::Chats
+            && self.sections[Section::Chats].detail.is_some()
+            && key_hint::plain(KeyCode::Char('a')).is_press(key)
+        {
+            self.show_zero_credit_groups = !self.show_zero_credit_groups;
+            return;
+        }
         if self.section == Section::Usage
             && self.business()
             && key_hint::plain(KeyCode::Char('m')).is_press(key)
@@ -302,7 +334,9 @@ impl AnalyticsView {
             self.load_report(Section::Usage);
             return;
         }
-        if key_hint::plain(KeyCode::Char('r')).is_press(key) && !self.visible_sections().is_empty()
+        if key_hint::plain(KeyCode::Char('r')).is_press(key)
+            && self.section != Section::Chats
+            && !self.visible_sections().is_empty()
         {
             self.change_range();
             return;
@@ -347,22 +381,37 @@ impl AnalyticsView {
         {
             return;
         }
+        if self.section == Section::Chats
+            && self.business()
+            && matches!(action, Some(ListAction::Accept | ListAction::MoveRight))
+            && self
+                .chats
+                .ready()
+                .and_then(|chats| chats.rows.get(self.sections[Section::Chats].cursor))
+                .and_then(|chat| chat.usage.as_ref())
+                .is_none()
+        {
+            return;
+        }
+        let chart = self.section != Section::Chats;
         let count = self.row_count().max(/*other*/ 1);
         let SectionState { cursor, detail, .. } = &mut self.sections[self.section];
+        let previous_cursor = *cursor;
         match action {
             Some(ListAction::MoveUp) => *cursor = cursor.saturating_sub(/*rhs*/ 1),
             Some(ListAction::MoveDown) => *cursor = (*cursor + 1).min(count - 1),
-            Some(ListAction::MoveLeft) => *cursor = cursor.saturating_sub(/*rhs*/ 1),
-            Some(ListAction::MoveRight) => *cursor = (*cursor + 1).min(count - 1),
+            Some(ListAction::MoveLeft) if chart => *cursor = cursor.saturating_sub(/*rhs*/ 1),
+            Some(ListAction::MoveRight) if chart => *cursor = (*cursor + 1).min(count - 1),
             Some(ListAction::JumpTop) => *cursor = 0,
             Some(ListAction::JumpBottom) => *cursor = count - 1,
-            Some(ListAction::Accept) => {
+            Some(ListAction::Accept | ListAction::MoveRight) => {
                 *detail = if *detail == Some(*cursor) {
                     None
                 } else {
                     Some(*cursor)
                 };
             }
+            Some(ListAction::MoveLeft) => *detail = None,
             Some(ListAction::Cancel) => {
                 self.is_done |= !self.zoomed || detail.take().is_none();
             }
@@ -376,8 +425,10 @@ impl AnalyticsView {
             }
             None => {}
         }
-        if detail.is_some() {
+        if chart && detail.is_some() {
             *detail = Some(*cursor);
+        } else if !chart && *cursor != previous_cursor {
+            *detail = None;
         }
     }
 
@@ -395,6 +446,7 @@ impl AnalyticsView {
                             section.history = Load::Unavailable;
                         }
                     }
+                    self.chats = Load::Unavailable;
                     self.account = Load::Unavailable;
                     self.connection = None;
                 }

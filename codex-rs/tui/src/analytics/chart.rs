@@ -93,7 +93,7 @@ impl AnalyticsView {
             Section::Activity => "messages",
             Section::Plugins => "calls",
             Section::Skills => "uses",
-            Section::Usage | Section::Credits => "credits",
+            Section::Usage | Section::Credits | Section::Chats => "credits",
         };
         let empty_breakdown = matches!(
             section,
@@ -193,6 +193,7 @@ impl AnalyticsView {
                 match section {
                     Section::Plugins => "Plugin",
                     Section::Skills => "Skill",
+                    Section::Chats => "Chat",
                     Section::Usage | Section::Credits | Section::Activity => {
                         self.group_label(section, self.sections[section].group)
                     }

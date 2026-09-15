@@ -7,7 +7,7 @@ Text:
 "  Analytics  ·  Live account                                                                                            "
 "  [7d]  30d  ·  Aug 27–Sep 2, 2026                                                                                      "
 "                                                                                                                        "
-"  1 Credits usage history  [2 Token usage history]  3 Plugins called  4 Skills used                                     "
+"  1 Credits usage history  [2 Token usage history]  3 Plugins called  4 Skills used  5 Top chats                        "
 "                                                                                                                        "
 "  ▎ Token usage history                                                                                  By token type  "
 "  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  "
@@ -44,7 +44,7 @@ Text:
 "  ● Output                                          43,000                                                              "
 "  Updated Sep 2 16:00 UTC                                                                                               "
 "                                                                                                                        "
-"  tab/1–4 section · z dashboard · ←/→ day · enter details                                                               "
+"  tab/1–5 section · z dashboard · ←/→ day · enter details                                                               "
 "  r 7/30d · g group · R refresh · pgup/pgdn scroll · esc back · q close                                                 "
 Palette (foreground|background|underline|modifiers):
 0: Reset|Reset|Reset|NONE
@@ -61,7 +61,7 @@ Rows (column:palette):
 0: 0:0 2:1 11:2 28:0
 1: 0:0 2:3 6:0 11:2 34:0
 2: 0:0
-3: 0:0 2:2 27:3 52:2 83:0
+3: 0:0 2:2 27:3 52:2 96:0
 4: 0:0
 5: 0:0 2:3 23:0 105:2 118:0
 6: 0:0 2:4 118:0

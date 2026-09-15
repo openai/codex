@@ -23,7 +23,7 @@ fn thread_usage_contract_uses_expected_paths_and_payload() {
     );
     assert_eq!(
         serde_json::to_value(ThreadUsageQueryRequest {
-            thread_ids: ["thread-123"],
+            thread_ids: &["thread-123"],
         })
         .expect("serialize thread usage request"),
         json!({ "thread_ids": ["thread-123"] })
@@ -142,5 +142,59 @@ async fn get_thread_usage_rejects_totals_for_another_thread() {
         .get_thread_usage("thread-123")
         .await
         .expect_err("reject usage for a different thread");
-    assert!(error.to_string().contains("requested thread thread-123"));
+    assert!(error.to_string().contains("unexpected threads"));
+}
+
+#[tokio::test]
+async fn batch_usage_rejects_invalid_requests_before_http() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(/*s*/ 500))
+        .expect(/*r*/ 0)
+        .mount(&server)
+        .await;
+    let client = Client::new(
+        server.uri(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    );
+    let too_many = (0..101)
+        .map(|id| format!("thread-{id}"))
+        .collect::<Vec<_>>();
+    for ids in [
+        Vec::new(),
+        vec!["duplicate", "duplicate"],
+        too_many.iter().map(String::as_str).collect(),
+    ] {
+        let error = client.get_threads_usage(&ids).await.unwrap_err();
+        assert!(error.to_string().contains("1–100 distinct thread IDs"));
+    }
+}
+
+#[tokio::test]
+async fn batch_usage_rejects_duplicate_and_unrequested_response_rows() {
+    for returned in [["first", "first"], ["first", "unexpected"]] {
+        for second_amount in [Some(1), None] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(body_json(json!({"thread_ids": ["first", "second"]})))
+                .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+                    "threads": returned.iter().enumerate().map(|(index, thread_id)| json!({
+                        "thread_id": thread_id,
+                        "estimated_usage_credits_micros": if index == 0 { Some(1) } else { second_amount }
+                    })).collect::<Vec<_>>()
+                })))
+                .expect(/*r*/ 1)
+                .mount(&server)
+                .await;
+            let client = Client::new(
+                server.uri(),
+                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            );
+            let error = client
+                .get_threads_usage(&["first", "second"])
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("unexpected threads"));
+        }
+    }
 }

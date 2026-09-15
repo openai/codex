@@ -2,8 +2,10 @@
 //! Card heights depend on the viewport, never on the selected day or load state.
 
 use super::AnalyticsView;
+use super::data;
 use super::render::columns;
 use super::render::join_columns;
+use super::styles::number;
 use super::styles::secondary_style;
 use crate::analytics::sections::Section;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow as truncate;
@@ -41,23 +43,28 @@ impl AnalyticsView {
                     secondary_style().dim()
                 };
                 let mut content = Vec::new();
-                content.push(
-                    format!(
-                        "{}d{}",
-                        if self.ranges[self.range_group(section) as usize] == 0 {
-                            7
-                        } else {
-                            30
-                        },
-                        if section == Section::Usage && self.business() {
-                            format!(" · {}", self.token_model.as_deref().unwrap_or("All models"))
-                        } else {
-                            String::new()
-                        }
-                    )
-                    .set_style(secondary_style())
-                    .into(),
-                );
+                if !matches!(section, Section::Chats) {
+                    content.push(
+                        format!(
+                            "{}d{}",
+                            if self.ranges[self.range_group(section) as usize] == 0 {
+                                7
+                            } else {
+                                30
+                            },
+                            if section == Section::Usage && self.business() {
+                                format!(
+                                    " · {}",
+                                    self.token_model.as_deref().unwrap_or("All models")
+                                )
+                            } else {
+                                String::new()
+                            }
+                        )
+                        .set_style(secondary_style())
+                        .into(),
+                    );
+                }
                 if matches!(
                     section,
                     Section::Usage | Section::Credits | Section::Activity
@@ -92,14 +99,70 @@ impl AnalyticsView {
                         },
                     ));
                 } else {
-                    content.extend(
-                        self.history_lines(
-                            section,
-                            inner_width,
-                            inner_height.saturating_sub(/*rhs*/ 13).max(/*other*/ 1),
-                        )
-                        .lines,
-                    );
+                    match section {
+                        Section::Usage
+                        | Section::Plugins
+                        | Section::Credits
+                        | Section::Activity
+                        | Section::Skills => content.extend(
+                            self.history_lines(
+                                section,
+                                inner_width,
+                                inner_height.saturating_sub(/*rhs*/ 13).max(/*other*/ 1),
+                            )
+                            .lines,
+                        ),
+                        Section::Chats => {
+                            content.push(
+                                "30d active · lifetime credits"
+                                    .set_style(secondary_style())
+                                    .into(),
+                            );
+                            content.push(Line::default());
+                            if let Some(chats) = self.chats.ready() {
+                                if chats.rows.is_empty() {
+                                    content.push(
+                                        "No recent local chats."
+                                            .set_style(secondary_style())
+                                            .into(),
+                                    );
+                                }
+                                for chat in chats.rows.iter().take(/*n*/ 5) {
+                                    let amount = chat
+                                        .usage
+                                        .as_ref()
+                                        .map(|usage| {
+                                            data::credits(usage.estimated_usage_credits_micros)
+                                        })
+                                        .unwrap_or_else(|| "—".into());
+                                    content.push(columns(
+                                        truncate(
+                                            chat.display_title().to_string().into(),
+                                            inner_width.saturating_sub(amount.len() + 1),
+                                        ),
+                                        number(amount).into(),
+                                        inner_width,
+                                    ));
+                                }
+                                content.push(Line::default());
+                                content.push(
+                                    "Local chats · excludes subagents"
+                                        .set_style(secondary_style())
+                                        .into(),
+                                );
+                                if chats.rows.iter().any(|chat| chat.usage.is_none()) {
+                                    content.push(
+                                        "Some estimates unavailable"
+                                            .set_style(secondary_style())
+                                            .into(),
+                                    );
+                                }
+                            } else if let Some(message) = self.chats.message() {
+                                content
+                                    .push(message.to_string().set_style(secondary_style()).into());
+                            }
+                        }
+                    }
                 }
                 let mut content = word_wrap_lines(content, RtOptions::new(inner_width));
                 if content.len() > inner_height {

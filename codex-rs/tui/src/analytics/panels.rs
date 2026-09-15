@@ -59,6 +59,7 @@ impl AnalyticsView {
             );
         }
         let mut selection;
+        let mut chart_bands = 0;
         if focused && let Some(choice) = self.group_picker {
             lines.extend(
                 self.group_options()
@@ -78,10 +79,16 @@ impl AnalyticsView {
                     }),
             );
         }
-        let history = self.history_lines(section, width, chart_height);
-        let chart_bands = history.bands;
-        lines.extend(history.lines);
-        selection = 0..lines.len();
+        if section == Section::Chats {
+            let (chats, detail) = self.chat_lines(width);
+            selection = lines.len() + detail.start..lines.len() + detail.end;
+            lines.extend(chats);
+        } else {
+            let history = self.history_lines(section, width, chart_height);
+            chart_bands = history.bands;
+            lines.extend(history.lines);
+            selection = 0..lines.len();
+        }
         if focused && self.group_picker.is_some() {
             selection = 0..2 + self.group_options().len();
         }

@@ -23,6 +23,7 @@ fn account_layouts_show_reports_and_wrap_navigation() {
                 Section::Usage,
                 Section::Plugins,
                 Section::Skills,
+                Section::Chats,
             ],
         ),
     ] {
@@ -65,7 +66,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             view.sections[Section::Usage].detail,
             view.sections[Section::Usage].group
         ),
-        ([1, 0, 0], [28, 6, 6, 6, 6], Some(28), 2)
+        ([1, 0, 0], [28, 6, 6, 0, 6, 6], Some(28), 2)
     );
     let context = (
         view.ranges,
@@ -94,7 +95,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             .0
             .each_ref()
             .map(|state| state.history.ready().map(|history| history.data.len())),
-        [Some(30), Some(7), None, Some(30), Some(7)]
+        [Some(30), Some(7), None, None, Some(30), Some(7)]
     );
     let server = test_support::server().await;
     let (_business_home, _business_server, mut view) =
@@ -111,7 +112,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             .0
             .each_ref()
             .map(|state| state.history.ready().map(|history| history.data.len())),
-        [Some(30), Some(7), Some(7), None, Some(7)]
+        [Some(30), Some(7), Some(7), None, None, Some(7)]
     );
 }
 
@@ -221,9 +222,9 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
         assert_eq!(
             ready,
             if plan == "plus" {
-                [true, true, false, true, true]
+                [true, true, false, false, true, true]
             } else {
-                [true, true, true, false, true]
+                [true, true, true, false, false, true]
             }
         );
         press(&mut view, KeyCode::Char('R'));
@@ -253,7 +254,7 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
 async fn legacy_response_closes_an_attribution_picker_that_is_no_longer_valid() {
     let server = test_support::server().await;
     let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
-    view.account = Load::Ready(models::AccountKind::Consumer);
+    view.account = Load::Ready(codex_protocol::account::PlanType::Plus);
     view.start_reports();
     view.group_picker = Some(3);
     test_support::settle(&mut view).await;
@@ -273,7 +274,7 @@ async fn legacy_response_invalidates_picker_before_the_next_draw() {
     let server = test_support::server().await;
     for choice in [2, 3] {
         let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
-        view.account = Load::Ready(models::AccountKind::Consumer);
+        view.account = Load::Ready(codex_protocol::account::PlanType::Plus);
         view.start_reports();
         view.group_picker = Some(choice);
         // Complete the request without polling the view, as can happen between key events.
@@ -289,4 +290,78 @@ async fn legacy_response_invalidates_picker_before_the_next_draw() {
         test_support::settle(&mut view).await;
         assert_eq!(view.sections[Section::Usage].group, 0);
     }
+}
+
+#[test]
+fn business_chats_display_only_supplied_dollars() {
+    let mut view = fixture::view(models::AccountKind::Enterprise);
+    let chats = match &mut view.chats {
+        Load::Ready(chats) => chats,
+        _ => panic!("fixture chats"),
+    };
+    for chat in &mut chats.rows {
+        if let Some(usage) = &mut chat.usage {
+            usage.estimated_usage_usd_micros = None;
+        }
+    }
+    press(&mut view, KeyCode::Char('5'));
+    assert!(!screen(&mut view, /*width*/ 100, /*height*/ 30).contains("Est. $ spent"));
+    if let Load::Ready(chats) = &mut view.chats {
+        chats.rows[0]
+            .usage
+            .as_mut()
+            .unwrap()
+            .estimated_usage_usd_micros = Some(123_450_000);
+    }
+    let dollars = screen(&mut view, /*width*/ 100, /*height*/ 30);
+    assert!(dollars.contains("$123.45") && dollars.contains("Est. $ spent"));
+    let narrow = screen(&mut view, /*width*/ 42, /*height*/ 30);
+    insta::assert_snapshot!(format!("{dollars}\n{narrow}"));
+}
+
+#[tokio::test]
+async fn unsupported_workspace_plans_hide_top_chats_and_skip_loading() {
+    for plan in [
+        "team",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "enterprise",
+        "ent26",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+    ] {
+        let server = test_support::server().await;
+        let (_home, _app_server, mut view) = client::tests::connected_view(&server, plan).await;
+        test_support::settle(&mut view).await;
+        assert_eq!(
+            view.visible_sections(),
+            &[
+                Section::Credits,
+                Section::Usage,
+                Section::Plugins,
+                Section::Skills
+            ],
+            "{plan}"
+        );
+        assert!(matches!(view.chats, Load::Unavailable), "{plan}");
+        let selected = view.section;
+        press(&mut view, KeyCode::Char('5'));
+        assert_eq!(view.section, selected);
+    }
+    for plan in [
+        "business",
+        "enterprise_cbp_usage_based",
+        "enterprise_cbp_automation",
+    ] {
+        let server = test_support::server().await;
+        let (_home, _app_server, mut view) = client::tests::connected_view(&server, plan).await;
+        test_support::settle(&mut view).await;
+        assert!(view.visible_sections().contains(&Section::Chats), "{plan}");
+        press(&mut view, KeyCode::Char('5'));
+        assert_eq!(view.section, Section::Chats);
+    }
+    let mut view = fixture::view(models::AccountKind::Enterprise);
+    view.account = Load::Ready(codex_protocol::account::PlanType::Enterprise);
+    insta::assert_snapshot!(screen(&mut view, /*width*/ 110, /*height*/ 24));
 }

@@ -47,6 +47,7 @@ fn analytics_sections_adapt_to_terminal_colors() {
                 if business {
                     view = fixture::view(models::AccountKind::Enterprise);
                 }
+                view.sections[Section::Chats].detail = Some(0);
                 // Exercise the reported credit range and preserve exact amounts below the plot.
                 let mut credits =
                     fixture::history(/*report*/ 1, /*range*/ 0, /*group*/ 0);

@@ -61,6 +61,7 @@ pub(super) async fn settle(view: &mut super::AnalyticsView) {
                     .0
                     .iter()
                     .any(|state| matches!(state.history, Load::Loading(_)))
+                && !matches!(view.chats, Load::Loading(_))
             {
                 break;
             }

@@ -57,3 +57,40 @@ async fn panicking_loads_request_a_frame_and_report_interruption() {
         Some("Request interrupted. Press R to retry.")
     );
 }
+
+#[test]
+fn rpc_errors_do_not_expose_server_diagnostics() {
+    let error = codex_app_server_client::TypedRequestError::Server {
+        method: "thread/list".into(),
+        source: codex_app_server_protocol::JSONRPCErrorError {
+            code: -32603,
+            message: "Failed opening /private/workspace: token=secret".into(),
+            data: Some(serde_json::json!({"credential": "secret"})),
+        },
+    };
+    assert_eq!(
+        super::error(error),
+        "Couldn't load analytics. Press R to retry."
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn extended_chat_load_budget_still_times_out_and_can_be_cancelled() {
+    let (cancelled_tx, cancelled_rx) = oneshot::channel::<()>();
+    let mut load = Load::<()>::start_with_timeout(
+        async move {
+            let _cancelled = cancelled_tx;
+            std::future::pending().await
+        },
+        FrameRequester::test_dummy(),
+        std::time::Duration::from_secs(/*secs*/ 90),
+    );
+    tokio::task::yield_now().await;
+    tokio::time::advance(std::time::Duration::from_secs(/*secs*/ 31)).await;
+    load.poll();
+    assert!(matches!(load, Load::Loading(_)));
+    tokio::time::advance(std::time::Duration::from_secs(/*secs*/ 60)).await;
+    assert!(cancelled_rx.await.is_err());
+    load.poll();
+    assert_eq!(load.message(), Some("Request timed out. Press R to retry."));
+}

@@ -1,0 +1,98 @@
+---
+source: tui/src/analytics/styles_tests.rs
+expression: snapshot
+---
+120x42
+Text:
+"  Analytics  ·  Live account                                                                                            "
+"                                                                                                                        "
+"  1 Credits usage history  2 Token usage history  3 Plugins called  4 Skills used  [5 Top chats]                        "
+"                                                                                                                        "
+"  ▎ Top chats                                                                                                           "
+"  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  "
+"  Active in past 30 days · sorted by lifetime credits                                                                   "
+"                                                                                                                        "
+"    Chat                                                                          Lifetime credits                      "
+"  › Q3 planning analysis                                                                    120.00                      "
+"    ──────────────────────────────────────────────────────────────────────────────────────────────                      "
+"    Model                                               Effort        Speed                Credits                      "
+"    GPT-5.6-Sol                                         high          standard              120.00                      "
+"                                                                                                                        "
+"    Refactor billing usage                                                                  113.00                      "
+"    Other usage                                                                             109.00                      "
+"    Launch readiness review                                                                  85.00                      "
+"    Plan the week                                                                             0.00                      "
+"                                                                                                                        "
+"  Showing 1–5 of 5 chats                                                                                                "
+"  Local chats · excludes archived chats and subagent usage                                                              "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"                                                                                                                        "
+"  tab/1–5 section · z dashboard · ↑/↓ row · enter details                                                               "
+"  R refresh · pgup/pgdn scroll · esc back · q close                                                                     "
+Palette (foreground|background|underline|modifiers):
+0: Reset|Reset|Reset|NONE
+1: Reset|Reset|Reset|BOLD
+2: Rgb(76, 76, 76)|Reset|Reset|NONE
+3: Rgb(0, 95, 135)|Reset|Reset|BOLD
+4: Reset|Reset|Reset|DIM
+5: White|Reset|Reset|BOLD
+Rows (column:palette):
+0: 0:0 2:1 11:2 28:0
+1: 0:0
+2: 0:0 2:2 83:3 96:0
+3: 0:0
+4: 0:0 2:3 13:0
+5: 0:0 2:4 118:0
+6: 0:0 2:2 53:0
+7: 0:0
+8: 0:0 2:1 8:0 82:1 98:0
+9: 0:0 2:3 24:0 92:3 98:0
+10: 0:0 2:4 98:0
+11: 0:0 2:2 82:0 91:1 98:0
+12: 0:0 2:1 54:2 82:0
+13: 0:0
+14: 0:0
+15: 0:0
+16: 0:0
+17: 0:0
+18: 0:0
+19: 0:0 2:2 24:0
+20: 0:0 2:2 58:0
+21: 0:0
+22: 0:0
+23: 0:0
+24: 0:0
+25: 0:0
+26: 0:0
+27: 0:0
+28: 0:0
+29: 0:0
+30: 0:0
+31: 0:0
+32: 0:0
+33: 0:0
+34: 0:0
+35: 0:0
+36: 0:0
+37: 0:0
+38: 0:0
+39: 0:0
+40: 0:0 2:5 9:2 20:5 21:2 34:5 37:2 44:5 49:2 118:0
+41: 0:0 2:5 3:2 14:5 23:2 33:5 36:2 44:5 45:2 118:0

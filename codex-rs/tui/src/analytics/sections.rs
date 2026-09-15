@@ -2,6 +2,7 @@
 //! Resolving the account precedes report loading; refreshing drops all account-owned data.
 
 use super::AnalyticsView;
+use super::chats;
 use super::data::Load;
 use super::models::AccountKind;
 
@@ -11,6 +12,7 @@ pub(super) enum Section {
     Usage,
     Plugins,
     Credits,
+    Chats,
     Activity,
     Skills,
 }
@@ -22,6 +24,7 @@ impl Section {
             Self::Usage => Some(Report::Usage),
             Self::Plugins => Some(Report::Plugins),
             Self::Credits => Some(Report::Credits),
+            Self::Chats => None,
             Self::Activity => Some(Report::Messages),
             Self::Skills => Some(Report::Skills),
         }
@@ -29,7 +32,7 @@ impl Section {
 }
 
 /// Section-only indexing keeps report identity separate from array positions.
-pub(super) struct SectionStates(pub(super) [SectionState; 5]);
+pub(super) struct SectionStates(pub(super) [SectionState; 6]);
 
 impl std::ops::Index<Section> for SectionStates {
     type Output = SectionState;
@@ -76,6 +79,7 @@ impl AnalyticsView {
         for section in &mut self.sections.0 {
             section.history.poll();
         }
+        self.chats.poll();
         self.account.poll();
         self.start_reports();
         if !self.business()
@@ -90,12 +94,17 @@ impl AnalyticsView {
         {
             self.group_picker = None;
         }
+        if let Some(chats) = self.chats.ready() {
+            self.sections[Section::Chats].cursor = self.sections[Section::Chats]
+                .cursor
+                .min(chats.rows.len().saturating_sub(/*rhs*/ 1));
+        }
     }
 
     pub(super) fn range_group(&self, section: Section) -> RangeGroup {
         match section {
             Section::Usage if self.business() => RangeGroup::Activity,
-            Section::Usage | Section::Credits => RangeGroup::Usage,
+            Section::Usage | Section::Credits | Section::Chats => RangeGroup::Usage,
             Section::Activity => RangeGroup::Activity,
             Section::Plugins | Section::Skills => RangeGroup::Tools,
         }
@@ -112,21 +121,39 @@ impl AnalyticsView {
         }
     }
 
+    fn account_kind(&self) -> Option<AccountKind> {
+        self.account
+            .ready()
+            .copied()
+            .map(|plan| AccountKind::from(Some(plan)))
+    }
+
     pub(super) fn business(&self) -> bool {
         matches!(
-            self.account.ready(),
+            self.account_kind(),
             Some(AccountKind::Business | AccountKind::Enterprise)
         )
     }
 
     pub(super) fn visible_sections(&self) -> &'static [Section] {
-        match self.account.ready() {
+        match self.account_kind() {
             Some(AccountKind::Consumer) => &[
                 Section::Usage,
                 Section::Activity,
                 Section::Plugins,
                 Section::Skills,
             ],
+            Some(AccountKind::Business | AccountKind::Enterprise)
+                if super::models::thread_usage_supported(self.account.ready().copied()) =>
+            {
+                &[
+                    Section::Credits,
+                    Section::Usage,
+                    Section::Plugins,
+                    Section::Skills,
+                    Section::Chats,
+                ]
+            }
             Some(AccountKind::Business | AccountKind::Enterprise) => &[
                 Section::Credits,
                 Section::Usage,
@@ -156,7 +183,7 @@ impl AnalyticsView {
         };
         if !usage_groups.contains(&self.sections[Section::Usage].group) {
             self.sections[Section::Usage].group =
-                if matches!(self.account.ready(), Some(AccountKind::Business)) {
+                if matches!(self.account_kind(), Some(AccountKind::Business)) {
                     2
                 } else {
                     usage_groups[0]
@@ -174,6 +201,18 @@ impl AnalyticsView {
                 self.load_report(*section);
             }
         }
+        if visible.contains(&Section::Chats) {
+            self.chats =
+                if let (Some((_, handle, frame)), Some(live)) = (&self.connection, &self.live) {
+                    Load::start_with_timeout(
+                        chats::read(handle.clone(), std::sync::Arc::clone(live)),
+                        frame.clone(),
+                        std::time::Duration::from_secs(/*secs*/ 90),
+                    )
+                } else {
+                    Load::Unavailable
+                };
+        }
     }
 
     pub(super) fn section_date_range(
@@ -189,7 +228,7 @@ impl AnalyticsView {
         let index = self.range_group(self.section);
         self.ranges[index as usize] ^= 1;
         for section in self.visible_sections() {
-            if self.range_group(*section) != index {
+            if matches!(section, Section::Chats) || self.range_group(*section) != index {
                 continue;
             }
             self.sections[*section].cursor = if self.ranges[index as usize] == 1 {

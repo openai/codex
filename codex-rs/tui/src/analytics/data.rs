@@ -51,21 +51,28 @@ impl<T: Send + 'static> Load<T> {
         future: impl std::future::Future<Output = Result<Option<T>, String>> + Send + 'static,
         frame: FrameRequester,
     ) -> Self {
+        Self::start_with_timeout(future, frame, std::time::Duration::from_secs(/*secs*/ 30))
+    }
+
+    pub(super) fn start_with_timeout(
+        future: impl std::future::Future<Output = Result<Option<T>, String>> + Send + 'static,
+        frame: FrameRequester,
+        timeout: std::time::Duration,
+    ) -> Self {
         let (sender, receiver) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            let result = match tokio::time::timeout(
-                std::time::Duration::from_secs(/*secs*/ 30),
-                AssertUnwindSafe(future).catch_unwind(),
-            )
-            .await
-            {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err("Request interrupted. Press R to retry.".into()),
-                Err(_) => Err("Request timed out. Press R to retry.".into()),
-            };
-            let _ = sender.send(result);
-            frame.schedule_frame();
-        });
+        let task =
+            tokio::spawn(async move {
+                let result =
+                    match tokio::time::timeout(timeout, AssertUnwindSafe(future).catch_unwind())
+                        .await
+                    {
+                        Ok(Ok(result)) => result,
+                        Ok(Err(_)) => Err("Request interrupted. Press R to retry.".into()),
+                        Err(_) => Err("Request timed out. Press R to retry.".into()),
+                    };
+                let _ = sender.send(result);
+                frame.schedule_frame();
+            });
         Self::Loading(Pending { receiver, task })
     }
 
@@ -99,6 +106,11 @@ impl<T: Send + 'static> Load<T> {
             Self::Error(message) => Some(message),
         }
     }
+}
+
+/// Keep untyped server and transport diagnostics out of account reports.
+pub(super) fn error(_error: codex_app_server_client::TypedRequestError) -> String {
+    "Couldn't load analytics. Press R to retry.".into()
 }
 
 /// Keep tiny refunds visible while avoiding noise on ordinary credit amounts.
@@ -145,6 +157,31 @@ pub(super) fn credit_amount(value: f64) -> String {
         Some((_, fraction)) if fraction.len() == 1 => format!("{formatted}0"),
         Some(_) => formatted,
     }
+}
+
+pub(super) fn credits(micros: i64) -> String {
+    let magnitude = micros.unsigned_abs();
+    if magnitude > 0 && magnitude < 10_000 {
+        let fractional = format!("{magnitude:06}");
+        return format!(
+            "{}0.{}",
+            if micros < 0 { "-" } else { "" },
+            fractional.trim_end_matches('0')
+        );
+    }
+    let cents = (magnitude + 5_000) / 10_000;
+    let mut whole = (cents / 100).to_string();
+    let digits = whole.len();
+    for index in (1..digits).rev() {
+        if (digits - index).is_multiple_of(/*rhs*/ 3) {
+            whole.insert(index, ',');
+        }
+    }
+    format!(
+        "{}{whole}.{:02}",
+        if micros < 0 { "-" } else { "" },
+        cents % 100
+    )
 }
 
 pub(super) fn date(date: &str) -> String {
