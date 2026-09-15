@@ -322,7 +322,7 @@ pub enum Feature {
     GuardianNodeReplTranscriptImages,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,
-    /// Enable the extension-owned synchronous Guardian reviewer.
+    /// Removed compatibility flag for the unused Guardian extension prototype.
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
@@ -1610,7 +1610,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::GuardianExt,
         key: "guardian_ext",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

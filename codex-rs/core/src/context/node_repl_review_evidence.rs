@@ -10,7 +10,7 @@ use std::sync::PoisonError;
 use codex_features::Feature;
 use codex_guardian_context::NodeReplContext;
 use codex_guardian_context::NodeReplResponse;
-pub use codex_guardian_context::NodeReplReviewEvidenceMode;
+pub(crate) use codex_guardian_context::NodeReplReviewEvidenceMode;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::user_input::UserInput;
@@ -127,16 +127,6 @@ impl NodeReplReviewEvidence {
                 _ => None,
             })
             .collect()
-    }
-
-    /// Returns bounded REPL evidence using the existing Guardian text and image layout.
-    pub fn review_inputs(&self, mode: NodeReplReviewEvidenceMode) -> Vec<UserInput> {
-        if mode == NodeReplReviewEvidenceMode::Disabled {
-            return Vec::new();
-        }
-        self.snapshot_since(/*reviewed_sequence*/ 0)
-            .map(|snapshot| snapshot.context(mode).render_inputs())
-            .unwrap_or_default()
     }
 
     pub(crate) fn record(

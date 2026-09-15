@@ -98,7 +98,7 @@ pub(crate) use multi_agent_role_instructions::MultiAgentRoleInstructions;
 pub(crate) use multi_agent_usage_hint::MultiAgentUsageHint;
 pub(crate) use network_rule_saved::NetworkRuleSaved;
 pub use node_repl_review_evidence::NodeReplReviewEvidence;
-pub use node_repl_review_evidence::NodeReplReviewEvidenceMode;
+pub(crate) use node_repl_review_evidence::NodeReplReviewEvidenceMode;
 pub(crate) use node_repl_review_evidence::node_repl_review_evidence_mode;
 pub use permissions_instructions::ApprovalPromptContext;
 pub use permissions_instructions::PermissionsInstructions;

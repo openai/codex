@@ -24,8 +24,6 @@ mod world_state;
 
 pub use approval_review::ApprovalDecision;
 pub use approval_review::ApprovalDecisionInput;
-pub use approval_review::ApprovalReviewError;
-pub use approval_review::ApprovalReviewInput;
 pub use approval_review::GuardianV2Enabled;
 pub use approval_review::SynchronousApprovalReviewer;
 pub use context::TurnContextContributionInput;
