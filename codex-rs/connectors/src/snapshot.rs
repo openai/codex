@@ -79,10 +79,11 @@ pub struct ConnectorSnapshot {
 
 impl ConnectorSnapshot {
     /// Builds the final selection from all plugin sources, preserving contribution order.
-    /// Pass host and selected sources together so any enabled shared owner keeps a connector.
+    /// An enabled contributor preserves a shared connector unless its canonical owner is disabled.
     pub fn from_plugin_sources(
         sources: impl IntoIterator<Item = PluginConnectorSource>,
         disabled_plugin_ids: &[String],
+        canonical_disabled_connector_ids: HashSet<String>,
     ) -> Self {
         let mut connector_ids = Vec::new();
         let mut seen_connector_ids = HashSet::new();
@@ -95,6 +96,9 @@ impl ConnectorSnapshot {
                 continue;
             }
             for connector_id in source.connector_ids() {
+                if canonical_disabled_connector_ids.contains(&connector_id.0) {
+                    continue;
+                }
                 if seen_connector_ids.insert(connector_id.0.clone()) {
                     connector_ids.push(connector_id.clone());
                 }
@@ -109,6 +113,7 @@ impl ConnectorSnapshot {
             plugin_names.dedup();
         }
         disabled_connector_ids.retain(|id| !seen_connector_ids.contains(id));
+        disabled_connector_ids.extend(canonical_disabled_connector_ids);
 
         Self {
             connector_ids,
@@ -119,7 +124,11 @@ impl ConnectorSnapshot {
 
     /// Adapts the current host plugin summaries to the connector-owned snapshot.
     pub fn from_plugin_capability_summaries(summaries: &[PluginCapabilitySummary]) -> Self {
-        Self::from_plugin_sources(summaries.iter().map(PluginConnectorSource::from), &[])
+        Self::from_plugin_sources(
+            summaries.iter().map(PluginConnectorSource::from),
+            &[],
+            HashSet::new(),
+        )
     }
 
     /// Returns the connector IDs in source contribution order.
@@ -127,7 +136,7 @@ impl ConnectorSnapshot {
         &self.connector_ids
     }
 
-    /// Connector tools excluded because no enabled plugin still contributes them.
+    /// Connector tools explicitly excluded or excluded by all contributing plugins.
     pub fn disabled_connector_ids(&self) -> &HashSet<String> {
         &self.disabled_connector_ids
     }

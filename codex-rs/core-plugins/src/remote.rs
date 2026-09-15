@@ -230,6 +230,7 @@ pub struct RemoteInstalledPlugin {
     pub id: String,
     pub version: Option<String>,
     pub name: String,
+    pub canonical_app_id: Option<String>,
     pub installed_at: Option<DateTime<Utc>>,
     pub enabled: bool,
     pub install_policy: PluginInstallPolicy,
@@ -682,6 +683,8 @@ impl RemotePluginInstallPolicySource {
 struct RemotePluginDirectoryItem {
     id: String,
     name: String,
+    #[serde(default)]
+    canonical_app_id: Option<String>,
     scope: RemotePluginScope,
     #[serde(default)]
     discoverability: Option<RemotePluginShareDiscoverability>,
@@ -1879,6 +1882,7 @@ fn remote_installed_plugin_to_cache_entry(
         id: plugin.id.clone(),
         version: plugin.release.version.clone(),
         name: plugin.name.clone(),
+        canonical_app_id: plugin.canonical_app_id.clone(),
         installed_at: installed_plugin.installed_at,
         enabled: installed_plugin.enabled,
         install_policy: plugin.installation_policy,

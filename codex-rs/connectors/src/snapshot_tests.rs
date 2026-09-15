@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use codex_plugin::AppConnectorId;
 use pretty_assertions::assert_eq;
 
@@ -15,7 +17,11 @@ fn snapshot_merges_sources_in_order_and_dedupes_provenance() {
         source("selected-b", "Alpha", &["calendar"]),
     ];
 
-    let merged = ConnectorSnapshot::from_plugin_sources(host.into_iter().chain(selected), &[]);
+    let merged = ConnectorSnapshot::from_plugin_sources(
+        host.into_iter().chain(selected),
+        &[],
+        HashSet::new(),
+    );
 
     assert_eq!(
         merged.connector_ids(),
@@ -40,13 +46,18 @@ fn disabled_plugins_preserve_shared_connectors() {
         source("alpha", "Alpha", &["exclusive", "shared"]),
         source("beta", "Beta", &["other", "shared"]),
     ];
-    let filtered = ConnectorSnapshot::from_plugin_sources(sources.clone(), &["alpha".to_string()]);
+    let filtered = ConnectorSnapshot::from_plugin_sources(
+        sources.clone(),
+        &["alpha".to_string()],
+        HashSet::new(),
+    );
 
     let expected = ConnectorSnapshot {
-        disabled_connector_ids: std::collections::HashSet::from(["exclusive".to_string()]),
+        disabled_connector_ids: HashSet::from(["exclusive".to_string()]),
         ..ConnectorSnapshot::from_plugin_sources(
             [source("beta", "Beta", &["other", "shared"])],
             &[],
+            HashSet::new(),
         )
     };
     assert_eq!(filtered, expected);
@@ -54,13 +65,18 @@ fn disabled_plugins_preserve_shared_connectors() {
         ConnectorSnapshot::from_plugin_sources(
             sources.iter().rev().cloned(),
             &["alpha".to_string()],
+            HashSet::new(),
         ),
         expected
     );
     assert_eq!(
-        ConnectorSnapshot::from_plugin_sources(sources, &["alpha".to_string(), "beta".to_string()],),
+        ConnectorSnapshot::from_plugin_sources(
+            sources,
+            &["alpha".to_string(), "beta".to_string()],
+            HashSet::new(),
+        ),
         ConnectorSnapshot {
-            disabled_connector_ids: std::collections::HashSet::from([
+            disabled_connector_ids: HashSet::from([
                 "exclusive".to_string(),
                 "other".to_string(),
                 "shared".to_string(),

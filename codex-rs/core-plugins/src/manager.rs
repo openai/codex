@@ -99,6 +99,8 @@ use codex_config::skill_config_rules_from_stack;
 use codex_config::types::PluginConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
+use codex_connectors::ConnectorSnapshot;
+use codex_connectors::PluginConnectorSource;
 use codex_hooks::plugin_hook_declarations;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -1022,6 +1024,40 @@ impl PluginsManager {
         if evicted {
             loaded_cache_metrics::record_event("capacity_eviction");
         }
+    }
+
+    /// Applies plugin exclusions and canonical ownership from the current account's installed cache.
+    /// A canonical owner's bundle need not be installed on this host.
+    pub fn connector_snapshot(
+        &self,
+        sources: impl IntoIterator<Item = PluginConnectorSource>,
+        disabled_plugin_ids: &[String],
+    ) -> ConnectorSnapshot {
+        let mut canonical_app_ids = HashSet::new();
+        if !disabled_plugin_ids.is_empty() {
+            let cache = match self.remote_installed_plugins_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            if self.remote_installed_plugins_cache_matches_current_auth(&cache) {
+                canonical_app_ids = cache
+                    .plugins
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|plugin| {
+                        let app_id = plugin.canonical_app_id.as_ref()?;
+                        let plugin_id =
+                            PluginId::new(plugin.name.clone(), plugin.marketplace_name.clone())
+                                .ok()?;
+                        disabled_plugin_ids
+                            .contains(&plugin_id.as_key())
+                            .then(|| app_id.clone())
+                    })
+                    .collect();
+            }
+        }
+        ConnectorSnapshot::from_plugin_sources(sources, disabled_plugin_ids, canonical_app_ids)
     }
 
     fn remote_installed_plugin_configs(&self) -> HashMap<String, PluginConfig> {

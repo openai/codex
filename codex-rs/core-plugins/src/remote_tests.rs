@@ -596,6 +596,7 @@ fn workspace_share_context_preserves_publish_capability() {
 
 fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
     RemotePluginDirectoryItem {
+        canonical_app_id: None,
         id: id.to_string(),
         name: name.to_string(),
         scope: RemotePluginScope::Global,
