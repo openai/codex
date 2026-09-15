@@ -127,7 +127,7 @@ pub struct GuardianV2ReviewScopeConfigToml {
 pub struct GuardianV2ConfigToml {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// Route Guardian review and classification through the unmetered Codex endpoints.
+    /// Legacy setting retained for config compatibility; the backend now controls Guardian billing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub free_guardian: Option<bool>,
     /// Use thread-owned context for sync and async Guardian. Defaults to false.

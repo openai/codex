@@ -81,7 +81,7 @@ impl Drop for Gateway {
 #[tokio::test]
 async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    for free_guardian in [false, true] {
+    for uses_codex_backend in [false, true] {
         let http = responses::start_mock_server().await;
         let events = vec![
             responses::ev_output_text_delta("low"),
@@ -93,7 +93,7 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
         connections.push(vec![events.clone()]);
         let ws = responses::start_websocket_server(connections).await;
         let gateway = Gateway::new(&http.uri(), ws.uri()).await?;
-        let base_path = if free_guardian {
+        let base_path = if uses_codex_backend {
             "/backend-api/codex"
         } else {
             "/v1"
@@ -102,13 +102,12 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
         let mut config = sampler_config(base_url.clone());
         config.provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(Some(base_url)),
-            Some(AuthManager::from_auth_for_testing(if free_guardian {
+            Some(AuthManager::from_auth_for_testing(if uses_codex_backend {
                 CodexAuth::create_dummy_chatgpt_auth_for_testing()
             } else {
                 CodexAuth::from_api_key("test-api-key")
             })),
         );
-        config.free_guardian = free_guardian;
         config.service_tier = Some("priority".to_owned());
         let sampler = LunaSampler::new(config);
         let opener = sampler.connections.replenish().unwrap();
@@ -145,17 +144,21 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
 
         let requests = http_mock.requests();
         let first = &requests[0];
-        let expected_path = if free_guardian {
-            "/backend-api/codex/guardian-classifier"
+        let expected_path = if uses_codex_backend {
+            "/backend-api/codex/responses"
         } else {
             "/v1/responses"
         };
         assert_eq!(first.path(), expected_path);
+        assert_eq!(
+            first.header("x-codex-guardian").as_deref(),
+            uses_codex_backend.then_some("classifier")
+        );
         assert!(first.header("authorization").is_some());
         let body = first.body_json();
         assert_eq!(
             body["service_tier"].as_str(),
-            if free_guardian {
+            if uses_codex_backend {
                 None
             } else {
                 Some("priority")
@@ -163,7 +166,7 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
         );
         assert_eq!(
             body["client_metadata"]["parent_response_id"].as_str(),
-            free_guardian.then_some("resp-parent")
+            uses_codex_backend.then_some("resp-parent")
         );
 
         gateway.allowed_opens.store(usize::MAX, Ordering::SeqCst);

@@ -1617,7 +1617,7 @@
           "type": "boolean"
         },
         "free_guardian": {
-          "description": "Route Guardian review and classification through the unmetered Codex endpoints.",
+          "description": "Legacy setting retained for config compatibility; the backend now controls Guardian billing.",
           "type": "boolean"
         },
         "max_action_tokens": {

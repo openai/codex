@@ -1522,17 +1522,6 @@ impl Config {
         &self.sqlite
     }
 
-    /// Whether Guardian may use the unmetered Codex inference endpoints.
-    pub fn free_guardian_enabled(&self) -> bool {
-        self.config_layer_stack
-            .effective_config()
-            .get("features")
-            .and_then(|features| features.get("guardianv2"))
-            .and_then(|guardian| guardian.get("free_guardian"))
-            .and_then(toml::Value::as_bool)
-            .unwrap_or(false)
-    }
-
     /// Resolves the configured, reviewer-catalog, or bundled Guardian policy.
     pub fn resolve_guardian_policy<'a>(
         &'a self,

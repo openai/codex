@@ -56,7 +56,6 @@ pub(super) async fn sampler_config(
             .thread_store
             .get::<ThreadOriginator>()
             .map(|originator| originator.0.clone()),
-        free_guardian: input.config.free_guardian_enabled(),
         service_tier: input.config.service_tier.clone(),
         luna_compaction_hash,
         max_input_tokens,

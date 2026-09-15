@@ -52,8 +52,6 @@ pub struct LunaSamplerConfig {
     pub thread_id: String,
     /// Optional host-resolved request originator.
     pub originator: Option<String>,
-    /// Whether this thread may use the unmetered Guardian classifier endpoint.
-    pub free_guardian: bool,
     /// Optional inference service tier.
     pub service_tier: Option<String>,
     /// Luna model's host-resolved encrypted-compaction compatibility hash.

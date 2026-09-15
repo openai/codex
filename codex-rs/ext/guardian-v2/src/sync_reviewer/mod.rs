@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
+use codex_core::CodexResponsesHeaders;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -85,6 +86,19 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
                             options.session_source =
                                 Some(SessionSource::Internal(InternalSessionSource::Guardian));
                             options.thread_source = Some(ThreadSource::GuardianReview);
+                            // This is the backend reviewer model, independent of current login.
+                            // Core checks the selected model and auth on each request attempt.
+                            let provider = codex_model_provider::create_model_provider(
+                                options.config.model_provider.clone(),
+                                /*auth_manager*/ None,
+                            );
+                            options.thread_extension_init.insert(CodexResponsesHeaders {
+                                model: provider.approval_review_preferred_model().to_owned(),
+                                headers: http::HeaderMap::from_iter([(
+                                    http::HeaderName::from_static("x-codex-guardian"),
+                                    http::HeaderValue::from_static("reviewer"),
+                                )]),
+                            });
                             options
                                 .thread_extension_init
                                 .insert(SessionIsolation::Isolated);

@@ -17,7 +17,6 @@ use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
-use codex_api::ResponsesEndpoint;
 use codex_api::TransportError;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -1203,76 +1202,41 @@ fn model_client_with_counting_attestation(
 }
 
 #[test]
-fn guardian_reviewer_uses_dedicated_endpoint_only_with_codex_backend_auth() {
+fn thread_responses_headers_are_scoped_to_model_and_backend_auth() {
     let (mut model_client, _) =
         model_client_with_counting_attestation(/*include_attestation*/ true);
-    Arc::get_mut(&mut model_client.state)
-        .expect("test client should have unique session state")
-        .session_source = SessionSource::SubAgent(SubAgentSource::Other("guardian".to_owned()));
-
-    assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            "codex-auto-review",
+    let headers = http::HeaderMap::from_iter([(
+        http::HeaderName::from_static("x-custom-request"),
+        http::HeaderValue::from_static("example"),
+    )]);
+    model_client.codex_responses_headers = Some(Arc::new(crate::CodexResponsesHeaders {
+        model: "selected-model".to_owned(),
+        headers: headers.clone(),
+    }));
+    let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let api_key_auth = CodexAuth::from_api_key("test-api-key");
+    for (auth, model, expected) in [
+        (Some(&chatgpt_auth), "selected-model", headers),
+        (Some(&chatgpt_auth), "other-model", http::HeaderMap::new()),
+        (
+            Some(&api_key_auth),
+            "selected-model",
+            http::HeaderMap::new(),
         ),
-        ResponsesEndpoint::Responses
-    );
-
-    model_client = model_client.with_free_guardian_enabled(/*free_guardian_enabled*/ true);
-    assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            "codex-auto-review",
-        ),
-        ResponsesEndpoint::Guardian
-    );
-    assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            "required-reviewer-model",
-        ),
-        ResponsesEndpoint::Responses
-    );
-    assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            "parent-fallback-model",
-        ),
-        ResponsesEndpoint::Responses
-    );
-    assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::from_api_key("test-api-key")),
-            "codex-auto-review",
-        ),
-        ResponsesEndpoint::Responses
-    );
+        (None, "selected-model", http::HeaderMap::new()),
+    ] {
+        assert_eq!(model_client.responses_headers(auth, model), expected);
+    }
 
     Arc::get_mut(&mut model_client.state)
         .expect("test client should have unique session state")
         .provider = create_model_provider(
         ModelProviderInfo::create_openai_provider(Some("https://proxy.example.com/v1".to_owned())),
-        Some(AuthManager::from_auth_for_testing(
-            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        )),
+        Some(AuthManager::from_auth_for_testing(chatgpt_auth.clone())),
     );
     assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            "codex-auto-review",
-        ),
-        ResponsesEndpoint::Responses
-    );
-
-    Arc::get_mut(&mut model_client.state)
-        .expect("test client should have unique session state")
-        .session_source = SessionSource::Exec;
-    assert_eq!(
-        model_client.responses_endpoint(
-            Some(&CodexAuth::create_dummy_chatgpt_auth_for_testing()),
-            "codex-auto-review",
-        ),
-        ResponsesEndpoint::Responses
+        model_client.responses_headers(Some(&chatgpt_auth), "selected-model"),
+        http::HeaderMap::new(),
     );
 }
 

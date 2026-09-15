@@ -1600,6 +1600,7 @@ impl Session {
                 &config.features,
                 &initial_history,
             );
+            let codex_responses_headers = thread_extension_data.get::<crate::CodexResponsesHeaders>();
             let services = SessionServices {
                 // Start with an empty connection set. The initialized set is
                 // published after SessionConfigured so MCP events follow it.
@@ -1672,7 +1673,6 @@ impl Session {
                     attestation_provider,
                     config.http_client_factory(),
                 )
-                .with_free_guardian_enabled(config.free_guardian_enabled())
                 .with_session_context(
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
@@ -1680,6 +1680,7 @@ impl Session {
                     )
                     .or(fork_cache_key),
                     tx_event.clone(),
+                    codex_responses_headers,
                 ),
                 executed_tool_calls: executed_tool_calls.clone(),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(

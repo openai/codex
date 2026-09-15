@@ -138,11 +138,11 @@ impl TimeProvider for RecordingTimeProvider {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(CodexAuth::from_api_key("test-api-key"), "OpenAI", "/v1", true, "/v1/responses", true; "api_key_uses_responses")]
-#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", false, "/backend-api/codex/responses", true; "chatgpt_uses_responses_by_default")]
-#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/guardian", true; "chatgpt_uses_guardian_when_enabled")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", false, "/backend-api/codex/responses", true; "chatgpt_marks_guardian_by_default")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/responses", true; "legacy_opt_in_still_accepted")]
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/v1", true, "/v1/responses", true; "custom_openai_url_uses_responses")]
 #[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "Custom", "/backend-api/codex", true, "/backend-api/codex/responses", true; "custom_provider_uses_responses")]
-#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/guardian", false; "retry_without_response_id_keeps_last_parent")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "OpenAI", "/backend-api/codex", true, "/backend-api/codex/responses", false; "retry_without_response_id_keeps_last_parent")]
 async fn guardian_session_inherits_parent_http_fallback(
     auth: CodexAuth,
     provider_name: &str,
@@ -151,6 +151,8 @@ async fn guardian_session_inherits_parent_http_fallback(
     expected_guardian_path: &str,
     response_id_present: bool,
 ) -> Result<()> {
+    let credits_enabled =
+        auth.uses_codex_backend() && provider_name == "OpenAI" && base_path == "/backend-api/codex";
     skip_if_no_network!(Ok(()));
 
     let configured_policy = "Use the task-configured Guardian policy.";
@@ -256,7 +258,10 @@ async fn guardian_session_inherits_parent_http_fallback(
             .body_contains_text("Configured template: Use the task-configured Guardian policy.")
     );
     assert_eq!(guardian_request.path(), expected_guardian_path);
-    let credits_enabled = expected_guardian_path.ends_with("/guardian");
+    assert_eq!(
+        guardian_request.header("x-codex-guardian").as_deref(),
+        credits_enabled.then_some("reviewer")
+    );
     let body = guardian_request.body_json();
     assert_eq!(
         (
@@ -278,6 +283,7 @@ async fn guardian_session_inherits_parent_http_fallback(
     for request in responses.requests() {
         let body = request.body_json();
         if body["client_metadata"]["x-openai-subagent"] != "guardian" {
+            assert_eq!(request.header("x-codex-guardian"), None);
             assert_eq!(
                 (
                     body["client_metadata"]
@@ -772,7 +778,7 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
     skip_if_no_network!(Ok(()));
 
     let uses_codex_backend = auth.uses_codex_backend();
-    let credits_enabled = free_guardian && uses_codex_backend;
+    let credits_enabled = uses_codex_backend;
     let bundled_models = codex_models_manager::bundled_models_response()?.models;
     let catalog_auto_review = bundled_models
         .iter()
@@ -1086,18 +1092,20 @@ async fn guardian_session_prewarms_and_is_reused_for_first_review(
     assert_eq!(guardian_context_windows, vec![Some(258_400)]);
     for handshake in server.handshakes() {
         let is_guardian = handshake.header("x-openai-subagent").as_deref() == Some("guardian");
-        let uses_guardian_endpoint = credits_enabled && is_guardian;
+        let is_guardian_request = credits_enabled && is_guardian;
         assert_eq!(
             handshake.uri(),
-            if uses_guardian_endpoint {
-                "/backend-api/codex/guardian"
-            } else if uses_codex_backend {
+            if uses_codex_backend {
                 "/backend-api/codex/responses"
             } else {
                 "/v1/responses"
             }
         );
-        if uses_guardian_endpoint {
+        assert_eq!(
+            handshake.header("x-codex-guardian").as_deref(),
+            is_guardian_request.then_some("reviewer")
+        );
+        if is_guardian_request {
             assert_eq!(handshake.header("x-codex-routing-hint"), None);
         }
     }
