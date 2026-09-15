@@ -337,6 +337,21 @@ async fn run_remote_compact_task_inner_impl(
             replacement_history: &replacement_history,
         });
     }
+    let reviewer_compaction_hash = if sess.enabled(Feature::GuardianThreadContext)
+        && crate::context::GuardianContextMode::from_history(
+            sess.conversation_history_snapshot().await.as_ref(),
+        ) == crate::context::GuardianContextMode::Legacy
+        && let Some(review_turn) = sess.turn_context_for_sub_id(&turn_context.sub_id).await
+    {
+        // Previous-model compaction must remain compatible with the continuing turn's
+        // reviewer, including model changes accepted while compaction was running.
+        let mut review_context = crate::guardian::GuardianReviewContext::from(&review_turn);
+        review_context.model_info = review_turn.capture_current_model_info();
+        let (_, reviewer) = crate::guardian::resolve_review_model(sess, &review_context).await;
+        reviewer.comp_hash.clone()
+    } else {
+        None
+    };
     sess.replace_compacted_history(
         new_history,
         reference_context_item,
@@ -347,6 +362,7 @@ async fn run_remote_compact_task_inner_impl(
             window_ids: new_window_ids,
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
+            reviewer_compaction_hash,
         },
     )
     .await;

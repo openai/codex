@@ -42,16 +42,20 @@ use tokio::sync::oneshot;
 enum PendingReviewChange {
     UserInstruction,
     VerifiedAnswer,
+    Compaction,
 }
 
-#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::ThreadOwned; "new user instruction")]
-#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::ThreadOwned; "verified answer")]
-#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::Legacy; "migration user instruction")]
-#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::Legacy; "migration verified answer")]
+#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Aborted; "new user instruction")]
+#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Aborted; "verified answer")]
+#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::Legacy, GuardianAssessmentStatus::Aborted; "migration user instruction")]
+#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::Legacy, GuardianAssessmentStatus::Aborted; "migration verified answer")]
+#[test_case(PendingReviewChange::Compaction, GuardianContextMode::Legacy, GuardianAssessmentStatus::Aborted; "compaction promotes policy")]
+#[test_case(PendingReviewChange::Compaction, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Approved; "ordinary compaction preserves review")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_revalidates_owning_session_before_allow(
     change: PendingReviewChange,
     review_mode: GuardianContextMode,
+    expected_status: GuardianAssessmentStatus,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -116,13 +120,26 @@ async fn guardian_revalidates_owning_session_before_allow(
         vec![StreamingSseChunk { gate: None, body: parent_followup }],
         vec![StreamingSseChunk {
             gate: None,
-            body: responses::sse(vec![responses::ev_completed("user-change")]),
+            body: match change {
+                PendingReviewChange::Compaction => responses::sse(vec![
+                    json!({"type": "response.output_item.done", "item": {
+                        "type": "compaction", "id": "compacted", "encrypted_content": "known producer"
+                    }}),
+                    responses::ev_completed("compacted"),
+                ]),
+                PendingReviewChange::UserInstruction | PendingReviewChange::VerifiedAnswer => {
+                    responses::sse(vec![responses::ev_completed("user-change")])
+                }
+            },
         }],
     ]).await;
     let base_url = format!("{}/v1", streaming_server.uri());
     let server = responses::start_mock_server().await;
     let mut test = test_codex()
-        .with_model("test-gpt-5.1-codex")
+        .with_model_info_override("test-gpt-5.1-codex", |model| {
+            model.comp_hash = Some("compatible".to_owned());
+            model.auto_review_model_override = Some(model.slug.clone());
+        })
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
@@ -191,7 +208,6 @@ async fn guardian_revalidates_owning_session_before_allow(
         review.pointer("/client_metadata/x-openai-subagent"),
         Some(&json!("guardian"))
     );
-    let before = test.codex.guardian_authorization_version().await;
     parent_completion_tx
         .send(())
         .expect("release parent completion");
@@ -222,20 +238,41 @@ async fn guardian_revalidates_owning_session_before_allow(
     if matches!(change, PendingReviewChange::UserInstruction) {
         test.submit_text_turn("Do not run the command.").await?;
     }
-    assert_ne!(before, test.codex.guardian_authorization_version().await);
+    let mut completed_status = None;
+    if matches!(change, PendingReviewChange::Compaction) {
+        test.codex.submit(Op::Compact).await?;
+        loop {
+            match test.codex.next_event().await?.msg {
+                EventMsg::GuardianAssessment(assessment)
+                    if assessment.status != GuardianAssessmentStatus::InProgress =>
+                {
+                    completed_status = Some(assessment.status)
+                }
+                EventMsg::TurnComplete(_) => break,
+                EventMsg::Error(error) => panic!("compaction failed: {error:?}"),
+                _ => {}
+            }
+        }
+    }
+
     review_completion_tx
         .send(())
         .expect("release Guardian response");
-    let status = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::GuardianAssessment(assessment)
-            if assessment.status != GuardianAssessmentStatus::InProgress =>
-        {
-            Some(assessment.status)
+    let status = match completed_status {
+        Some(status) => status,
+        None => {
+            wait_for_event_match(&test.codex, |event| match event {
+                EventMsg::GuardianAssessment(assessment)
+                    if assessment.status != GuardianAssessmentStatus::InProgress =>
+                {
+                    Some(assessment.status)
+                }
+                _ => None,
+            })
+            .await
         }
-        _ => None,
-    })
-    .await;
-    assert_eq!(status, GuardianAssessmentStatus::Aborted);
+    };
+    assert_eq!(status, expected_status);
     test.codex.shutdown_and_wait().await?;
     streaming_server.shutdown().await;
     Ok(())

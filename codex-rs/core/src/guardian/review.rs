@@ -134,39 +134,8 @@ pub(super) async fn guardian_review_session_config(
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
-    let available_models = session
-        .services
-        .models_manager
-        .list_models(
-            codex_models_manager::manager::RefreshStrategy::Offline,
-            turn.config.http_client_factory(),
-        )
-        .await;
-    let default_review_model_id = turn.provider.approval_review_preferred_model();
-    let review_model = codex_guardian_reviewer::select_review_model(
-        &context.model_info,
-        context.reasoning_effort.as_ref(),
-        default_review_model_id,
-        &available_models,
-    );
-
-    // Resolve a separate reviewer against the current catalog on every attempt.
-    // Parent fallback must retain the action's metadata even after a catalog refresh.
-    let guardian_model_info =
-        if !review_model.catalog_contains_auto_review && !review_model.model_overridden {
-            Arc::clone(&context.model_info)
-        } else {
-            Arc::new(
-                session
-                    .services
-                    .models_manager
-                    .get_model_info(
-                        review_model.model.as_str(),
-                        &turn.config.to_models_manager_config(),
-                    )
-                    .await,
-            )
-        };
+    let (review_model, guardian_model_info) =
+        super::reviewer_config::resolve_review_model(session, context).await;
     let reviewer_config = session
         .services
         .thread_extension_data

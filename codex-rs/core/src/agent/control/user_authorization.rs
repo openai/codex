@@ -159,12 +159,6 @@ impl AgentControl {
             assistant_messages.drain(..assistant_messages.len().saturating_sub(available));
             messages.extend(assistant_messages);
             let mut authorization_version = root_evidence.authorization_version(history.as_ref());
-            if history.retained_context().is_none() {
-                // Legacy checkpoint review hides retained answers from its snapshot, but
-                // root authorization still needs their completeness and original restrictions.
-                authorization_version.retained_context_complete =
-                    codex_guardian_context::render_verified_answers(retained_context).complete;
-            }
             if !authorization_version.retained_context_complete {
                 messages.insert(
                     /*index*/ 0,

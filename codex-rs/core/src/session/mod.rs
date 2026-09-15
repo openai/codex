@@ -1678,7 +1678,7 @@ impl Session {
     )]
     async fn apply_rollout_reconstruction(
         &self,
-        turn_context: &TurnContext,
+        turn_context: &Arc<TurnContext>,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
         let rollout_reconstruction::RolloutReconstruction {
@@ -1720,6 +1720,14 @@ impl Session {
             .zip(metadata)
             .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
             .collect();
+        let reviewer_compaction_hash =
+            if self.guardian_context_mode == crate::context::GuardianContextMode::ThreadOwned {
+                let context = crate::guardian::GuardianReviewContext::from(turn_context);
+                let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
+                reviewer.comp_hash.clone()
+            } else {
+                None
+            };
         {
             let mut state = self.state.lock().await;
             state.replace_annotated_history(
@@ -1727,9 +1735,11 @@ impl Session {
                 reference_context_item,
                 HistoryReplacement::Reset,
             );
-            state
-                .history
-                .restore_review_context(Some(&retained_context), guardian_history.as_ref());
+            state.history.restore_review_context(
+                Some(&retained_context),
+                guardian_history.as_ref(),
+                reviewer_compaction_hash.as_deref(),
+            );
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }
@@ -4039,7 +4049,9 @@ impl Session {
             state.replace_annotated_history(
                 items,
                 reference_context_item.clone(),
-                HistoryReplacement::Compaction,
+                HistoryReplacement::Compaction {
+                    reviewer_compaction_hash: metadata.reviewer_compaction_hash,
+                },
             );
             compacted_item.guardian_history = state.history.guardian_history_checkpoint();
             compacted_item.retained_context = Some(state.history.retained_context().clone());
@@ -4501,6 +4513,7 @@ impl Session {
                 window_ids,
                 compaction_response_id: None,
                 compaction_model_hash: None,
+                reviewer_compaction_hash: None,
             },
         )
         .await;

@@ -5428,6 +5428,7 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
                 window_ids,
                 compaction_response_id: None,
                 compaction_model_hash: None,
+                reviewer_compaction_hash: None,
             },
         ),
     ));

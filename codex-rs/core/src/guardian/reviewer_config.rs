@@ -1,5 +1,7 @@
-//! Adds model, policy context and live network state to the extension's reviewer configuration.
+//! Resolves reviewer models and adds policy context and live network state to reviewer configuration.
 //! Both prewarming and reviews finish this setup before context preparation and reuse checks.
+
+use std::sync::Arc;
 
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::openai_models::ModelMessages;
@@ -52,4 +54,48 @@ pub fn build_guardian_review_session_config(
         )?);
     }
     Ok(guardian_config)
+}
+
+/// Resolves the same catalog-backed reviewer for approval and checkpoint migration.
+pub(crate) async fn resolve_review_model(
+    session: &crate::session::session::Session,
+    context: &super::GuardianReviewContext,
+) -> (
+    codex_guardian_reviewer::ReviewModel,
+    Arc<codex_protocol::openai_models::ModelInfo>,
+) {
+    let turn = context.turn();
+    let available_models = session
+        .services
+        .models_manager
+        .list_models(
+            codex_models_manager::manager::RefreshStrategy::Offline,
+            turn.config.http_client_factory(),
+        )
+        .await;
+    let default_review_model_id = turn.provider.approval_review_preferred_model();
+    let review_model = codex_guardian_reviewer::select_review_model(
+        &context.model_info,
+        context.reasoning_effort.as_ref(),
+        default_review_model_id,
+        &available_models,
+    );
+    // Resolve a separate reviewer against the current catalog on every attempt.
+    // Parent fallback must retain the action's metadata even after a catalog refresh.
+    let guardian_model_info =
+        if !review_model.catalog_contains_auto_review && !review_model.model_overridden {
+            Arc::clone(&context.model_info)
+        } else {
+            Arc::new(
+                session
+                    .services
+                    .models_manager
+                    .get_model_info(
+                        review_model.model.as_str(),
+                        &turn.config.to_models_manager_config(),
+                    )
+                    .await,
+            )
+        };
+    (review_model, guardian_model_info)
 }

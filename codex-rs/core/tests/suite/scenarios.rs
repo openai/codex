@@ -634,3 +634,31 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_checkpoint_migration_request_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    use super::guardian_checkpoint_migration::migration_scenario;
+    let requests = migration_scenario().await?;
+    let mut snapshot = context_snapshot::format_request_history_snapshot(
+        "An old checkpoint retains a user restriction and verified answer. Incompatible automatic compaction keeps legacy review across restart with its saved answer; compatible manual compaction immediately activates thread-owned review.",
+        &requests,
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
+    );
+    // Normalize executor paths and shell wrappers in the reviewed actions.
+    for (pattern, replacement) in [
+        (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),
+        (
+            r#""command": \[\s*(?:"[^"]*",\s*)*"exit 0"\s*\]"#,
+            "\"command\": [\"<SHELL>\", \"exit 0\"]",
+        ),
+    ] {
+        snapshot = regex_lite::Regex::new(pattern)?
+            .replace_all(&snapshot, replacement)
+            .into_owned();
+    }
+    insta::assert_snapshot!("guardian_checkpoint_migration", snapshot);
+    Ok(())
+}

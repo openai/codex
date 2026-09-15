@@ -351,6 +351,9 @@ impl Session {
             history.restore_review_context(
                 checkpoint.compacted.retained_context.as_ref(),
                 checkpoint.compacted.guardian_history.as_ref(),
+                // Keep the backup during replay; the installing session resolves its reviewer.
+                /*reviewer_compaction_hash*/
+                None,
             );
         }
         // Materialize exact history semantics from the replay-derived suffix. The eventual lazy

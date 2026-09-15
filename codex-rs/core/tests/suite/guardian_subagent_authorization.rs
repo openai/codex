@@ -200,12 +200,11 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             vec![RolloutItem::Compacted(checkpoint)],
         )
         .await?;
-        assert!(
-            test.codex
-                .conversation_history_snapshot()
-                .await
-                .retained_context()
-                .is_none()
+        assert_eq!(
+            codex_core::context::GuardianContextMode::from_history(
+                test.codex.conversation_history_snapshot().await.as_ref()
+            ),
+            codex_core::context::GuardianContextMode::Legacy,
         );
     }
     let root_thread_id = test.session_configured.thread_id;

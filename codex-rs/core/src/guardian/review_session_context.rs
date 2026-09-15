@@ -87,16 +87,10 @@ impl ReviewContextPolicy {
         if strict {
             // A resumed parent may now use a different model. Compare the actual
             // checkpoint producer with the selected reviewer, not the live parent model.
-            let producer_hash = envelope
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.compaction_model_hash.as_deref());
             anyhow::ensure!(
-                producer_hash
-                    .zip(reviewer_compaction_hash)
-                    .is_some_and(|(producer, reviewer)| {
-                        !producer.is_empty() && producer == reviewer
-                    }),
+                GuardianContextMode::ThreadOwned
+                    .for_checkpoint(history.annotated_items(), reviewer_compaction_hash)
+                    == GuardianContextMode::ThreadOwned,
                 "parent compaction checkpoint is incompatible with the Guardian review model or its compatibility is unknown"
             );
         }

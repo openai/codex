@@ -20,6 +20,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use core_test_support::responses;
@@ -28,7 +29,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use test_case::test_case;
 
 async fn finish_turn(thread: &CodexThread) {
     wait_for_event_match(thread, |event| match event {
@@ -58,9 +58,11 @@ pub(super) async fn resume(
 ) -> Result<Arc<CodexThread>> {
     let thread_id = thread.session_configured().thread_id;
     let environments = thread.environment_selections().await;
+    let model = thread.config_snapshot().await.model;
     thread.shutdown_and_wait().await?;
     test.thread_manager.remove_thread(&thread_id).await;
     let mut config = test.config.clone();
+    config.model = Some(model);
     config.features.enable(Feature::GuardianThreadContext)?;
     Ok(test
         .thread_manager
@@ -68,7 +70,7 @@ pub(super) async fn resume(
             environments: Some(environments),
             initial_history: InitialHistory::Resumed(ResumedHistory {
                 conversation_id: thread_id,
-                history: Arc::new(serde_json::from_value(serde_json::to_value(history)?)?),
+                history: Arc::new(history),
                 rollout_path: None,
             }),
             ..StartThreadOptions::new(config)
@@ -77,38 +79,47 @@ pub(super) async fn resume(
         .thread)
 }
 
-#[test_case(ThreadHistoryMode::Legacy; "legacy")]
-#[test_case(ThreadHistoryMode::Paginated; "paginated")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn old_checkpoint_migrates_after_compaction_and_resume(
-    history_mode: ThreadHistoryMode,
-) -> Result<()> {
-    core_test_support::skip_if_no_network!(Ok(()));
+pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesRequest>> {
     let server = responses::start_mock_server().await;
     let test = test_codex()
-        .with_history_mode(history_mode)
+        .with_history_mode(ThreadHistoryMode::Paginated)
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model("gpt-5.5")
         .with_model_info_override("gpt-5.5", |model| {
-            model.comp_hash = Some("compatible".to_owned());
+            model.comp_hash = Some("previous-model".to_owned());
             model.auto_review_model_override = Some(model.slug.clone());
         })
+        .with_model_info_override("gpt-5.6-luna", |model| {
+            model.comp_hash = Some("current-model".to_owned());
+            model.auto_review_model_override = Some(model.slug.clone());
+        })
+        .with_model("gpt-5.5")
         .with_config(|config| {
             config
                 .features
                 .disable(Feature::TokenBudget)
                 .expect("disable token budget");
-            for feature in [
-                Feature::GuardianReuseParentCompaction,
-                Feature::DefaultModeRequestUserInput,
-            ] {
-                config.features.enable(feature).expect("enable review flow");
-            }
+            config
+                .features
+                .disable(Feature::GuardianReuseParentCompaction)
+                .expect("use the selected reviewer");
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("enable user input");
+            config.model_auto_compact_token_limit = Some(100_000);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         })
         .build_with_auto_env(&server)
         .await?;
+    let compact = |id: &str| {
+        responses::sse(vec![
+            json!({"type": "response.output_item.done", "item": {
+                "type": "compaction", "id": id, "encrypted_content": format!("encrypted checkpoint {id}")
+            }}),
+            responses::ev_completed(id),
+        ])
+    };
     // Old wire format, including an ordinary instruction recorded after the checkpoint.
     let history: Vec<RolloutItem> = serde_json::from_value(json!([
         {"type": "compacted", "payload": {
@@ -130,41 +141,22 @@ async fn old_checkpoint_migrates_after_compaction_and_resume(
         GuardianContextMode::Legacy
     );
 
-    let review = responses::mount_sse_sequence(
+    let answer = responses::mount_sse_sequence(
         &server,
         vec![
             responses::sse(vec![
                 responses::ev_function_call(
                     "ask",
                     "request_user_input",
-                    &json!({
-                        "questions": [{
-                            "id": "publish", "header": "Publish",
-                            "question": "Where may I publish?",
-                            "options": [
-                                {"label": "Private", "description": "Private repository only."},
-                                {"label": "Nowhere", "description": "Keep local."}
-                            ]
-                        }]
-                    })
-                    .to_string(),
+                    // Keep the transcript independent of serde_json's preserve_order feature.
+                    concat!(
+                        r#"{"questions":[{"header":"Publish","id":"publish","options":["#,
+                        r#"{"description":"Private repository only.","label":"Private"},"#,
+                        r#"{"description":"Keep local.","label":"Nowhere"}],"#,
+                        r#""question":"Where may I publish?"}]}"#,
+                    ),
                 ),
                 responses::ev_completed("question"),
-            ]),
-            responses::sse(vec![
-                responses::ev_function_call(
-                    "exec",
-                    "exec_command",
-                    r#"{"cmd":"echo migration","sandbox_permissions":"require_escalated"}"#,
-                ),
-                responses::ev_completed("action"),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message(
-                    "decision",
-                    r#"{"risk_level":"low","user_authorization":"high","outcome":"allow"}"#,
-                ),
-                responses::ev_completed("review"),
             ]),
             responses::sse(vec![responses::ev_completed("done")]),
         ],
@@ -172,7 +164,7 @@ async fn old_checkpoint_migrates_after_compaction_and_resume(
     .await;
     thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Check authorization, then run the command.".to_owned(),
+            text: "Confirm where publishing is allowed.".to_owned(),
             text_elements: Vec::new(),
         }]))
         .await?;
@@ -191,32 +183,98 @@ async fn old_checkpoint_migrates_after_compaction_and_resume(
         })
         .await?;
     finish_turn(&thread).await;
-    let requests = review.requests();
-    let guardian = requests
-        .iter()
-        .find(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
-        .expect("Guardian reviewed the action");
-    let prompt = guardian.message_input_texts("user").join("\n");
-    assert!(prompt.contains("Private repository only."));
-    assert!(prompt.contains("Keep the working tree unchanged."));
-
     let before_compaction = saved_history(&test, &thread).await?;
-    responses::mount_sse_once(
-        &server,
-        responses::sse(vec![
-            json!({"type": "response.output_item.done", "item": {
-                "type": "compaction", "id": "migrated", "encrypted_content": "new checkpoint"
-            }}),
-            responses::ev_completed("compacted"),
-        ]),
-    )
-    .await;
-    thread.submit(Op::Compact).await?;
-    finish_turn(&thread).await;
+    let thread = resume(&test, &thread, before_compaction).await?;
     assert_eq!(
         GuardianContextMode::from_history(thread.conversation_history_snapshot().await.as_ref()),
         GuardianContextMode::Legacy
     );
+    let mut all_requests = answer.requests();
+
+    // Automatic compaction uses the previous model, whose checkpoint the new reviewer cannot read.
+    let compaction = responses::mount_sse_sequence(
+        &server,
+        vec![
+            compact("cmp_previous_model"),
+            responses::sse(vec![responses::ev_completed("continued")]),
+        ],
+    )
+    .await;
+    thread
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Continue with the new model.".to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                model: Some("gpt-5.6-luna".to_owned()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    finish_turn(&thread).await;
+    all_requests.extend(compaction.requests());
+    let after = thread.conversation_history_snapshot().await;
+    assert_eq!(
+        (
+            GuardianContextMode::from_history(after.as_ref()),
+            after.latest_compaction_model_hash()
+        ),
+        (GuardianContextMode::Legacy, Some("previous-model")),
+    );
+
+    // A real restart must preserve legacy review and the persisted answer for a mismatched hash.
+    let incompatible_history = saved_history(&test, &thread).await?;
+    let thread = resume(&test, &thread, incompatible_history).await?;
+    for (call_id, checkpoint) in [("resumed", None), ("after", Some("cmp_migrated"))] {
+        if let Some(checkpoint) = checkpoint {
+            let compaction = responses::mount_sse_once(&server, compact(checkpoint)).await;
+            thread.submit(Op::Compact).await?;
+            finish_turn(&thread).await;
+            all_requests.extend(compaction.requests());
+        }
+        assert_eq!(
+            GuardianContextMode::from_history(
+                thread.conversation_history_snapshot().await.as_ref()
+            ),
+            if checkpoint.is_some() {
+                GuardianContextMode::ThreadOwned
+            } else {
+                GuardianContextMode::Legacy
+            },
+        );
+        let followup = responses::mount_sse_sequence(
+            &server,
+            vec![
+                responses::sse(vec![
+                    responses::ev_function_call(
+                        call_id,
+                        "exec_command",
+                        r#"{"cmd":"exit 0","sandbox_permissions":"require_escalated"}"#,
+                    ),
+                    responses::ev_completed(&format!("{call_id}-action")),
+                ]),
+                responses::sse(vec![
+                    responses::ev_assistant_message(
+                        &format!("{call_id}-decision"),
+                        // Exercise review without starting processes on the shared executor.
+                        r#"{"outcome":"deny"}"#,
+                    ),
+                    responses::ev_completed(&format!("{call_id}-review")),
+                ]),
+                responses::sse(vec![responses::ev_completed(&format!("{call_id}-done"))]),
+            ],
+        )
+        .await;
+        thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Run another check after compaction.".to_owned(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        finish_turn(&thread).await;
+        all_requests.extend(followup.requests());
+    }
     let after_compaction = saved_history(&test, &thread).await?;
     let expected_answer = VerifiedAnswer {
         turn_id: question.turn_id,
@@ -226,32 +284,26 @@ async fn old_checkpoint_migrates_after_compaction_and_resume(
             answer: "Private".to_owned(),
         }],
     };
-    let mut thread = thread;
-    // Both replayed suffix events and compacted checkpoints must preserve the accepted answer.
-    for (saved, expected_hash) in [
-        (before_compaction, None),
-        (after_compaction, Some("compatible")),
-    ] {
-        thread = resume(&test, &thread, saved).await?;
-        let history = thread.conversation_history_snapshot().await;
-        let answers = history
-            .retained_context()
-            .expect("retained answer evidence")
-            .verified_answers()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            (
-                GuardianContextMode::from_history(history.as_ref()),
-                history.latest_compaction_model_hash(),
-                answers,
-            ),
-            (
-                GuardianContextMode::ThreadOwned,
-                expected_hash,
-                vec![&expected_answer]
-            ),
-        );
-    }
+    // The answer has survived suffix replay, both compactions, and checkpoint replay.
+    let thread = resume(&test, &thread, after_compaction).await?;
+    let history = thread.conversation_history_snapshot().await;
+    let answers = history
+        .retained_context()
+        .expect("retained answer evidence")
+        .verified_answers()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        (
+            GuardianContextMode::from_history(history.as_ref()),
+            history.latest_compaction_model_hash(),
+            answers,
+        ),
+        (
+            GuardianContextMode::ThreadOwned,
+            Some("current-model"),
+            vec![&expected_answer]
+        ),
+    );
     thread.shutdown_and_wait().await?;
-    Ok(())
+    Ok(all_requests)
 }

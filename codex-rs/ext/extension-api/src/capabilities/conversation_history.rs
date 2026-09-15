@@ -18,9 +18,15 @@ pub trait ConversationHistorySnapshot: Send + Sync {
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_>;
 
     /// Host-owned retained facts captured atomically with the parent model window.
-    /// Legacy hosts can withhold these facts to preserve their existing reviewer policy.
+    /// These facts may be available while review still uses a legacy transcript.
     fn retained_context(&self) -> Option<&RetainedContext> {
         None
+    }
+
+    /// Whether review uses the parent checkpoint and model window instead of a legacy transcript.
+    /// Checkpoint compatibility is independent of access to retained user evidence.
+    fn uses_parent_context_for_review(&self) -> bool {
+        self.retained_context().is_some()
     }
 
     /// Producer compatibility recorded on the latest opaque checkpoint. Missing provenance

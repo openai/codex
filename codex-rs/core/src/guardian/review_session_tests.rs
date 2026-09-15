@@ -91,6 +91,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
                 window_ids,
                 compaction_response_id: None,
                 compaction_model_hash: Some("matching".to_owned()),
+                reviewer_compaction_hash: Some("matching".to_owned()),
             },
         )
         .await;

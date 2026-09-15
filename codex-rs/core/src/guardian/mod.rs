@@ -18,6 +18,7 @@ pub(crate) use request_budget::observe as observe_guardian_request;
 mod review;
 mod review_session;
 mod reviewer_config;
+pub(crate) use reviewer_config::resolve_review_model;
 mod runtime;
 #[cfg(test)]
 pub(crate) mod test_host;

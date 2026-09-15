@@ -86,6 +86,7 @@ pub(crate) struct CompactedHistoryMetadata {
     pub(crate) window_ids: AutoCompactWindowIds,
     pub(crate) compaction_response_id: Option<String>,
     pub(crate) compaction_model_hash: Option<String>,
+    pub(crate) reviewer_compaction_hash: Option<String>,
 }
 
 pub(crate) async fn build_compaction_initial_context(
@@ -388,6 +389,7 @@ async fn run_compact_task_inner_impl(
             window_ids,
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: turn_context.model_info().comp_hash.clone(),
+            reviewer_compaction_hash: None,
         },
     )
     .await;

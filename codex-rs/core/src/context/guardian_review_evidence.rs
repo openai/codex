@@ -1,6 +1,6 @@
 //! Selects Guardian answer evidence from the review's history snapshot and retains reviews.
-//! Legacy review uses a bounded runtime buffer while thread-owned review uses retained answers.
-//! A migrating session captures both until its checkpoint can support thread-owned review.
+//! Retained answers survive restart even while incompatible checkpoints use legacy review.
+//! Sessions without retained capture continue using the bounded runtime buffer.
 
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -18,7 +18,6 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use serde_json::json;
 
 use super::ContextualUserFragment;
-use super::GuardianContextMode;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use crate::codex_thread::GuardianRootMessage;
 use crate::guardian::guardian_truncate_text;
@@ -63,7 +62,7 @@ impl GuardianReviewEvidence {
         questions: &[RequestUserInputQuestion],
         response: &RequestUserInputResponse,
     ) {
-        if GuardianContextMode::from_history(history) != GuardianContextMode::Legacy {
+        if history.retained_context().is_some() {
             return;
         }
         let fragment = questions
@@ -115,24 +114,20 @@ impl GuardianReviewEvidence {
         &self,
         history: &dyn ConversationHistorySnapshot,
     ) -> GuardianUserInputSnapshot {
-        match GuardianContextMode::from_history(history) {
-            GuardianContextMode::ThreadOwned => {
-                let answers = history
-                    .retained_context()
-                    .map(codex_guardian_context::render_verified_answers);
+        match history.retained_context() {
+            Some(context) => {
+                let answers = codex_guardian_context::render_verified_answers(context);
                 let authorization_version = GuardianAuthorizationVersion {
                     user_message_revision: history.user_message_revision(),
                     user_input_response_count: 0,
-                    retained_context_complete: answers
-                        .as_ref()
-                        .is_none_or(|answers| answers.complete),
+                    retained_context_complete: answers.complete,
                 };
                 GuardianUserInputSnapshot {
-                    fragments: answers.map(|answers| answers.fragments).unwrap_or_default(),
+                    fragments: answers.fragments,
                     authorization_version,
                 }
             }
-            GuardianContextMode::Legacy => {
+            None => {
                 let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 let fragments = state
                     .user_inputs
@@ -168,13 +163,12 @@ impl GuardianReviewEvidence {
         history: &dyn ConversationHistorySnapshot,
         call_id: &str,
     ) -> Option<String> {
-        match GuardianContextMode::from_history(history) {
-            GuardianContextMode::ThreadOwned => history
-                .retained_context()?
+        match history.retained_context() {
+            Some(context) => context
                 .verified_answers()
                 .find(|answer| answer.call_id == call_id)
                 .and_then(codex_guardian_context::render_verified_answer),
-            GuardianContextMode::Legacy => self
+            None => self
                 .state
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
