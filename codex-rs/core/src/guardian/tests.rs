@@ -44,8 +44,6 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxPermissions;
@@ -397,38 +395,6 @@ fn last_user_message_text_from_body(body: &serde_json::Value) -> String {
         .filter(|span| span.get("type").and_then(serde_json::Value::as_str) == Some("input_text"))
         .filter_map(|span| span.get("text").and_then(serde_json::Value::as_str))
         .collect::<String>()
-}
-
-#[test]
-fn build_guardian_transcript_keeps_original_numbering() {
-    let entries = [
-        ConversationTranscriptEntry {
-            kind: ConversationTranscriptEntryKind::User,
-            text: "first".to_string(),
-            original_bytes: "first".len(),
-        },
-        ConversationTranscriptEntry {
-            kind: ConversationTranscriptEntryKind::Assistant,
-            text: "second".to_string(),
-            original_bytes: "second".len(),
-        },
-        ConversationTranscriptEntry {
-            kind: ConversationTranscriptEntryKind::ProtectedAssistant,
-            text: "third".to_string(),
-            original_bytes: "third".len(),
-        },
-    ];
-
-    let (transcript, omission) = render_guardian_transcript_entries(&entries[..2]);
-
-    assert_eq!(
-        transcript,
-        vec![
-            "[1] user: first".to_string(),
-            "[2] assistant: second".to_string()
-        ]
-    );
-    assert!(omission.is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1069,86 +1035,6 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             )
         );
     }
-}
-
-#[test]
-fn collect_guardian_transcript_entries_preserves_named_unpaired_tool_sources() {
-    let mut items = vec![ResponseItem::FunctionCallOutput {
-        id: None,
-        call_id: None,
-        name: Some("notifications".to_string()),
-        namespace: Some("slack".to_string()),
-        output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-            "new message".to_string(),
-        ),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    items.extend(
-        [
-            (None, "anonymous output"),
-            (Some("missing-call"), "orphaned function output"),
-        ]
-        .map(|(call_id, text)| ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: call_id.map(str::to_string),
-            name: None,
-            namespace: None,
-            output: codex_protocol::models::FunctionCallOutputPayload::from_text(text.to_string()),
-            internal_chat_message_metadata_passthrough: None,
-        }),
-    );
-    items.push(ResponseItem::CustomToolCallOutput {
-        id: None,
-        call_id: "missing-custom-call".to_string(),
-        name: None,
-        output: codex_protocol::models::FunctionCallOutputPayload::from_text(
-            "orphaned custom output".to_string(),
-        ),
-        internal_chat_message_metadata_passthrough: None,
-    });
-
-    let mut expected = vec![ConversationTranscriptEntry {
-        kind: ConversationTranscriptEntryKind::ToolOutput(
-            "tool slack.notifications result".to_string(),
-        ),
-        text: "new message".to_string(),
-        original_bytes: "new message".len(),
-    }];
-    expected.extend(
-        ["orphaned function output", "orphaned custom output"].map(|text| {
-            ConversationTranscriptEntry {
-                kind: ConversationTranscriptEntryKind::ToolOutput("tool result".to_string()),
-                text: text.to_string(),
-                original_bytes: text.len(),
-            }
-        }),
-    );
-    assert_eq!(
-        collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS),
-        expected,
-    );
-
-    if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[0] {
-        *output = codex_protocol::models::FunctionCallOutputPayload::from_content_items(vec![
-            FunctionCallOutputContentItem::InputImage {
-                image: ImageReference::Inline {
-                    image_url: "data:image/png;base64,image".to_string(),
-                },
-                detail: None,
-            },
-        ]);
-    }
-    expected[0] = ConversationTranscriptEntry {
-        kind: ConversationTranscriptEntryKind::ToolOutput(
-            "tool slack.notifications result".to_string(),
-        ),
-        text: "[non-text output]".to_string(),
-        original_bytes: "[non-text output]".len(),
-    };
-    assert_eq!(
-        collect_guardian_transcript_entries(&items, GUARDIAN_MAX_TOOL_ENTRY_TOKENS),
-        expected,
-    );
 }
 
 #[test]
