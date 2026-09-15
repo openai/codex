@@ -9,12 +9,23 @@ use codex_login::default_client::originator;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
+
+pub fn managed_proxy_routing_for_windows_sandbox(
+    sandbox_type: SandboxType,
+) -> codex_network_proxy::ManagedProxyRouting {
+    if cfg!(windows) && sandbox_type == SandboxType::WindowsMxc {
+        codex_network_proxy::ManagedProxyRouting::DedicatedListeners
+    } else {
+        codex_network_proxy::ManagedProxyRouting::SharedIngress
+    }
+}
 
 pub trait WindowsSandboxLevelExt {
     fn from_config(config: &Config) -> WindowsSandboxLevel;

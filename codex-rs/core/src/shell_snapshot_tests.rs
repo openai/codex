@@ -238,6 +238,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
     let started_proxy = network_spec
         .start_proxy(
             &permission_profile,
+            codex_network_proxy::ManagedProxyRouting::SharedIngress,
             /*policy_decider*/ None,
             /*blocked_request_observer*/ None,
             /*enable_network_approval_flow*/ false,
@@ -664,6 +665,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
     let started_proxy = network_spec
         .start_proxy(
             &permission_profile,
+            codex_network_proxy::ManagedProxyRouting::SharedIngress,
             /*policy_decider*/ None,
             /*blocked_request_observer*/ None,
             /*enable_network_approval_flow*/ false,

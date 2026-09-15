@@ -881,6 +881,10 @@ impl NetworkProxy {
         self.http_addr
     }
 
+    pub fn managed_proxy_routing(&self) -> ManagedProxyRouting {
+        self.managed_proxy_routing
+    }
+
     pub fn socks_addr(&self) -> SocketAddr {
         #[cfg(target_os = "windows")]
         if let Some(runtime) = self.windows_runtime.as_ref() {

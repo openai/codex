@@ -128,6 +128,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::McpOAuthRefreshMode;
+use codex_sandboxing::SandboxType;
 pub use codex_thread_store::ExtraConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -345,6 +346,8 @@ pub struct Permissions {
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
     /// legacy feature keys.
     pub windows_sandbox_mode: Option<WindowsSandboxModeToml>,
+    /// Selected Windows sandbox implementation, separate from the legacy setup level.
+    pub windows_sandbox_type: SandboxType,
     /// Whether the final Windows sandboxed child should run on a private desktop.
     pub windows_sandbox_private_desktop: bool,
 }
@@ -367,6 +370,7 @@ impl Permissions {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_type: SandboxType::None,
             windows_sandbox_private_desktop: true,
         })
     }
@@ -3319,6 +3323,7 @@ impl Config {
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let PreparedWindowsSandboxConfig {
             mode: windows_sandbox_mode,
+            sandbox_type: windows_sandbox_type,
             level: windows_sandbox_level,
         } = prepare_windows_sandbox_config(
             resolve_windows_sandbox_mode(&cfg),
@@ -4154,6 +4159,7 @@ impl Config {
                 allow_login_shell,
                 shell_environment_policy,
                 windows_sandbox_mode,
+                windows_sandbox_type,
                 windows_sandbox_private_desktop,
             },
             explicit_permission_profile_mode,

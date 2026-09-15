@@ -1,5 +1,6 @@
 use super::*;
 use codex_core::exec_env::inject_apply_patch_env;
+use codex_core::windows_sandbox::managed_proxy_routing_for_windows_sandbox;
 use codex_protocol::shell_environment::is_non_inheritable_env_var;
 
 #[derive(Clone)]
@@ -262,6 +263,9 @@ impl CommandExecRequestProcessor {
             Some(spec) => match spec
                 .start_proxy(
                     &network_proxy_permission_profile,
+                    managed_proxy_routing_for_windows_sandbox(
+                        self.config.permissions.windows_sandbox_type,
+                    ),
                     /*policy_decider*/ None,
                     /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,

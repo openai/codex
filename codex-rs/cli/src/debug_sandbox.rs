@@ -19,6 +19,7 @@ use codex_core::exec_env::create_env;
 #[cfg(target_os = "macos")]
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::windows_sandbox::managed_proxy_routing_for_windows_sandbox;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -316,19 +317,22 @@ async fn run_command_under_sandbox(
         }
     }
 
-    // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
+    // Legacy Windows sandbox sessions emulate inherited stdio and exit the process.
     if let SandboxType::Windows = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            run_command_under_windows_session(
-                &config,
-                &permission_profile,
-                command,
-                cwd,
-                workspace_roots,
-                env,
-            )
-            .await;
+            if config.permissions.windows_sandbox_type != codex_sandboxing::SandboxType::WindowsMxc
+            {
+                run_command_under_windows_session(
+                    &config,
+                    &permission_profile,
+                    command,
+                    cwd,
+                    workspace_roots,
+                    env,
+                )
+                .await;
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -348,6 +352,7 @@ async fn run_command_under_sandbox(
         Some(spec) => Some(
             spec.start_proxy(
                 &permission_profile,
+                managed_proxy_routing_for_windows_sandbox(config.permissions.windows_sandbox_type),
                 /*policy_decider*/ None,
                 /*blocked_request_observer*/ None,
                 managed_network_requirements_enabled,
@@ -363,7 +368,7 @@ async fn run_command_under_sandbox(
         .map(codex_core::config::StartedNetworkProxy::proxy);
     // Proxy containment depends on whether a proxy is active, not whether its
     // policy came from managed requirements.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let enforce_managed_network = network.is_some();
     let managed_mitm_ca_trust_bundle_path = match network.as_ref() {
         Some(network) => network.managed_mitm_ca_trust_bundle_path(),
@@ -449,8 +454,56 @@ async fn run_command_under_sandbox(
             )
             .await?
         }
+        #[cfg(not(target_os = "windows"))]
         SandboxType::Windows => {
             unreachable!("Windows sandbox should have been handled above");
+        }
+        #[cfg(target_os = "windows")]
+        SandboxType::Windows => {
+            use codex_sandboxing::SandboxCommand;
+            use codex_sandboxing::SandboxManager;
+            use codex_sandboxing::SandboxTransformRequest;
+            use codex_utils_path_uri::PathUri;
+
+            let (program, args) = command
+                .split_first()
+                .context("sandbox command must not be empty")?;
+            let sandbox_policy_cwd = PathUri::from_abs_path(&sandbox_policy_cwd);
+            let codex_self_exe = std::env::current_exe()?;
+            let request = SandboxManager::new().transform(SandboxTransformRequest {
+                command: SandboxCommand {
+                    program: program.into(),
+                    args: args.to_vec(),
+                    cwd: PathUri::from_abs_path(&cwd),
+                    env,
+                    managed_network: None,
+                    additional_permissions: None,
+                },
+                permissions: &runtime_permission_profile,
+                sandbox: codex_sandboxing::SandboxType::WindowsMxc,
+                enforce_managed_network,
+                environment_id: None,
+                network: network.as_ref(),
+                sandbox_policy_cwd: &sandbox_policy_cwd,
+                sandbox_exe: Some(codex_self_exe.as_path()),
+                use_legacy_landlock: false,
+                windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+                windows_sandbox_private_desktop: false,
+            })?;
+            let (program, args) = request
+                .command
+                .split_first()
+                .context("missing MXC wrapper")?;
+            spawn_debug_sandbox_child(
+                PathBuf::from(program),
+                args.to_vec(),
+                /*arg0*/ None,
+                cwd.to_path_buf(),
+                runtime_permission_profile.network_sandbox_policy(),
+                request.env,
+                |_| {},
+            )
+            .await?
         }
     };
 

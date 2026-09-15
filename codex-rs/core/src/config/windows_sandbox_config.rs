@@ -5,11 +5,14 @@ use super::apply_requirement_constrained_value;
 use codex_config::ConstrainedWithSource;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_sandboxing::SandboxType;
 
 #[derive(Debug, PartialEq)]
 pub struct PreparedWindowsSandboxConfig {
     /// Explicit or requirement-constrained mode; excludes feature-only fallback.
     pub mode: Option<WindowsSandboxModeToml>,
+    /// Selected implementation, kept separate from the legacy setup level.
+    pub sandbox_type: SandboxType,
     /// Effective sandbox level after Windows requirements have been applied.
     pub level: WindowsSandboxLevel,
 }
@@ -39,7 +42,16 @@ pub fn prepare_windows_sandbox_config(
         Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
         None => WindowsSandboxLevel::Disabled,
     };
-    Ok(PreparedWindowsSandboxConfig { mode, level })
+    let sandbox_type = if level == WindowsSandboxLevel::Disabled {
+        SandboxType::None
+    } else {
+        SandboxType::WindowsRestrictedToken
+    };
+    Ok(PreparedWindowsSandboxConfig {
+        mode,
+        sandbox_type,
+        level,
+    })
 }
 
 #[cfg(test)]
