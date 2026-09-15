@@ -1,5 +1,6 @@
 //! Account analytics data preparation, staged for the dashboard integration.
 
+mod client;
 mod data;
 mod models;
 mod normalize;

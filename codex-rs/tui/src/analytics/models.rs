@@ -1,5 +1,27 @@
 //! Private analytics display types, independent of the app-server wire protocol.
 
+use codex_protocol::account::PlanType;
+
+/// Billing families match the App's consumer, business, and workspace scopes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AccountKind {
+    Consumer,
+    Business,
+    Enterprise,
+    Unknown,
+}
+
+impl From<Option<PlanType>> for AccountKind {
+    fn from(plan: Option<PlanType>) -> Self {
+        match plan {
+            None | Some(PlanType::Unknown) => Self::Unknown,
+            Some(plan) if plan.is_team_like() => Self::Business,
+            Some(plan) if plan.is_workspace_account() => Self::Enterprise,
+            Some(_) => Self::Consumer,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccountAnalyticsReport {
     Usage,
@@ -18,6 +40,17 @@ pub(crate) enum AccountAnalyticsGrouping {
     Speed,
     Reasoning,
     TokenType,
+}
+
+impl AccountAnalyticsGrouping {
+    /// Credit breakdowns supported by the account's billing report.
+    pub(crate) fn credit_groupings(plan: Option<PlanType>) -> &'static [Self] {
+        match AccountKind::from(plan) {
+            AccountKind::Business => &[Self::Surface, Self::Model, Self::Speed],
+            AccountKind::Enterprise => &[Self::Surface, Self::Model, Self::Speed, Self::Reasoning],
+            AccountKind::Consumer | AccountKind::Unknown => &[Self::Surface],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

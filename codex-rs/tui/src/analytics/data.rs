@@ -1,4 +1,16 @@
-//! Precise signed credit amounts and dates for analytics presentation.
+//! Grouping metadata and numeric formatting for account analytics.
+
+use super::models::AccountAnalyticsGrouping as Grouping;
+
+pub(super) const GROUPINGS: [Grouping; 7] = [
+    Grouping::Surface,
+    Grouping::Feature,
+    Grouping::Model,
+    Grouping::TaskStart,
+    Grouping::Speed,
+    Grouping::Reasoning,
+    Grouping::TokenType,
+];
 
 /// Keep tiny refunds visible while avoiding noise on ordinary credit amounts.
 pub(super) fn amount(value: f64) -> String {
