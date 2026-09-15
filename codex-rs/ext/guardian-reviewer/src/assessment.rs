@@ -21,7 +21,7 @@ pub struct GuardianAssessment {
 /// wrapper so transient formatting drift fails less noisily during dogfooding.
 /// Non-JSON output is still a review failure; this is only a thin recovery path
 /// for cases where the model wrapped the JSON in extra prose.
-pub fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAssessment> {
+pub(crate) fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<GuardianAssessment> {
     let Some(text) = text else {
         anyhow::bail!("guardian review completed without an assessment payload");
     };
