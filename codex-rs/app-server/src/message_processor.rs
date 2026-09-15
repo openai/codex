@@ -757,8 +757,10 @@ impl MessageProcessor {
         self.thread_processor.thread_created_receiver()
     }
 
-    pub(crate) async fn daemon_recovery_candidates(&self) -> Vec<String> {
-        self.thread_processor.daemon_recovery_candidates().await
+    pub(crate) async fn daemon_recovery_snapshot(
+        &self,
+    ) -> codex_app_server_transport::daemon_recovery::RecoverySnapshot {
+        self.thread_processor.daemon_recovery_snapshot().await
     }
 
     pub(crate) async fn restore_daemon_threads(

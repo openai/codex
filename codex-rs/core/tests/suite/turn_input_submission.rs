@@ -832,3 +832,36 @@ async fn start_or_steer_turn_requires_matching_active_output_schema() {
     assert!(!second_request.contains("rejected steer"));
     server.shutdown().await;
 }
+
+#[test_case(Vec::new(); "automatic")]
+#[test_case(vec![UserInput::Text { text: "Do the work".into(), text_elements: Vec::new() }]; "user")]
+#[tokio::test]
+async fn sampling_is_ready_for_daemon_recovery(input: Vec<UserInput>) -> anyhow::Result<()> {
+    let (release, gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(gate),
+        body: responses::sse_completed("automatic"),
+    }]])
+    .await;
+    let test = test_codex().build_with_streaming_server(&server).await?;
+    let StartIfIdleSubmission::Started { turn_id } = test
+        .codex
+        .start_turn_if_idle(TurnInputRequest::user_input(input))
+        .await?
+    else {
+        panic!("sampling should start");
+    };
+    timeout(
+        Duration::from_secs(5),
+        server.wait_for_request_count(/*count*/ 1),
+    )
+    .await?;
+    let active = test.codex.interrupted_turn().await;
+    assert_eq!(active.map(|(id, _)| id), Some(turn_id));
+    release.send(()).expect("sampling is waiting");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    Ok(())
+}

@@ -497,6 +497,11 @@ impl CodexThread {
         self.session.inject_if_running(items).await
     }
 
+    /// Captures a regular turn only after its input is recorded. The caller must flush the rollout.
+    pub async fn interrupted_turn(&self) -> Option<(String, TurnStartOptions)> {
+        self.session.interrupted_turn().await
+    }
+
     /// Returns the trusted root when the expected turn is currently active.
     pub async fn active_turn_root(&self, expected_turn_id: &str) -> Option<String> {
         let active = self.session.active_turn.lock().await;

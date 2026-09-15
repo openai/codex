@@ -27,6 +27,7 @@ codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
+codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
@@ -61,7 +62,6 @@ signal-hook = { workspace = true }
 [dev-dependencies]
 chrono = { workspace = true }
 codex-config = { workspace = true }
-codex-protocol = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

@@ -187,14 +187,13 @@ async fn managed_restart_resumes_loaded_threads_and_goal_without_client() -> Res
 }
 
 #[tokio::test]
-async fn managed_force_shutdown_exits_without_snapshotting_active_work() -> Result<()> {
+async fn managed_force_shutdown_exits_with_active_work() -> Result<()> {
     let home = TempDir::new()?;
     let (_release_response, response_gate) = oneshot::channel();
     let (mock, _completions) =
         start_streaming_sse_server(vec![vec![stream_chunk(Some(response_gate), "Done")?]]).await;
     create_config_toml(home.path(), mock.uri(), "never")?;
     let socket_path = home.path().join("control/server.sock");
-    let recovery_file = daemon_recovery_file_path(home.path());
     let mut server = spawn_server(home.path(), &socket_path)?;
     let mut client = connect_default_daemon_client(&socket_path).await?;
     let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
@@ -204,7 +203,6 @@ async fn managed_force_shutdown_exits_without_snapshotting_active_work() -> Resu
     assert_still_running(&mut server, "graceful shutdown must wait").await;
     request_shutdown(&server, &socket_path).await?;
     wait_success(&mut server).await?;
-    assert!(!recovery_file.exists());
     Ok(())
 }
 
@@ -305,16 +303,105 @@ async fn managed_shutdown_skips_nonpersistent_threads_and_tolerates_save_failure
     Ok(())
 }
 
+#[tokio::test]
+async fn managed_shutdown_preserves_admitted_resume() -> Result<()> {
+    let home = TempDir::new()?;
+    let mock = wiremock::MockServer::start().await;
+    let (mcp, control) =
+        core_test_support::apps_test_server::AppsTestServer::mount_with_startup_control(&mock)
+            .await?;
+    let release = control.hold_next_successful_initialize();
+    create_config_toml(home.path(), "http://127.0.0.1:1", "never")?;
+    let config = home.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "{}\n[mcp_servers.stalled]\nurl = {:?}\nrequired = true\nstartup_timeout_sec = 120\nhttp_headers = {{ Authorization = \"Bearer synthetic-test-token\" }}\n",
+            std::fs::read_to_string(&config)?,
+            format!("{}/api/codex/ps/mcp", mcp.chatgpt_base_url),
+        ),
+    )?;
+    let id = app_test_support::create_fake_rollout(
+        home.path(),
+        "2026-09-01T12-00-00",
+        "2026-09-01T12:00:00Z",
+        "Saved task",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let socket = home.path().join("control/server.sock");
+    let mut server = spawn_server(home.path(), &socket)?;
+    let mut client = connect_default_daemon_client(&socket).await?;
+    client
+        .send(Message::Text(
+            json!({"id":2,"method":"thread/resume","params":{"threadId":id}})
+                .to_string()
+                .into(),
+        ))
+        .await?;
+    // Required MCP startup holds the admitted resume before its runtime is registered.
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        while control.initialize_attempts() == 0 {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .context("required MCP initialization did not begin")?;
+    request_shutdown(&server, &socket).await?;
+    assert_still_running(&mut server, "shutdown must wait for the admitted resume").await;
+    assert!(!daemon_recovery_file_path(home.path()).exists());
+    release
+        .send(())
+        .expect("release required MCP initialization");
+    wait_success(&mut server).await?;
+    assert_eq!(
+        daemon_recovery::read_candidates(&daemon_recovery_file_path(home.path()))?,
+        [id].into(),
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()> {
+    use core_test_support::responses;
+
     let home = TempDir::new()?;
-    let mock = wiremock::MockServer::start().await;
-    create_config_toml(home.path(), &mock.uri(), "never")?;
+    let (release_spawn, spawn_gate) = oneshot::channel();
+    let (_release_parent, parent_gate) = oneshot::channel();
+    let (_release_child, child_gate) = oneshot::channel();
+    let (mock, _completions) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: Some(spawn_gate),
+            body: responses::sse(vec![
+                responses::ev_response_created("spawn-child"),
+                responses::ev_function_call_with_namespace(
+                    "spawn-child",
+                    "collaboration",
+                    "spawn_agent",
+                    r#"{"task_name":"child","message":"Wait here","fork_turns":"none"}"#,
+                ),
+                responses::ev_completed("spawn-child"),
+            ]),
+        }],
+        vec![stream_chunk(Some(parent_gate), "Done")?],
+        vec![stream_chunk(Some(child_gate), "Done")?],
+    ])
+    .await;
+    create_config_toml(home.path(), mock.uri(), "never")?;
+    let config_path = home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[features.multi_agent_v2]\nenabled = true\n"),
+    )?;
     let socket_path = home.path().join("control/server.sock");
     let mut server = spawn_server(home.path(), &socket_path)?;
     let mut client = connect_default_daemon_client(&socket_path).await?;
     let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    let parent = start_thread(&mut client, /*id*/ 3, json!({})).await?;
+    start_turn(&mut client, /*id*/ 4, &parent.thread.id).await?;
+    wait_for_requests(&mock, /*count*/ 1).await?;
     let rollout = thread
         .thread
         .path
@@ -343,6 +430,10 @@ async fn managed_force_shutdown_exits_with_blocked_rollout_writer() -> Result<()
     })
     .await
     .context("rollout writer did not open the blocked input")?;
+    // The running parent can create a child after admissions drain. Its listener
+    // needs the unload lock held by the blocked snapshot.
+    release_spawn.send(()).expect("parent is waiting to spawn");
+    wait_for_requests(&mock, /*count*/ 3).await?;
     assert_still_running(&mut server, "graceful shutdown must wait for the writer").await;
     request_shutdown(&server, &socket_path).await?;
     wait_success(&mut server).await?;
@@ -366,6 +457,115 @@ async fn assert_still_running(server: &mut Child, message: &str) {
             .is_err(),
         "{message}"
     );
+}
+
+#[test_case::test_case("running")]
+#[test_case::test_case("completed")]
+#[test_case::test_case("canceled")]
+#[test_case::test_case("compacting")]
+#[tokio::test]
+async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> {
+    let home = TempDir::new()?;
+    let (release, gate) = oneshot::channel();
+    let (_release_compaction, compaction_gate) = oneshot::channel();
+    let (mock, _completions) = start_streaming_sse_server(vec![
+        vec![stream_chunk(Some(gate), "Original")?],
+        vec![stream_chunk(Some(compaction_gate), "Compacted")?],
+    ])
+    .await;
+    create_config_toml(home.path(), mock.uri(), "never")?;
+    let socket = home.path().join("control/server.sock");
+    let mut server = spawn_server(home.path(), &socket)?;
+    let mut client = connect_default_daemon_client(&socket).await?;
+    let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    let id = thread.thread.id;
+    let schema = json!({"type":"object","properties":{},"additionalProperties":false});
+    let turn = request(
+        &mut client,
+        /*id*/ 3,
+        "turn/start",
+        json!({
+            "threadId":id,"input":[{"type":"text","text":"Do the work"}],"outputSchema":schema
+        }),
+    )
+    .await?;
+    wait_for_requests(&mock, /*count*/ 1).await?;
+    match outcome {
+        "completed" => {
+            release.send(()).expect("original request is waiting");
+            timeout(DEFAULT_READ_TIMEOUT, async {
+                loop {
+                    let Message::Text(text) = client.next().await.context("socket closed")?? else {
+                        continue;
+                    };
+                    if let JSONRPCMessage::Notification(notification) = serde_json::from_str(&text)?
+                        && notification.method == "turn/completed"
+                    {
+                        break;
+                    }
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await??;
+        }
+        "canceled" => {
+            request(
+                &mut client,
+                /*id*/ 4,
+                "turn/interrupt",
+                json!({"threadId":id,"turnId":turn["turn"]["id"]}),
+            )
+            .await?;
+        }
+        "compacting" => {
+            request(
+                &mut client,
+                /*id*/ 4,
+                "thread/compact/start",
+                json!({"threadId":id}),
+            )
+            .await?;
+            wait_for_requests(&mock, /*count*/ 2).await?;
+        }
+        "running" => {}
+        _ => unreachable!(),
+    }
+    request_shutdown(&server, &socket).await?;
+    let path = daemon_recovery_file_path(home.path());
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        while !path.exists() {
+            sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?;
+    let expected = if outcome == "running" {
+        [(
+            id.clone(),
+            daemon_recovery::InterruptedTurn {
+                turn_id: turn["turn"]["id"].as_str().context("turn ID")?.to_string(),
+                output_schema: Some(schema),
+                service_tier: Some("default".into()),
+                cyber_access_program: None,
+            },
+        )]
+        .into()
+    } else {
+        Default::default()
+    };
+    assert_eq!(
+        daemon_recovery::read_snapshot(&path)?,
+        daemon_recovery::RecoverySnapshot {
+            loaded: [id.clone()].into(),
+            interrupted: expected,
+        }
+    );
+    // Existing binaries can still read the candidate array and ignore the metadata entry.
+    let legacy: std::collections::BTreeSet<String> = serde_json::from_slice(&std::fs::read(path)?)?;
+    assert!(legacy.contains(&id));
+    if server.try_wait()?.is_none() {
+        server.kill().await?;
+    }
+    Ok(())
 }
 
 fn stream_chunk(gate: Option<oneshot::Receiver<()>>, body: &str) -> Result<StreamingSseChunk> {
