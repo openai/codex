@@ -74,15 +74,21 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
 
                 if status == http::StatusCode::SERVICE_UNAVAILABLE
                     && let Ok(value) = serde_json::from_str::<serde_json::Value>(&body_text)
-                    && matches!(
-                        value
-                            .get("error")
-                            .and_then(|error| error.get("code"))
-                            .and_then(serde_json::Value::as_str),
-                        Some("server_is_overloaded" | "slow_down")
-                    )
+                    && let Some(error) = value.get("error")
                 {
-                    return CodexErr::ServerOverloaded;
+                    match error.get("code").and_then(Value::as_str) {
+                        Some("server_is_overloaded") => return CodexErr::ServerOverloaded,
+                        Some("slow_down") => {
+                            return CodexErr::new(CodexErrorDetails::RateLimitExceeded(
+                                error
+                                    .get("message")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
 
                 if (status == http::StatusCode::BAD_REQUEST
