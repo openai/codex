@@ -539,10 +539,12 @@ def test_generated_chatgpt_account_email_is_required_nullable() -> None:
 def test_generated_inline_image_class_names_remain_stable() -> None:
     """Keep the existing Python class names when image references expand."""
     from openai_codex.generated.v2_all import (
+        ImageUserInput,
         InputImageContentItem,
         InputImageFunctionCallOutputContentItem,
     )
 
+    assert ImageUserInput.__name__ == "ImageUserInput"
     assert InputImageContentItem.__name__ == "InputImageContentItem"
     assert (
         InputImageFunctionCallOutputContentItem.__name__

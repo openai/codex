@@ -587,6 +587,7 @@ def _preserve_inline_image_class_names(out_path: Path) -> None:
     """Keep the public class names used before ImageReference was introduced."""
     source = out_path.read_text()
     stable_names = {
+        "UrlUserInput": "ImageUserInput",
         "ImageUrlContentItem": "InputImageContentItem",
         "ImageUrlFunctionCallOutputContentItem": "InputImageFunctionCallOutputContentItem",
     }

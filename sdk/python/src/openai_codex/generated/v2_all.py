@@ -6240,7 +6240,7 @@ class TextUserInput(BaseModel):
     type: Annotated[Literal["text"], Field(title="TextUserInputType")]
 
 
-class UrlUserInput(BaseModel):
+class ImageUserInput(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -6304,7 +6304,7 @@ class MentionUserInput(BaseModel):
 class UserInput(
     RootModel[
         TextUserInput
-        | UrlUserInput
+        | ImageUserInput
         | FileIdUserInput
         | LocalImageUserInput
         | AudioUserInput
@@ -6318,7 +6318,7 @@ class UserInput(
     )
     root: (
         TextUserInput
-        | UrlUserInput
+        | ImageUserInput
         | FileIdUserInput
         | LocalImageUserInput
         | AudioUserInput
