@@ -342,7 +342,7 @@ function Resolve-ReleaseFromGitHub {
     try {
         $releaseMetadata = Invoke-RestMethod -Uri $metadataUri
     } catch {
-        throw "Could not fetch GitHub release metadata for Codex $requestedRelease. GitHub API may be unavailable or rate limited. $($_.Exception.Message)"
+        throw "Could not fetch GitHub release metadata for Codex $requestedRelease. GitHub API may be unavailable or rate limited. $($_.Exception.Message) Consider other installation options https://developers.openai.com/codex/cli"
     }
 
     if ($NormalizedVersion -eq "latest") {
