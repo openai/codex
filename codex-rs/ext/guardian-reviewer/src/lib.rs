@@ -18,6 +18,7 @@ mod pool;
 mod reporting;
 mod retry;
 mod review;
+mod routing;
 mod settings;
 
 pub use assessment::GuardianAssessment;
@@ -47,7 +48,6 @@ pub use pool::ReviewerTasks;
 pub use pool::SessionDisposition;
 
 pub use review::ReviewHost;
-pub use review::SynchronousReview;
 
 pub use completion::ReviewCompletion;
 pub use completion::complete_review;
@@ -66,3 +66,6 @@ pub use feedback::ReviewFeedbackSettings;
 pub use reporting::ReviewDenials;
 pub use reporting::ReviewMetadata;
 pub use reporting::ReviewReport;
+
+pub use routing::ReviewRequest;
+pub use routing::routes_approval_policy_to_guardian;

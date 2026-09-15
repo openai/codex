@@ -1466,11 +1466,45 @@ fn guardian_request_target_item_id_omits_network_access_trigger_call_id() {
     assert_eq!(guardian_request_target_item_id(&network_access), None);
 }
 
+#[derive(Clone, Copy)]
+enum ApprovalCancellation {
+    BeforeRouting,
+    BeforeCachedResult,
+}
+
+#[test_case::test_case(ApprovalCancellation::BeforeRouting; "before_routing")]
+#[test_case::test_case(ApprovalCancellation::BeforeCachedResult; "before_cached_result")]
 #[tokio::test]
-async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
-    let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
+async fn cancelled_guardian_review_emits_terminal_abort_without_warning(
+    moment: ApprovalCancellation,
+) {
+    let (mut session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
     let cancel_token = CancellationToken::new();
-    cancel_token.cancel();
+    match moment {
+        ApprovalCancellation::BeforeRouting => cancel_token.cancel(),
+        ApprovalCancellation::BeforeCachedResult => {
+            struct CancelWhileApproving(CancellationToken);
+            impl codex_extension_api::ApprovalReviewContributor for CancelWhileApproving {
+                fn decide<'a>(
+                    &'a self,
+                    _input: &'a codex_extension_api::ApprovalDecisionInput<'_>,
+                ) -> codex_extension_api::ExtensionFuture<
+                    'a,
+                    Option<codex_extension_api::ApprovalDecision>,
+                > {
+                    self.0.cancel();
+                    Box::pin(async { Some(codex_extension_api::ApprovalDecision::Allow) })
+                }
+            }
+            let mut extensions = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
+            extensions
+                .approval_review_contributor(Arc::new(CancelWhileApproving(cancel_token.clone())));
+            Arc::get_mut(&mut session)
+                .expect("unique test session")
+                .services
+                .extensions = Arc::new(extensions.build());
+        }
+    }
 
     let decision = super::decide_approval(
         Arc::clone(&session),
@@ -1511,10 +1545,13 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
 
     assert_eq!(
         guardian_statuses,
-        vec![
-            GuardianAssessmentStatus::InProgress,
-            GuardianAssessmentStatus::Aborted,
-        ]
+        match moment {
+            ApprovalCancellation::BeforeRouting => vec![
+                GuardianAssessmentStatus::InProgress,
+                GuardianAssessmentStatus::Aborted
+            ],
+            ApprovalCancellation::BeforeCachedResult => vec![],
+        }
     );
     assert!(warnings.is_empty());
 }

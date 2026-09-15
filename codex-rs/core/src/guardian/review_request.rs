@@ -21,10 +21,6 @@ pub(in crate::guardian) struct PreparedApproval {
 impl ReviewHost for super::super::runtime::ReviewRuntime {
     type Prepared = PreparedApproval;
 
-    fn cancellation(&self) -> Option<&CancellationToken> {
-        self.options.external_cancel.as_ref()
-    }
-
     async fn servicing_turn(
         &self,
     ) -> Option<(String, Arc<codex_protocol::openai_models::ModelInfo>)> {
@@ -35,14 +31,15 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
 
     async fn prepare(
         &self,
+        review_id: &str,
         review_reason: GuardianReviewReason,
         deadline: Instant,
+        cancellation: &CancellationToken,
     ) -> Result<(PreparedApproval, codex_guardian_reviewer::ReviewReport), ReviewDecision> {
         let super::super::runtime::ReviewRuntime {
             session,
             history_reset: _,
             context,
-            review_id,
             request,
             reasons: _,
             options,
@@ -56,7 +53,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let GuardianReviewOptions {
             plugin_attribution_override,
             approval_request_source,
-            external_cancel,
+            external_cancel: _,
             require_synchronous_review: _,
             require_guardian: _,
         } = options;
@@ -65,9 +62,6 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let plugin_attribution = match plugin_attribution_override {
             Some(attribution) => Some(attribution),
             None if matches!(&request, GuardianApprovalRequest::ExecCommand { .. }) => {
-                let cancellation = external_cancel
-                    .clone()
-                    .unwrap_or_else(CancellationToken::new);
                 let attribution_deadline = std::cmp::min(
                     deadline,
                     Instant::now() + GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT,
@@ -101,7 +95,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             codex_guardian_reviewer::ReviewReport::new(codex_guardian_reviewer::ReviewMetadata {
                 thread_id: session.thread_id.to_string(),
                 turn_id: assessment_turn_id,
-                review_id,
+                review_id: review_id.to_owned(),
                 target_item_id,
                 plugin_id,
                 script_path,
@@ -153,6 +147,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         &self,
         prepared: &PreparedApproval,
         deadline: Instant,
+        cancellation: &CancellationToken,
     ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
         let (mut outcome, analytics) = run_guardian_review_session_before_deadline(
             Arc::clone(&self.session),
@@ -160,7 +155,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             prepared.request.clone(),
             self.reasons.clone(),
             guardian_output_schema(),
-            self.options.external_cancel.clone(),
+            Some(cancellation.clone()),
             deadline,
         )
         .await;
@@ -182,11 +177,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                             .await
                             .user_message_revision()))
                 || self.history_reset.is_cancelled()
-                || self
-                    .options
-                    .external_cancel
-                    .as_ref()
-                    .is_some_and(CancellationToken::is_cancelled))
+                || cancellation.is_cancelled())
         {
             // A completed approval cannot outlive the owning-session or root evidence
             // it evaluated, including when either changed before prompt construction.
@@ -194,6 +185,14 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         }
 
         (outcome, analytics)
+    }
+
+    fn validate_action(&self) -> Result<(&str, Option<&str>), ReviewDecision> {
+        let request = self.request.validate(&self.context)?;
+        Ok((
+            guardian_request_turn_id(request, &self.context.turn().sub_id),
+            guardian_request_target_item_id(request),
+        ))
     }
 
     async fn emit(&self, event: EventMsg) {

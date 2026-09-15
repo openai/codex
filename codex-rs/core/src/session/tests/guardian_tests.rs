@@ -389,8 +389,18 @@ async fn request_permissions_uses_issuing_step_policy_and_reviewer() {
     );
 }
 
+#[derive(Clone, Copy)]
+enum ReviewCancellationSource {
+    Action,
+    ParentShutdown,
+}
+
+#[test_case::test_case(ReviewCancellationSource::Action; "action")]
+#[test_case::test_case(ReviewCancellationSource::ParentShutdown; "parent_shutdown")]
 #[tokio::test]
-async fn request_permissions_guardian_review_stops_when_cancelled() {
+async fn request_permissions_guardian_review_stops_when_cancelled(
+    source: ReviewCancellationSource,
+) {
     let server = start_mock_server().await;
     let _guardian_request_log = mount_response_once(
         &server,
@@ -479,13 +489,35 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
     .await
     .expect("guardian review should start before cancellation");
 
-    cancellation_token.cancel();
+    let reviewer_tasks = session
+        .services
+        .thread_extension_data
+        .get::<codex_guardian_reviewer::ReviewerTasks>()
+        .expect("reviewer tasks installed");
+    match source {
+        ReviewCancellationSource::Action => cancellation_token.cancel(),
+        ReviewCancellationSource::ParentShutdown => reviewer_tasks.cancellation.cancel(),
+    }
 
     let response = timeout(Duration::from_secs(5), request_handle)
         .await
         .expect("request_permissions should stop when cancelled")
         .expect("request_permissions task should not panic");
-    assert_eq!(response, None);
+    let expected_response = match source {
+        ReviewCancellationSource::Action => None,
+        ReviewCancellationSource::ParentShutdown => Some(RequestPermissionsResponse {
+            permissions: RequestPermissionProfile::default(),
+            scope: PermissionGrantScope::Turn,
+            strict_auto_review: false,
+        }),
+    };
+    assert_eq!(response, expected_response);
+    if matches!(source, ReviewCancellationSource::ParentShutdown) {
+        reviewer_tasks.tasks.close();
+        timeout(Duration::from_secs(5), reviewer_tasks.tasks.wait())
+            .await
+            .expect("parent shutdown must finish reviewer cleanup");
+    }
     assert_eq!(
         session
             .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)

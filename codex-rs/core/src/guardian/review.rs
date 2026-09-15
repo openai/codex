@@ -1,5 +1,5 @@
 //! Supplies host review preparation and context-dependent configuration.
-//! Guardian's extension owns execution, reporting and denial accounting.
+//! Guardian's extension owns routing, execution, reporting and denial accounting.
 
 #[path = "review_request.rs"]
 mod request;
@@ -14,8 +14,6 @@ use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
 use codex_guardian_reviewer::GuardianReviewSessionLimits;
 use codex_guardian_reviewer::ReviewModel;
-use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ReviewDecision;
@@ -98,16 +96,7 @@ pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Whether an exact approval policy and reviewer should route through Guardian.
-pub(crate) fn routes_approval_policy_to_guardian(
-    approval_policy: AskForApproval,
-    approvals_reviewer: ApprovalsReviewer,
-) -> bool {
-    matches!(
-        approval_policy,
-        AskForApproval::OnRequest | AskForApproval::Granular(_)
-    ) && approvals_reviewer == ApprovalsReviewer::AutoReview
-}
+pub(crate) use codex_guardian_reviewer::routes_approval_policy_to_guardian;
 
 pub(crate) fn is_basic_session_source(session_source: &SessionSource) -> bool {
     match session_source {
@@ -115,19 +104,6 @@ pub(crate) fn is_basic_session_source(session_source: &SessionSource) -> bool {
         SessionSource::Internal(InternalSessionSource::Guardian) => true,
         _ => false,
     }
-}
-
-pub(super) async fn record_guardian_non_denial(session: &Arc<Session>) {
-    let turn_id = {
-        let active = session.active_turn.lock().await;
-        let Some(task) = active.as_ref().and_then(|active| active.task.as_ref()) else {
-            return;
-        };
-        task.turn_context.sub_id.clone()
-    };
-    codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
-        .record_non_denial(&turn_id)
-        .await;
 }
 
 #[derive(Clone)]

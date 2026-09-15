@@ -6,12 +6,10 @@ use crate::GuardianReviewOutcome;
 use crate::GuardianReviewSessionLimits;
 use crate::ReviewDenials;
 use crate::ReviewReport;
-use codex_analytics::AnalyticsEventsClient;
+use crate::ReviewRequest;
 use codex_analytics::GuardianReviewAnalyticsResult;
-use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::SynchronousApprovalReviewer;
-use codex_otel::SessionTelemetry;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::EventMsg;
@@ -29,19 +27,23 @@ use tokio_util::sync::CancellationToken;
 /// they do not select Guardian outcomes, retry policy or reporting effects.
 pub trait ReviewHost: Send + Sync {
     type Prepared: Send + Sync;
-    fn cancellation(&self) -> Option<&CancellationToken>;
     /// Captures the turn currently servicing reviews, which may differ from a yielded cell's origin.
     fn servicing_turn(&self) -> impl Future<Output = Option<(String, Arc<ModelInfo>)>> + Send;
+    /// Returns the owning turn and optional target item after validating the action.
+    fn validate_action(&self) -> Result<(&str, Option<&str>), ReviewDecision>;
     fn prepare(
         &self,
+        approval_id: &str,
         reason: GuardianReviewReason,
         deadline: Instant,
+        cancellation: &CancellationToken,
     ) -> impl Future<Output = Result<(Self::Prepared, ReviewReport), ReviewDecision>> + Send;
     /// Rejects stale approvals before returning the attempt's outcome.
     fn attempt(
         &self,
         prepared: &Self::Prepared,
         deadline: Instant,
+        cancellation: &CancellationToken,
     ) -> impl Future<Output = (GuardianReviewOutcome, GuardianReviewAnalyticsResult)> + Send;
     fn emit(&self, event: EventMsg) -> impl Future<Output = ()> + Send;
     fn record_evidence(
@@ -52,32 +54,22 @@ pub trait ReviewHost: Send + Sync {
     fn interrupt(&self, turn_id: &str, warning: EventMsg) -> impl Future<Output = ()> + Send;
 }
 
-/// One review bound by the host before Guardian's approval policy chooses to run it.
-pub struct SynchronousReview<'a, H> {
-    pub host: H,
-    pub thread_store: &'a ExtensionData,
-    pub model: &'a ModelInfo,
-    pub require_guardian: bool,
-    pub telemetry: &'a SessionTelemetry,
-    pub analytics: &'a AnalyticsEventsClient,
-}
-
-impl<H: ReviewHost> SynchronousApprovalReviewer for SynchronousReview<'_, H> {
+impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
     fn review(&self, reason: GuardianReviewReason) -> ExtensionFuture<'_, Option<ReviewDecision>> {
         Box::pin(async move {
             let deadline = Instant::now() + crate::REVIEW_TIMEOUT;
-            let (context, report) = match self.host.prepare(reason, deadline).await {
+            let (context, report) = match self
+                .host
+                .prepare(self.approval_id, reason, deadline, &self.cancellation)
+                .await
+            {
                 Ok(prepared) => prepared,
                 Err(decision) => return Some(decision),
             };
             self.host
                 .emit(EventMsg::GuardianAssessment(report.started_event()))
                 .await;
-            let (outcome, analytics) = if self
-                .host
-                .cancellation()
-                .is_some_and(CancellationToken::is_cancelled)
-            {
+            let (outcome, analytics) = if self.cancellation.is_cancelled() {
                 (
                     GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
                     GuardianReviewAnalyticsResult::without_session(),
@@ -88,8 +80,8 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for SynchronousReview<'_, H> {
                         max_attempts: crate::MAX_REVIEW_ATTEMPTS,
                         deadline,
                     },
-                    self.host.cancellation(),
-                    |deadline| self.host.attempt(&context, deadline),
+                    Some(&self.cancellation),
+                    |deadline| self.host.attempt(&context, deadline, &self.cancellation),
                 ))
                 .await
             };

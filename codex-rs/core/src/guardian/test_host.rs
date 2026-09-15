@@ -35,7 +35,10 @@ pub(crate) fn install(session: &Session, config: &Config) {
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     ));
-    let runtime = Arc::new(codex_guardian_reviewer::ReviewerTasks::default());
+    let runtime = session
+        .services
+        .thread_extension_data
+        .get_or_init(codex_guardian_reviewer::ReviewerTasks::default);
     session
         .services
         .thread_extension_data

@@ -2289,8 +2289,32 @@ async fn guardian_timeout_rejects_tool_call_with_acting_model_instructions(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ApprovalPath {
+    SynchronousFallback,
+    CachedContributor,
+}
+
+struct AttemptCachedApproval(Arc<std::sync::atomic::AtomicUsize>);
+
+impl codex_extension_api::ApprovalReviewContributor for AttemptCachedApproval {
+    fn decide<'a>(
+        &'a self,
+        _input: &'a codex_extension_api::ApprovalDecisionInput<'_>,
+    ) -> codex_extension_api::ExtensionFuture<'a, Option<codex_extension_api::ApprovalDecision>>
+    {
+        self.0
+            .fetch_add(/*val*/ 1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async { Some(codex_extension_api::ApprovalDecision::Allow) })
+    }
+}
+
+#[test_case(ApprovalPath::SynchronousFallback; "synchronous_fallback")]
+#[test_case(ApprovalPath::CachedContributor; "cached_result_requires_fresh_review")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_model_guardian_denial_interrupts_turn_immediately() -> Result<()> {
+async fn cyber_model_guardian_denial_interrupts_turn_immediately(
+    approval_path: ApprovalPath,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_wine_exec!(
@@ -2318,6 +2342,14 @@ async fn cyber_model_guardian_denial_interrupts_turn_immediately() -> Result<()>
                 .set_legacy_sandbox_policy(sandbox_policy_for_config)
                 .expect("set sandbox policy");
         });
+    let cached_calls = Arc::new(std::sync::atomic::AtomicUsize::new(/*v*/ 0));
+    if matches!(approval_path, ApprovalPath::CachedContributor) {
+        let mut extensions = ExtensionRegistryBuilder::default();
+        extensions.approval_review_contributor(Arc::new(AttemptCachedApproval(Arc::clone(
+            &cached_calls,
+        ))));
+        builder = builder.with_extensions(Arc::new(extensions.build()));
+    }
     let test = builder.build_with_auto_env(&server).await?;
 
     let output_file = test.cwd.path().join("cyber-guardian-denied.txt");
@@ -2373,14 +2405,41 @@ async fn cyber_model_guardian_denial_interrupts_turn_immediately() -> Result<()>
         )
         .await?;
 
+    let mut assessments = Vec::new();
     let warning = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
+        match event {
+            EventMsg::GuardianAssessment(event) => assessments.push(event.clone()),
             EventMsg::GuardianWarning(warning)
-                if warning.message.contains("too many approval requests")
-        )
+                if warning.message.contains("too many approval requests") =>
+            {
+                return true;
+            }
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
+                panic!("turn ended without Guardian's denial warning")
+            }
+            _ => {}
+        }
+        false
     })
     .await;
+    assert_eq!(
+        assessments
+            .iter()
+            .map(|event| event.status)
+            .collect::<Vec<_>>(),
+        vec![
+            codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+            codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        ]
+    );
+    assert_eq!(assessments[0].id, assessments[1].id);
+    assert_eq!(
+        cached_calls.load(std::sync::atomic::Ordering::SeqCst),
+        match approval_path {
+            ApprovalPath::SynchronousFallback => 0,
+            ApprovalPath::CachedContributor => 1,
+        }
+    );
     let EventMsg::GuardianWarning(warning) = warning else {
         unreachable!("wait_for_event returned a non-warning event")
     };

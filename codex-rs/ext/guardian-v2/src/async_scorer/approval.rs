@@ -37,7 +37,7 @@ impl ApprovalReviewContributor for GuardianApprovalReviewer {
         input: &'a ApprovalDecisionInput<'_>,
     ) -> ExtensionFuture<'a, Option<ApprovalDecision>> {
         Box::pin(async move {
-            // If the extension is unavailable, core keeps its existing synchronous fallback.
+            // If the scorer is unavailable, the reviewer extension runs its synchronous fallback.
             let manager = self.thread_manager.upgrade()?;
             let Ok(thread) = manager.get_thread(input.thread_id).await else {
                 record_fast_decision(input.metrics.as_deref(), "deferred", "scoring_failure");

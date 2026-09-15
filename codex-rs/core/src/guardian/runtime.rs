@@ -77,7 +77,6 @@ pub(super) struct ReviewRuntime {
     pub(super) session: Arc<Session>,
     pub(super) history_reset: CancellationToken,
     pub(super) context: GuardianReviewContext,
-    pub(super) review_id: String,
     pub(super) request: ReviewAction,
     pub(super) reasons: ApprovalRequestReasons,
     pub(super) options: GuardianReviewOptions,
