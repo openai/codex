@@ -72,7 +72,7 @@ pub async fn update_from_cli(
             .ok()
             .map(|info| info.app_server_version),
         managed_codex_path,
-        message: "The CLI package is selected and pinned.".to_string(),
+        message: "The CLI package is selected and pinned. Run `codex app-server daemon update` to return to production updates.".to_string(),
     }))
 }
 

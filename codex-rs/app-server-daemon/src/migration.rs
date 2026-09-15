@@ -24,7 +24,7 @@ pub(super) async fn run(http: &impl InstallerHttp, legacy: &Daemon) -> Result<Up
     let _operation_lock = legacy.acquire_operation_lock().await?;
     let previous = selected_release(legacy)?;
     anyhow::ensure!(
-        previous.0.ends_with("standalone") && legacy.is_stable_standalone_release()?,
+        previous.0.ends_with("standalone") && super::manual_update::supported(legacy)?,
         "daemon selection changed; retry the update"
     );
     let home = previous

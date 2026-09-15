@@ -60,7 +60,7 @@ pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
                         connection
                     } else {
                         let settings = daemon.load_settings().await?;
-                        if !daemon.is_stable_standalone_release()?
+                        if !supported(daemon)?
                             || (daemon.running_backend_instance(&settings).await?.is_none()
                                 && client::probe(&daemon.socket_path).await.is_ok())
                         {
@@ -70,8 +70,16 @@ pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
                             .stop()
                             .await?;
                         let current_exe = std::env::current_exe()?;
-                        let worker = crate::backend::pid_update_loop_backend(
-                            daemon.backend_paths_with_bin(&settings, &current_exe),
+                        let paths = daemon.backend_paths_with_bin(&settings, &current_exe);
+                        let restore_release = if daemon.is_stable_standalone_release()? {
+                            None
+                        } else {
+                            Some(selected_release(daemon)?.2)
+                        };
+                        let worker = crate::backend::PidBackend::new_update_loop(
+                            paths.codex_bin,
+                            paths.update_pid_file,
+                            restore_release,
                         );
                         worker.start().await?;
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -120,11 +128,38 @@ pub(crate) async fn request(daemon: &Daemon) -> Result<UpdateOutput> {
         transport?;
         let outcome: std::result::Result<UpdateOutput, String> =
             serde_json::from_slice(&response).context("invalid response from daemon updater")?;
-        return outcome.map_err(anyhow::Error::msg);
+        let outcome = outcome.map_err(anyhow::Error::msg)?;
+        if outcome.status == UpdateStatus::Unsupported && supported(daemon)? {
+            // A scheduled or older updater cannot authorize restoring a pin.
+            // Replace it under the writable operation lock, even with identical bytes.
+            let _operation_lock = daemon.acquire_operation_lock().await?;
+            let settings = daemon.load_settings().await?;
+            let worker = crate::backend::pid_update_loop_backend(daemon.backend_paths(&settings));
+            if !daemon.is_stable_standalone_release()? {
+                worker.stop().await?;
+                continue 'request;
+            }
+        }
+        return Ok(outcome);
     }
 }
 
-const UNSUPPORTED_MESSAGE: &str = "This command requires a CLI-managed daemon and a stable latest-channel standalone install; update this installation with its owning installer.";
+pub(super) fn supported(daemon: &Daemon) -> Result<bool> {
+    if daemon.is_stable_standalone_release()? {
+        return Ok(true);
+    }
+    let Ok((root, release, _)) = selected_release(daemon) else {
+        return Ok(false);
+    };
+    let bin = daemon.current_managed_codex_bin()?;
+    Ok(std::fs::canonicalize(root.join("releases"))
+        .is_ok_and(|releases| release.parent() == Some(releases.as_path()))
+        && bin.is_file()
+        && std::fs::canonicalize(bin).is_ok_and(|bin| bin.starts_with(&release)))
+}
+
+const UNSUPPORTED_MESSAGE: &str =
+    "This command requires a daemon package selected from its managed releases directory.";
 
 pub(super) async fn unsupported(daemon: &Daemon) -> Result<UpdateOutput> {
     let managed_codex_path = daemon.current_managed_codex_bin()?;
@@ -146,6 +181,7 @@ pub(super) async fn handle_request(
     daemon: &Daemon,
     running_updater_identity: &crate::managed_install::ExecutableIdentity,
     terminate: &mut Signal,
+    trigger: UpdateTrigger<'_>,
 ) -> Result<RequestDisposition> {
     #[cfg(windows)]
     if connection.ensure_non_elevated_peer().is_err() {
@@ -159,7 +195,7 @@ pub(super) async fn handle_request(
     {
         return Ok(RequestDisposition::Unchanged);
     }
-    let result = run(http, daemon, running_updater_identity, terminate).await;
+    let result = run(http, daemon, running_updater_identity, terminate, trigger).await;
     let interrupted = result.as_ref().err().is_some_and(|err| {
         err.downcast_ref::<std::io::Error>()
             .is_some_and(|err| err.kind() == std::io::ErrorKind::Interrupted)
@@ -192,10 +228,12 @@ pub(super) async fn run(
     daemon: &Daemon,
     running_updater_identity: &crate::managed_install::ExecutableIdentity,
     terminate: &mut Signal,
+    trigger: UpdateTrigger<'_>,
 ) -> Result<UpdateOutput> {
     let settings = daemon.load_settings().await?;
     let managed_running = daemon.running_backend_instance(&settings).await?.is_some();
-    if !daemon.is_stable_standalone_release()?
+    if !(daemon.is_stable_standalone_release()?
+        || matches!(trigger, UpdateTrigger::RestoreProduction(_)) && supported(daemon)?)
         || (!managed_running && client::probe(&daemon.socket_path).await.is_ok())
     {
         return unsupported(daemon).await;
@@ -204,14 +242,8 @@ pub(super) async fn run(
     let managed_codex_path = daemon.current_managed_codex_bin()?;
     let (_, previous_release, _) = selected_release(daemon)?;
     let previous_identity = executable_identity(&managed_codex_path).await?;
-    let (control, restart) = update_once(
-        http,
-        daemon,
-        running_updater_identity,
-        terminate,
-        UpdateTrigger::Manual,
-    )
-    .await?;
+    let (control, restart) =
+        update_once(http, daemon, running_updater_identity, terminate, trigger).await?;
     if matches!(control, UpdateLoopControl::Stop) {
         return Err(std::io::Error::from(std::io::ErrorKind::Interrupted).into());
     }

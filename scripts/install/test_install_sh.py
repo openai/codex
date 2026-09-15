@@ -183,6 +183,63 @@ class InstallShTest(unittest.TestCase):
                 (daemon / "current").resolve(), daemon / "releases" / release_name
             )
             self.assertEqual((daemon / "auto-update-version").read_text(), release_name)
+            options["daemon_only"] = True
+            local = daemon / "releases/local-development"
+            local.mkdir()
+            (daemon / "current").unlink()
+            (daemon / "current").symlink_to(local)
+            marker = daemon / "auto-update-version"
+            marker.unlink()
+
+            scheduled, _ = run_installer_in(
+                root, "latest", update_guard_from_release=local.name, **options
+            )
+            self.assertEqual(scheduled.returncode, 0, scheduled.stderr)
+            self.assertEqual((daemon / "current").resolve(), local)
+            self.assertFalse(marker.exists())
+
+            raced, _ = run_installer_in(
+                root,
+                "latest",
+                update_guard_from_release="a-different-release",
+                manual_update=True,
+                **options,
+            )
+            self.assertNotEqual(raced.returncode, 0, raced.stderr)
+            self.assertEqual((daemon / "current").resolve(), local)
+            self.assertFalse(marker.exists())
+
+            binary = daemon / "releases" / release_name / "bin/codex"
+            contents = binary.read_text()
+            binary.write_text(
+                '#!/bin/sh\n[ "$1" = "--version" ] || exit 2\n'
+                f"echo codex-cli {VERSION}\n"
+            )
+            incompatible, _ = run_installer_in(
+                root,
+                "latest",
+                update_guard_from_release=local.name,
+                manual_update=True,
+                **options,
+            )
+            self.assertNotEqual(incompatible.returncode, 0)
+            self.assertIn("does not support daemon-owned packages", incompatible.stderr)
+            self.assertEqual((daemon / "current").resolve(), local)
+            self.assertFalse(marker.exists())
+            binary.write_text(contents)
+
+            restored, _ = run_installer_in(
+                root,
+                "latest",
+                update_guard_from_release=local.name,
+                manual_update=True,
+                **options,
+            )
+            self.assertEqual(restored.returncode, 0, restored.stderr)
+            self.assertEqual(
+                (daemon / "current").resolve(), daemon / "releases" / release_name
+            )
+            self.assertEqual(marker.read_text(), release_name)
             self.assertEqual(visible.resolve(), original)
             self.assertTrue(pending.is_symlink())
             self.assertEqual(profile.read_text(), "unchanged profile\n")
@@ -672,6 +729,7 @@ def run_installer_in(
     old_updater_parent_pid: int | None = None,
     fail_ps: bool = False,
     daemon_only: bool = False,
+    manual_update: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -831,11 +889,12 @@ def run_installer_in(
             "SHELL": "/bin/sh",
         }
     )
+    env["CODEX_INSTALL_IF_CURRENT"] = "1" if manual_update else "0"
     if update_guard_from_release is None:
         env.pop("CODEX_INSTALL_IF_LATEST", None)
         env.pop("CODEX_UPDATE_FROM_RELEASE", None)
     else:
-        env["CODEX_INSTALL_IF_LATEST"] = "1"
+        env["CODEX_INSTALL_IF_LATEST"] = "0" if manual_update else "1"
         env["CODEX_UPDATE_FROM_RELEASE"] = update_guard_from_release
     if old_updater_parent_pid is not None:
         env["CODEX_TEST_PARENT_PID"] = str(old_updater_parent_pid)

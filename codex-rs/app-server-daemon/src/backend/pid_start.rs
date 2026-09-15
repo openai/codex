@@ -205,7 +205,7 @@ impl PidBackend {
             // Never retry inside the parent's Job Object: that would report a
             // successful launch that dies when the terminal/SSH session closes.
             command.creation_flags(DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
-            if matches!(self.command_kind, PidCommandKind::UpdateLoop) {
+            if matches!(self.command_kind, PidCommandKind::UpdateLoop { .. }) {
                 match fs::remove_file(self.pid_file.with_extension("ready")).await {
                     Ok(()) => {}
                     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -216,7 +216,7 @@ impl PidBackend {
                 PidCommandKind::AppServer { .. } => {
                     command.env(codex_app_server_transport::DAEMON_SHUTDOWN_SOCKET_ENV, "1");
                 }
-                PidCommandKind::UpdateLoop => {
+                PidCommandKind::UpdateLoop { .. } => {
                     let shutdown_file = self.pid_file.with_extension("shutdown");
                     match fs::remove_file(&shutdown_file).await {
                         Ok(()) => {}
@@ -311,7 +311,7 @@ impl PidBackend {
             });
         }
         #[cfg(windows)]
-        if matches!(self.command_kind, PidCommandKind::UpdateLoop) {
+        if matches!(self.command_kind, PidCommandKind::UpdateLoop { .. }) {
             self.finish_updater_start(&record, replacement.as_ref())
                 .await?;
         }

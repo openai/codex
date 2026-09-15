@@ -821,6 +821,9 @@ enum AppServerDaemonSubcommand {
         /// Check support for daemon-owned packages without starting the updater.
         #[arg(long, hide = true)]
         check_package_ownership: bool,
+        /// Authorize one production restoration of this selected release.
+        #[arg(long, hide = true)]
+        restore_release: Option<String>,
     },
 }
 
@@ -1434,12 +1437,14 @@ async fn cli_main(
                     }
                     AppServerDaemonSubcommand::PidUpdateLoop {
                         check_package_ownership: true,
+                        ..
                     } => return Ok(()),
                     AppServerDaemonSubcommand::Update {
                         from_cli: false, ..
                     }
                     | AppServerDaemonSubcommand::PidUpdateLoop {
                         check_package_ownership: false,
+                        ..
                     } => {
                         let cli_overrides = root_config_overrides
                             .parse_overrides()
@@ -1458,8 +1463,17 @@ async fn cli_main(
                                 codex_app_server_daemon::update(http_client_factory).await?;
                             println!("{}", serde_json::to_string(&output)?);
                         } else {
-                            codex_app_server_daemon::run_pid_update_loop(http_client_factory)
-                                .await?;
+                            let AppServerDaemonSubcommand::PidUpdateLoop {
+                                restore_release, ..
+                            } = daemon_cli.subcommand
+                            else {
+                                unreachable!()
+                            };
+                            codex_app_server_daemon::run_pid_update_loop(
+                                http_client_factory,
+                                restore_release,
+                            )
+                            .await?;
                         }
                     }
                 },

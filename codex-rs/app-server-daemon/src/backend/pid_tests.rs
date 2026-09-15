@@ -434,7 +434,11 @@ async fn shutdown_grace_handles_process_exit() {
             /*remote_control_enabled*/ false,
         );
         #[cfg(windows)]
-        let backend = PidBackend::new_update_loop(temp.path().join("codex"), pid_file);
+        let backend = PidBackend::new_update_loop(
+            temp.path().join("codex"),
+            pid_file,
+            /*restore_release*/ None,
+        );
         let result = tokio::time::timeout(
             Duration::from_secs(3),
             backend.stop_with_grace(grace_seconds),
@@ -503,7 +507,11 @@ async fn stopping_updater_signals_its_installer_process_group() {
     )
     .await
     .expect("write pid file");
-    let backend = PidBackend::new_update_loop(temp.path().join("codex"), pid_file);
+    let backend = PidBackend::new_update_loop(
+        temp.path().join("codex"),
+        pid_file,
+        /*restore_release*/ None,
+    );
     backend.stop().await.expect("stop updater");
     // The backend normally reaps the shim, so a second wait may return ECHILD.
     let _ = child.wait();
@@ -542,8 +550,11 @@ async fn exited_unreaped_updater_is_reaped() {
         process_identity,
         executable_identity: None,
     };
-    let backend =
-        PidBackend::new_update_loop(temp.path().join("codex"), temp.path().join("updater.pid"));
+    let backend = PidBackend::new_update_loop(
+        temp.path().join("codex"),
+        temp.path().join("updater.pid"),
+        /*restore_release*/ None,
+    );
     child.kill().expect("terminate updater shim");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let result = loop {
@@ -569,7 +580,9 @@ fn update_loop_uses_hidden_app_server_subcommand() {
         codex_bin: "codex".into(),
         pid_file: "updater.pid".into(),
         lock_file: "updater.pid.lock".into(),
-        command_kind: PidCommandKind::UpdateLoop,
+        command_kind: PidCommandKind::UpdateLoop {
+            restore_release: None,
+        },
     };
 
     assert_eq!(
@@ -692,6 +705,7 @@ async fn failed_updater_handoff_preserves_predecessor_record() {
     let backend = PidBackend::new_update_loop(
         temp.path().join("missing-codex.exe"),
         state_dir.join("updater.pid"),
+        /*restore_release*/ None,
     );
     let record = PidRecord {
         pid: std::process::id(),
@@ -738,6 +752,7 @@ async fn updater_readiness_and_post_publication_failure_preserve_ownership() {
     let backend = PidBackend::new_update_loop(
         temp.path().join("codex.exe"),
         temp.path().join("updater.pid"),
+        /*restore_release*/ None,
     );
     let _lock = backend
         .acquire_reservation_lock()

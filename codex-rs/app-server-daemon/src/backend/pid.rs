@@ -78,11 +78,11 @@ enum PidFileState {
     Running(PidRecord),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 enum PidCommandKind {
     AppServer { remote_control_enabled: bool },
-    UpdateLoop,
+    UpdateLoop { restore_release: Option<String> },
 }
 
 impl PidBackend {
@@ -107,13 +107,17 @@ impl PidBackend {
         }
     }
 
-    pub(crate) fn new_update_loop(codex_bin: PathBuf, pid_file: PathBuf) -> Self {
+    pub(crate) fn new_update_loop(
+        codex_bin: PathBuf,
+        pid_file: PathBuf,
+        restore_release: Option<String>,
+    ) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
         Self {
             codex_bin,
             pid_file,
             lock_file,
-            command_kind: PidCommandKind::UpdateLoop,
+            command_kind: PidCommandKind::UpdateLoop { restore_release },
         }
     }
 
@@ -190,7 +194,7 @@ impl PidBackend {
                             tracing::warn!(%pid, %err, "managed app-server shutdown request failed; waiting for force deadline");
                         }
                     }
-                    PidCommandKind::UpdateLoop => {
+                    PidCommandKind::UpdateLoop { .. } => {
                         fs::write(self.pid_file.with_extension("shutdown"), pid.to_string())
                             .await
                             .context("failed to request updater shutdown")?;
@@ -358,15 +362,21 @@ impl PidBackend {
     }
 
     #[cfg(any(unix, windows))]
-    fn command_args(&self) -> Vec<&'static str> {
-        match self.command_kind {
+    fn command_args(&self) -> Vec<&str> {
+        match &self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
             } => vec!["app-server", "--remote-control", "--listen", "unix://"],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
             } => vec!["app-server", "--listen", "unix://"],
-            PidCommandKind::UpdateLoop => vec!["app-server", "daemon", "pid-update-loop"],
+            PidCommandKind::UpdateLoop { restore_release } => {
+                let mut args = vec!["app-server", "daemon", "pid-update-loop"];
+                if let Some(release) = restore_release {
+                    args.extend(["--restore-release", release.as_str()]);
+                }
+                args
+            }
         }
     }
 
@@ -379,7 +389,7 @@ impl PidBackend {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
             }
-            | PidCommandKind::UpdateLoop => None,
+            | PidCommandKind::UpdateLoop { .. } => None,
         }
     }
 
@@ -387,9 +397,9 @@ impl PidBackend {
         match self.command_kind {
             PidCommandKind::AppServer { .. } => terminate_process(pid),
             #[cfg(unix)]
-            PidCommandKind::UpdateLoop => terminate_process_group(pid),
+            PidCommandKind::UpdateLoop { .. } => terminate_process_group(pid),
             #[cfg(not(unix))]
-            PidCommandKind::UpdateLoop => terminate_process(pid),
+            PidCommandKind::UpdateLoop { .. } => terminate_process(pid),
         }
     }
 
@@ -397,7 +407,7 @@ impl PidBackend {
     fn force_terminate_process(&self, pid: u32) -> Result<()> {
         match self.command_kind {
             PidCommandKind::AppServer { .. } => force_terminate_process(pid),
-            PidCommandKind::UpdateLoop => force_terminate_process_group(pid),
+            PidCommandKind::UpdateLoop { .. } => force_terminate_process_group(pid),
         }
     }
 

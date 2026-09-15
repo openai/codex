@@ -1177,7 +1177,7 @@ if [ "$DAEMON_ONLY" = "1" ]; then
   updater_record="$CODEX_HOME_DIR/app-server-daemon/daemon-updater.pid"
 fi
 old_updater_parent="false"
-if [ "${CODEX_INSTALL_IF_LATEST:-}" != "1" ] && [ -f "$updater_record" ]; then
+if [ "${CODEX_INSTALL_IF_LATEST:-}" != "1" ] && [ "${CODEX_INSTALL_IF_CURRENT:-}" != "1" ] && [ -f "$updater_record" ]; then
   updater_pid="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$updater_record" | head -n 1)"
   recorded_start="$(sed -n 's/.*"processStartTime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$updater_record" | head -n 1)"
   if [ -r "/proc/$$/stat" ]; then
@@ -1201,7 +1201,7 @@ if [ "${CODEX_INSTALL_IF_LATEST:-}" != "1" ] && [ -f "$updater_record" ]; then
     exit 0
   fi
 fi
-if [ "${CODEX_INSTALL_IF_LATEST:-}" = "1" ] || [ "$old_updater_parent" = "true" ]; then
+if [ "${CODEX_INSTALL_IF_LATEST:-}" = "1" ] || [ "${CODEX_INSTALL_IF_CURRENT:-}" = "1" ] || [ "$old_updater_parent" = "true" ]; then
   guarded_release="${CODEX_UPDATE_FROM_RELEASE:-}"
   if [ "$old_updater_parent" = "true" ]; then
     guarded_release="$(cat "$AUTO_UPDATE_VERSION" 2>/dev/null || true)"
@@ -1209,8 +1209,17 @@ if [ "${CODEX_INSTALL_IF_LATEST:-}" = "1" ] || [ "$old_updater_parent" = "true" 
   current_release_dir="$(cd -P "$CURRENT_LINK" 2>/dev/null && pwd)" || exit 0
   releases_dir="$(cd -P "$RELEASES_DIR" 2>/dev/null && pwd)" || exit 0
   if [ "$RELEASE" != "latest" ] || [ -z "$guarded_release" ] ||
-    [ "$(cat "$AUTO_UPDATE_VERSION" 2>/dev/null || true)" != "$guarded_release" ] ||
     [ "$current_release_dir" != "$releases_dir/$guarded_release" ]; then
+    if [ "${CODEX_INSTALL_IF_CURRENT:-}" = "1" ]; then
+      echo "Daemon selection changed; retry the update." >&2
+      exit 1
+    fi
+    exit 0
+  fi
+  # An explicit daemon update may leave a local or pinned release. Scheduled
+  # updates still require the selected release to follow the latest channel.
+  if [ "${CODEX_INSTALL_IF_CURRENT:-}" != "1" ] &&
+    [ "$(cat "$AUTO_UPDATE_VERSION" 2>/dev/null || true)" != "$guarded_release" ]; then
     exit 0
   fi
 fi
@@ -1248,6 +1257,16 @@ fi
 if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$install_layout"; then
   echo "Installed Codex command did not report expected version $resolved_version." >&2
   exit 1
+fi
+if [ "$DAEMON_ONLY" = "1" ] && [ "${CODEX_INSTALL_DEFER_SELECTION:-0}" != "1" ]; then
+  installed_codex="$release_dir/codex"
+  if [ "$install_layout" = "package" ]; then
+    installed_codex="$release_dir/bin/codex"
+  fi
+  if ! "$installed_codex" app-server daemon pid-update-loop --check-package-ownership >/dev/null 2>&1; then
+    echo "The production release does not support daemon-owned packages; the current selection was left unchanged." >&2
+    exit 1
+  fi
 fi
 update_current_link "$release_dir"
 if [ "$RELEASE" = "latest" ]; then

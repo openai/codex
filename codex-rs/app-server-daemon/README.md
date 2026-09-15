@@ -58,14 +58,13 @@ Positive minute intervals have no configured cap. `daemon restart` applies the
 enabled state; the next updater wait reads a new interval. The preference does
 not affect an explicit `codex update` command or `daemon update`.
 
-`daemon update` checks the latest stable release once, even with automatic
-updates disabled. It requires an installer-owned latest-channel package in either
-the dedicated daemon root or the retained legacy root. JSON reports `updated`,
-`noUpdate`, or `unsupported`, with installed
-and running versions. The updater owns scheduled and manual installs. A manual
-update restarts a running managed daemon, so active or queued work may be
-interrupted.
-Accepted updates continue if the CLI exits. Installer errors return nonzero.
+`daemon update` selects the latest stable release, even with automatic updates
+disabled. It also returns pinned or local managed packages to production update
+eligibility, preserving the automatic-update preference. Legacy installations
+migrate to the dedicated root once the published installer and release support
+migration. JSON reports `updated`, `noUpdate`, or `unsupported`, with installed
+and running versions. A running daemon restarts, so active or queued work may be
+interrupted; a stopped daemon stays stopped. Installer errors return nonzero.
 The updater uses saved network settings; CLI `-c` overrides do not reach it.
 
 For all managed app-server shutdowns, including explicit stop and restart and

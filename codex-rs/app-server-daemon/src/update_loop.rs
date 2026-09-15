@@ -49,7 +49,7 @@ pub(crate) async fn request_manual_update(
         .pid_file
         .file_name()
         .is_some_and(|name| name == crate::LEGACY_PID_FILE_NAME)
-        && daemon.is_stable_standalone_release()?
+        && manual_update::supported(daemon)?
     {
         let http = RouteAwareClientPool::new_without_request_logging(
             http_client_factory,
@@ -67,7 +67,10 @@ const INSTALL_URL: &str = "https://chatgpt.com/codex/install.sh";
 #[cfg(windows)]
 const INSTALL_URL: &str = "https://chatgpt.com/codex/install.ps1";
 
-pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
+pub(crate) async fn run(
+    http_client_factory: HttpClientFactory,
+    restore_release: Option<String>,
+) -> Result<()> {
     let http = RouteAwareClientPool::new_without_request_logging(
         http_client_factory,
         ClientRouteClass::Other,
@@ -76,6 +79,7 @@ pub(crate) async fn run(http_client_factory: HttpClientFactory) -> Result<()> {
         &http,
         &Daemon::from_environment()?,
         &current_updater_identity().await?,
+        restore_release,
     )
     .await
 }
@@ -84,6 +88,7 @@ async fn run_with_http(
     http: &impl InstallerHttp,
     daemon: &Daemon,
     running_updater_identity: &ExecutableIdentity,
+    mut restore_release: Option<String>,
 ) -> Result<()> {
     #[cfg(unix)]
     let mut terminate =
@@ -136,7 +141,7 @@ async fn run_with_http(
         .map(|settings| settings.auto_update_enabled)
         .unwrap_or(true);
     let mut next_check = Instant::now()
-        + if needs_managed_handoff || !auto_update_enabled {
+        + if restore_release.is_some() || needs_managed_handoff || !auto_update_enabled {
             Duration::from_secs(15)
         } else {
             INITIAL_UPDATE_DELAY
@@ -148,7 +153,11 @@ async fn run_with_http(
             _ = terminate.recv() => return Ok(()),
             connection = listener.as_mut().context("updater listener closed")?.accept() => {
                 let connection = connection.context("failed to accept updater request")?;
-                let disposition = match manual_update::handle_request(connection, http, daemon, running_updater_identity, &mut terminate).await {
+                // Only a manual CLI launch under the operation lock supplies this
+                // single-use authority. Ordinary socket requests cannot undo a pin.
+                let restoration = restore_release.take();
+                let trigger = restoration.as_deref().map_or(UpdateTrigger::Manual, UpdateTrigger::RestoreProduction);
+                let disposition = match manual_update::handle_request(connection, http, daemon, running_updater_identity, &mut terminate, trigger).await {
                     Ok(manual_update::RequestDisposition::Stop) => return Ok(()),
                     Ok(disposition) => disposition,
                     Err(_) => manual_update::RequestDisposition::Continue,
@@ -168,6 +177,10 @@ async fn run_with_http(
                 next_check = Instant::now();
             }
             _ = sleep_until(next_check) => {
+                // The authorizing CLI may have exited before sending its request.
+                if restore_release.is_some() {
+                    return Ok(());
+                }
                 match UpdaterSettings::load(&daemon.settings_file).await {
                     Ok(settings) if !settings.auto_update_enabled => return Ok(()),
                     Err(_) => {
@@ -284,9 +297,10 @@ enum UpdateLoopControl {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum UpdateTrigger {
+enum UpdateTrigger<'a> {
     Scheduled,
     Manual,
+    RestoreProduction(&'a str),
 }
 
 async fn update_once(
@@ -294,7 +308,7 @@ async fn update_once(
     daemon: &Daemon,
     running_updater_identity: &ExecutableIdentity,
     terminate: &mut Signal,
-    trigger: UpdateTrigger,
+    trigger: UpdateTrigger<'_>,
 ) -> Result<(UpdateLoopControl, Option<RestartIfRunningOutcome>)> {
     if trigger == UpdateTrigger::Scheduled
         && !UpdaterSettings::load(&daemon.settings_file)
@@ -308,20 +322,36 @@ async fn update_once(
         // latest-channel marker. Retry after the interval instead of exiting.
         return Ok((UpdateLoopControl::Continue, None));
     }
-    let (package_root, _, previous_release) = selected_release(daemon)?;
+    let (package_root, previous_selection, previous_release) = selected_release(daemon)?;
     let codex_home = package_root
         .parent()
         .and_then(Path::parent)
         .context("daemon package root has no Codex home")?;
+    let (installer_mode, installer_guard) =
+        if let UpdateTrigger::RestoreProduction(expected) = trigger {
+            anyhow::ensure!(
+                previous_release == expected,
+                "daemon selection changed; retry the update"
+            );
+            (
+                InstallerMode::RestoreProduction(&previous_release),
+                "CODEX_INSTALL_IF_CURRENT",
+            )
+        } else {
+            (
+                InstallerMode::Update(&previous_release),
+                "CODEX_INSTALL_IF_LATEST",
+            )
+        };
     let script = tokio::select! {
         result = fetch_installer_script(http) => result?,
         _ = terminate.recv() => return Ok((UpdateLoopControl::Stop, None)),
     };
     anyhow::ensure!(
         script
-            .windows(b"CODEX_INSTALL_IF_LATEST".len())
-            .any(|window| window == b"CODEX_INSTALL_IF_LATEST"),
-        "standalone installer does not support guarded updates"
+            .windows(installer_guard.len())
+            .any(|window| window == installer_guard.as_bytes()),
+        "standalone installer does not support {installer_guard} guarded updates"
     );
     if package_root.ends_with("app-server-daemon") {
         anyhow::ensure!(
@@ -347,22 +377,20 @@ async fn update_once(
     );
     #[cfg(unix)]
     if matches!(
-        run_installer_script(
-            &script,
-            InstallerMode::Update(&previous_release),
-            &package_root,
-            terminate.recv()
-        )
-        .await?,
+        run_installer_script(&script, installer_mode, &package_root, terminate.recv()).await?,
         UpdateLoopControl::Stop
     ) {
         return Ok((UpdateLoopControl::Stop, None));
     }
     #[cfg(windows)]
     tokio::select! {
-        result = run_installer_script(&script, InstallerMode::Update(&previous_release), &package_root) => { result?; },
+        result = run_installer_script(&script, installer_mode, &package_root) => { result?; },
         _ = terminate.recv() => return Ok((UpdateLoopControl::Stop, None)),
     }
+    anyhow::ensure!(
+        trigger == UpdateTrigger::Scheduled || daemon.is_stable_standalone_release()?,
+        "installer did not select a stable latest release; retry the update"
+    );
     if release_selection_unstable(daemon, trigger)? {
         return Ok((UpdateLoopControl::Continue, None));
     }
@@ -370,7 +398,16 @@ async fn update_once(
     let managed_codex_bin =
         resolved_managed_codex_bin(&daemon.current_managed_codex_bin()?).await?;
     let restart_mode = match trigger {
-        UpdateTrigger::Manual => RestartMode::IfBinaryOrVersionChanged,
+        // The package can contain different resources even when its CLI binary
+        // is identical. A release change must also replace the running process.
+        UpdateTrigger::Manual | UpdateTrigger::RestoreProduction(_)
+            if selected_release(daemon)?.1 != previous_selection =>
+        {
+            RestartMode::Always
+        }
+        UpdateTrigger::Manual | UpdateTrigger::RestoreProduction(_) => {
+            RestartMode::IfBinaryOrVersionChanged
+        }
         UpdateTrigger::Scheduled
             if executable_identity(&managed_codex_bin).await? != *running_updater_identity =>
         {
@@ -405,7 +442,7 @@ async fn update_once(
                 ));
             }
             RestartIfRunningOutcome::AlreadyCurrent
-                if trigger == UpdateTrigger::Manual
+                if trigger != UpdateTrigger::Scheduled
                     && restart_mode == RestartMode::IfBinaryOrVersionChanged =>
             {
                 anyhow::ensure!(
@@ -421,7 +458,7 @@ async fn update_once(
             }
             RestartIfRunningOutcome::NotReady | RestartIfRunningOutcome::AlreadyCurrent => {
                 anyhow::ensure!(
-                    trigger != UpdateTrigger::Manual,
+                    trigger == UpdateTrigger::Scheduled,
                     "managed daemon could not restart; retry when it is ready"
                 );
                 return Ok((
@@ -437,12 +474,15 @@ async fn update_once(
     }
 }
 
-fn release_selection_unstable(daemon: &Daemon, trigger: UpdateTrigger) -> Result<bool> {
-    if daemon.is_stable_standalone_release()? {
+fn release_selection_unstable(daemon: &Daemon, trigger: UpdateTrigger<'_>) -> Result<bool> {
+    if daemon.is_stable_standalone_release()?
+        || matches!(trigger, UpdateTrigger::RestoreProduction(_))
+            && manual_update::supported(daemon)?
+    {
         return Ok(false);
     }
     anyhow::ensure!(
-        trigger != UpdateTrigger::Manual,
+        trigger == UpdateTrigger::Scheduled,
         "standalone install selection changed during the update"
     );
     Ok(true)
@@ -485,6 +525,7 @@ pub(crate) fn reexec_managed_updater(managed_codex_bin: &std::path::Path) -> Res
 
 enum InstallerMode<'a> {
     Update(&'a str),
+    RestoreProduction(&'a str),
     Migration,
 }
 
@@ -509,9 +550,10 @@ async fn run_installer_script(
             .kill_on_drop(true);
         command
     };
-    let (guard, previous_release, defer_selection) = match mode {
-        InstallerMode::Update(release) => ("1", release, "0"),
-        InstallerMode::Migration => ("0", "", "1"),
+    let (latest_guard, current_guard, previous_release, defer_selection) = match mode {
+        InstallerMode::Update(release) => ("1", "0", release, "0"),
+        InstallerMode::RestoreProduction(release) => ("0", "1", release, "0"),
+        InstallerMode::Migration => ("0", "0", "", "1"),
     };
     let mut child = command
         .env(
@@ -532,7 +574,8 @@ async fn run_installer_script(
         )
         .env("CODEX_RELEASE", "latest")
         .env("CODEX_NON_INTERACTIVE", "1")
-        .env("CODEX_INSTALL_IF_LATEST", guard)
+        .env("CODEX_INSTALL_IF_LATEST", latest_guard)
+        .env("CODEX_INSTALL_IF_CURRENT", current_guard)
         .env("CODEX_UPDATE_FROM_RELEASE", previous_release)
         .kill_on_drop(true)
         .stdin(Stdio::piped())
