@@ -34,6 +34,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fmt;
 
+pub(crate) mod analytics;
 mod chatgpt_turn_cost;
 mod rate_limit_resets;
 mod thread_usage;
