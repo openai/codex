@@ -9,7 +9,9 @@ use std::time::Duration;
 use anyhow::Context;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_extension_api::AllowedTools;
 use codex_extension_api::SessionIsolation;
+use codex_extension_api::ToolName;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::ThreadStoreError;
@@ -20,6 +22,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use test_case::test_case;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -239,6 +242,108 @@ async fn owner_cancellation_closes_agent_and_preserves_history_and_parent() -> a
             .single_request()
             .body_contains_text("parent still works")
     );
+    fixture.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(vec![ToolName::namespaced("functions", "update_plan")]; "selected_tool")]
+#[test_case(vec![]; "no_tools")]
+async fn startup_allowlist_controls_advertising_and_execution(
+    tools: Vec<ToolName>,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let fixture = test_codex()
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+            config
+                .features
+                .disable(codex_features::Feature::CodeMode)
+                .expect("disable Code Mode for direct-tool assertions");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mut options = StartThreadOptions::new(fixture.config.clone());
+    options.environments = Some(fixture.codex.environment_selections().await);
+    options
+        .thread_extension_init
+        .insert(SessionIsolation::Isolated);
+    options
+        .thread_extension_init
+        .insert(AllowedTools(tools.clone()));
+    let cancelled = CancellationToken::new();
+    let tasks = TaskTracker::new();
+    let agent = fixture
+        .thread_manager
+        .start_thread_until(options, cancelled.clone().cancelled_owned(), &tasks)
+        .await?;
+    // Replacing extension state after startup must not change the captured ceiling.
+    agent
+        .thread
+        .thread_extension_data()
+        .insert(AllowedTools(vec![ToolName::plain("exec_command")]));
+    let response = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_function_call(
+                    "plan",
+                    "update_plan",
+                    r#"{"plan":[{"step":"inspect","status":"completed"}]}"#,
+                ),
+                responses::ev_function_call(
+                    "excluded",
+                    "exec_command",
+                    r#"{"cmd":"echo should-not-run"}"#,
+                ),
+                responses::ev_completed("tools"),
+            ]),
+            responses::sse(vec![responses::ev_completed("done")]),
+        ],
+    )
+    .await;
+    agent
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Try both tools".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&agent.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].body_json()["tools"]
+            .as_array()
+            .expect("request tools array")
+            .iter()
+            .map(|tool| tool["name"].as_str().expect("plain tool name"))
+            .collect::<Vec<_>>(),
+        tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        requests[1].function_call_output("excluded")["output"],
+        "unsupported call: exec_command"
+    );
+    assert_eq!(
+        requests[1].function_call_output("plan")["output"],
+        if tools.is_empty() {
+            "unsupported call: update_plan"
+        } else {
+            "Plan updated"
+        }
+    );
+    cancelled.cancel();
+    tasks.close();
+    tasks.wait().await;
     fixture.codex.shutdown_and_wait().await?;
     Ok(())
 }

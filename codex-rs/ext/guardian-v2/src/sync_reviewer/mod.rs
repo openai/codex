@@ -82,6 +82,9 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
                             options
                                 .thread_extension_init
                                 .insert(SessionIsolation::Isolated);
+                            options
+                                .thread_extension_init
+                                .insert(codex_guardian_reviewer::reviewer_allowed_tools());
                             let session_cancel = cancel.clone();
                             let until = async move {
                                 let _cancel_on_exit = cancel.clone().drop_guard();

@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use codex_extension_api::AllowedTools;
+use codex_extension_api::ToolName;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -20,6 +22,17 @@ use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
+
+/// Reviewer tools, including the existing Code Mode dispatchers when enabled.
+/// The host still applies feature flags and sandbox restrictions to these tools.
+pub fn reviewer_allowed_tools() -> AllowedTools {
+    AllowedTools(
+        ["exec_command", "write_stdin", "view_image", "exec", "wait"]
+            .into_iter()
+            .map(ToolName::plain)
+            .collect(),
+    )
+}
 
 /// Configuration policy for a reviewer. The host retains managed constraints and
 /// live network rules while applying these values to its concrete runtime config.

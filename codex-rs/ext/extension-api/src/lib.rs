@@ -1,3 +1,4 @@
+mod allowed_tools;
 mod capabilities;
 mod contributors;
 mod registry;
@@ -6,6 +7,7 @@ mod state;
 mod turn_admission;
 mod user_instructions;
 
+pub use allowed_tools::AllowedTools;
 pub use session_isolation::SessionIsolation;
 
 pub use capabilities::ConversationHistorySnapshot;

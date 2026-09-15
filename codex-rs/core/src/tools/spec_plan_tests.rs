@@ -515,9 +515,92 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
 }
 
 #[tokio::test]
+async fn allowed_tools_filter_sources_before_code_mode_and_discovery() {
+    use crate::tools::registry::ToolRegistry;
+    use codex_extension_api::AllowedTools;
+
+    for allowed in [
+        None,
+        Some(AllowedTools(vec![
+            ToolName::namespaced("kept", "lookup"),
+            ToolName::plain("exec"),
+            ToolName::plain("wait"),
+        ])),
+        Some(AllowedTools::default()),
+    ] {
+        let (_, mut turn) = make_session_and_context().await;
+        set_feature(&mut turn, Feature::CodeMode, /*enabled*/ true);
+        set_web_search_mode(&mut turn, WebSearchMode::Live);
+        update_turn_settings_for_test(&mut turn, |settings| {
+            let model = Arc::make_mut(&mut settings.model_info);
+            model.supports_search_tool = true;
+            model.use_responses_lite = false;
+        });
+        let mut registry = ToolRegistry::with_allowed_tools(allowed.clone().map(Arc::new));
+        registry.add(crate::tools::handlers::PlanHandler);
+        let hosted = append_source_tools(
+            &turn,
+            turn.model_info(),
+            &mut registry,
+            vec![
+                mcp_runtime("kept", "kept", "lookup", ToolExposure::Deferred),
+                mcp_runtime("excluded", "excluded", "lookup", ToolExposure::Deferred),
+            ],
+            [Arc::new(DeferredExtensionTool)
+                as Arc<
+                    dyn for<'call> ToolExecutor<ExtensionToolCall<'call>>,
+                >],
+            &[dynamic_tool(
+                /*namespace*/ None,
+                "dynamic_echo",
+                /*defer_loading*/ false,
+            )],
+        );
+        assert!(!hosted.is_empty(), "exercise hosted tool filtering too");
+        let router = ToolRouter::from_registry(
+            &turn,
+            turn.model_info(),
+            registry,
+            hosted,
+            &Default::default(),
+        );
+        let plan = ToolPlanProbe::from_router(router);
+        match allowed {
+            None => {
+                plan.assert_registered_contains(&["update_plan", "extension_echo", "dynamic_echo"]);
+                plan.assert_visible_contains(&["web_search", "tool_search", "exec", "wait"]);
+            }
+            Some(allowed) if allowed.0.is_empty() => {
+                assert_eq!(plan.registered_names, Vec::<String>::new());
+                assert_eq!(plan.visible_specs, Vec::<ToolSpec>::new());
+                assert_eq!(plan.code_mode_tool_names, BTreeMap::new());
+            }
+            Some(_) => {
+                assert_eq!(plan.registered_names, vec!["exec", "wait", "keptlookup"]);
+                assert_eq!(
+                    plan.code_mode_tool_names
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    vec![ToolName::namespaced("kept", "lookup")]
+                );
+                plan.assert_visible_lacks(&[
+                    "web_search",
+                    "tool_search",
+                    "update_plan",
+                    "dynamic_echo",
+                    "extension_echo",
+                ]);
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn internal_guardian_sessions_exclude_optional_core_tools() {
-    let (session, mut turn) = make_session_and_context().await;
+    let (mut session, mut turn) = make_session_and_context().await;
     turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+    session.allowed_tools = Some(Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()));
     set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
     Arc::make_mut(&mut turn.config).update_plan_enabled = true;
     turn.multi_agent_version = MultiAgentVersion::V2;
@@ -554,8 +637,9 @@ async fn internal_guardian_sessions_respect_managed_shell_restrictions() {
         (Some(Feature::UnifiedExec), ConfigShellToolType::UnifiedExec),
         (None, ConfigShellToolType::Disabled),
     ] {
-        let (session, mut turn) = make_session_and_context().await;
+        let (mut session, mut turn) = make_session_and_context().await;
         turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+        session.allowed_tools = Some(Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()));
         set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
         set_feature(&mut turn, Feature::CodeMode, /*enabled*/ true);
         if let Some(feature) = disabled_feature {
@@ -608,8 +692,9 @@ async fn internal_guardian_sessions_respect_managed_shell_restrictions() {
 
 #[tokio::test]
 async fn internal_guardian_sessions_preserve_code_mode() {
-    let (session, mut turn) = make_session_and_context().await;
+    let (mut session, mut turn) = make_session_and_context().await;
     turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+    session.allowed_tools = Some(Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()));
     set_feature(&mut turn, Feature::CodeMode, /*enabled*/ true);
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
@@ -653,8 +738,9 @@ async fn internal_guardian_sessions_require_managed_secondary_environments() {
             Vec::new(),
         ),
     ] {
-        let (session, mut turn) = make_session_and_context().await;
+        let (mut session, mut turn) = make_session_and_context().await;
         turn.session_source = SessionSource::Internal(InternalSessionSource::Guardian);
+        session.allowed_tools = Some(Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()));
         set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
         let TurnEnvironmentState::Ready(primary) = turn
             .environments
