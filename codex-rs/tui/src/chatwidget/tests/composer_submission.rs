@@ -2796,6 +2796,7 @@ fn image_preparation_keeps_input_responsive_and_preserves_pending_input() {
                     assert_chatwidget_snapshot!(
                         "image_preparation_disconnected",
                         normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+                            .replace('◦', "•")
                     );
                     chat.on_images_prepared(id);
                 } else {
