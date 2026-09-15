@@ -5,6 +5,7 @@
 
 use super::analytics::ToolCallAnalytics;
 use super::*;
+use crate::agent::child_config::build_agent_resume_config;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::tools::context::FunctionToolOutput;
@@ -85,7 +86,8 @@ pub(super) async fn handle_message_string_tool(
     let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
-    let resume_config = build_agent_resume_config(turn.as_ref())?;
+    let resume_config =
+        build_agent_resume_config(turn.as_ref()).map_err(FunctionCallError::RespondToModel)?;
     session
         .services
         .agent_control

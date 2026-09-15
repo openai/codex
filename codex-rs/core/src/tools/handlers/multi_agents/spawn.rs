@@ -1,4 +1,7 @@
 use super::*;
+use crate::agent::child_config::SpawnConfigOptions;
+use crate::agent::child_config::SpawnConfigVersion;
+use crate::agent::child_config::prepare_agent_spawn_config;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::control::render_input_preview;
@@ -89,25 +92,20 @@ async fn handle_spawn_agent(
             }),
         )
         .await;
-    let mut config =
-        build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
-    if args.fork_context {
-        reject_full_fork_agent_type_override(role_name)?;
-    }
-    apply_requested_spawn_agent_model_overrides(
+    let prepared = prepare_agent_spawn_config(
         &session,
         turn.as_ref(),
-        &mut config,
-        args.model.as_deref(),
-        args.reasoning_effort.clone(),
+        SpawnConfigOptions {
+            version: SpawnConfigVersion::V1,
+            full_history_fork: args.fork_context,
+            role_name,
+            model: args.model.as_deref(),
+            reasoning_effort: args.reasoning_effort.clone(),
+        },
     )
-    .await?;
-    if !args.fork_context {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
-    }
-    apply_spawn_agent_service_tier(&session, &mut config).await?;
-    apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-
+    .await
+    .map_err(FunctionCallError::RespondToModel)?;
+    let config = prepared.config;
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
         input_items,
@@ -115,7 +113,7 @@ async fn handle_spawn_agent(
             session.thread_id,
             &turn.session_source,
             child_depth,
-            role_name,
+            prepared.role_name.as_deref(),
             /*task_name*/ None,
         )?),
         SpawnAgentOptions {
