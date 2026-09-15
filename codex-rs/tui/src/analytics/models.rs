@@ -25,6 +25,7 @@ pub(crate) enum AccountAnalyticsUnit {
     RelativeUsage,
     Credits,
     Count,
+    Tokens,
 }
 
 #[derive(Debug, Clone, PartialEq)]
