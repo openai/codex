@@ -1719,6 +1719,7 @@ jobs:
   publish-dotslash:
     name: publish-dotslash
     needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
