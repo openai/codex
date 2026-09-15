@@ -23,7 +23,9 @@ use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ToolError;
 use crate::turn_metadata::ExecutionMetadata;
 use codex_analytics::AppInvocation;
+use codex_analytics::ElicitationType;
 use codex_analytics::InvocationType;
+use codex_analytics::McpToolCallElicitation;
 use codex_analytics::build_track_events_context;
 use codex_api::HostedFileUploadContext;
 use codex_config::ConfigLayerSource;
@@ -41,6 +43,7 @@ use codex_mcp::SandboxState;
 use codex_mcp::ToolInfo;
 use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
+use codex_mcp::is_connector_auth_failure_from_tool_result;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpToolCallError;
@@ -450,6 +453,7 @@ async fn handle_approved_mcp_tool_call(
     let mut tool_input = arguments_value
         .clone()
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
+    let mut elicitation_type = None;
     let result = async {
         let result = async {
             let mut result = prepared_call
@@ -532,6 +536,8 @@ async fn handle_approved_mcp_tool_call(
                 })
                 .await
                 .map_err(|error| format!("tool call error: {error:?}"))?;
+            // Capture trusted server metadata before result callbacks or model-facing rewrites.
+            elicitation_type = mcp_tool_call_auth_elicitation_type(&server, connector_id, &result);
             let mcp_tool = McpToolContext::from_prepared_call(
                 &prepared_call,
                 turn_context.config.mcp_servers.get().get(&server),
@@ -581,6 +587,9 @@ async fn handle_approved_mcp_tool_call(
         tracing::warn!("MCP tool call error: {error:?}");
     }
     let duration = start.elapsed();
+    if let Some(elicitation_type) = elicitation_type {
+        track_mcp_tool_call_elicitation(sess, turn_context, call_id, elicitation_type);
+    }
     notify_mcp_tool_call_completed(
         sess,
         turn_context,
@@ -591,7 +600,7 @@ async fn handle_approved_mcp_tool_call(
         truncate_mcp_tool_result_for_event(&result),
     )
     .await;
-    maybe_track_codex_app_used(sess, step_context, &server, &metadata).await;
+    maybe_track_codex_app_used(sess, step_context, &server, &metadata, elicitation_type).await;
 
     let outcome = mcp_call_metric_outcome(&result);
     emit_mcp_call_metrics(
@@ -1059,6 +1068,7 @@ async fn maybe_track_codex_app_used(
     step_context: &StepContext,
     server: &str,
     metadata: &McpToolApprovalMetadata,
+    elicitation_type: Option<ElicitationType>,
 ) {
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return;
@@ -1090,8 +1100,34 @@ async fn maybe_track_codex_app_used(
             app_name,
             invocation_type: Some(invocation_type),
         },
-        /*elicitation_type*/ None,
+        elicitation_type,
     );
+}
+
+fn track_mcp_tool_call_elicitation(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    elicitation_type: ElicitationType,
+) {
+    sess.services
+        .analytics_events_client
+        .track_mcp_tool_call_elicitation(McpToolCallElicitation {
+            thread_id: sess.thread_id.to_string(),
+            turn_id: turn_context.sub_id.clone(),
+            item_id: call_id.to_string(),
+            elicitation_type,
+        });
+}
+
+fn mcp_tool_call_auth_elicitation_type(
+    server: &str,
+    connector_id: Option<&str>,
+    result: &CallToolResult,
+) -> Option<ElicitationType> {
+    (server == CODEX_APPS_MCP_SERVER_NAME
+        && is_connector_auth_failure_from_tool_result(result, connector_id))
+    .then_some(ElicitationType::AuthOrLink)
 }
 
 #[derive(Clone, Copy)]
@@ -1583,7 +1619,7 @@ pub(crate) async fn request_mcp_tool_user_approval(
             .as_ref()
             .map(|rendered_template| rendered_template.question.as_str()),
     );
-    if tool_call_mcp_elicitation_enabled {
+    let (request_dispatched, decision) = if tool_call_mcp_elicitation_enabled {
         let link_id = sess
             .mcp_tool_approval_metadata(server, id)
             .and_then(|(_, metadata)| metadata.link_id);
@@ -1617,27 +1653,40 @@ pub(crate) async fn request_mcp_tool_user_approval(
                     .map(|rendered_template| rendered_template.elicitation_message.as_str()),
                 prompt_options,
             });
-        let decision = parse_mcp_tool_approval_elicitation_response(
-            sess.request_mcp_server_elicitation(turn_context, server.clone(), request_id, request)
-                .await
-                .response,
-            &question_id,
-        );
-        return normalize_approval_decision_for_mode(decision, *approval_mode);
-    }
-
-    let args = RequestUserInputArgs {
-        questions: vec![question],
-        is_blocking: true,
-        auto_resolution_ms: None,
+        let outcome = sess
+            .request_mcp_server_elicitation(turn_context, server.clone(), request_id, request)
+            .await;
+        (
+            outcome.sent,
+            parse_mcp_tool_approval_elicitation_response(outcome.response, &question_id),
+        )
+    } else {
+        let args = RequestUserInputArgs {
+            questions: vec![question],
+            is_blocking: true,
+            auto_resolution_ms: None,
+        };
+        let response = sess
+            .request_user_input(turn_context, call_id.to_string(), args)
+            .await;
+        (
+            true,
+            parse_mcp_tool_approval_response(
+                response.map(|accepted| accepted.response),
+                &question_id,
+            ),
+        )
     };
-    let response = sess
-        .request_user_input(turn_context, call_id.to_string(), args)
-        .await;
-    normalize_approval_decision_for_mode(
-        parse_mcp_tool_approval_response(response.map(|accepted| accepted.response), &question_id),
-        *approval_mode,
-    )
+    let decision = normalize_approval_decision_for_mode(decision, *approval_mode);
+    if request_dispatched
+        && matches!(
+            decision,
+            ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort
+        )
+    {
+        track_mcp_tool_call_elicitation(sess, turn_context, call_id, ElicitationType::Approval);
+    }
+    decision
 }
 
 fn session_mcp_tool_approval_key(
