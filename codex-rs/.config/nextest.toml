@@ -6,6 +6,11 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 retries = 1
 
 [[profile.default.overrides]]
+# This case validates and copies both the initial and replacement debug package.
+filter = 'package(codex-cli) & binary(app_server_daemon) & test(=packaged_daemon_start_and_explicit_replacement)'
+slow-timeout = { period = "1m", terminate-after = 3 }
+
+[[profile.default.overrides]]
 # These cases copy a full debug CLI package and launch its new executable.
 filter = 'package(codex-cli) & binary(app_server_daemon) & test(packaged_daemon_)'
 slow-timeout = { period = "1m", terminate-after = 2 }

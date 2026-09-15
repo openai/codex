@@ -153,12 +153,17 @@ pub(crate) async fn managed_codex_version(codex_bin: &Path) -> Result<String> {
     let mut command = Command::new(codex_bin);
     #[cfg(windows)]
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    let output = command.arg("--version").output().await.with_context(|| {
-        format!(
-            "failed to invoke managed Codex binary {}",
-            codex_bin.display()
-        )
-    })?;
+    let output = command
+        .arg("--version")
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| {
+            format!(
+                "failed to invoke managed Codex binary {}",
+                codex_bin.display()
+            )
+        })?;
     if !output.status.success() {
         return Err(anyhow!(
             "managed Codex binary {} exited with status {}",

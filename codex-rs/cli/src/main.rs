@@ -57,6 +57,7 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod app_cmd;
 mod cloud_config;
+mod daemon_install;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod doctor;
@@ -792,8 +793,15 @@ enum AppServerDaemonSubcommand {
     /// Restart the local app server daemon.
     Restart,
 
-    /// Update the standalone installation and restart the managed daemon (may interrupt work).
-    Update,
+    /// Update the daemon package (may interrupt running work).
+    Update {
+        /// Copy and pin this CLI package.
+        #[arg(long)]
+        from_cli: bool,
+        /// Confirm replacing the daemon package without an interactive prompt.
+        #[arg(short = 'y', long, requires = "from_cli")]
+        yes: bool,
+    },
 
     /// Enable remote control for future starts and a currently running managed daemon.
     EnableRemoteControl,
@@ -1396,6 +1404,18 @@ async fn cli_main(
                     AppServerDaemonSubcommand::Restart => {
                         print_app_server_daemon_output(AppServerLifecycleCommand::Restart).await?;
                     }
+                    AppServerDaemonSubcommand::Update {
+                        from_cli: true,
+                        yes,
+                    } => {
+                        if let Some(output) = codex_app_server_daemon::update_from_cli(|request| {
+                            daemon_install::confirm_install(request, yes)
+                        })
+                        .await?
+                        {
+                            println!("{}", serde_json::to_string(&output)?);
+                        }
+                    }
                     AppServerDaemonSubcommand::EnableRemoteControl => {
                         print_app_server_remote_control_output(AppServerRemoteControlMode::Enabled)
                             .await?;
@@ -1415,7 +1435,9 @@ async fn cli_main(
                     AppServerDaemonSubcommand::PidUpdateLoop {
                         check_package_ownership: true,
                     } => return Ok(()),
-                    AppServerDaemonSubcommand::Update
+                    AppServerDaemonSubcommand::Update {
+                        from_cli: false, ..
+                    }
                     | AppServerDaemonSubcommand::PidUpdateLoop {
                         check_package_ownership: false,
                     } => {
@@ -1428,7 +1450,10 @@ async fn cli_main(
                             .await
                             .map_err(anyhow::Error::from);
                         let http_client_factory = updater_http_client_factory(config);
-                        if matches!(daemon_cli.subcommand, AppServerDaemonSubcommand::Update) {
+                        if matches!(
+                            daemon_cli.subcommand,
+                            AppServerDaemonSubcommand::Update { .. }
+                        ) {
                             let output =
                                 codex_app_server_daemon::update(http_client_factory).await?;
                             println!("{}", serde_json::to_string(&output)?);
@@ -2647,7 +2672,7 @@ fn app_server_subcommand_name(subcommand: Option<&AppServerSubcommand>) -> &'sta
             AppServerDaemonSubcommand::Bootstrap(_) => "app-server daemon bootstrap",
             AppServerDaemonSubcommand::Start => "app-server daemon start",
             AppServerDaemonSubcommand::Restart => "app-server daemon restart",
-            AppServerDaemonSubcommand::Update => "app-server daemon update",
+            AppServerDaemonSubcommand::Update { .. } => "app-server daemon update",
             AppServerDaemonSubcommand::EnableRemoteControl => {
                 "app-server daemon enable-remote-control"
             }

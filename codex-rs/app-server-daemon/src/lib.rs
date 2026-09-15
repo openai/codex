@@ -7,6 +7,8 @@ mod client;
 mod install_lock;
 mod managed_install;
 mod prepare_install;
+pub use prepare_install::InstallRequest;
+pub use prepare_install::update_from_cli;
 mod remote_control_client;
 mod settings;
 mod thread_recovery;

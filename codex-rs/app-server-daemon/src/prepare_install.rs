@@ -1,7 +1,8 @@
-//! Prepares complete local CLI packages for a stopped daemon. Legacy standalone
-//! installations are left to their installer; new releases are immutable.
+//! Installs complete CLI packages after confirmation. Initial starts preserve
+//! existing selections; explicit replacements migrate to dedicated packages and stay pinned.
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -14,68 +15,134 @@ use crate::install_lock::acquire_install_lock;
 use crate::managed_install;
 use crate::settings::DaemonSettings;
 
+/// The complete CLI package offered for a daemon installation.
+pub struct InstallRequest {
+    pub source: PathBuf,
+    pub version: String,
+    pub destination: PathBuf,
+    pub installed_version: Option<String>,
+    pub restart_required: bool,
+}
+
 /// Prepare a missing package while the caller holds the daemon operation lock.
 pub(super) async fn prepare(daemon: &Daemon, settings: &DaemonSettings) -> Result<()> {
     let source = InstallContext::current().package_layout.as_ref();
-    prepare_from_package(
+    // Keep package replacement state out of the CLI dispatcher's async stack frame.
+    Box::pin(prepare_from_package(
         daemon,
         settings,
+        InstallMode::Missing,
         source.map(|layout| layout.package_dir.as_path()),
         &std::env::current_exe()?,
-    )
+        |_| Ok(true),
+    ))
     .await
+    .map(|_| ())
+}
+
+/// Select this CLI's complete package and pin it, restarting only a running daemon.
+/// Returns None when the user cancels without changing the installation.
+pub async fn update_from_cli(
+    confirm: impl FnOnce(&InstallRequest) -> Result<bool>,
+) -> Result<Option<crate::UpdateOutput>> {
+    crate::ensure_supported_platform()?;
+    #[cfg(windows)]
+    crate::backend::windows::ensure_not_elevated()?;
+    let daemon = Daemon::from_environment()?;
+    let settings = daemon.load_settings().await?;
+    let source = InstallContext::current().package_layout.as_ref();
+    if !Box::pin(prepare_from_package(
+        &daemon,
+        &settings,
+        InstallMode::Replace,
+        source.map(|layout| layout.package_dir.as_path()),
+        &std::env::current_exe()?,
+        confirm,
+    ))
+    .await?
+    {
+        return Ok(None);
+    }
+    let managed_codex_path = daemon.current_managed_codex_bin()?;
+    Ok(Some(crate::UpdateOutput {
+        status: crate::UpdateStatus::Updated,
+        installed_version: Some(managed_install::managed_codex_version(&managed_codex_path).await?),
+        running_version: crate::client::probe(&daemon.socket_path)
+            .await
+            .ok()
+            .map(|info| info.app_server_version),
+        managed_codex_path,
+        message: "The CLI package is selected and pinned.".to_string(),
+    }))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstallMode {
+    Missing,
+    Replace,
 }
 
 async fn prepare_from_package(
     daemon: &Daemon,
     settings: &DaemonSettings,
+    mode: InstallMode,
     source: Option<&Path>,
     running_exe: &Path,
-) -> Result<()> {
+    confirm: impl FnOnce(&InstallRequest) -> Result<bool>,
+) -> Result<bool> {
     let home = daemon
         .settings_file
         .parent()
         .and_then(Path::parent)
         .context("daemon settings path has no Codex home")?;
-    let root = managed_install::package_root(home);
+    let previous_root = managed_install::package_root(home);
+    let root = home.join("packages/app-server-daemon");
     anyhow::ensure!(
-        daemon.managed_codex_bin.starts_with(&root),
+        daemon.managed_codex_bin.starts_with(&previous_root),
         "daemon package location changed; retry the command"
     );
-    if !root.ends_with("app-server-daemon")
-        || daemon.running_backend_instance(settings).await?.is_some()
-        || crate::client::probe(&daemon.socket_path).await.is_ok()
-    {
-        return Ok(());
-    }
-    if !matches!(root.join("current").symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-        || ["daemon.pid", "daemon.stderr.log", "daemon-updater.pid", "daemon-updater.stderr.log"]
-            .iter().any(|name| !matches!(home.join("app-server-daemon").join(name).symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
-    {
-        daemon.ensure_managed_codex_bin()?;
-        return Ok(());
+    if mode == InstallMode::Missing {
+        if previous_root != root
+            || daemon.running_backend_instance(settings).await?.is_some()
+            || crate::client::probe(&daemon.socket_path).await.is_ok()
+        {
+            return Ok(true);
+        }
+        if !matches!(root.join("current").symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            || ["daemon.pid", "daemon.stderr.log", "daemon-updater.pid", "daemon-updater.stderr.log"]
+                .iter().any(|name| !matches!(home.join("app-server-daemon").join(name).symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
+        {
+            daemon.ensure_managed_codex_bin()?;
+            return Ok(true);
+        }
+    } else {
+        anyhow::ensure!(
+            previous_root.join("current").symlink_metadata().is_ok(),
+            "no daemon package is selected; run `codex app-server daemon start` first"
+        );
     }
     std::fs::create_dir_all(&root)?;
-    let _install_lock = acquire_install_lock(&root).await?;
-    // An older CLI may have launched a legacy daemon while this CLI waited.
     anyhow::ensure!(
-        managed_install::package_root(home) == root,
+        managed_install::package_root(home) == previous_root,
         "daemon package location changed; retry the command"
     );
+    let backend = daemon.running_backend_instance(settings).await?;
     anyhow::ensure!(
-        daemon.running_backend_instance(settings).await?.is_none()
-            && crate::client::probe(&daemon.socket_path).await.is_err(),
-        "an app server started while preparing the daemon; retry the command"
+        backend.is_some() || crate::client::probe(&daemon.socket_path).await.is_err(),
+        "app server is running but is not managed by codex app-server daemon"
     );
     let selected = managed_install::managed_codex_bin(home);
-    let missing = !selected.is_file();
-    if !missing {
-        return Ok(());
+    let previous_release = previous_root.join("current").canonicalize().ok();
+    if mode == InstallMode::Missing {
+        if selected.is_file() {
+            return Ok(true);
+        }
+        anyhow::ensure!(
+            backend.is_none()
+                && matches!(root.join("current").symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+            "the selected daemon package is incomplete; repair its installation before starting"
+        );
     }
-    anyhow::ensure!(
-        matches!(root.join("current").symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
-        "the selected daemon package is incomplete; repair its installation before starting"
-    );
     let source = source.context(
         "this CLI has no complete local package; install a packaged Codex CLI or use the standalone installer",
     )?;
@@ -98,12 +165,62 @@ async fn prepare_from_package(
         "the CLI package does not match this platform or executable"
     );
     validate_package(source)?;
-    eprintln!(
-        "Installing daemon from CLI version {version} into {}...",
-        root.display()
-    );
-    let stable = stable_version(&version).is_some();
+    // A local build may replace the executable while confirmation is pending.
     let running_identity = managed_install::executable_identity(running_exe).await?;
+    if mode == InstallMode::Replace {
+        if !confirm(&InstallRequest {
+            source: source.to_path_buf(),
+            version: version.clone(),
+            destination: root.clone(),
+            installed_version: tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                managed_install::managed_codex_version(&selected),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok),
+            restart_required: backend.is_some(),
+        })? {
+            return Ok(false);
+        }
+    } else {
+        eprintln!(
+            "Installing daemon from CLI version {version} into {}...",
+            root.display()
+        );
+    }
+    // Confirmation must not block lifecycle commands. Recheck the approved
+    // selection and running state once this operation owns both locks.
+    let _operation_lock = if mode == InstallMode::Replace {
+        Some(daemon.acquire_operation_lock().await?)
+    } else {
+        None // Initial startup already holds the operation lock.
+    };
+    let current_settings = if mode == InstallMode::Replace {
+        Some(daemon.load_settings().await?)
+    } else {
+        None
+    };
+    let settings = current_settings.as_ref().unwrap_or(settings);
+    let _install_lock = acquire_install_lock(&root).await?;
+    anyhow::ensure!(
+        managed_install::package_root(home) == previous_root,
+        "daemon package location changed; retry the command"
+    );
+    if mode == InstallMode::Missing && managed_install::managed_codex_bin(home).is_file() {
+        return Ok(true);
+    }
+    anyhow::ensure!(
+        previous_root.join("current").canonicalize().ok() == previous_release,
+        "daemon selection changed while awaiting confirmation; retry the command"
+    );
+    let current_backend = daemon.running_backend_instance(settings).await?;
+    anyhow::ensure!(
+        current_backend.is_some() == backend.is_some(),
+        "daemon running state changed while awaiting confirmation; retry the command"
+    );
+    let backend = current_backend;
+    let stable = stable_version(&version).is_some();
     let releases = root.join("releases");
     std::fs::create_dir_all(&releases)?;
     let stage = tempfile::Builder::new()
@@ -128,7 +245,7 @@ async fn prepare_from_package(
         !stable || version == binary_version,
         "the CLI package version does not match its executable"
     );
-    let name = if stable {
+    let name = if stable && mode == InstallMode::Missing {
         format!("{version}-{target}")
     } else {
         format!("local-{digest}-{target}")
@@ -149,7 +266,8 @@ async fn prepare_from_package(
     }
     let standalone = home.join("packages/standalone");
     let canonical_source = source.canonicalize()?;
-    let follows_latest = stable
+    let follows_latest = mode == InstallMode::Missing
+        && stable
         && (standalone.join("current").canonicalize().ok().as_deref()
             != Some(canonical_source.as_path())
             || std::fs::read_to_string(standalone.join("auto-update-version"))
@@ -157,11 +275,55 @@ async fn prepare_from_package(
                 .as_deref()
                 == canonical_source.file_name().and_then(|name| name.to_str()));
     anyhow::ensure!(
-        managed_install::package_root(home) == root
-            && daemon.running_backend_instance(settings).await?.is_none()
-            && crate::client::probe(&daemon.socket_path).await.is_err(),
-        "daemon state changed while preparing its package; retry the command"
+        managed_install::package_root(home) == previous_root
+            && (backend.is_some() || crate::client::probe(&daemon.socket_path).await.is_err()),
+        "daemon package location or socket ownership changed while preparing its package; retry the command"
     );
+    #[cfg(windows)]
+    if backend.is_some() {
+        crate::backend::windows::ensure_detached_launch(&release.join(entrypoint))?;
+    }
+    #[cfg(windows)]
+    windows::validate_selection(&root)?;
+    if mode == InstallMode::Replace {
+        let stopped = async {
+            crate::backend::pid_update_loop_backend(daemon.backend_paths(settings))
+                .stop()
+                .await?;
+            anyhow::ensure!(
+                managed_install::package_root(home) == previous_root
+                    && previous_root.join("current").canonicalize().ok() == previous_release,
+                "daemon selection changed while preparing its package; retry the command"
+            );
+            if let Some(backend) = &backend {
+                if let Err(error) = crate::thread_recovery::discard_pending(daemon) {
+                    eprintln!(
+                        "warning: failed to clear stale daemon recovery before replacement: {error}"
+                    );
+                }
+                backend
+                    .stop_with_grace(settings.shutdown_grace_seconds)
+                    .await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = stopped {
+            if let Err(restore_error) = async {
+                daemon
+                    .current_installation()?
+                    .ensure_managed_updater(settings)
+                    .await
+            }
+            .await
+            {
+                eprintln!(
+                    "warning: failed to restore the daemon updater after replacement failed: {restore_error:#}"
+                );
+            }
+            return Err(error);
+        }
+    }
     let marker = root.join("auto-update-version");
     if follows_latest {
         let temporary = tempfile::NamedTempFile::new_in(&root)?;
@@ -179,7 +341,21 @@ async fn prepare_from_package(
     }
     #[cfg(windows)]
     windows::select_release(&root, &release)?;
-    Ok(())
+    if backend.is_some() {
+        let selected = Daemon {
+            pid_file: daemon.pid_file.with_file_name(crate::DAEMON_PID_FILE_NAME),
+            update_pid_file: daemon
+                .update_pid_file
+                .with_file_name(crate::DAEMON_UPDATE_PID_FILE_NAME),
+            managed_codex_bin: root.join("current").join(entrypoint),
+            ..daemon.clone()
+        };
+        selected.start_managed_backend(settings).await.context(
+            "daemon package selected but could not start; retry with `codex app-server daemon start`",
+        )?;
+        selected.wait_until_ready().await?;
+    }
+    Ok(true)
 }
 
 /// Hash the complete tree and optionally copy those same bytes. Relative file

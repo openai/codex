@@ -25,11 +25,21 @@ pub(super) fn select_release(root: &Path, release: &Path) -> Result<()> {
         std::fs::rename(junction, &current)?;
         return Ok(());
     }
+    validate_selection(root)?;
+    retarget_junction(&current, &release)
+}
+
+pub(super) fn validate_selection(root: &Path) -> Result<()> {
+    let current = root.join("current");
+    if matches!(current.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
     anyhow::ensure!(
         current.canonicalize()?.parent() == Some(root.join("releases").canonicalize()?.as_path()),
         "refusing to replace a daemon selection outside its releases directory"
     );
-    retarget_junction(&current, &release)
+    Ok(())
 }
 
 fn retarget_junction(current: &Path, release: &Path) -> Result<()> {
