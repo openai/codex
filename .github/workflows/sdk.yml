@@ -67,13 +67,15 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Set up Bazel CI
+      - name: Prepare Bazel CI
         id: setup_bazel
-        uses: ./.github/actions/setup-bazel-ci
+        uses: ./.github/actions/prepare-bazel-ci
         with:
           target: x86_64-unknown-linux-gnu
+          cache-scope: sdk
 
       - name: Build codex and the code-mode host with Bazel
+        id: build_bazel
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -147,12 +149,12 @@ jobs:
           uv run --only-group dev --frozen --no-sync pytest
 
       - name: Save bazel repository cache
-        if: always() && !cancelled() && steps.setup_bazel.outputs.cache-hit != 'true'
+        if: always() && !cancelled() && steps.build_bazel.outcome == 'success' && steps.setup_bazel.outputs.repository-cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: ${{ steps.setup_bazel.outputs.repository-cache-path }}
-          key: bazel-cache-x86_64-unknown-linux-gnu-${{ hashFiles('MODULE.bazel', 'codex-rs/Cargo.lock', 'codex-rs/Cargo.toml') }}
+          key: ${{ steps.setup_bazel.outputs.repository-cache-key }}
 
       - name: Check for a clean worktree
         if: always() && !cancelled()
