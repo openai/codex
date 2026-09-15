@@ -6,6 +6,7 @@ use super::exports;
 use super::literals;
 use super::posix_env_path_expansion_function;
 use crate::shell_detect::ShellType;
+use crate::shell_startup_script;
 use std::borrow::Cow;
 
 const SNAPSHOT_COMMAND_HELPER: &str = r#"__codex_snapshot_command() {
@@ -82,17 +83,7 @@ pub fn snapshot_capture_script(
 
 fn zsh_snapshot_script(shell_startup: SnapshotStartup) -> String {
     let startup = match shell_startup {
-        SnapshotStartup::Interactive => {
-            r##"if [[ -n "${ZDOTDIR-}" ]]; then
-  rc="$ZDOTDIR/.zshrc"
-elif [[ -n "${HOME-}" ]]; then
-  rc="$HOME/.zshrc"
-else
-  rc=
-fi
-[[ -r "$rc" ]] && . "$rc"
-"##
-        }
+        SnapshotStartup::Interactive => shell_startup_script(ShellType::Zsh),
         SnapshotStartup::NonInteractive => "",
     };
     let script = r##"print '# Snapshot file'
@@ -121,12 +112,7 @@ SNAPSHOT_ENVIRONMENT
 
 fn bash_snapshot_script(shell_startup: SnapshotStartup) -> String {
     let startup = match shell_startup {
-        SnapshotStartup::Interactive => {
-            r##"if [ -z "${BASH_ENV-}" ] && [ -n "${HOME-}" ] && [ -r "$HOME/.bashrc" ]; then
-  . "$HOME/.bashrc"
-fi
-"##
-        }
+        SnapshotStartup::Interactive => shell_startup_script(ShellType::Bash),
         SnapshotStartup::NonInteractive => "",
     };
     let script = r##"echo '# Snapshot file'
