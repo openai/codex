@@ -48,7 +48,8 @@ impl AccountAnalyticsGrouping {
         match AccountKind::from(plan) {
             AccountKind::Business => &[Self::Surface, Self::Model, Self::Speed],
             AccountKind::Enterprise => &[Self::Surface, Self::Model, Self::Speed, Self::Reasoning],
-            AccountKind::Consumer | AccountKind::Unknown => &[Self::Surface],
+            AccountKind::Consumer => &[Self::Surface],
+            AccountKind::Unknown => &[],
         }
     }
 }

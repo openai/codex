@@ -4,6 +4,7 @@ mod client;
 mod data;
 mod models;
 mod normalize;
+mod render;
 mod report_data;
 mod tokens;
 

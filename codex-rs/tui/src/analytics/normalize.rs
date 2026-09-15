@@ -8,6 +8,25 @@ use chrono::DateTime;
 use chrono::NaiveDate;
 use std::collections::BTreeMap;
 
+/// Out-of-range legacy rows do not change attribution semantics for the requested period.
+pub(super) fn has_complete_attribution(
+    response: &AnalyticsData,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<bool, String> {
+    response
+        .data
+        .iter()
+        .try_fold(/*init*/ true, |complete, record| {
+            let date = NaiveDate::parse_from_str(
+                record.date.get(..10).unwrap_or(&record.date),
+                "%Y-%m-%d",
+            )
+            .map_err(|_| String::from("Analytics returned an invalid date."))?;
+            Ok(complete && (date < start || date > end || record.attribution.is_some()))
+        })
+}
+
 pub(super) fn history(
     response: AnalyticsData,
     report: Report,
@@ -27,6 +46,7 @@ pub(super) fn history(
             }
         }
     }
+    let attributed = has_complete_attribution(&response, start, end)?;
     let series = response.series.as_ref();
     let mut days: BTreeMap<NaiveDate, (f64, BTreeMap<String, f64>)> = BTreeMap::new();
     for record in response.data {
@@ -39,21 +59,26 @@ pub(super) fn history(
         let (total, values) = days.entry(date).or_default();
         match report {
             Report::Usage => {
-                let daily = match grouping {
-                    Grouping::Surface => record.product_surface_usage_values,
-                    Grouping::Model => record
-                        .models
-                        .map(|models| -> Result<_, String> {
-                            let mut values = BTreeMap::new();
-                            for model in models {
-                                let amount =
-                                    model.credits.ok_or("Plan usage amount was not reported.")?;
-                                *values.entry(model.model).or_insert(/*default*/ 0.0) += amount;
-                            }
-                            Ok(values)
-                        })
-                        .transpose()?,
-                    _ => None,
+                let daily = if attributed {
+                    None
+                } else {
+                    match grouping {
+                        Grouping::Surface => record.product_surface_usage_values,
+                        Grouping::Model => record
+                            .models
+                            .map(|models| -> Result<_, String> {
+                                let mut values = BTreeMap::new();
+                                for model in models {
+                                    let amount = model
+                                        .credits
+                                        .ok_or("Plan usage amount was not reported.")?;
+                                    *values.entry(model.model).or_insert(/*default*/ 0.0) += amount;
+                                }
+                                Ok(values)
+                            })
+                            .transpose()?,
+                        _ => None,
+                    }
                 };
                 if let Some(daily) = daily {
                     for (key, amount) in daily {
@@ -75,17 +100,12 @@ pub(super) fn history(
                         *total += amount;
                         *values.entry(key).or_default() += amount;
                     }
-                } else if let Some(attribution) = record.attribution {
+                } else if let Some(attribution) = record.attribution.filter(|_| attributed) {
                     for entry in attribution {
                         if !entry.value.is_finite() || entry.value < 0.0 {
                             return Err(String::from("Analytics returned an invalid amount."));
                         }
                         *total += entry.value;
-                        if grouping == Grouping::TaskStart
-                            && entry.thread_source.as_deref() != Some("user")
-                        {
-                            continue;
-                        }
                         let key = match grouping {
                             Grouping::Feature => entry.thread_source,
                             Grouping::Model => entry.model,
@@ -224,6 +244,7 @@ pub(super) fn history(
         }
     }
     if report == Report::Usage
+        && !attributed
         && grouping == Grouping::Model
         && response.units.as_deref() != Some("credits")
     {
@@ -257,7 +278,7 @@ pub(super) fn history(
     }
     Ok(Some(AccountAnalyticsHistory {
         unit: match report {
-            Report::Usage if response.units.as_deref() == Some("credits") => {
+            Report::Usage if !attributed && response.units.as_deref() == Some("credits") => {
                 AccountAnalyticsUnit::Credits
             }
             Report::Usage => AccountAnalyticsUnit::RelativeUsage,

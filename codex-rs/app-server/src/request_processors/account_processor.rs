@@ -1194,11 +1194,15 @@ impl AccountRequestProcessor {
 
         // Match desktop's account readiness check before exposing account-bound CTA content.
         // Normal rate limits remain available when older backends omit identity or banner data.
-        let matches_active_account = !auth.is_fedramp_account()
-            && response.account_id.is_some()
-            && response.account_id == auth.get_account_id()
-            && response.user_id.is_some()
-            && response.user_id == auth.get_chatgpt_user_id();
+        // Login can change while the backend read is in flight.
+        let active_auth = self.auth_manager.auth().await;
+        let matches_active_account = active_auth.is_some_and(|auth| {
+            !auth.is_fedramp_account()
+                && response.account_id.is_some()
+                && response.account_id == auth.get_account_id()
+                && response.user_id.is_some()
+                && response.user_id == auth.get_chatgpt_user_id()
+        });
         let rate_limit_upsell = response
             .rate_limit_upsell
             .filter(|_| matches_active_account);

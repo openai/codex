@@ -5,7 +5,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
-fn task_start_keeps_the_full_denominator_and_missing_attribution_is_unavailable() {
+fn turn_start_includes_all_features_and_missing_attribution_is_unavailable() {
     let date = NaiveDate::from_ymd_opt(/*year*/ 2026, /*month*/ 1, /*day*/ 9).unwrap();
     let response = serde_json::from_value(json!({"data": [{"date": "2026-01-09", "attribution": [
         {"thread_source": "user", "turn_trigger": "composer", "value": 30},
@@ -20,11 +20,18 @@ fn task_start_keeps_the_full_denominator_and_missing_attribution_is_unavailable(
             data: vec![AccountAnalyticsDay {
                 date: "2026-01-09".parse().unwrap(),
                 total: 100.0,
-                values: vec![AccountAnalyticsValue {
-                    key: "start-composer".to_string(),
-                    label: "User messages".to_string(),
-                    value: 30.0
-                }],
+                values: vec![
+                    AccountAnalyticsValue {
+                        key: "start-composer".to_string(),
+                        label: "User messages".to_string(),
+                        value: 30.0
+                    },
+                    AccountAnalyticsValue {
+                        key: "unknown".to_string(),
+                        label: "Unknown".to_string(),
+                        value: 70.0
+                    }
+                ],
             }],
         })
     );
@@ -190,13 +197,12 @@ fn count_reports_preserve_explicit_zero_and_omit_unreported_days() {
 }
 
 #[test]
-fn consumer_plan_prefers_daily_products_and_models_over_attribution() {
+fn legacy_consumer_history_keeps_daily_products_and_models() {
     let date = "2026-09-01".parse().unwrap();
     let response: AnalyticsData = serde_json::from_value(json!({"units":"relative", "data":[{
         "date":"2026-09-01",
         "product_surface_usage_values":{"work_desktop":12,"work_web":8,"cli":30,"desktop_app":50},
-        "models":[{"model":"major","credits":98.5},{"model":"one-percent","credits":1},{"model":"tiny","credits":0.3},{"model":"OTHER","credits":0.2}],
-        "attribution":[{"surface":"wrong","model":"wrong","value":999}]
+        "models":[{"model":"major","credits":98.5},{"model":"one-percent","credits":1},{"model":"tiny","credits":0.3},{"model":"OTHER","credits":0.2}]
     }]})).unwrap();
     for (grouping, expected) in [
         (
@@ -240,6 +246,52 @@ fn consumer_plan_prefers_daily_products_and_models_over_attribution() {
     assert_eq!(
         (model.unit, model.data[0].values.len()),
         (AccountAnalyticsUnit::Credits, 4)
+    );
+}
+
+#[test]
+fn complete_attribution_wins_consistently_and_incomplete_attribution_is_not_mixed() {
+    let date = "2026-09-01".parse().unwrap();
+    let response: AnalyticsData = serde_json::from_value(json!({"units":"credits", "data":[{
+        "date":"2026-09-01", "product_surface_usage_values":{"cli":999},
+        "models":[{"model":"legacy","credits":999}],
+        "attribution":[
+            {"thread_source":"user","turn_trigger":"composer","surface":"desktop_app","model":"alpha","value":30},
+            {"thread_source":"subagent","turn_trigger":"goal","surface":"cli","model":"tiny","value":0.1}
+        ]
+    }]})).unwrap();
+    for grouping in [
+        Grouping::Feature,
+        Grouping::Model,
+        Grouping::Surface,
+        Grouping::TaskStart,
+    ] {
+        let normalized = history(response.clone(), Report::Usage, grouping, date, date)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                normalized.unit,
+                normalized.data[0].total,
+                normalized.data[0].values.len()
+            ),
+            (AccountAnalyticsUnit::RelativeUsage, 30.1, 2)
+        );
+    }
+    let incomplete = serde_json::from_value(json!({"data":[
+        {"date":"2026-09-01", "attribution":[]}, {"date":"2026-09-02"}
+    ]}))
+    .unwrap();
+    assert_eq!(
+        history(
+            incomplete,
+            Report::Usage,
+            Grouping::Feature,
+            date,
+            "2026-09-02".parse().unwrap()
+        )
+        .unwrap(),
+        None
     );
 }
 
