@@ -260,15 +260,24 @@ impl PidBackend {
             super::super::windows::Process::open(pid)?
                 .context("daemon exited during launch")?
                 .ensure_detached()?;
-            read_process_start_time(pid).await
+            let process_start_time = read_process_start_time(pid).await?;
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let process_identity = super::identity::read_process_details(pid)
+                .await
+                .ok()
+                .map(|(_, identity)| identity);
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let process_identity = None;
+            anyhow::Ok(PidRecord {
+                pid,
+                process_start_time,
+                process_identity,
+                executable_identity: launched_identity,
+            })
         }
         .await
         {
-            Ok(process_start_time) => PidRecord {
-                pid,
-                process_start_time,
-                executable_identity: launched_identity,
-            },
+            Ok(record) => record,
             Err(err) => {
                 let _ = self.terminate_process(pid);
                 let mut context =

@@ -1,4 +1,7 @@
-//! PID reservations serialize detached launches; creation times protect stale-record cleanup.
+//! PID reservations serialize detached launches; process identities protect stale-record cleanup.
+
+#[path = "pid_identity.rs"]
+mod identity;
 
 use std::io::SeekFrom;
 use std::path::Path;
@@ -40,7 +43,11 @@ pub(crate) struct PidBackend {
 #[serde(rename_all = "camelCase")]
 struct PidRecord {
     pid: u32,
+    // Keep the legacy timestamp for older CLI/updater versions reading this record.
     process_start_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "linuxProcessIdentity")]
+    process_identity: Option<identity::ProcessIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     executable_identity: Option<ExecutableIdentity>,
 }
@@ -539,20 +546,37 @@ async fn process_matches_record(record: &PidRecord) -> Result<bool> {
         return Ok(false);
     }
 
-    match read_process_details(record.pid).await {
-        Ok((state, start_time)) => {
+    let details = async {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(expected) = &record.process_identity {
+            return expected.matches_process(record.pid).await;
+        }
+        let (state, start_time) = read_process_details(record.pid).await?;
+        let matches = start_time == record.process_start_time;
+        let is_zombie = state.starts_with('Z');
+        if !matches && !is_zombie {
+            bail!(
+                "cannot verify pid-managed process {}: legacy start time changed; PID record retained. \
+                 Retry with the locale and timezone used to start the daemon. If the system clock \
+                 changed, stop the original process before restarting the daemon",
+                record.pid
+            );
+        }
+        Ok((is_zombie, matches))
+    }
+    .await;
+    match details {
+        Ok((is_zombie, matches)) => {
             // An unreaped zombie still passes kill(pid, 0) and retains its start
             // time, but it can no longer run the app-server or updater.
-            if state.starts_with('Z') {
-                if start_time == record.process_start_time
-                    && let Ok(raw_pid) = libc::pid_t::try_from(record.pid)
-                {
+            if is_zombie {
+                if matches && let Ok(raw_pid) = libc::pid_t::try_from(record.pid) {
                     // Re-exec can lose the Child handle without changing parenthood.
                     unsafe { libc::waitpid(raw_pid, std::ptr::null_mut(), libc::WNOHANG) };
                 }
                 return Ok(false);
             }
-            Ok(start_time == record.process_start_time)
+            Ok(matches)
         }
         Err(_err) if !process_exists(record.pid) => Ok(false),
         Err(err) => Err(err),
@@ -714,21 +738,7 @@ async fn read_process_start_time(pid: u32) -> Result<String> {
 
 #[cfg(windows)]
 async fn process_matches_record(record: &PidRecord) -> Result<bool> {
-    let process = match super::windows::Process::open(record.pid) {
-        Ok(process) => process,
-        // A managed daemon is queryable by its launching user. A stale PID may
-        // have been reused by a protected process; never try to terminate it.
-        Err(err)
-            if err.downcast_ref::<std::io::Error>().is_some_and(|err| {
-                err.raw_os_error()
-                    == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32)
-            }) =>
-        {
-            return Ok(false);
-        }
-        Err(err) => return Err(err),
-    };
-    let Some(process) = process else {
+    let Some(process) = super::windows::Process::open(record.pid)? else {
         return Ok(false);
     };
     Ok(process.is_running()? && process.start_time()? == record.process_start_time)

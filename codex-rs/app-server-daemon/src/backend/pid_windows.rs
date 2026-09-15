@@ -42,6 +42,7 @@ impl PidBackend {
         let record = PidRecord {
             pid: std::process::id(),
             process_start_time: read_process_start_time(std::process::id()).await?,
+            process_identity: None,
             executable_identity: None,
         };
         self.start_inner(Some(record)).await?;

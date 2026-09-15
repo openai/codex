@@ -32,7 +32,7 @@ use crate::RestartMode;
 use crate::managed_install::ExecutableIdentity;
 use crate::managed_install::executable_identity;
 use crate::managed_install::resolved_managed_codex_bin;
-#[cfg(windows)]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use crate::settings::DaemonSettings;
 use crate::settings::UpdaterSettings;
 
@@ -88,6 +88,17 @@ async fn run_with_http(
     #[cfg(unix)]
     let mut terminate =
         signal(SignalKind::terminate()).context("failed to install updater shutdown handler")?;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let paths = daemon.backend_paths(&DaemonSettings::default());
+        for backend in [
+            crate::backend::pid_backend(paths.clone()),
+            crate::backend::pid_update_loop_backend(paths),
+        ] {
+            // Inspection failures must preserve legacy records without blocking updates.
+            let _ = backend.promote_legacy_identity().await;
+        }
+    }
     #[cfg(windows)]
     let updater = {
         // Updater ownership needs only paths, not settings that may be mid-edit.
