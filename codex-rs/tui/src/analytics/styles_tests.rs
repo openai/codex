@@ -79,19 +79,26 @@ fn analytics_sections_adapt_to_terminal_colors() {
                         assert!(marker.modifier.contains(Modifier::BOLD));
                     }
                     if theme == "light" {
-                        for cell in &buffer.content {
-                            if !cell.symbol().trim().is_empty()
-                                && let Color::Rgb(r, g, b) = cell.fg
-                            {
-                                let contrast =
-                                    (luminance(colors.bg) + 0.05) / (luminance((r, g, b)) + 0.05);
-                                assert!(
-                                    contrast >= 4.5,
-                                    "{}: {:?} has contrast {contrast}",
-                                    cell.symbol(),
-                                    cell.fg
-                                );
-                            }
+                        for cell in buffer
+                            .content
+                            .iter()
+                            .filter(|cell| !cell.symbol().trim().is_empty())
+                        {
+                            let foreground = match cell.fg {
+                                Color::Rgb(r, g, b) => (r, g, b),
+                                Color::White => (255, 255, 255),
+                                Color::Black => (0, 0, 0),
+                                Color::Reset => colors.fg,
+                                _ => continue,
+                            };
+                            let contrast =
+                                (luminance(colors.bg) + 0.05) / (luminance(foreground) + 0.05);
+                            assert!(
+                                contrast >= 4.5,
+                                "{}: {:?} has contrast {contrast}",
+                                cell.symbol(),
+                                cell.fg
+                            );
                         }
                     }
                     // Preserve every symbol and style while sharing repeated styles in a palette.

@@ -911,7 +911,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AnalyticsPlanHistory,
         key: "analytics_plan_history",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Analytics plan history",
+            menu_description: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

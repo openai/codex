@@ -11,6 +11,9 @@ mod summary;
 #[path = "analytics/account_layout_tests.rs"]
 mod account_layout;
 
+#[path = "analytics/navigation_tests.rs"]
+mod navigation;
+
 #[path = "analytics/consumer_refresh_tests.rs"]
 mod consumer_refresh;
 

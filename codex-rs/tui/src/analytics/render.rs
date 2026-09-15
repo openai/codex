@@ -9,12 +9,14 @@ use crate::analytics::models::AccountAnalyticsValue;
 use crate::analytics::sections::Section;
 use crate::keymap::ListAction;
 use crate::style::accent_style;
+use crate::style::footer_hint_key_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -169,11 +171,11 @@ impl AnalyticsView {
                     spans.push(" · ".into());
                 }
                 let (keys, description) = control.rsplit_once(' ').unwrap_or((control, ""));
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "Analytics shortcut keys intentionally use white to distinguish them from descriptions."
-                )]
-                spans.push(keys.to_owned().white().bold().not_dim());
+                spans.push(
+                    keys.to_owned()
+                        .fg(Color::Reset)
+                        .patch_style(footer_hint_key_style().bold().not_dim()),
+                );
                 if !description.is_empty() {
                     spans.push(format!(" {description}").into());
                 }

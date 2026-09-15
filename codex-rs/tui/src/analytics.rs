@@ -297,7 +297,18 @@ impl AnalyticsView {
         let action = if key_hint::plain(KeyCode::Char(' ')).is_press(key) {
             Some(ListAction::Accept)
         } else {
-            self.keymap.action_for(key)
+            self.keymap.action_for(key).or_else(|| {
+                if !key.modifiers.is_empty() {
+                    return None;
+                }
+                // Keep explicit bindings first and honor remapped or unbound arrows.
+                let code = match key.code {
+                    KeyCode::Char('h') => KeyCode::Left,
+                    KeyCode::Char('l') => KeyCode::Right,
+                    _ => return None,
+                };
+                self.keymap.action_for(KeyEvent { code, ..key })
+            })
         };
 
         self.follow_selection = true;

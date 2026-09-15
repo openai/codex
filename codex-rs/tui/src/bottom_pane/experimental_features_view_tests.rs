@@ -1,6 +1,27 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+#[test]
+fn experimental_features_analytics_plan_history() {
+    let feature = Feature::AnalyticsPlanHistory;
+    let stage = feature.stage();
+    let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();
+    let view = ExperimentalFeaturesView::new(
+        vec![ExperimentalFeatureItem {
+            key: feature.key().to_string(),
+            name: stage.experimental_menu_name().unwrap().to_string(),
+            description: stage.experimental_menu_description().unwrap().to_string(),
+            enabled: feature.default_enabled(),
+            writable: true,
+        }],
+        ThreadId::new(),
+        /*catalog_rx*/ None,
+        AppEventSender::new(app_tx),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
+    snapshot_view("experimental_features_analytics_plan_history", &view);
+}
+
 fn server_feature(name: &str) -> ExperimentalFeature {
     ExperimentalFeature {
         name: name.to_string(),
