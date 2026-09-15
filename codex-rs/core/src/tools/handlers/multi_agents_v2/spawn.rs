@@ -2,6 +2,7 @@ use super::*;
 use crate::agent::child_config::SpawnConfigOptions;
 use crate::agent::child_config::SpawnConfigVersion;
 use crate::agent::child_config::prepare_agent_spawn_config;
+use crate::agent::control::MessageDeliveryMode;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
@@ -156,12 +157,10 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication = communication_from_tool_message(
+    let communication = agent_message_from_tool(message, &source).into_communication(
         author,
         new_agent_path.clone(),
-        message,
-        &source,
-        /*trigger_turn*/ true,
+        MessageDeliveryMode::TriggerTurn,
     );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =

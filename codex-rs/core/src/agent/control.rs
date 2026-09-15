@@ -67,10 +67,14 @@ use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
 
+pub(crate) use self::delivery::AgentMessage;
+pub(crate) use self::delivery::MessageDeliveryError;
+pub(crate) use self::delivery::MessageDeliveryMode;
 pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
 use self::residency::V2Residency;
 
+mod delivery;
 mod execution;
 mod legacy;
 mod residency;
