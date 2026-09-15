@@ -467,3 +467,69 @@ fn duplicate_message_dates_render_the_full_other_remainder() {
     );
     insta::assert_snapshot!(display(&rendered));
 }
+
+#[test]
+fn seven_day_totals_render_without_selecting_each_bar() {
+    let start: NaiveDate = "2026-01-01".parse().unwrap();
+    let rows = (0..7)
+        .map(|index| AccountAnalyticsDay {
+            date: start + chrono::Duration::days(index),
+            total: 111.0 + index as f64 * 100.0,
+            values: vec![value("a", 111.0 + index as f64 * 100.0)],
+        })
+        .collect::<Vec<_>>();
+    let days = rows
+        .iter()
+        .map(|day| (day.date, Some(day)))
+        .collect::<Vec<_>>();
+    let rendered = chart(
+        &days,
+        &rows[0].values,
+        /*cursor*/ 3,
+        /*width*/ 100,
+        /*height*/ 8,
+        AccountAnalyticsUnit::Count,
+    );
+    let text = display(&rendered);
+    for day in &rows {
+        assert!(text.contains(&day.total.to_string()));
+    }
+    insta::assert_snapshot!("seven_day_totals", text);
+}
+
+#[test]
+fn narrow_equal_height_totals_remain_separate_numbers() {
+    let start: NaiveDate = "2026-01-01".parse().unwrap();
+    let rows = (0..7)
+        .map(|index| AccountAnalyticsDay {
+            date: start + chrono::Duration::days(index),
+            total: 111.0,
+            values: vec![value("a", /*value*/ 111.0)],
+        })
+        .collect::<Vec<_>>();
+    let days = rows
+        .iter()
+        .map(|day| (day.date, Some(day)))
+        .collect::<Vec<_>>();
+    let mut screens = Vec::new();
+    for width in [21, 28, 35] {
+        let rendered = chart(
+            &days,
+            &rows[0].values,
+            /*cursor*/ 3,
+            width,
+            /*height*/ 4,
+            AccountAnalyticsUnit::Count,
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.to_string().trim_end().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("111"));
+        assert!(!text.contains("111111"));
+        screens.push(text);
+    }
+    insta::assert_snapshot!(screens.join("\n\n"));
+}

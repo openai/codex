@@ -3,7 +3,7 @@ source: tui/src/analytics/plot_tests.rs
 expression: "snapshots.join(\"\\n\\n\")"
 ---
 width=36, cursor=0
-
+                              5
  6                         ▄▄▄▄▄▄▄
                            ███████
         —          0       ███████
@@ -13,22 +13,23 @@ width=36, cursor=0
 
 Palette:
 0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-1: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
-2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
-3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
-4: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+1: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+2: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+4: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
+5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
-0: 0:0
-1: 0:0 1:1 2:0 27:2 34:0
-2: 0:0 27:2 34:0
-3: 0:0 8:3 9:0 19:4 20:0 27:2 34:0
-4: 0:0 1:1 2:0 3:4
-5: 0:0 8:3 9:0
-6: 0:0 5:5 11:0 16:1 22:0 27:1 33:0
+0: 0:0 30:1 31:0
+1: 0:0 1:2 2:0 27:3 34:0
+2: 0:0 27:3 34:0
+3: 0:0 8:4 9:0 19:1 20:0 27:3 34:0
+4: 0:0 1:2 2:0 3:1
+5: 0:0 8:5 9:0
+6: 0:0 5:6 11:0 16:2 22:0 27:2 33:0
 
 width=36, cursor=1
-
+                              5
  6                         ▄▄▄▄▄▄▄
                            ███████
         —          0       ███████
@@ -38,19 +39,20 @@ width=36, cursor=1
 
 Palette:
 0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-1: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
-2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
-3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
-4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+1: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+2: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+4: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
+5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
-0: 0:0
-1: 0:0 1:1 2:0 27:2 34:0
-2: 0:0 27:2 34:0
-3: 0:0 8:3 9:0 19:4 20:0 27:2 34:0
-4: 0:0 1:1 2:0 3:3
-5: 0:0 19:4 20:0
-6: 0:0 5:1 11:0 16:5 22:0 27:1 33:0
+0: 0:0 30:1 31:0
+1: 0:0 1:2 2:0 27:3 34:0
+2: 0:0 27:3 34:0
+3: 0:0 8:1 9:0 19:4 20:0 27:3 34:0
+4: 0:0 1:2 2:0 3:1
+5: 0:0 19:5 20:0
+6: 0:0 5:2 11:0 16:6 22:0 27:2 33:0
 
 width=8, cursor=2
       5
@@ -63,19 +65,20 @@ width=8, cursor=2
 
 Palette:
 0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+1: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
 2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
-4: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+5: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
+6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
 0: 0:0 6:1 7:0
 1: 0:0 5:2 7:0
 2: 0:0 5:2 7:0
 3: 0:3 1:0 3:3 4:0 5:2 7:0
 4: 0:3
-5: 0:0 6:1 7:0
-6: 0:4 2:0 5:5 7:0
+5: 0:0 6:4 7:0
+6: 0:5 2:0 5:6 7:0
 
 width=1, cursor=2
 5
@@ -87,15 +90,16 @@ width=1, cursor=2
 
 
 Palette:
-0: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+0: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
 1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 2: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
-3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+4: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 Rows (column:palette):
 0: 0:0
 1: 0:1
 2: 0:1
 3: 0:1
 4: 0:2
-5: 0:0
-6: 0:3
+5: 0:3
+6: 0:4

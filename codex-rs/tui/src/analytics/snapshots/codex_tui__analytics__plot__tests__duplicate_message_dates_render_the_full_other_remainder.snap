@@ -19,11 +19,12 @@ expression: display(&rendered)
 
 Palette:
 0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+1: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
 2: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
 3: Style::new().magenta().bg(Color::Reset).underline_color(Color::Reset)
 4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
 0: 0:0 22:1 24:0
 1: 0:0 1:2 3:0 18:3 30:0
@@ -37,5 +38,5 @@ Rows (column:palette):
 9: 0:0 18:4 30:0
 10: 0:0 18:4 30:0
 11: 0:0 2:2 3:0 4:2
-12: 0:0 23:1 24:0
-13: 0:0 20:5 26:0
+12: 0:0 23:5 24:0
+13: 0:0 20:6 26:0

@@ -32,7 +32,6 @@ impl AnalyticsView {
         self.section = Section::Summary;
         self.zoomed = true;
         self.scroll_offset = 0;
-        self.group_picker = None;
         if let Some(view) = view {
             self.sections[Section::Summary].group = VIEWS
                 .iter()

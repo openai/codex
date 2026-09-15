@@ -25,7 +25,7 @@ expression: snapshot
 
 
   tab/1–6 section · z dashboard · ←/→ day
-  r 7/30d · R refresh · pgup/pgdn scroll · esc back · q close
+  r 7/30d · R refresh · esc back · q close
 
   Analytics  ·  Live account
   [7d]  30d  · [date range]
@@ -50,9 +50,10 @@ expression: snapshot
 
 
   tab/1–6 section · z dashboard · ←/→ day
-  r 7/30d · R refresh · pgup/pgdn scroll · esc back · q close
+  r 7/30d · R refresh · esc back · q close
 
   Analytics  ·  Live account
+
 
   [1 Summary]  2 Total usage history  3 Messages  4 Plugins called  5 Skills
   used  6 Top chats
@@ -67,12 +68,11 @@ expression: snapshot
                     —                                     —
               Current streak                        Longest streak
 
-  Token activity                                   Daily  [Weekly]  Cumulative
+  Token activity                                                        Weekly
   Last 12 months
 
   Token activity history unavailable
 
   Activity insights                       Most used plugins and skills
-
   tab/1–6 section · z dashboard · ↑/↓ scroll
   g view · R refresh · pgup/pgdn scroll · esc back · q close

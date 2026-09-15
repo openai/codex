@@ -7,7 +7,6 @@ use super::render::join_columns;
 use super::sections::Section;
 use super::styles::secondary_style;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow as truncate;
-use crate::style::accent_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 use codex_backend_client::ProfileInvocationKind;
@@ -157,17 +156,7 @@ impl AnalyticsView {
             lines.extend([values, labels, Line::default()]);
         }
         let selected = self.sections[Section::Summary].group;
-        let mut controls = Line::default();
-        for (index, view) in super::summary::VIEWS.iter().enumerate() {
-            if index > 0 {
-                controls.spans.push("  ".into());
-            }
-            controls.spans.push(if index == selected {
-                format!("[{}]", view.label()).set_style(accent_style())
-            } else {
-                view.label().to_string().set_style(secondary_style())
-            });
-        }
+        let controls = Line::from(super::summary::VIEWS[selected].label());
         if inner_width >= 58 {
             lines.push(columns(
                 "Token activity".bold().into(),

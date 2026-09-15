@@ -1,5 +1,8 @@
 //! Account layouts, authenticated report loading, independent ranges, and model filters.
 use super::*;
+use codex_config::types::KeybindingSpec;
+use codex_config::types::KeybindingsSpec;
+use codex_config::types::TuiKeymap;
 use pretty_assertions::assert_eq;
 
 use crate::analytics::sections::Section;
@@ -60,8 +63,6 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
     press(&mut view, KeyCode::Char('r'));
     test_support::settle(&mut view).await;
     press(&mut view, KeyCode::Char('g'));
-    press(&mut view, KeyCode::Down);
-    press(&mut view, KeyCode::Enter);
     test_support::settle(&mut view).await;
     assert_eq!(
         (
@@ -264,46 +265,42 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
 }
 
 #[tokio::test]
-async fn legacy_response_closes_an_attribution_picker_that_is_no_longer_valid() {
+async fn grouping_cycle_uses_current_server_capabilities() {
     let server = test_support::server().await;
     let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
     view.section = Section::Usage;
     view.account = Load::Ready(codex_protocol::account::PlanType::Plus);
+    view.sections[Section::Usage].group = 3;
     view.start_reports();
-    view.group_picker = Some(3);
     test_support::settle(&mut view).await;
     assert_eq!(
-        (
-            view.group_picker,
-            view.group_options(),
-            view.sections[Section::Usage].group
-        ),
-        (None, &[0, 2][..], 0)
+        (view.group_options(), view.sections[Section::Usage].group),
+        (&[0, 2][..], 0)
     );
-    press(&mut view, KeyCode::Enter);
+    press(&mut view, KeyCode::Char('g'));
+    assert_eq!(view.sections[Section::Usage].group, 2);
+    press(&mut view, KeyCode::Char('g'));
+    assert_eq!(view.sections[Section::Usage].group, 0);
 }
 
-#[tokio::test]
-async fn legacy_response_invalidates_picker_before_the_next_draw() {
-    let server = test_support::server().await;
-    for choice in [2, 3] {
-        let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
-        view.section = Section::Usage;
-        view.account = Load::Ready(codex_protocol::account::PlanType::Plus);
-        view.start_reports();
-        view.group_picker = Some(choice);
-        // Complete the request without polling the view, as can happen between key events.
-        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), async {
-            while view.consumer_attribution() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        press(&mut view, KeyCode::Enter);
-        assert_eq!((view.group_picker, view.is_done), (None, false));
-        test_support::settle(&mut view).await;
-        assert_eq!(view.sections[Section::Usage].group, 0);
+#[test]
+fn ungrouped_sections_preserve_configured_g_jump_top() {
+    let mut config = TuiKeymap::default();
+    config.list.jump_top = Some(KeybindingsSpec::One(KeybindingSpec("g".into())));
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid list keymap");
+    let mut view = fixture::view(models::AccountKind::Enterprise);
+    view.keymap = keymap.list;
+    for section in [
+        Section::Chats,
+        Section::Plugins,
+        Section::Skills,
+        Section::Credits,
+    ] {
+        view.section = section;
+        press(&mut view, KeyCode::End);
+        assert!(view.sections[section].cursor > 0, "{section:?}");
+        press(&mut view, KeyCode::Char('g'));
+        assert_eq!(view.sections[section].cursor, 0, "{section:?}");
     }
 }
 
@@ -432,4 +429,63 @@ async fn unknown_plan_keeps_summary_available_without_billing_reports() {
         .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
         .unwrap();
     insta::assert_snapshot!(terminal.backend().to_string());
+}
+
+#[test]
+fn navigation_keeps_its_row_when_sections_change() {
+    for width in [64, 120] {
+        let mut view = fixture::view(models::AccountKind::Consumer);
+        let mut positions = Vec::new();
+        for section in [
+            Section::Summary,
+            Section::Usage,
+            Section::Chats,
+            Section::Summary,
+        ] {
+            view.section = section;
+            let rendered = screen(&mut view, width, /*height*/ 40);
+            positions.push(
+                rendered
+                    .lines()
+                    .position(|line| line.contains("Summary") && line.contains("usage history"))
+                    .unwrap(),
+            );
+        }
+        assert_eq!(positions, vec![positions[0]; 4]);
+    }
+}
+
+#[test]
+fn taller_report_reveals_more_legend_rows_and_keeps_timestamp_in_footer() {
+    let mut view = fixture::view(models::AccountKind::Consumer);
+    view.section = Section::Usage;
+    let mut history = fixture::history(/*report*/ 0, /*range*/ 0, /*group*/ 1);
+    history.updated_at = Some(1_788_364_800);
+    for day in &mut history.data {
+        day.values = (0..10)
+            .map(|index| models::AccountAnalyticsValue {
+                key: format!("feature-{index}"),
+                label: format!("Feature {}", index + 1),
+                value: day.total / 10.0,
+            })
+            .collect();
+    }
+    view.sections[Section::Usage].history = data::Load::Ready(history);
+    let short = screen(&mut view, /*width*/ 120, /*height*/ 30);
+    let tall = screen(&mut view, /*width*/ 120, /*height*/ 60);
+    assert!(
+        tall.lines().filter(|line| line.contains('●')).count()
+            > short.lines().filter(|line| line.contains('●')).count()
+    );
+    assert!(
+        tall.lines()
+            .rev()
+            .take(3)
+            .any(|line| line.contains("Updated"))
+    );
+    insta::assert_snapshot!("legend_tall_report", tall);
+    for width in [24, 40, 64] {
+        let narrow = screen(&mut view, width, /*height*/ 60);
+        assert!(narrow.lines().last().unwrap().contains("UTC"));
+    }
 }

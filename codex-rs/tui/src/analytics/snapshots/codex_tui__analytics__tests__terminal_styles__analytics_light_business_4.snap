@@ -6,6 +6,7 @@ expression: snapshot
 Text:
 "  Analytics  ·  Live account                                                                                            "
 "                                                                                                                        "
+"                                                                                                                        "
 "  1 Summary  2 Credits usage history  3 Token usage history  4 Plugins called  5 Skills used  [6 Top chats]             "
 "                                                                                                                        "
 "  ▎ Top chats                                                                                                           "
@@ -43,9 +44,8 @@ Text:
 "                                                                                                                        "
 "                                                                                                                        "
 "                                                                                                                        "
-"                                                                                                                        "
 "  tab/1–6 section · z dashboard · ↑/↓ row · enter details                                                               "
-"  R refresh · pgup/pgdn scroll · esc back · q close                                                                     "
+"  R refresh · esc back · q close                                                                                        "
 Palette (foreground|background|underline|modifiers):
 0: Reset|Reset|Reset|NONE
 1: Reset|Reset|Reset|BOLD
@@ -56,26 +56,26 @@ Palette (foreground|background|underline|modifiers):
 Rows (column:palette):
 0: 0:0 2:1 11:2 28:0
 1: 0:0
-2: 0:0 2:2 94:3 107:0
-3: 0:0
-4: 0:0 2:3 13:0
-5: 0:0 2:4 118:0
-6: 0:0 2:2 53:0
-7: 0:0
-8: 0:0 2:1 8:0 82:1 98:0
-9: 0:0 2:3 24:0 92:3 98:0
-10: 0:0 2:4 98:0
-11: 0:0 2:2 82:0 91:1 98:0
-12: 0:0 2:1 54:2 82:0
-13: 0:0
+2: 0:0
+3: 0:0 2:2 94:3 107:0
+4: 0:0
+5: 0:0 2:3 13:0
+6: 0:0 2:4 118:0
+7: 0:0 2:2 53:0
+8: 0:0
+9: 0:0 2:1 8:0 82:1 98:0
+10: 0:0 2:3 24:0 92:3 98:0
+11: 0:0 2:4 98:0
+12: 0:0 2:2 82:0 91:1 98:0
+13: 0:0 2:1 54:2 82:0
 14: 0:0
 15: 0:0
 16: 0:0
 17: 0:0
 18: 0:0
-19: 0:0 2:2 24:0
-20: 0:0 2:2 58:0
-21: 0:0
+19: 0:0
+20: 0:0 2:2 24:0
+21: 0:0 2:2 58:0
 22: 0:0
 23: 0:0
 24: 0:0
@@ -95,4 +95,4 @@ Rows (column:palette):
 38: 0:0
 39: 0:0
 40: 0:0 2:5 9:2 20:5 21:2 34:5 37:2 44:5 49:2 118:0
-41: 0:0 2:5 3:2 14:5 23:2 33:5 36:2 44:5 45:2 118:0
+41: 0:0 2:5 3:2 14:5 17:2 25:5 26:2 118:0

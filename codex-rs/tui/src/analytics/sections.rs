@@ -93,12 +93,6 @@ impl AnalyticsView {
         {
             self.sections[Section::Usage].group = 0;
         }
-        if self
-            .group_picker
-            .is_some_and(|choice| choice >= self.group_options().len())
-        {
-            self.group_picker = None;
-        }
         if let Some(chats) = self.tasks.ready() {
             self.sections[Section::Chats].cursor = self.sections[Section::Chats]
                 .cursor

@@ -79,93 +79,69 @@ impl AnalyticsView {
                         .into(),
                     );
                 }
-                if focused && self.group_picker.is_some() {
-                    content.extend(self.group_options().iter().enumerate().map(
-                        |(index, group)| {
-                            let label = format!(
-                                "{} {}",
-                                if self.group_picker == Some(index) {
-                                    "›"
-                                } else {
-                                    " "
-                                },
-                                self.group_label(section, *group)
-                            );
-                            if self.group_picker == Some(index) {
-                                label.set_style(accent_style()).into()
-                            } else {
-                                label.into()
+                match section {
+                    Section::Summary => content.extend(self.summary_lines(inner_width)),
+                    Section::Usage
+                    | Section::Plugins
+                    | Section::Credits
+                    | Section::Activity
+                    | Section::Skills => content.extend(
+                        self.history_lines(
+                            section,
+                            inner_width,
+                            inner_height.saturating_sub(/*rhs*/ 13).max(/*other*/ 1),
+                        )
+                        .lines,
+                    ),
+                    Section::Plan => content.extend(self.plan_lines(inner_width).0),
+                    Section::Chats if !self.business() => {
+                        content.extend(self.task_lines(inner_width).0)
+                    }
+                    Section::Chats => {
+                        content.push(
+                            "30d active · lifetime credits"
+                                .set_style(secondary_style())
+                                .into(),
+                        );
+                        content.push(Line::default());
+                        if let Some(chats) = self.chats.ready() {
+                            if chats.rows.is_empty() {
+                                content.push(
+                                    "No recent local chats.".set_style(secondary_style()).into(),
+                                );
                             }
-                        },
-                    ));
-                } else {
-                    match section {
-                        Section::Summary => content.extend(self.summary_lines(inner_width)),
-                        Section::Usage
-                        | Section::Plugins
-                        | Section::Credits
-                        | Section::Activity
-                        | Section::Skills => content.extend(
-                            self.history_lines(
-                                section,
-                                inner_width,
-                                inner_height.saturating_sub(/*rhs*/ 13).max(/*other*/ 1),
-                            )
-                            .lines,
-                        ),
-                        Section::Plan => content.extend(self.plan_lines(inner_width).0),
-                        Section::Chats if !self.business() => {
-                            content.extend(self.task_lines(inner_width).0)
-                        }
-                        Section::Chats => {
+                            for chat in chats.rows.iter().take(/*n*/ 5) {
+                                let amount = chat
+                                    .usage
+                                    .as_ref()
+                                    .map(|usage| {
+                                        data::credits(usage.estimated_usage_credits_micros)
+                                    })
+                                    .unwrap_or_else(|| "—".into());
+                                content.push(columns(
+                                    truncate(
+                                        chat.display_title().to_string().into(),
+                                        inner_width.saturating_sub(amount.len() + 1),
+                                    ),
+                                    number(amount).into(),
+                                    inner_width,
+                                ));
+                            }
+                            content.push(Line::default());
                             content.push(
-                                "30d active · lifetime credits"
+                                "Local chats · excludes subagents"
                                     .set_style(secondary_style())
                                     .into(),
                             );
-                            content.push(Line::default());
-                            if let Some(chats) = self.chats.ready() {
-                                if chats.rows.is_empty() {
-                                    content.push(
-                                        "No recent local chats."
-                                            .set_style(secondary_style())
-                                            .into(),
-                                    );
-                                }
-                                for chat in chats.rows.iter().take(/*n*/ 5) {
-                                    let amount = chat
-                                        .usage
-                                        .as_ref()
-                                        .map(|usage| {
-                                            data::credits(usage.estimated_usage_credits_micros)
-                                        })
-                                        .unwrap_or_else(|| "—".into());
-                                    content.push(columns(
-                                        truncate(
-                                            chat.display_title().to_string().into(),
-                                            inner_width.saturating_sub(amount.len() + 1),
-                                        ),
-                                        number(amount).into(),
-                                        inner_width,
-                                    ));
-                                }
-                                content.push(Line::default());
+                            if chats.rows.iter().any(|chat| chat.usage.is_none()) {
                                 content.push(
-                                    "Local chats · excludes subagents"
+                                    "Some estimates unavailable"
                                         .set_style(secondary_style())
                                         .into(),
                                 );
-                                if chats.rows.iter().any(|chat| chat.usage.is_none()) {
-                                    content.push(
-                                        "Some estimates unavailable"
-                                            .set_style(secondary_style())
-                                            .into(),
-                                    );
-                                }
-                            } else if let Some(message) = self.chats.message() {
-                                content
-                                    .push(message.to_string().set_style(secondary_style()).into());
                             }
+                        } else if let Some(message) = self.chats.message() {
+                            content.push(message.to_string().set_style(secondary_style()).into());
                         }
                     }
                 }

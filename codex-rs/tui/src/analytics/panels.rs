@@ -58,27 +58,9 @@ impl AnalyticsView {
                 .into(),
             );
         }
-        let mut selection;
+        let selection;
         let mut chart_bands = 0;
-        if focused && let Some(choice) = self.group_picker {
-            lines.extend(
-                self.group_options()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, group)| {
-                        let label = format!(
-                            "{} {}",
-                            if index == choice { "›" } else { " " },
-                            self.group_label(section, *group)
-                        );
-                        if index == choice {
-                            label.set_style(accent_style()).into()
-                        } else {
-                            label.into()
-                        }
-                    }),
-            );
-        }
+
         if section == Section::Summary {
             selection = 0..1;
             lines.extend(self.summary_lines(width));
@@ -100,9 +82,7 @@ impl AnalyticsView {
             lines.extend(history.lines);
             selection = 0..lines.len();
         }
-        if focused && self.group_picker.is_some() {
-            selection = 0..2 + self.group_options().len();
-        }
+
         let mut wrapped = Vec::new();
         let mut wrapped_selection = 0..0;
         for (index, line) in lines.into_iter().enumerate() {

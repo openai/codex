@@ -102,21 +102,8 @@ impl AnalyticsView {
                 .map(crate::key_hint::ShortcutHint::display_label)
                 .unwrap_or_default()
         };
-        let controls = if self.visible_sections().is_empty() {
+        let mut controls = if self.visible_sections().is_empty() {
             format!("R refresh · {} back · q close", hint(ListAction::Cancel))
-        } else if self.group_picker.is_some() {
-            format!(
-                "{}/{} {} · {} select · {} cancel",
-                hint(ListAction::MoveUp),
-                hint(ListAction::MoveDown),
-                if self.section == Section::Summary {
-                    "view"
-                } else {
-                    "group"
-                },
-                hint(ListAction::Accept),
-                hint(ListAction::Cancel)
-            )
         } else {
             let navigation = if !self.zoomed {
                 format!("{}/z maximize", hint(ListAction::Accept))
@@ -193,21 +180,42 @@ impl AnalyticsView {
             }
             Line::from(spans)
         };
+        let updated = self
+            .zoomed
+            .then(|| self.sections[self.section].history.ready())
+            .flatten()
+            .and_then(|history| history.updated_at)
+            .and_then(|value| chrono::DateTime::from_timestamp(value, /*nsecs*/ 0))
+            .map(|updated| format!("Updated {} UTC", updated.format("%b %-d %H:%M")));
+        let add_updated = |footer: &mut Vec<Line<'static>>| {
+            if let Some(updated) = &updated {
+                let timestamp = Line::from(updated.clone().set_style(secondary_style()));
+                if let Some(line) = footer
+                    .last_mut()
+                    .filter(|line| line.width() + timestamp.width() + 3 <= width)
+                {
+                    *line = columns(line.clone(), timestamp, width);
+                } else {
+                    footer.extend(word_wrap_lines(
+                        [columns(Line::default(), timestamp, width)],
+                        RtOptions::new(width),
+                    ));
+                }
+            }
+        };
         let mut footer = word_wrap_lines(controls.lines().map(control_line), RtOptions::new(width));
-        if self.group_picker.is_none()
-            && matches!(
-                self.section,
-                Section::Plugins | Section::Activity | Section::Skills
-            )
-            && !self.day_has_details(self.section, self.sections[self.section].cursor)
+        if matches!(
+            self.section,
+            Section::Plugins | Section::Activity | Section::Skills
+        ) && !self.day_has_details(self.section, self.sections[self.section].cursor)
         {
             let height = footer.len();
-            let controls =
-                controls.replace(&format!(" · {} details", hint(ListAction::Accept)), "");
+            controls = controls.replace(&format!(" · {} details", hint(ListAction::Accept)), "");
             footer = word_wrap_lines(controls.lines().map(control_line), RtOptions::new(width));
             // Removing a contextual hint must not resize the chart on narrow terminals.
             footer.resize(height, Line::default());
         }
+        add_updated(&mut footer);
         let sections = if self.zoomed {
             let line = Line::from(
                 self.visible_sections()
@@ -235,7 +243,7 @@ impl AnalyticsView {
         };
         let [title, range, tabs, body, hints] = Layout::vertical([
             Constraint::Length(1),
-            Constraint::Length(if show_range { 2 } else { 1 }),
+            Constraint::Length(2),
             Constraint::Length(if sections.is_empty() {
                 0
             } else {
@@ -309,9 +317,7 @@ impl AnalyticsView {
                     panel = self.panel(self.section, width, height);
                 }
             }
-            let center_summary = self.section == Section::Summary
-                && self.profile.ready().is_some()
-                && self.group_picker.is_none();
+            let center_summary = self.section == Section::Summary && self.profile.ready().is_some();
             if center_summary {
                 // Keep the section heading and rule fixed; center the profile below them.
                 let padding = usize::from(body.height).saturating_sub(panel.lines.len()) / 2;
@@ -324,13 +330,41 @@ impl AnalyticsView {
             } else {
                 panel.selection
             };
-            if !center_summary {
+            if !center_summary && panel.lines.len() > usize::from(body.height) {
                 panel.lines.push(Line::default());
             }
             (panel.lines, selection)
         } else {
             self.dashboard_lines(width, usize::from(body.height))
         };
+        if lines.len() <= self.viewport_height {
+            let height = footer.len();
+            let controls = controls
+                .replace(
+                    &format!(
+                        " · {}/{} scroll",
+                        hint(ListAction::PageUp),
+                        hint(ListAction::PageDown)
+                    ),
+                    "",
+                )
+                .replace(
+                    &format!(
+                        " · {}/{} scroll",
+                        hint(ListAction::MoveUp),
+                        hint(ListAction::MoveDown)
+                    ),
+                    "",
+                );
+            footer = word_wrap_lines(controls.lines().map(control_line), RtOptions::new(width));
+            add_updated(&mut footer);
+            if updated.is_some() {
+                let padding = height.saturating_sub(footer.len());
+                footer.splice(0..0, std::iter::repeat_n(Line::default(), padding));
+            } else {
+                footer.resize(height, Line::default());
+            }
+        }
         if self.follow_selection {
             if selection.start < self.scroll_offset {
                 self.scroll_offset = selection.start;

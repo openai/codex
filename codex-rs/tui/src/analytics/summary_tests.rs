@@ -27,8 +27,6 @@ fn summary_modes_reflow_and_keep_selection_across_tabs() {
         screen(&mut view, /*width*/ 140, /*height*/ 44)
     );
     press(&mut view, KeyCode::Char('g'));
-    press(&mut view, KeyCode::Down);
-    press(&mut view, KeyCode::Enter);
     assert_eq!(view.sections[Section::Summary].group, 1);
     assert!(view.profile.ready().is_some());
     insta::assert_snapshot!(
@@ -39,8 +37,6 @@ fn summary_modes_reflow_and_keep_selection_across_tabs() {
     press(&mut view, KeyCode::BackTab);
     assert_eq!(view.sections[Section::Summary].group, 1);
     press(&mut view, KeyCode::Char('g'));
-    press(&mut view, KeyCode::Down);
-    press(&mut view, KeyCode::Enter);
     insta::assert_snapshot!(
         "summary_cumulative_narrow",
         screen(&mut view, /*width*/ 64, /*height*/ 60)
@@ -110,8 +106,6 @@ async fn summary_loads_once_per_refresh_and_does_not_block_other_reports() {
     assert!(matches!(view.profile, Load::Error(_)));
     assert!(view.sections[Section::Usage].history.ready().is_some());
     press(&mut view, KeyCode::Char('g'));
-    press(&mut view, KeyCode::Down);
-    press(&mut view, KeyCode::Enter);
     press(&mut view, KeyCode::Tab);
     press(&mut view, KeyCode::BackTab);
     test_support::settle(&mut view).await;
@@ -140,4 +134,20 @@ async fn closing_summary_aborts_its_pending_profile() {
     );
     view.cancel_loads();
     assert!(cancelled_rx.await.is_err());
+}
+
+#[test]
+fn summary_scroll_hints_follow_overflow_and_grouping_wraps() {
+    let mut view = fixture::view(models::AccountKind::Consumer);
+    view.profile = Load::Ready(profile());
+    view.select_summary(Some(crate::analytics::TokenActivityView::Daily));
+    assert!(!screen(&mut view, /*width*/ 140, /*height*/ 60).contains("scroll"));
+    assert!(screen(&mut view, /*width*/ 80, /*height*/ 18).contains("scroll"));
+    let mut groups = Vec::new();
+    for _ in 0..4 {
+        groups.push(view.sections[Section::Summary].group);
+        press(&mut view, KeyCode::Char('g'));
+    }
+    assert_eq!(groups, vec![0, 1, 2, 0]);
+    assert!(!screen(&mut view, /*width*/ 140, /*height*/ 60).contains("scroll"));
 }

@@ -40,6 +40,25 @@ fn screen(view: &mut AnalyticsView, width: u16, height: u16) -> String {
 }
 
 #[test]
+fn analytics_exact_fit_content_has_no_scroll_hint() {
+    let mut view = fixture::view(models::AccountKind::Enterprise);
+    view.section = Section::Chats;
+    screen(&mut view, /*width*/ 120, /*height*/ 60);
+    let chrome_height = 60 - view.viewport_height;
+    let content_height = view
+        .panel(Section::Chats, /*width*/ 116, /*chart_height*/ 4)
+        .lines
+        .len();
+    let exact_height = (chrome_height + content_height) as u16;
+
+    let exact = screen(&mut view, /*width*/ 120, exact_height);
+    assert!(!exact.contains("scroll"));
+    assert_eq!(view.viewport_height, content_height);
+
+    insta::assert_snapshot!(exact);
+}
+
+#[test]
 fn analytics_overview() {
     let mut view = fixture::view(models::AccountKind::Consumer);
     press(&mut view, KeyCode::Char('z'));
@@ -93,15 +112,8 @@ async fn analytics_credits_grouping_preserves_selected_day_and_total() {
         .iter()
         .map(|day| day.total)
         .collect::<Vec<_>>();
-    press(&mut view, KeyCode::Char('g'));
-    view.end_date = fixture::END_DATE;
-    fixture::seed_reports(&mut view);
-    let picker = screen(&mut view, /*width*/ 85, /*height*/ 40);
-    press(&mut view, KeyCode::Esc);
     for group in [2, 4, 5, 0] {
         press(&mut view, KeyCode::Char('g'));
-        press(&mut view, KeyCode::Down);
-        press(&mut view, KeyCode::Enter);
         test_support::settle(&mut view).await;
         assert_eq!(
             (
@@ -122,11 +134,9 @@ async fn analytics_credits_grouping_preserves_selected_day_and_total() {
             before
         );
     }
+    view.end_date = fixture::END_DATE;
     fixture::seed_reports(&mut view);
-    insta::assert_snapshot!(format!(
-        "{picker}\n{}",
-        screen(&mut view, /*width*/ 85, /*height*/ 40)
-    ));
+    insta::assert_snapshot!(screen(&mut view, /*width*/ 85, /*height*/ 40));
 }
 
 #[tokio::test]

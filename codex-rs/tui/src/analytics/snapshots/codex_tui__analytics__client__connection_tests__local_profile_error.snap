@@ -4,6 +4,7 @@ expression: terminal.backend().to_string()
 ---
 "  Analytics  ·  Live account · analytics@example.test                                               "
 "                                                                                                    "
+"                                                                                                    "
 "  [1 Summary]  2 Credits usage history  3 Token usage history  4 Plugins called  5 Skills used      "
 "                                                                                                    "
 "  ▎ Summary                                                                                         "
@@ -47,6 +48,5 @@ expression: terminal.backend().to_string()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
-"  tab/1–5 section · z dashboard · ↑/↓ scroll                                                        "
-"  g view · R refresh · pgup/pgdn scroll · esc back · q close                                        "
+"  tab/1–5 section · z dashboard                                                                     "
+"  g view · R refresh · esc back · q close                                                           "

@@ -77,7 +77,6 @@ pub(crate) struct AnalyticsView {
     ranges: [usize; 3],
     end_date: chrono::NaiveDate,
     token_model: Option<String>,
-    group_picker: Option<usize>,
     pub(crate) is_done: bool,
 }
 
@@ -105,7 +104,6 @@ impl AnalyticsView {
             ranges: [0; 3],
             end_date: chrono::Utc::now().date_naive(),
             token_model: None,
-            group_picker: None,
             is_done: false,
         };
         view.sections[Section::Usage].group = 1;
@@ -137,7 +135,6 @@ impl AnalyticsView {
 
     pub(crate) fn refresh(&mut self) {
         self.end_date = chrono::Utc::now().date_naive();
-        self.group_picker = None;
         self.live = self.connection.as_ref().map(|(config, _, _)| {
             std::sync::Arc::new(client::Live::new(
                 std::sync::Arc::clone(config),
@@ -294,7 +291,6 @@ impl AnalyticsView {
         if key_hint::plain(KeyCode::Char('q')).is_press(key)
             || key_hint::ctrl(KeyCode::Char('c')).is_press(key)
         {
-            self.group_picker = None;
             self.is_done = true;
             return;
         }
@@ -303,30 +299,7 @@ impl AnalyticsView {
         } else {
             self.keymap.action_for(key)
         };
-        if let Some(choice) = self.group_picker {
-            let options = self.group_options();
-            let Some(&group) = options.get(choice) else {
-                self.group_picker = None;
-                return;
-            };
-            match action {
-                Some(ListAction::MoveUp | ListAction::MoveLeft) => {
-                    self.group_picker = Some((choice + options.len() - 1) % options.len());
-                }
-                Some(ListAction::MoveDown | ListAction::MoveRight) => {
-                    self.group_picker = Some((choice + 1) % options.len());
-                }
-                Some(ListAction::Accept) => {
-                    self.sections[self.section].group = group;
-                    self.group_picker = None;
-                    self.load_report(self.section);
-                }
-                Some(ListAction::Cancel) => self.group_picker = None,
-                _ => {}
-            }
-            self.follow_selection = true;
-            return;
-        }
+
         self.follow_selection = true;
         if key_hint::plain(KeyCode::Char('z')).is_press(key) {
             self.zoomed = !self.zoomed;
@@ -379,10 +352,13 @@ impl AnalyticsView {
             return;
         }
         if key_hint::plain(KeyCode::Char('g')).is_press(key) && self.group_options().len() > 1 {
-            self.group_picker = self
-                .group_options()
+            let options = self.group_options();
+            let next = options
                 .iter()
-                .position(|group| *group == self.sections[self.section].group);
+                .position(|group| *group == self.sections[self.section].group)
+                .map_or(/*default*/ 0, |index| (index + 1) % options.len());
+            self.sections[self.section].group = options[next];
+            self.load_report(self.section);
             return;
         }
         let visible = self.visible_sections();
@@ -407,7 +383,6 @@ impl AnalyticsView {
                 self.scroll_offset = 0;
             }
             self.section = section;
-            self.group_picker = None;
             return;
         }
         if self.section == Section::Summary {

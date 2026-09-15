@@ -162,7 +162,7 @@ async fn analytics_menu_reopen_preserves_navigation_and_explicit_view_selects_su
     assert_eq!(screens[0], screens[1]);
     assert!(screens[1].contains("[4 Plugins called]"));
     assert!(screens[2].contains("[1 Summary]"));
-    assert!(screens[2].contains("[Weekly]"));
+    assert!(screens[2].contains("Weekly"));
     let snapshot = screens.join("\n\n");
     let snapshot = snapshot
         .lines()

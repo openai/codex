@@ -1,0 +1,24 @@
+---
+source: tui/src/analytics_tests.rs
+expression: exact
+---
+"  Analytics  ·  Live account                                                                                            "
+"                                                                                                                        "
+"                                                                                                                        "
+"  1 Summary  2 Credits usage history  3 Token usage history  4 Plugins called  5 Skills used  [6 Top chats]             "
+"                                                                                                                        "
+"  ▎ Top chats                                                                                                           "
+"  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  "
+"  Active in past 30 days · sorted by lifetime credits                                                                   "
+"                                                                                                                        "
+"    Chat                                                                          Lifetime credits                      "
+"  › Q3 planning analysis                                                                    120.00                      "
+"    Refactor billing usage                                                                  113.00                      "
+"    Other usage                                                                             109.00                      "
+"    Launch readiness review                                                                  85.00                      "
+"                                                                                                                        "
+"  Showing 1–4 of 5 chats                                                                                                "
+"  Local chats · excludes archived chats and subagent usage                                                              "
+"                                                                                                                        "
+"  tab/1–6 section · z dashboard · ↑/↓ row · enter details                                                               "
+"  R refresh · esc back · q close                                                                                        "

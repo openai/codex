@@ -1,14 +1,13 @@
 ---
 source: tui/src/analytics/connection_tests.rs
-assertion_line: 189
 expression: terminal.backend().to_string()
 ---
 "  Analytics  ·  Live account                                                                        "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  Couldn't load account plan. Press R to retry Analytics.                                           "
 "                                                                                                    "
+"  Couldn't load account plan. Press R to retry Analytics.                                           "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "

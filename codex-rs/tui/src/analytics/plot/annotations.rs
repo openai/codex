@@ -1,12 +1,13 @@
-//! Missing-day markers, selected-value callouts, and stable calendar labels.
+//! Missing-day markers, daily-value callouts, and stable calendar labels.
 
 use super::Renderer;
 use super::amount;
 use super::layout::Layout;
 use super::painting::Band;
-use crate::analytics::styles::number;
 use crate::analytics::styles::secondary_style;
+use crate::color::is_light;
 use crate::style::accent_style;
+use crate::terminal_palette::default_bg;
 use ratatui::buffer::Buffer;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -52,72 +53,101 @@ impl Renderer<'_> {
             width,
             ..
         } = self.layout;
-        let selected_total = self.days[self.cursor]
-            .1
-            .map_or(/*default*/ 0.0, |day| day.total);
-        let selected = self.days[self.cursor]
-            .1
-            .map_or_else(|| "—".into(), |_| amount(selected_total, self.unit));
-        // A partial number can mean a different amount; leave the cursor when the value cannot fit.
-        let selected = if selected.width() <= plot_width {
-            selected
-        } else {
-            String::new()
-        };
-        let x = self.layout.center(self.cursor - start);
-        let label_width = selected.width();
-        let label_x = x
-            .saturating_sub(label_width / 2)
-            .clamp(axis_width, width - label_width);
-        let below = selected_total < 0.0;
-        let band = if below {
-            Band::Negative
-        } else {
-            Band::Positive
-        };
-        let extent = self.values[self.cursor]
-            .iter()
-            .map(|value| band.amount(*value))
-            .sum::<f64>();
-        let rows = ((extent * height as f64 / self.peak).ceil() as usize).min(height);
-        let cap = if below {
-            baseline + rows
-        } else {
-            baseline - rows
-        };
-        let mut label_y = if below {
-            cap + 1
-        } else {
-            cap.saturating_sub(/*rhs*/ 1)
-        };
-        // Keep the callout close without painting over a neighboring bar. A guide connects any gap.
-        while (label_x..label_x + label_width)
-            .any(|col| buf[(col as u16, label_y as u16)].symbol() != " ")
+        // Give the selected value first choice of space; the other labels never overwrite it.
+        for index in
+            std::iter::once(self.cursor).chain((start..start + self.layout.count).filter(|index| {
+                self.days.len() <= 7
+                    && *index != self.cursor
+                    && self.days[*index].1.is_some_and(|day| {
+                        day.total != 0.0 || self.values[*index].iter().any(|value| *value != 0.0)
+                    })
+            }))
         {
-            if below {
-                label_y += 1;
-            } else if label_y > 0 {
-                label_y -= 1;
-            } else {
-                break;
+            let total = self.days[index].1.map_or(/*default*/ 0.0, |day| day.total);
+            let label = self.days[index]
+                .1
+                .map_or_else(|| "—".into(), |_| amount(total, self.unit));
+            // A partial number can mean a different amount; leave the cursor when the value cannot fit.
+            if label.width() > plot_width {
+                continue;
             }
+            let x = self.layout.center(index - start);
+            let label_width = label.width();
+            let label_x = x
+                .saturating_sub(label_width / 2)
+                .clamp(axis_width, width - label_width);
+            let occupied = label_x.saturating_sub(/*rhs*/ 1).max(axis_width)
+                ..(label_x + label_width + 1).min(width);
+            let below = total < 0.0;
+            let band = if below {
+                Band::Negative
+            } else {
+                Band::Positive
+            };
+            let extent = self.values[index]
+                .iter()
+                .map(|value| band.amount(*value))
+                .sum::<f64>();
+            let rows = ((extent * height as f64 / self.peak).ceil() as usize).min(height);
+            let cap = if below {
+                baseline + rows
+            } else {
+                baseline - rows
+            };
+            let mut label_y = if below {
+                cap + 1
+            } else {
+                cap.saturating_sub(/*rhs*/ 1)
+            };
+            // Keep the callout close without painting over a neighboring bar. A guide connects any gap.
+            while occupied
+                .clone()
+                .any(|col| buf[(col as u16, label_y as u16)].symbol() != " ")
+            {
+                if below && label_y + 1 < marker_row {
+                    label_y += 1;
+                } else if !below && label_y > 0 {
+                    label_y -= 1;
+                } else {
+                    break;
+                }
+            }
+            if occupied
+                .clone()
+                .any(|col| buf[(col as u16, label_y as u16)].symbol() != " ")
+            {
+                continue;
+            }
+            // Use white on dark backgrounds and the terminal foreground on light backgrounds.
+            let style = if index == self.cursor {
+                let selected = Style::default().bold().not_dim();
+                if default_bg().is_some_and(is_light) {
+                    selected
+                } else {
+                    selected.white()
+                }
+            } else {
+                Style::default().dim()
+            };
+            let guide = if below {
+                cap + 1..label_y
+            } else {
+                label_y + 1..cap
+            };
+            for y in guide {
+                let cell = &mut buf[(x as u16, y as u16)];
+                if cell.symbol() == " " {
+                    cell.set_char('┊').set_style(style);
+                }
+            }
+            buf.set_line(
+                label_x as u16,
+                label_y as u16,
+                &Line::from(label.set_style(style)),
+                label_width as u16,
+            );
         }
-        let guide = if below {
-            cap + 1..label_y
-        } else {
-            label_y + 1..cap
-        };
-        for y in guide {
-            buf[(x as u16, y as u16)]
-                .set_char('┊')
-                .set_style(accent_style());
-        }
-        buf.set_line(
-            label_x as u16,
-            label_y as u16,
-            &Line::from(number(selected)),
-            label_width as u16,
-        );
+        let x = self.layout.center(self.cursor - start);
         buf[(x as u16, marker_row as u16)]
             .set_char('▲')
             .set_style(accent_style());

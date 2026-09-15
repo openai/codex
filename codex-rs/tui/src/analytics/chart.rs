@@ -1,6 +1,6 @@
 //! Daily history with a stable chart and a compact, separated breakdown table.
 //! Chart series rank by the full range; table rows rank by the selected day and retain series colors.
-//! Missing and zero days retain the same row count; only explicit expansion changes height.
+//! Missing and zero days retain the same row count; only viewport changes and explicit expansion change height.
 
 use super::AnalyticsView;
 use super::data;
@@ -245,8 +245,13 @@ impl AnalyticsView {
             })
             .collect::<Vec<_>>();
         values.sort_by(|(_, a), (_, b)| b.value.abs().total_cmp(&a.value.abs()));
-        let remainder = if !expanded && values.len() > 4 {
-            let remaining = values.split_off(/*at*/ 3);
+        let row_budget = if self.zoomed {
+            (self.viewport_height / 4).max(/*other*/ 4)
+        } else {
+            4
+        };
+        let remainder = if !expanded && values.len() > row_budget {
+            let remaining = values.split_off(row_budget - 1);
             Some((
                 format!("{} more", remaining.len()),
                 remaining.iter().map(|(_, value)| value.value).sum::<f64>(),
@@ -317,9 +322,10 @@ impl AnalyticsView {
             ));
             lines.resize(table_end, Line::default());
         }
-        if let Some(updated) = history
-            .updated_at
-            .and_then(|value| chrono::DateTime::from_timestamp(value, /*nsecs*/ 0))
+        if !self.zoomed
+            && let Some(updated) = history
+                .updated_at
+                .and_then(|value| chrono::DateTime::from_timestamp(value, /*nsecs*/ 0))
         {
             lines.push(
                 format!("Updated {} UTC", updated.format("%b %-d %H:%M"))
