@@ -147,6 +147,7 @@ rmcp = { workspace = true, default-features = false, features = [
 ] }
 serial_test = { workspace = true }
 shlex = { workspace = true }
+sqlx = { workspace = true }
 tar = { workspace = true }
 test-case = "3.3.1"
 tokio-tungstenite = { workspace = true }

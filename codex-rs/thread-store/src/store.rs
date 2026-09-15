@@ -285,6 +285,22 @@ pub trait ThreadStore: Any + Send + Sync {
         false
     }
 
+    /// Copies current attachment membership into a newly persisted fork.
+    ///
+    /// Copies must be atomic and use new attachment IDs. The destination must be empty;
+    /// subsequent membership changes on either thread must remain independent.
+    fn copy_thread_attachments(
+        &self,
+        _source_thread_id: ThreadId,
+        _destination_thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "copy_thread_attachments",
+            })
+        })
+    }
+
     /// Attaches an attachment, returning an existing attachment for repeated requests.
     fn add_thread_attachment(
         &self,

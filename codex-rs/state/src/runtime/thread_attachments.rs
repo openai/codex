@@ -21,6 +21,46 @@ use sqlx::sqlite::SqliteRow;
 use uuid::Uuid;
 
 impl StateRuntime {
+    /// Atomically copies current membership into a new, empty fork, independent of history cutoffs.
+    pub async fn copy_thread_attachments(
+        &self,
+        source_thread_id: ThreadId,
+        destination_thread_id: ThreadId,
+    ) -> anyhow::Result<()> {
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let destination = destination_thread_id.to_string();
+        let exists = sqlx::query_scalar::<_, i64>("SELECT 1 FROM threads WHERE id = ?")
+            .bind(&destination)
+            .fetch_optional(&mut *transaction)
+            .await?
+            .is_some();
+        if !exists {
+            anyhow::bail!("thread not found: {destination_thread_id}");
+        }
+        let rows = sqlx::query(
+            "SELECT attachment_type, identity_key, payload FROM thread_attachments WHERE thread_id = ? ORDER BY created_at, id",
+        )
+        .bind(source_thread_id.to_string())
+        .fetch_all(&mut *transaction)
+        .await?;
+        let created_at = Utc::now().timestamp();
+        for row in rows {
+            sqlx::query(
+                "INSERT INTO thread_attachments (id, thread_id, attachment_type, identity_key, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(Uuid::now_v7().to_string())
+            .bind(&destination)
+            .bind(row.try_get::<String, _>("attachment_type")?)
+            .bind(row.try_get::<String, _>("identity_key")?)
+            .bind(row.try_get::<String, _>("payload")?)
+            .bind(created_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     /// Attach an attachment once, returning an existing attachment for repeated requests.
     pub async fn add_thread_attachment(
         &self,

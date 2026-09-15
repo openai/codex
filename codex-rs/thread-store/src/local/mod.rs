@@ -604,6 +604,21 @@ impl ThreadStore for LocalThreadStore {
         self.state_db.is_some()
     }
 
+    fn copy_thread_attachments(
+        &self,
+        source_thread_id: ThreadId,
+        destination_thread_id: ThreadId,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move {
+            thread_attachments::copy_thread_attachments(
+                self,
+                source_thread_id,
+                destination_thread_id,
+            )
+            .await
+        })
+    }
+
     fn add_thread_attachment(
         &self,
         params: AddThreadAttachmentParams,

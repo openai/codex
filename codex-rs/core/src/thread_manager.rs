@@ -2145,6 +2145,8 @@ impl ThreadManagerState {
         } else {
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile
         };
+        let attachment_source =
+            forked_from_thread_id.filter(|_| matches!(&initial_history, InitialHistory::Forked(_)));
         let (session, io) = Session::spawn(SessionSpawnArgs {
             startup,
             config,
@@ -2207,6 +2209,21 @@ impl ThreadManagerState {
             windows_sandbox_proxy_settings_mode,
         })
         .await?;
+        if let Some(source_thread_id) = attachment_source
+            && session.live_thread().is_some()
+            && self.thread_store.supports_thread_attachments()
+        {
+            // Fork initialization already handles persistence. Copy current membership before
+            // registration, but do not fail the conversation fork for attachment metadata errors.
+            let thread_id = session.thread_id();
+            if let Err(error) = self
+                .thread_store
+                .copy_thread_attachments(source_thread_id, thread_id)
+                .await
+            {
+                warn!(%thread_id, %source_thread_id, %error, "failed to copy fork attachments");
+            }
+        }
         // Enable Full Access form input only after session startup so a required MCP server cannot
         // block startup while waiting for form input.
         if session

@@ -12,6 +12,24 @@ use crate::ThreadStoreResult;
 use codex_protocol::ThreadId;
 use codex_rollout::StateDbHandle;
 
+pub(super) async fn copy_thread_attachments(
+    store: &LocalThreadStore,
+    source_thread_id: ThreadId,
+    destination_thread_id: ThreadId,
+) -> ThreadStoreResult<()> {
+    let state_db = state_db(store, "copy_thread_attachments")?;
+    let _lifecycle_reservation = store
+        .live_writer_locks
+        .reserve_lifecycle(destination_thread_id)
+        .await;
+    // Reference-backed forks already reserve their source. Do not recursively acquire that
+    // reservation: a queued deletion could deadlock it. SQLite serializes the source snapshot.
+    state_db
+        .copy_thread_attachments(source_thread_id, destination_thread_id)
+        .await
+        .map_err(|error| attachment_error("copy", Some(destination_thread_id), error))
+}
+
 pub(super) async fn add_thread_attachment(
     store: &LocalThreadStore,
     params: AddThreadAttachmentParams,

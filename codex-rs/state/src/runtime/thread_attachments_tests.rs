@@ -41,6 +41,72 @@ async fn runtime_with_threads(count: usize) -> Result<(Arc<StateRuntime>, PathBu
 }
 
 #[tokio::test]
+async fn copying_attachments_is_atomic_and_independent() -> Result<()> {
+    let (runtime, _codex_home, thread_ids) = runtime_with_threads(/*count*/ 2).await?;
+    let source = thread_ids[0];
+    let destination = thread_ids[1];
+    for key in ["first", "second"] {
+        runtime
+            .add_thread_attachment(source, "document", key, &json!({"path": key}))
+            .await?;
+    }
+    sqlx::query(
+        "CREATE TRIGGER fail_attachment_copy BEFORE INSERT ON thread_attachments WHEN NEW.identity_key = 'second' BEGIN SELECT RAISE(FAIL, 'copy failure'); END",
+    )
+    .execute(runtime.pool.as_ref())
+    .await?;
+    let error = runtime
+        .copy_thread_attachments(source, destination)
+        .await
+        .expect_err("a failed insert must roll back the entire copy");
+    assert!(error.to_string().contains("copy failure"));
+    assert!(
+        runtime
+            .list_thread_attachments(destination, /*cursor*/ None, /*limit*/ 10)
+            .await?
+            .attachments
+            .is_empty()
+    );
+    sqlx::query("DROP TRIGGER fail_attachment_copy")
+        .execute(runtime.pool.as_ref())
+        .await?;
+    runtime.copy_thread_attachments(source, destination).await?;
+    let originals = runtime
+        .list_thread_attachments(source, /*cursor*/ None, /*limit*/ 10)
+        .await?
+        .attachments;
+    let copied = runtime
+        .list_thread_attachments(destination, /*cursor*/ None, /*limit*/ 10)
+        .await?
+        .attachments;
+    assert_eq!(copied.len(), originals.len());
+    for (original, copy) in originals.iter().zip(&copied) {
+        assert_ne!(copy.id, original.id);
+        assert_eq!(
+            copy,
+            &crate::ThreadAttachment {
+                id: copy.id.clone(),
+                thread_id: destination,
+                created_at: copy.created_at,
+                ..original.clone()
+            }
+        );
+    }
+    runtime
+        .remove_thread_attachment(source, "document", "first")
+        .await?;
+    runtime.delete_thread(source).await?;
+    assert_eq!(
+        runtime
+            .list_thread_attachments(destination, /*cursor*/ None, /*limit*/ 10)
+            .await?
+            .attachments,
+        copied
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn attachment_attachments_are_idempotent_and_scoped_to_their_thread() -> Result<()> {
     let (runtime, _codex_home, thread_ids) = runtime_with_threads(/*count*/ 2).await?;
     let first = runtime
