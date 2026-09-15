@@ -4,57 +4,153 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
-use codex_utils_image::data_url_from_bytes;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Result returned by [`AttachmentStore`] operations.
 pub type AttachmentStoreResult<T> = Result<T, AttachmentStoreError>;
 
-/// Future returned by [`AttachmentStore::persist`].
-pub type AttachmentStoreFuture<'a> =
-    Pin<Box<dyn Future<Output = AttachmentStoreResult<AttachmentRef>> + Send + 'a>>;
+/// Future returned by [`AttachmentStore::upload`].
+pub type UploadFuture<'a> =
+    Pin<Box<dyn Future<Output = AttachmentStoreResult<UploadResult>> + Send + 'a>>;
 
-/// Stores attachment bytes and returns durable references to them.
+/// Future returned by [`AttachmentStore::resolve`].
+pub type ResolveFuture<'a> =
+    Pin<Box<dyn Future<Output = AttachmentStoreResult<AttachmentMetadata>> + Send + 'a>>;
+
+/// Uploads attachments and resolves metadata for stored files.
 ///
-/// Implementations perform any required I/O before resolving the returned future. A successful
-/// reference must remain valid when callers persist it or pass it across subsystem boundaries.
+/// Implementations choose whether uploaded attachments remain inline or become file references.
+/// File references returned by [`AttachmentStore::upload`] must be resolvable by
+/// [`AttachmentStore::resolve`].
 pub trait AttachmentStore: Send + Sync {
-    /// Persists `data` and returns a durable reference to it.
-    fn persist<'a>(
-        &'a self,
-        data: &'a [u8],
-        metadata: &'a AttachmentMetadata,
-    ) -> AttachmentStoreFuture<'a>;
+    /// Uploads an attachment and returns the representation callers should retain.
+    fn upload(&self, request: UploadRequest) -> UploadFuture<'_>;
+
+    /// Resolves metadata and, when requested, a fresh URL for a stored attachment.
+    fn resolve<'a>(&'a self, request: ResolveRequest<'a>) -> ResolveFuture<'a>;
 }
 
-/// Metadata used to identify and interpret an attachment.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct AttachmentMetadata {
-    /// Name associated with the attachment.
-    pub file_name: String,
-    /// IANA media type used to interpret the attachment bytes.
-    pub media_type: String,
+/// Attachment data supplied to [`AttachmentStore::upload`].
+#[derive(Clone, Eq, PartialEq)]
+pub struct UploadRequest {
+    /// Optional name associated with the attachment.
+    pub file_name: Option<String>,
+    /// Attachment bytes to persist.
+    pub data: Vec<u8>,
 }
 
-/// Durable reference to bytes stored by an [`AttachmentStore`].
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
-pub struct AttachmentRef {
-    /// Identifier assigned to an externally stored file.
-    pub file_id: Option<String>,
-    /// URL referring to the attachment bytes, such as a data URL or
-    /// `sediment://<file_id>`.
-    pub url: String,
-}
-
-impl fmt::Debug for AttachmentRef {
+impl fmt::Debug for UploadRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AttachmentRef")
-            .field("file_id", &self.file_id)
-            .field("url", &"<redacted>")
+            .debug_struct("UploadRequest")
+            .field("file_name", &self.file_name)
+            .field("data", &"<redacted>")
             .finish()
+    }
+}
+
+/// Parameters supplied to [`AttachmentStore::resolve`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResolveRequest<'a> {
+    /// Identifier assigned by the attachment store.
+    pub file_id: &'a str,
+    /// Minimum remaining lifetime required for the returned file URL.
+    ///
+    /// When absent, implementations must omit the file URL and may return cached metadata. When
+    /// present, implementations must return a URL that remains valid for at least this duration
+    /// after the resolve operation completes.
+    pub download_url_ttl: Option<Duration>,
+}
+
+/// Metadata used to validate and interpret an attachment.
+#[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AttachmentMetadata {
+    /// Name associated with the attachment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    /// MD5 digest of the attachment bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// Length of the attachment byte payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// IANA media type used to interpret the attachment bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Metadata specific to the attachment's format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_specific: Option<FormatSpecificMetadata>,
+    /// URL for reading the attachment bytes when requested during resolution.
+    ///
+    /// Implementations must omit this field when [`ResolveRequest::download_url_ttl`] is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_url: Option<String>,
+}
+
+impl fmt::Debug for AttachmentMetadata {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let file_url = self.file_url.as_ref().map(|_| "<redacted>");
+        formatter
+            .debug_struct("AttachmentMetadata")
+            .field("file_name", &self.file_name)
+            .field("digest", &self.digest)
+            .field("size_bytes", &self.size_bytes)
+            .field("mime_type", &self.mime_type)
+            .field("format_specific", &self.format_specific)
+            .field("file_url", &file_url)
+            .finish()
+    }
+}
+
+/// Metadata specific to an attachment format.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum FormatSpecificMetadata {
+    /// Metadata for an image attachment.
+    Image(ImageMetadata),
+}
+
+/// Metadata specific to an image attachment.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ImageMetadata {
+    /// Image width in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Image height in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+/// Representation callers should retain after uploading an attachment.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub enum UploadResult {
+    /// Attachment data remains inline.
+    Inline {
+        /// Original attachment bytes passed to [`AttachmentStore::upload`].
+        bytes: Vec<u8>,
+    },
+    /// Attachment data is available through an external file reference.
+    File {
+        /// Identifier assigned by the attachment store.
+        file_id: String,
+    },
+}
+
+impl fmt::Debug for UploadResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inline { .. } => formatter
+                .debug_struct("Inline")
+                .field("bytes", &"<redacted>")
+                .finish(),
+            Self::File { file_id } => formatter
+                .debug_struct("File")
+                .field("file_id", file_id)
+                .finish(),
+        }
     }
 }
 
@@ -62,32 +158,56 @@ impl fmt::Debug for AttachmentRef {
 pub struct InlineAttachmentStore;
 
 impl AttachmentStore for InlineAttachmentStore {
-    fn persist<'a>(
-        &'a self,
-        data: &'a [u8],
-        metadata: &'a AttachmentMetadata,
-    ) -> AttachmentStoreFuture<'a> {
+    fn upload(&self, request: UploadRequest) -> UploadFuture<'_> {
         Box::pin(async move {
-            Ok(AttachmentRef {
-                file_id: None,
-                url: data_url_from_bytes(&metadata.media_type, data),
+            Ok(UploadResult::Inline {
+                bytes: request.data,
             })
         })
     }
+
+    fn resolve<'a>(&'a self, request: ResolveRequest<'a>) -> ResolveFuture<'a> {
+        let file_id = request.file_id;
+        Box::pin(async move {
+            Err(AttachmentStoreError::new(
+                AttachmentStoreErrorKind::NotFound,
+                format!("attachment `{file_id}` was not found"),
+            ))
+        })
+    }
+}
+
+/// Category of failure returned by an [`AttachmentStore`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachmentStoreErrorKind {
+    /// The requested attachment could not be resolved.
+    NotFound,
+    /// The attachment data or metadata is invalid.
+    InvalidAttachment,
+    /// The backing store could not complete the operation.
+    Backend,
 }
 
 /// Error returned by an [`AttachmentStore`] implementation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AttachmentStoreError {
+    kind: AttachmentStoreErrorKind,
     message: String,
 }
 
 impl AttachmentStoreError {
     /// Creates an error without exposing backend-specific error types.
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn new(kind: AttachmentStoreErrorKind, message: impl Into<String>) -> Self {
         Self {
+            kind,
             message: message.into(),
         }
+    }
+
+    /// Returns the category callers can use to handle this error.
+    #[must_use]
+    pub const fn kind(&self) -> AttachmentStoreErrorKind {
+        self.kind
     }
 }
 

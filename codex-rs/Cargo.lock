@@ -2481,8 +2481,6 @@ dependencies = [
 name = "codex-attachment-store"
 version = "0.0.0"
 dependencies = [
- "base64 0.22.1",
- "codex-utils-image",
  "pretty_assertions",
  "serde",
  "tokio",
@@ -5497,6 +5495,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
+ "codex-attachment-store",
  "codex-config",
  "codex-core",
  "codex-exec-server",

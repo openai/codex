@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_attachment_store::AttachmentStore;
 use codex_config::CloudConfigBundleLoader;
 use codex_core::CodexThread;
 pub use codex_core::StartThreadOptions;
@@ -342,6 +343,7 @@ pub struct TestCodexBuilder {
     history_mode: Option<ThreadHistoryMode>,
     models_manager: Option<SharedModelsManager>,
     thread_store: Option<Arc<dyn ThreadStore>>,
+    image_store: Arc<dyn AttachmentStore>,
 }
 
 impl TestCodexBuilder {
@@ -365,6 +367,11 @@ impl TestCodexBuilder {
 
     pub fn with_models_manager(mut self, models_manager: SharedModelsManager) -> Self {
         self.models_manager = Some(models_manager);
+        self
+    }
+
+    pub fn with_image_store(mut self, image_store: Arc<dyn AttachmentStore>) -> Self {
+        self.image_store = image_store;
         self
     }
 
@@ -739,7 +746,7 @@ impl TestCodexBuilder {
                 Arc::new(extensions.build()),
                 user_instructions_provider,
                 /*analytics_events_client*/ None,
-                codex_core::passthrough_image_store(),
+                Arc::clone(&self.image_store),
                 Arc::clone(&thread_store),
                 codex_core::local_agent_graph_store_from_state_db(state_db.as_ref()),
                 installation_id,
@@ -1403,6 +1410,7 @@ pub fn test_codex() -> TestCodexBuilder {
         history_mode: None,
         models_manager: None,
         thread_store: None,
+        image_store: codex_core::passthrough_image_store(),
     }
 }
 

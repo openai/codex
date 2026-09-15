@@ -5824,6 +5824,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         environment_manager,
         /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
+        crate::passthrough_image_store(),
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
@@ -6061,6 +6062,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         live_thread: None,
+        image_store: crate::passthrough_image_store(),
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
@@ -6309,6 +6311,7 @@ async fn make_session_with_config_and_rx(
         environment_manager,
         /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
+        crate::passthrough_image_store(),
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
@@ -6439,6 +6442,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         environment_manager,
         /*inherited_environments*/ None,
         /*analytics_events_client*/ None,
+        crate::passthrough_image_store(),
         Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             Some(
@@ -8239,6 +8243,7 @@ where
         network_approval: Arc::clone(&network_approval),
         state_db: state_db.clone(),
         live_thread: None,
+        image_store: crate::passthrough_image_store(),
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             state_db,

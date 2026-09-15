@@ -1,60 +1,75 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use pretty_assertions::assert_eq;
 
 use super::*;
 
-/// Debug output retains the Sediment file ID while redacting credential-bearing URLs.
+/// Debug output redacts attachment bytes in requests and results.
 #[test]
-fn attachment_ref_debug_redacts_url() {
-    let attachment = AttachmentRef {
-        file_id: Some("sediment-file-id".to_string()),
-        url: "https://attachments.test/file?signed=secret".to_string(),
+fn attachment_debug_output_redacts_bytes() {
+    let request = UploadRequest {
+        file_name: Some("image.png".to_string()),
+        data: b"secret".to_vec(),
+    };
+    let result = UploadResult::Inline {
+        bytes: b"secret".to_vec(),
     };
 
     assert_eq!(
-        format!("{attachment:?}"),
-        r#"AttachmentRef { file_id: Some("sediment-file-id"), url: "<redacted>" }"#
+        (format!("{request:?}"), format!("{result:?}")),
+        (
+            r#"UploadRequest { file_name: Some("image.png"), data: "<redacted>" }"#.to_string(),
+            r#"Inline { bytes: "<redacted>" }"#.to_string(),
+        )
     );
 }
 
-/// The inline store preserves binary, text, PNG, and JPEG attachment bytes.
+/// Debug output redacts credential-bearing file URLs in resolved metadata.
+#[test]
+fn attachment_metadata_debug_output_redacts_file_url() {
+    let metadata = AttachmentMetadata {
+        file_url: Some("https://attachments.test/file?signed=secret".to_string()),
+        ..AttachmentMetadata::default()
+    };
+
+    let debug = format!("{metadata:?}");
+
+    assert!(!debug.contains("signed=secret"));
+    assert!(debug.contains("<redacted>"));
+}
+
+/// The inline store preserves PNG and JPEG attachment bytes.
 #[tokio::test]
-async fn inline_store_preserves_attachment_bytes() {
-    let cases: [(&str, &str, &[u8]); 4] = [
-        (
-            "attachment.bin",
-            "application/octet-stream",
-            b"\x00\x01\x7f\x80\xfe\xff",
-        ),
-        ("note.txt", "text/plain", b"hello\n"),
-        ("image.png", "image/png", b"\x89PNG\r\n\x1a\n"),
-        (
-            "image.jpg",
-            "image/jpeg",
-            b"\xff\xd8\xff\xe0JFIF\x00\xff\xd9",
-        ),
+async fn inline_store_preserves_image_bytes() {
+    let cases: [(&str, &[u8]); 2] = [
+        ("image.png", b"\x89PNG\r\n\x1a\n"),
+        ("image.jpg", b"\xff\xd8\xff\xe0JFIF\x00\xff\xd9"),
     ];
 
-    for (file_name, media_type, data) in cases {
-        let metadata = AttachmentMetadata {
-            file_name: file_name.to_string(),
-            media_type: media_type.to_string(),
-        };
+    for (file_name, data) in cases {
         let attachment = InlineAttachmentStore
-            .persist(data, &metadata)
+            .upload(UploadRequest {
+                file_name: Some(file_name.to_string()),
+                data: data.to_vec(),
+            })
             .await
             .expect("inline attachment");
-        let (data_url_metadata, encoded) =
-            attachment.url.split_once(',').expect("data URL payload");
-        let decoded = BASE64_STANDARD
-            .decode(encoded)
-            .expect("valid base64 payload");
-        let expected_data_url_metadata = format!("data:{media_type};base64");
+        let UploadResult::Inline { bytes } = attachment else {
+            panic!("inline store returned a file reference");
+        };
 
-        assert_eq!(
-            (attachment.file_id, data_url_metadata, decoded),
-            (None, expected_data_url_metadata.as_str(), data.to_vec())
-        );
+        assert_eq!(bytes, data);
     }
+}
+
+/// The inline store reports file references as missing because it never uploads them.
+#[tokio::test]
+async fn inline_store_cannot_resolve_file_references() {
+    let error = InlineAttachmentStore
+        .resolve(ResolveRequest {
+            file_id: "file_123",
+            download_url_ttl: None,
+        })
+        .await
+        .expect_err("inline store cannot resolve file references");
+
+    assert_eq!(error.kind(), AttachmentStoreErrorKind::NotFound);
 }
