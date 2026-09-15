@@ -1,6 +1,7 @@
 //! Owns the reusable reviewer and temporary forks for one parent thread.
 //! Guardian supplies agent startup; the host supplies captured context. Selection stays serialized;
-//! concurrent reviews fork committed context and shutdown joins every tracked session.
+//! concurrent reviews fork committed context. Lifetime guards cancel agents; ThreadManager
+//! performs cleanup and tracks its completion. The pool never runs a second shutdown protocol.
 //! Startup and fork futures stay boxed to bound the orchestration stack frames.
 
 use std::future::Future;
@@ -16,7 +17,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::GuardianReviewSessionOutcome;
 use crate::run_before_review_deadline;
-use crate::run_before_review_deadline_with_cancel;
 
 /// Background work owned by Guardian for one parent runtime.
 /// Stop cancels the work and joins this tracker before the parent closes its history.
@@ -26,18 +26,16 @@ pub struct ReviewerTasks {
     pub cancellation: CancellationToken,
 }
 
-/// A host-owned reviewer session. Context and snapshots remain opaque to the pool.
-/// Shutdown must cancel the runtime and await its termination.
+/// Context bookkeeping for a reviewer. Lifetime and cleanup belong to ThreadManager.
+/// Context and snapshots remain opaque while the host context builder is being A/B tested.
 pub trait ReviewerSession: Send + Sync + 'static {
     type Setup: Send + Sync + 'static;
     type Context: Clone + PartialEq + Send + Sync;
     type Snapshot: Send + Sync;
 
     fn context(&self) -> &Self::Context;
-    fn cancel(&self);
     fn snapshot(&self) -> impl Future<Output = Option<Self::Snapshot>> + Send;
     fn commit_snapshot(&self) -> impl Future<Output = ()> + Send;
-    fn shutdown(&self) -> impl Future<Output = ()> + Send;
 }
 
 /// Executes one approval on a selected session. The host must drain the submitted
@@ -74,8 +72,8 @@ pub enum SessionDisposition {
 
 /// Per-parent reviewer state. The same pool serves prewarm, review, invalidation and shutdown.
 pub struct ReviewerPool<S: ReviewerSession> {
-    state: Arc<Mutex<PoolState<S>>>,
-    cancellation: CancellationToken,
+    trunk: Mutex<Option<Arc<Trunk<S>>>>,
+    runtime: Arc<ReviewerTasks>,
     spawn: Box<SpawnReviewer<S>>,
 }
 
@@ -89,20 +87,23 @@ type SpawnReviewer<S> = dyn Fn(
     + Send
     + Sync;
 
-struct PoolState<S: ReviewerSession> {
-    trunk: Option<Arc<Trunk<S>>>,
-    ephemeral_reviews: Vec<Arc<S>>,
-}
-
 struct Trunk<S: ReviewerSession> {
     session: Arc<S>,
     review_lock: Semaphore,
+    cancellation: CancellationToken,
+}
+
+impl<S: ReviewerSession> Drop for Trunk<S> {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 
 impl<S: ReviewerSession> ReviewerPool<S> {
     /// Installs Guardian's startup function once. It must finish or clean up partial startup
     /// even when the caller drops its future, and preserve the supplied cancellation token.
     pub fn new(
+        runtime: Arc<ReviewerTasks>,
         spawn: impl Fn(
             Arc<S::Setup>,
             S::Context,
@@ -115,11 +116,8 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         + 'static,
     ) -> Self {
         Self {
-            state: Arc::new(Mutex::new(PoolState {
-                trunk: None,
-                ephemeral_reviews: Vec::new(),
-            })),
-            cancellation: CancellationToken::new(),
+            trunk: Mutex::new(None),
+            runtime,
             spawn: Box::new(spawn),
         }
     }
@@ -128,17 +126,16 @@ impl<S: ReviewerSession> ReviewerPool<S> {
 impl<S: ReviewerSession> ReviewerPool<S> {
     /// Returns the current reviewer handle for host inspection and feedback collection.
     pub async fn trunk(&self) -> Option<Arc<S>> {
-        self.state
+        self.trunk
             .lock()
             .await
-            .trunk
             .as_ref()
             .map(|trunk| Arc::clone(&trunk.session))
     }
 
     /// Prepares the first reviewer without replacing a review that won the startup race.
     pub async fn prewarm(&self, setup: Arc<S::Setup>, context: S::Context) -> anyhow::Result<()> {
-        let cancellation = self.cancellation.child_token();
+        let cancellation = self.runtime.cancellation.child_token();
         let guard = cancellation.clone().drop_guard();
         let session = (self.spawn)(
             setup,
@@ -148,44 +145,23 @@ impl<S: ReviewerSession> ReviewerPool<S> {
             cancellation.clone(),
         )
         .await?;
-        let mut state = self.state.lock().await;
-        if !cancellation.is_cancelled() && state.trunk.is_none() {
-            state.trunk = Some(Arc::new(Trunk {
+        let mut trunk = self.trunk.lock().await;
+        if !cancellation.is_cancelled() && trunk.is_none() {
+            *trunk = Some(Arc::new(Trunk {
                 session: Arc::new(session),
                 review_lock: Semaphore::new(/*permits*/ 1),
+                cancellation: guard.disarm(),
             }));
-            drop(guard.disarm());
         }
         Ok(())
     }
 
     /// Permanently stops this parent's reviewer pool and waits for tracked runtimes.
     pub async fn shutdown(&self) {
-        self.cancellation.cancel();
-        self.invalidate().await;
-    }
-
-    /// Drops reusable context after parent history rollback or another host invalidation.
-    pub async fn invalidate(&self) {
-        let (trunk, ephemeral) = {
-            let mut state = self.state.lock().await;
-            (
-                state.trunk.take(),
-                std::mem::take(&mut state.ephemeral_reviews),
-            )
-        };
-        for session in trunk
-            .into_iter()
-            .map(|trunk| Arc::clone(&trunk.session))
-            .chain(ephemeral)
-        {
-            if self.cancellation.is_cancelled() {
-                session.shutdown().await;
-            } else {
-                session.cancel();
-                shutdown_in_background(session);
-            }
-        }
+        self.runtime.cancellation.cancel();
+        self.trunk.lock().await.take();
+        self.runtime.tasks.close();
+        self.runtime.tasks.wait().await;
     }
 
     /// Selects one reviewer; busy or incompatible trunks use an isolated temporary session.
@@ -204,26 +180,24 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         let (trunk, context) = match run_before_review_deadline(
             request.deadline(),
             request.cancellation(),
-            self.state.lock(),
+            self.trunk.lock(),
         )
         .await
         {
             Ok(mut state) => {
-                let context =
-                    request.context(state.trunk.as_ref().map(|trunk| trunk.session.as_ref()));
-                if let Some(trunk) = state.trunk.as_ref()
-                    && trunk.session.context() != &context
+                let context = request.context(state.as_ref().map(|trunk| trunk.session.as_ref()));
+                if let Some(trunk) = state.as_ref()
+                    && (trunk.cancellation.is_cancelled() || trunk.session.context() != &context)
                     && trunk.review_lock.try_acquire().is_ok()
-                    && let Some(stale) = state.trunk.take()
                 {
-                    shutdown_in_background(Arc::clone(&stale.session));
+                    state.take();
                 }
-                if state.trunk.is_none() {
-                    let cancellation = self.cancellation.child_token();
-                    let session = match run_before_review_deadline_with_cancel(
+                if state.is_none() {
+                    let cancellation = self.runtime.cancellation.child_token();
+                    let lifetime = cancellation.clone().drop_guard();
+                    let session = match run_before_review_deadline(
                         request.deadline(),
                         request.cancellation(),
-                        &cancellation,
                         (self.spawn)(
                             request.setup(),
                             context.clone(),
@@ -245,13 +219,14 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                             return (outcome, GuardianReviewAnalyticsResult::without_session());
                         }
                     };
-                    state.trunk = Some(Arc::new(Trunk {
+                    *state = Some(Arc::new(Trunk {
                         session,
                         review_lock: Semaphore::new(/*permits*/ 1),
+                        cancellation: lifetime.disarm(),
                     }));
                     spawned_trunk = true;
                 }
-                (state.trunk.as_ref().cloned(), context)
+                (state.as_ref().cloned(), context)
             }
             Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
         };
@@ -282,22 +257,27 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         } else {
             GuardianReviewSessionKind::TrunkReused
         };
+        // Dropping a review before it drains its turn must not leave a reusable agent.
+        let review_lifetime = trunk.cancellation.clone().drop_guard();
         let (outcome, disposition, analytics) = request.run(&trunk.session, kind).await;
         if disposition == SessionDisposition::Reusable
             && matches!(outcome, GuardianReviewSessionOutcome::Completed(_))
         {
             trunk.session.commit_snapshot().await;
         }
+        if disposition == SessionDisposition::Reusable {
+            review_lifetime.disarm();
+        } else {
+            drop(review_lifetime);
+        }
         drop(guard);
         if disposition == SessionDisposition::Discard {
-            let mut state = self.state.lock().await;
+            let mut state = self.trunk.lock().await;
             if state
-                .trunk
                 .as_ref()
                 .is_some_and(|current| Arc::ptr_eq(current, &trunk))
-                && let Some(removed) = state.trunk.take()
             {
-                shutdown_in_background(Arc::clone(&removed.session));
+                state.take();
             }
         }
         (outcome, analytics)
@@ -312,11 +292,11 @@ impl<S: ReviewerSession> ReviewerPool<S> {
     where
         R: ReviewerRequest<Session = S>,
     {
-        let cancellation = self.cancellation.child_token();
-        let session = match run_before_review_deadline_with_cancel(
+        let cancellation = self.runtime.cancellation.child_token();
+        let _lifetime = cancellation.clone().drop_guard();
+        let session = match run_before_review_deadline(
             request.deadline(),
             request.cancellation(),
-            &cancellation,
             (self.spawn)(
                 request.setup(),
                 context,
@@ -336,63 +316,9 @@ impl<S: ReviewerSession> ReviewerPool<S> {
             }
             Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
         };
-        self.state
-            .lock()
-            .await
-            .ephemeral_reviews
-            .push(Arc::clone(&session));
-        let mut cleanup = EphemeralCleanup {
-            state: Arc::clone(&self.state),
-            session: Some(Arc::clone(&session)),
-        };
         let (outcome, _, analytics) = request
             .run(&session, GuardianReviewSessionKind::EphemeralForked)
             .await;
-        let removed = {
-            let mut state = self.state.lock().await;
-            state
-                .ephemeral_reviews
-                .iter()
-                .position(|active| Arc::ptr_eq(active, &session))
-                .map(|index| state.ephemeral_reviews.swap_remove(index))
-        };
-        if let Some(removed) = removed {
-            cleanup.session = None;
-            shutdown_in_background(removed);
-        }
         (outcome, analytics)
-    }
-}
-
-fn shutdown_in_background<S: ReviewerSession>(session: Arc<S>) {
-    drop(tokio::spawn(async move {
-        session.shutdown().await;
-    }));
-}
-
-struct EphemeralCleanup<S: ReviewerSession> {
-    state: Arc<Mutex<PoolState<S>>>,
-    session: Option<Arc<S>>,
-}
-
-impl<S: ReviewerSession> Drop for EphemeralCleanup<S> {
-    fn drop(&mut self) {
-        let Some(session) = self.session.take() else {
-            return;
-        };
-        let state = Arc::clone(&self.state);
-        drop(tokio::spawn(async move {
-            let removed = {
-                let mut state = state.lock().await;
-                state
-                    .ephemeral_reviews
-                    .iter()
-                    .position(|active| Arc::ptr_eq(active, &session))
-                    .map(|index| state.ephemeral_reviews.swap_remove(index))
-            };
-            if let Some(removed) = removed {
-                removed.shutdown().await;
-            }
-        }));
     }
 }

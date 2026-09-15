@@ -16,6 +16,11 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadReadyInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
+use codex_extension_api::TurnAbortInput;
+use codex_extension_api::TurnLifecycleContributor;
+use codex_extension_api::TurnStartInput;
+use codex_extension_api::TurnStopInput;
+use codex_guardian_reviewer::ReviewDenials;
 use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerTasks;
 use codex_protocol::ThreadId;
@@ -26,15 +31,9 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 
 /// Owns reviewer agents through the same thread manager as the parent conversation.
-#[derive(Clone, Debug)]
-pub struct GuardianExtension {
+#[derive(Debug)]
+struct GuardianExtension {
     thread_manager: Weak<ThreadManager>,
-}
-
-impl GuardianExtension {
-    pub fn new(thread_manager: Weak<ThreadManager>) -> Self {
-        Self { thread_manager }
-    }
 }
 
 impl ThreadLifecycleContributor<Config> for GuardianExtension {
@@ -50,6 +49,7 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
             let runtime = input.thread_store.get_or_init(ReviewerTasks::default);
             input.thread_store.get_or_init(|| {
                 ReviewerPool::<GuardianReviewSession>::new(
+                    Arc::clone(&runtime),
                     move |context, key, kind, snapshot, cancel| {
                         let manager = manager.clone();
                         let runtime = Arc::clone(&runtime);
@@ -82,14 +82,12 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
                             options
                                 .thread_extension_init
                                 .insert(SessionIsolation::Isolated);
-                            let parent_cancel = runtime.cancellation.clone();
                             let session_cancel = cancel.clone();
                             let until = async move {
                                 let _cancel_on_exit = cancel.clone().drop_guard();
                                 tokio::select! {
                                     _ = cancel.cancelled() => {}
                                     _ = history_reset.cancelled() => {}
-                                    _ = parent_cancel.cancelled() => {}
                                 }
                             };
                             let spawned = manager
@@ -164,24 +162,44 @@ impl ThreadLifecycleContributor<Config> for GuardianExtension {
 
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if let Some(runtime) = input.thread_store.get::<ReviewerTasks>() {
-                runtime.cancellation.cancel();
-                if let Some(pool) = input
-                    .thread_store
-                    .get::<ReviewerPool<GuardianReviewSession>>()
-                {
-                    pool.shutdown().await;
-                }
-                runtime.tasks.close();
-                runtime.tasks.wait().await;
+            if let Some(pool) = input
+                .thread_store
+                .get::<ReviewerPool<GuardianReviewSession>>()
+            {
+                pool.shutdown().await;
             }
         })
     }
 }
 
+impl TurnLifecycleContributor for GuardianExtension {
+    fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(ReviewDenials::clear_turn(input.thread_store, input.turn_id))
+    }
+    fn on_turn_stop<'a>(&'a self, input: TurnStopInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(ReviewDenials::clear_turn(
+            input.thread_store,
+            input.turn_store.level_id(),
+        ))
+    }
+    fn on_turn_abort<'a>(&'a self, input: TurnAbortInput<'a>) -> ExtensionFuture<'a, ()> {
+        Box::pin(ReviewDenials::clear_turn(
+            input.thread_store,
+            input.turn_store.level_id(),
+        ))
+    }
+}
+
+/// Registers the synchronous reviewer and its thread and turn cleanup.
 pub fn install(
     registry: &mut ExtensionRegistryBuilder<Config>,
     thread_manager: Weak<ThreadManager>,
 ) {
-    registry.thread_lifecycle_contributor(Arc::new(GuardianExtension::new(thread_manager)));
+    let extension = Arc::new(GuardianExtension { thread_manager });
+    registry.thread_lifecycle_contributor(extension.clone());
+    registry.turn_lifecycle_contributor(extension);
 }
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;

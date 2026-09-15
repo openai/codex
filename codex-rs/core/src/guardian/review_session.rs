@@ -874,15 +874,6 @@ impl codex_guardian_reviewer::ReviewerSession for GuardianReviewSession {
     fn context(&self) -> &Self::Context {
         &self.reuse_key
     }
-    fn cancel(&self) {
-        self.cancel_token.cancel();
-    }
-
-    async fn shutdown(&self) {
-        self.cancel_token.cancel();
-        let _ = self.io.shutdown_and_wait().await;
-    }
-
     async fn snapshot(&self) -> Option<GuardianReviewForkSnapshot> {
         self.state.lock().await.conversation.snapshot().cloned()
     }

@@ -4,7 +4,6 @@ use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::context_manager::ContextManager;
 use codex_guardian_reviewer::ReviewerRequest;
-use codex_guardian_reviewer::ReviewerSession;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::openai_models::AutoReviewMessages;
@@ -299,7 +298,7 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
 
     assert_eq!(review.reuse_key, expected_key);
     assert_eq!(review.session.inherited_instructions().await.thread, latest);
-    review.shutdown().await;
+    manager.shutdown().await;
 }
 
 #[tokio::test]
@@ -1152,10 +1151,13 @@ async fn prewarm_test_session(
 ) -> GuardianReviewSessionManager {
     let key = session.reuse_key.clone();
     let session = Arc::new(Mutex::new(Some(session)));
-    let pool = GuardianReviewSessionManager::new(move |_, _, _, _, _| {
-        let session = Arc::clone(&session);
-        Box::pin(async move { Ok(session.lock().await.take().expect("one fixture spawn")) })
-    });
+    let pool = GuardianReviewSessionManager::new(
+        Arc::new(codex_guardian_reviewer::ReviewerTasks::default()),
+        move |_, _, _, _, _| {
+            let session = Arc::clone(&session);
+            Box::pin(async move { Ok(session.lock().await.take().expect("one fixture spawn")) })
+        },
+    );
     let context = setup::prepare_prewarm(
         Arc::clone(&params.parent_session),
         Arc::clone(params.parent_context.turn()),

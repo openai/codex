@@ -9,7 +9,7 @@ use codex_login::AuthManager;
 mod async_scorer;
 mod sync_reviewer;
 
-pub use sync_reviewer::GuardianExtension as GuardianReviewerExtension;
+pub use sync_reviewer::install as install_reviewer;
 
 /// Installs the guardian contributors into the extension registry.
 pub fn install(
@@ -18,5 +18,5 @@ pub fn install(
     thread_manager: Weak<ThreadManager>,
 ) {
     async_scorer::install(registry, auth_manager, thread_manager.clone());
-    sync_reviewer::install(registry, thread_manager);
+    install_reviewer(registry, thread_manager);
 }

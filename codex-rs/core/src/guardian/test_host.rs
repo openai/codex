@@ -35,12 +35,15 @@ pub(crate) fn install(session: &Session, config: &Config) {
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
     ));
+    let runtime = Arc::new(codex_guardian_reviewer::ReviewerTasks::default());
     session
         .services
         .thread_extension_data
         .insert(GuardianReviewSessionManager::new(
+            Arc::clone(&runtime),
             move |context, key, kind, snapshot, cancel| {
                 let manager = Arc::clone(&manager);
+                let runtime = Arc::clone(&runtime);
                 Box::pin(async move {
                     let history_reset = context.history_reset.clone();
                     let (mut options, state) = context.thread_options(snapshot).await;
@@ -67,7 +70,7 @@ pub(crate) fn install(session: &Session, config: &Config) {
                         }
                     };
                     let spawned = manager
-                        .start_thread_until(options, until, &tokio_util::task::TaskTracker::new())
+                        .start_thread_until(options, until, &runtime.tasks)
                         .await?;
                     Ok(context
                         .bind_thread(&spawned.thread, key, state, session_cancel)
