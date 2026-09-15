@@ -43,7 +43,7 @@ impl AnalyticsView {
                     secondary_style().dim()
                 };
                 let mut content = Vec::new();
-                if !matches!(section, Section::Chats) {
+                if !matches!(section, Section::Chats | Section::Plan) {
                     content.push(
                         format!(
                             "{}d{}",
@@ -67,7 +67,7 @@ impl AnalyticsView {
                 }
                 if matches!(
                     section,
-                    Section::Usage | Section::Credits | Section::Activity
+                    Section::Usage | Section::Credits | Section::Activity | Section::Plan
                 ) {
                     content.push(
                         format!(
@@ -112,6 +112,7 @@ impl AnalyticsView {
                             )
                             .lines,
                         ),
+                        Section::Plan => content.extend(self.plan_lines(inner_width).0),
                         Section::Chats => {
                             content.push(
                                 "30d active · lifetime credits"

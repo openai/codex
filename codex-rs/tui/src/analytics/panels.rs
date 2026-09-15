@@ -35,7 +35,7 @@ impl AnalyticsView {
         let group = self.sections[section].group;
         let heading = if matches!(
             section,
-            Section::Usage | Section::Credits | Section::Activity
+            Section::Usage | Section::Credits | Section::Activity | Section::Plan
         ) {
             columns(
                 heading,
@@ -79,7 +79,11 @@ impl AnalyticsView {
                     }),
             );
         }
-        if section == Section::Chats {
+        if section == Section::Plan {
+            let (plan, detail) = self.plan_lines(width);
+            selection = lines.len() + detail.start..lines.len() + detail.end;
+            lines.extend(plan);
+        } else if section == Section::Chats {
             let (chats, detail) = self.chat_lines(width);
             selection = lines.len() + detail.start..lines.len() + detail.end;
             lines.extend(chats);

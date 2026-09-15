@@ -15,6 +15,7 @@ pub(super) enum Section {
     Chats,
     Activity,
     Skills,
+    Plan,
 }
 
 impl Section {
@@ -24,7 +25,7 @@ impl Section {
             Self::Usage => Some(Report::Usage),
             Self::Plugins => Some(Report::Plugins),
             Self::Credits => Some(Report::Credits),
-            Self::Chats => None,
+            Self::Chats | Self::Plan => None,
             Self::Activity => Some(Report::Messages),
             Self::Skills => Some(Report::Skills),
         }
@@ -32,7 +33,7 @@ impl Section {
 }
 
 /// Section-only indexing keeps report identity separate from array positions.
-pub(super) struct SectionStates(pub(super) [SectionState; 6]);
+pub(super) struct SectionStates(pub(super) [SectionState; 7]);
 
 impl std::ops::Index<Section> for SectionStates {
     type Output = SectionState;
@@ -80,6 +81,7 @@ impl AnalyticsView {
             section.history.poll();
         }
         self.chats.poll();
+        self.plan.poll();
         self.account.poll();
         self.start_reports();
         if !self.business()
@@ -104,7 +106,7 @@ impl AnalyticsView {
     pub(super) fn range_group(&self, section: Section) -> RangeGroup {
         match section {
             Section::Usage if self.business() => RangeGroup::Activity,
-            Section::Usage | Section::Credits | Section::Chats => RangeGroup::Usage,
+            Section::Usage | Section::Credits | Section::Chats | Section::Plan => RangeGroup::Usage,
             Section::Activity => RangeGroup::Activity,
             Section::Plugins | Section::Skills => RangeGroup::Tools,
         }
@@ -137,6 +139,13 @@ impl AnalyticsView {
 
     pub(super) fn visible_sections(&self) -> &'static [Section] {
         match self.account_kind() {
+            Some(AccountKind::Consumer) if self.plan.enabled => &[
+                Section::Usage,
+                Section::Plan,
+                Section::Activity,
+                Section::Plugins,
+                Section::Skills,
+            ],
             Some(AccountKind::Consumer) => &[
                 Section::Usage,
                 Section::Activity,
@@ -201,6 +210,12 @@ impl AnalyticsView {
                 self.load_report(*section);
             }
         }
+        if visible.contains(&Section::Plan)
+            && let (Some((_, _, frame)), Some(live)) = (&self.connection, &self.live)
+        {
+            let live = std::sync::Arc::clone(live);
+            self.plan.report = Load::start(async move { live.plan_history().await }, frame.clone());
+        }
         if visible.contains(&Section::Chats) {
             self.chats =
                 if let (Some((_, handle, frame)), Some(live)) = (&self.connection, &self.live) {
@@ -228,7 +243,9 @@ impl AnalyticsView {
         let index = self.range_group(self.section);
         self.ranges[index as usize] ^= 1;
         for section in self.visible_sections() {
-            if matches!(section, Section::Chats) || self.range_group(*section) != index {
+            if matches!(section, Section::Chats | Section::Plan)
+                || self.range_group(*section) != index
+            {
                 continue;
             }
             self.sections[*section].cursor = if self.ranges[index as usize] == 1 {

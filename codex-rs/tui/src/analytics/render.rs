@@ -92,7 +92,8 @@ impl AnalyticsView {
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.poll_reports();
         let width = usize::from(area.width.saturating_sub(/*rhs*/ 4)).max(/*other*/ 1);
-        let show_range = self.section != Section::Chats && !self.visible_sections().is_empty();
+        let show_range = !matches!(self.section, Section::Chats | Section::Plan)
+            && !self.visible_sections().is_empty();
         let hint = |action| {
             self.keymap
                 .primary_hint(action)
@@ -112,6 +113,15 @@ impl AnalyticsView {
         } else {
             let navigation = if !self.zoomed {
                 format!("{}/z maximize", hint(ListAction::Accept))
+            } else if self.section == Section::Plan {
+                format!(
+                    "{}/{} window · {}/{} period · {} details",
+                    hint(ListAction::MoveLeft),
+                    hint(ListAction::MoveRight),
+                    hint(ListAction::MoveUp),
+                    hint(ListAction::MoveDown),
+                    hint(ListAction::Accept)
+                )
             } else if self.section != Section::Chats {
                 format!(
                     "{}/{} day · {} details",

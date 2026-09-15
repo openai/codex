@@ -66,7 +66,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             view.sections[Section::Usage].detail,
             view.sections[Section::Usage].group
         ),
-        ([1, 0, 0], [28, 6, 6, 0, 6, 6], Some(28), 2)
+        ([1, 0, 0], [28, 6, 6, 0, 6, 6, 6], Some(28), 2)
     );
     let context = (
         view.ranges,
@@ -95,7 +95,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             .0
             .each_ref()
             .map(|state| state.history.ready().map(|history| history.data.len())),
-        [Some(30), Some(7), None, None, Some(30), Some(7)]
+        [Some(30), Some(7), None, None, Some(30), Some(7), None]
     );
     let server = test_support::server().await;
     let (_business_home, _business_server, mut view) =
@@ -112,7 +112,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             .0
             .each_ref()
             .map(|state| state.history.ready().map(|history| history.data.len())),
-        [Some(30), Some(7), Some(7), None, None, Some(7)]
+        [Some(30), Some(7), Some(7), None, None, Some(7), None]
     );
 }
 
@@ -222,9 +222,9 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
         assert_eq!(
             ready,
             if plan == "plus" {
-                [true, true, false, false, true, true]
+                [true, true, false, false, true, true, false]
             } else {
-                [true, true, true, false, false, true]
+                [true, true, true, false, false, true, false]
             }
         );
         press(&mut view, KeyCode::Char('R'));

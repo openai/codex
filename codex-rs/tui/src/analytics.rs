@@ -13,6 +13,8 @@ mod fixture;
 mod models;
 mod normalize;
 mod panels;
+mod plan;
+mod plan_panel;
 mod plot;
 mod render;
 mod report_data;
@@ -47,6 +49,7 @@ pub(crate) struct AnalyticsView {
     model_names: std::collections::HashMap<String, String>,
     sections: SectionStates,
     chats: Load<chats::Chats>,
+    plan: plan::State,
     show_zero_credit_groups: bool,
     account: Load<codex_protocol::account::PlanType>,
     reports_started: bool,
@@ -75,6 +78,7 @@ impl AnalyticsView {
             model_names: std::collections::HashMap::new(),
             sections: SectionStates(std::array::from_fn(|_| SectionState::default())),
             chats: Load::Unavailable,
+            plan: plan::State::default(),
             show_zero_credit_groups: false,
             account: Load::Unavailable,
             reports_started: false,
@@ -93,6 +97,7 @@ impl AnalyticsView {
             is_done: false,
         };
         view.sections[Section::Usage].group = 1;
+        view.sections[Section::Plan].group = 1;
         view.sections[Section::Chats].cursor = 0;
         view.sections[Section::Activity].group = 2;
         view.refresh();
@@ -110,6 +115,9 @@ impl AnalyticsView {
             .into_iter()
             .map(|model| (model.model, model.display_name))
             .collect();
+        self.plan.enabled = config
+            .features
+            .enabled(codex_features::Feature::AnalyticsPlanHistory);
         self.connection = Some((config, handle, frame));
         self.is_done = false;
         self.refresh();
@@ -129,6 +137,7 @@ impl AnalyticsView {
         }
         self.sections[Section::Chats].detail = None;
         self.chats = Load::Unavailable;
+        self.plan.report = Load::Unavailable;
         self.reports_started = false;
         self.token_model = None;
         self.account = if let (Some((_, _, frame)), Some(live)) = (&self.connection, &self.live) {
@@ -159,6 +168,7 @@ impl AnalyticsView {
             section.history = Load::Unavailable;
         }
         self.chats = Load::Unavailable;
+        self.plan.report = Load::Unavailable;
         self.account = Load::Unavailable;
         self.live = None;
         self.connection = None;
@@ -199,6 +209,7 @@ impl AnalyticsView {
             return &[];
         }
         match self.section {
+            Section::Plan => &[1, 2, 0, 3],
             Section::Usage if self.business() => &[6, 2],
             Section::Usage if self.consumer_attribution() => &[1, 2, 0, 3],
             Section::Usage => &[0, 2],
@@ -226,6 +237,7 @@ impl AnalyticsView {
             Section::Activity => "Messages",
             Section::Skills => "Skills used",
             Section::Chats => "Top chats",
+            Section::Plan => "Plan usage history",
         }
     }
 
@@ -335,7 +347,7 @@ impl AnalyticsView {
             return;
         }
         if key_hint::plain(KeyCode::Char('r')).is_press(key)
-            && self.section != Section::Chats
+            && !matches!(self.section, Section::Chats | Section::Plan)
             && !self.visible_sections().is_empty()
         {
             self.change_range();
@@ -371,6 +383,10 @@ impl AnalyticsView {
             }
             self.section = section;
             self.group_picker = None;
+            return;
+        }
+        if self.section == Section::Plan {
+            self.plan_action(action);
             return;
         }
         if matches!(
@@ -447,6 +463,7 @@ impl AnalyticsView {
                         }
                     }
                     self.chats = Load::Unavailable;
+                    self.plan.report = Load::Unavailable;
                     self.account = Load::Unavailable;
                     self.connection = None;
                 }

@@ -1,0 +1,31 @@
+---
+source: tui/src/analytics/plan_tests.rs
+assertion_line: 105
+expression: snapshot
+---
+› 5-hour limits                                       Weekly limits
+
+Limit history isn't available yet                   Limit history isn't available yet
+
+› 5-hour limits                                       Weekly limits
+
+No limit periods in this date range                 No limit periods in this date range
+Usage as of Sep 2 12:00 UTC · * current at last update
+Available since Sep 1 00:00 UTC
+Amounts and period boundaries are approximate; recent activity may be delayed
+
+› 5-hour limits                                       Weekly limits
+
+› Sep 2 10:00 – Sep 2 15:00 *                 0%    › Sep 1 00:00 – Sep 8 00:00 *      Not available
+Some periods aren't available yet
+Usage as of Sep 2 12:00 UTC · * current at last update
+Available since Sep 1 00:00 UTC
+Amounts and period boundaries are approximate; recent activity may be delayed
+
+› 5-hour limits                                       Weekly limits
+
+› Sep 2 13:00 – Sep 2 15:00                 125%    › Sep 1 00:00 – Sep 8 00:00 *      Not available
+Some periods aren't available yet
+Usage as of Sep 2 12:00 UTC · * current at last update
+Available since Sep 1 00:00 UTC
+Amounts and period boundaries are approximate; recent activity may be delayed

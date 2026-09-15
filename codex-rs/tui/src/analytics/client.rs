@@ -95,6 +95,23 @@ impl Live {
             .await
     }
 
+    pub(super) async fn plan_history(&self) -> Result<Option<super::plan::Report>, String> {
+        let session = self.session().await?;
+        if session.kind != AccountKind::Consumer {
+            return Ok(None);
+        }
+        let history = session
+            .backend
+            .request(|client| async move { client.get_plan_limit_history().await })
+            .await;
+        session.backend.ensure_identity().await?;
+        history
+            .map_err(request_error)?
+            .map(super::plan::Report::parse)
+            .transpose()
+            .map(Option::flatten)
+    }
+
     pub(super) async fn history(
         &self,
         report: Report,

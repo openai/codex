@@ -42,4 +42,9 @@ pub use types::TokenUsageProfileDailyBucket;
 pub use types::TokenUsageProfileStats;
 pub use types::TurnAttemptsSiblingTurnsResponse;
 
+pub use client::plan_history::PlanLimitBreakdown;
+pub use client::plan_history::PlanLimitDimension;
+pub use client::plan_history::PlanLimitHistory;
+pub use client::plan_history::PlanLimitPeriod;
+pub use client::plan_history::PlanLimitValue;
 pub use codex_backend_openapi_models::models::analytics as analytics_models;

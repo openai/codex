@@ -819,3 +819,30 @@ async fn live_account_identity_is_visible_and_closing_aborts_pending_loads() {
     view.cancel_loads();
     assert!(cancelled_rx.await.is_err());
 }
+
+#[tokio::test]
+async fn plan_history_rejects_account_change_during_response() {
+    let server = MockServer::start().await;
+    for status in [200, 404, 503] {
+        server.reset().await;
+        let (home, live) = live(&server, "plus").await;
+        let home_path = home.path().to_path_buf();
+        Mock::given(method("GET"))
+            .and(path("/backend-api/wham/usage/plan_limit_history"))
+            .and(header("chatgpt-account-id", "account-a"))
+            .respond_with(move |_: &wiremock::Request| {
+                sign_in(&home_path, "account-a", "user-b", "plus");
+                ResponseTemplate::new(status).set_body_json(json!({
+                    "data_as_of":"2026-09-02T00:00:00Z", "coverage_start":null,
+                    "coverage_complete":true, "periods":[]
+                }))
+            })
+            .expect(/*r*/ 1)
+            .mount(&server)
+            .await;
+        assert_eq!(
+            live.plan_history().await.err().unwrap(),
+            "Account changed. Press R to refresh Analytics."
+        );
+    }
+}

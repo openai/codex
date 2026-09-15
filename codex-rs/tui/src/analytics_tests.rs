@@ -668,7 +668,7 @@ fn analytics_details_reflow_and_keep_focus() {
             view.is_done,
             view.sections.0.each_ref().map(|state| state.detail)
         ),
-        (false, [None; 6])
+        (false, [None; 7])
     );
     press(&mut view, KeyCode::Esc);
     assert!(view.is_done);
