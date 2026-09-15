@@ -1,6 +1,5 @@
 ---
 source: tui/src/analytics/styles_tests.rs
-assertion_line: 142
 expression: snapshot
 ---
 120x42
@@ -8,7 +7,7 @@ Text:
 "  Analytics  ·  Live account                                                                                            "
 "  [7d]  30d  ·  Aug 27–Sep 2, 2026                                                                                      "
 "                                                                                                                        "
-"  [1 Total usage history]  2 Messages  3 Plugins called  4 Skills used  5 Top chats                                     "
+"  1 Summary  [2 Total usage history]  3 Messages  4 Plugins called  5 Skills used  6 Top chats                          "
 "                                                                                                                        "
 "  ▎ Total usage history                                                                                     By feature  "
 "  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  "
@@ -45,7 +44,7 @@ Text:
 "  ● Images                                           11.6%                                                              "
 "  ● Other                                            10.5%                                                              "
 "                                                                                                                        "
-"  tab/1–5 section · z dashboard · ←/→ day · enter details                                                               "
+"  tab/1–6 section · z dashboard · ←/→ day · enter details                                                               "
 "  r 7/30d · g group · R refresh · pgup/pgdn scroll · esc back · q close                                                 "
 Palette (foreground|background|underline|modifiers):
 0: Reset|Reset|Reset|NONE
@@ -62,7 +61,7 @@ Rows (column:palette):
 0: 0:0 2:1 11:2 28:0
 1: 0:0 2:3 6:0 11:2 34:0
 2: 0:0
-3: 0:0 2:3 27:2 83:0
+3: 0:0 2:2 13:3 38:2 94:0
 4: 0:0
 5: 0:0 2:3 23:0 108:2 118:0
 6: 0:0 2:4 118:0

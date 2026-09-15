@@ -2,7 +2,7 @@
 source: tui/src/analytics_tests.rs
 expression: panels
 ---
-▎ Total usage history                       By feature
+  Total usage history                       By feature
 ──────────────────────────────────────────────────────
 Loading…
 

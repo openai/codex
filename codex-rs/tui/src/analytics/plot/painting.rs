@@ -118,7 +118,7 @@ impl Renderer<'_> {
                 ticks.push((baseline + height, -self.peak));
             }
             for (y, value) in ticks {
-                let label = tick(value, self.unit);
+                let label = tick(value);
                 let x = axis_width.saturating_sub(label.len() + 1);
                 buf.set_line(
                     x as u16,

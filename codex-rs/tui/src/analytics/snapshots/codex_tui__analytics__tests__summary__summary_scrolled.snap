@@ -1,0 +1,22 @@
+---
+source: tui/src/analytics/summary_tests.rs
+expression: "screen(&mut view, 64, 18)"
+---
+"  Analytics  ·  Live account                                    "
+"                                                                "
+"  [Summary]  Total usage history  Messages  Plugins called      "
+"  Skills used  Top chats                                        "
+"                                                                "
+"  Most used reasoning                               high · 26%  "
+"  Skills explored                                          147  "
+"  Total skills used                                     13,190  "
+"  Total chats                                           21,482  "
+"                                                                "
+"  Most used plugins and skills                                  "
+"                                                                "
+"  $review                                           1,142 runs  "
+"  @GitHub                                           1,059 runs  "
+"                                                                "
+"  Statistics as of Sep 9, 2026                                  "
+"  tab/1–6 section · z dashboard · ↑/↓ scroll                    "
+"  g view · R refresh · pgup/pgdn scroll · esc back · q close    "

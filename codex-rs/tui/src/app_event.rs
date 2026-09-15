@@ -19,7 +19,6 @@ use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
-use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
@@ -678,11 +677,10 @@ pub(crate) enum AppEvent {
         result: Result<GetAccountRateLimitsResponse, String>,
     },
 
-    /// Open the default token-activity view selected from the `/usage` menu.
-    OpenTokenActivity,
-
     /// Open the authenticated account analytics dashboard.
-    OpenAnalytics,
+    OpenAnalytics {
+        view: Option<crate::analytics::TokenActivityView>,
+    },
 
     /// Open the reset-credit flow selected from the `/usage` menu.
     OpenRateLimitResetCredits,
@@ -709,17 +707,6 @@ pub(crate) enum AppEvent {
         idempotency_key: String,
         credit_id: Option<String>,
         result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
-    },
-
-    /// Fetch account-wide token activity for a `/usage` history card.
-    RefreshTokenActivity {
-        request_id: u64,
-    },
-
-    /// Result of fetching account-wide token activity.
-    TokenActivityLoaded {
-        request_id: u64,
-        result: Result<GetAccountTokenUsageResponse, String>,
     },
 
     /// Fetch backend-estimated usage for the currently visible enterprise thread.

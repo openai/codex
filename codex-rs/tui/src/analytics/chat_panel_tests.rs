@@ -15,7 +15,7 @@ fn chats_range_controls_and_visible_rows() {
         })
         .collect();
     view.chats = Load::Ready(chats);
-    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Char('6'));
     let before = (
         view.ranges,
         view.sections.0.each_ref().map(|state| state.cursor),
@@ -48,7 +48,7 @@ fn chats_range_controls_and_visible_rows() {
     press(&mut view, KeyCode::Char('z'));
     press(&mut view, KeyCode::Char('r'));
     assert_eq!(view.ranges, [0; 3]);
-    press(&mut view, KeyCode::Char('1'));
+    press(&mut view, KeyCode::Char('2'));
     press(&mut view, KeyCode::Char('r'));
     press(&mut view, KeyCode::Char('z'));
     assert!(screen(&mut view, /*width*/ 110, /*height*/ 24).contains("[30d]"));
@@ -82,7 +82,7 @@ fn chats_breakdown_ranks_nonzero_groups_and_reflows() {
         .map(|group| group.estimated_usage_credits_micros)
         .sum();
     view.chats = Load::Ready(chats);
-    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Char('6'));
     press(&mut view, KeyCode::Enter);
     let mut screens = Vec::new();
     for width in [110, 58] {
@@ -116,7 +116,7 @@ fn chats_long_title_keeps_detail_indent_and_counts_missing_estimates() {
     chats.rows[1].usage = None;
     chats.rows[2].usage = None;
     view.chats = Load::Ready(chats);
-    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Char('6'));
     press(&mut view, KeyCode::Enter);
     let output = screen(&mut view, /*width*/ 110, /*height*/ 30);
     assert!(output.contains("2 chat estimates unavailable"));

@@ -1413,9 +1413,6 @@ impl App {
                     self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::Periodic);
                 }
             }
-            AppEvent::RefreshTokenActivity { request_id } => {
-                self.refresh_token_activity(app_server, request_id);
-            }
             AppEvent::RefreshThreadUsage {
                 thread_id,
                 request_id,
@@ -1605,16 +1602,15 @@ impl App {
                     self.chat_widget.finish_rate_limit_recovery();
                 }
             },
-            AppEvent::OpenTokenActivity => {
-                self.chat_widget
-                    .add_token_activity_output(crate::chatwidget::TokenActivityView::Daily);
-            }
-            AppEvent::OpenAnalytics => {
+            AppEvent::OpenAnalytics { view: summary_view } => {
                 tui.enter_alt_screen()?;
                 let mut view = self.retained_analytics.take().unwrap_or_else(|| {
                     Box::new(crate::analytics::AnalyticsView::new(self.keymap.list.clone()))
                 });
                 view.keymap = self.keymap.list.clone();
+                if summary_view.is_some() {
+                    view.select_summary(summary_view);
+                }
                 view.open(
                     app_server.request_handle(),
                     tui.frame_requester(),
@@ -1690,22 +1686,6 @@ impl App {
                         app_server,
                         RateLimitRefreshOrigin::ResetConsume { request_id },
                     );
-                }
-            }
-            AppEvent::TokenActivityLoaded { request_id, result } => {
-                if let Err(err) = &result {
-                    tracing::warn!("account/usage/read failed during TUI refresh: {err}");
-                }
-                if self
-                    .chat_widget
-                    .finish_token_activity_refresh(request_id, result)
-                {
-                    // Commit synchronously so an already queued /clear cannot overtake this card.
-                    // Do not route through ChatWidget::add_to_history: /usage may complete during
-                    // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
-                    // If an answer stream is active, keep the settled card transient until its
-                    // provisional transcript cells have been consolidated.
-                    self.insert_pending_usage_output_if_ready(tui);
                 }
             }
             AppEvent::ThreadUsageLoaded {

@@ -1,13 +1,12 @@
 ---
 source: tui/src/analytics/styles_tests.rs
-assertion_line: 142
 expression: snapshot
 ---
 120x42
 Text:
 "  Analytics  ·  Live account                                                                                            "
 "                                                                                                                        "
-"  1 Total usage history  2 Messages  3 Plugins called  4 Skills used  [5 Top chats]                                     "
+"  1 Summary  2 Total usage history  3 Messages  4 Plugins called  5 Skills used  [6 Top chats]                          "
 "                                                                                                                        "
 "  ▎ Top chats                                                                                                           "
 "  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  "
@@ -45,7 +44,7 @@ Text:
 "                                                                                                                        "
 "                                                                                                                        "
 "                                                                                                                        "
-"  tab/1–5 section · s sort · z dashboard · ↑/↓ row · enter details                                                      "
+"  tab/1–6 section · s sort · z dashboard · ↑/↓ row · enter details                                                      "
 "  R refresh · pgup/pgdn scroll · esc back · q close                                                                     "
 Palette (foreground|background|underline|modifiers):
 0: Reset|Reset|Reset|NONE
@@ -57,7 +56,7 @@ Palette (foreground|background|underline|modifiers):
 Rows (column:palette):
 0: 0:0 2:1 11:2 28:0
 1: 0:0
-2: 0:0 2:2 70:3 83:0
+2: 0:0 2:2 81:3 94:0
 3: 0:0
 4: 0:0 2:3 13:0
 5: 0:0 2:4 118:0

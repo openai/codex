@@ -92,8 +92,10 @@ impl AnalyticsView {
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.poll_reports();
         let width = usize::from(area.width.saturating_sub(/*rhs*/ 4)).max(/*other*/ 1);
-        let show_range = !matches!(self.section, Section::Chats | Section::Plan)
-            && !self.visible_sections().is_empty();
+        let show_range = !matches!(
+            self.section,
+            Section::Chats | Section::Plan | Section::Summary
+        ) && !self.visible_sections().is_empty();
         let hint = |action| {
             self.keymap
                 .primary_hint(action)
@@ -104,15 +106,26 @@ impl AnalyticsView {
             format!("R refresh · {} back · q close", hint(ListAction::Cancel))
         } else if self.group_picker.is_some() {
             format!(
-                "{}/{} group · {} select · {} cancel",
+                "{}/{} {} · {} select · {} cancel",
                 hint(ListAction::MoveUp),
                 hint(ListAction::MoveDown),
+                if self.section == Section::Summary {
+                    "view"
+                } else {
+                    "group"
+                },
                 hint(ListAction::Accept),
                 hint(ListAction::Cancel)
             )
         } else {
             let navigation = if !self.zoomed {
                 format!("{}/z maximize", hint(ListAction::Accept))
+            } else if self.section == Section::Summary {
+                format!(
+                    "{}/{} scroll",
+                    hint(ListAction::MoveUp),
+                    hint(ListAction::MoveDown)
+                )
             } else if self.section == Section::Plan {
                 format!(
                     "{}/{} window · {}/{} period · {} details",
@@ -152,6 +165,8 @@ impl AnalyticsView {
                 if show_range { "r 7/30d · " } else { "" },
                 if self.group_options().len() < 2 {
                     ""
+                } else if self.section == Section::Summary {
+                    "g view · "
                 } else {
                     "g group · "
                 },
@@ -275,7 +290,12 @@ impl AnalyticsView {
                 .account
                 .message()
                 .unwrap_or("Analytics is not available for this account type.");
-            (vec![Line::from(message.to_string())], 0..1)
+            let lines = textwrap::wrap(message, width)
+                .into_iter()
+                .map(|line| Line::from(line.into_owned()))
+                .collect::<Vec<_>>();
+            let selection = 0..lines.len();
+            (lines, selection)
         } else if self.zoomed {
             let chart_height =
                 (usize::from(body.height) / 5).clamp(/*min*/ 4, /*max*/ 10);
@@ -289,12 +309,24 @@ impl AnalyticsView {
                     panel = self.panel(self.section, width, height);
                 }
             }
+            let center_summary = self.section == Section::Summary
+                && self.profile.ready().is_some()
+                && self.group_picker.is_none();
+            if center_summary {
+                // Keep the section heading and rule fixed; center the profile below them.
+                let padding = usize::from(body.height).saturating_sub(panel.lines.len()) / 2;
+                panel
+                    .lines
+                    .splice(2..2, std::iter::repeat_n(Line::default(), padding));
+            }
             let selection = if panel.lines.len() <= usize::from(body.height) {
                 0..panel.lines.len()
             } else {
                 panel.selection
             };
-            panel.lines.push(Line::default());
+            if !center_summary {
+                panel.lines.push(Line::default());
+            }
             (panel.lines, selection)
         } else {
             self.dashboard_lines(width, usize::from(body.height))

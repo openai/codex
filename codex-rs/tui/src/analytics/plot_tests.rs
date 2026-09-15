@@ -311,14 +311,21 @@ fn partial_cells_use_the_midpoint_and_descend_from_the_baseline() {
 
 #[test]
 fn oversized_axes_are_hidden_instead_of_truncated() {
-    let day = AccountAnalyticsDay {
-        date: "2026-01-15".parse().unwrap(),
-        total: 100_000_000.0,
-        values: vec![value("a", /*value*/ 100_000_000.0)],
-    };
-    let days = [(day.date, Some(&day))];
     let mut snapshots = Vec::new();
-    for width in [8, 30, 35, 44] {
+    for (width, total) in [
+        (8, 100_000_000.0),
+        (30, 100_000_000.0),
+        (35, 100_000_000.0),
+        (44, 100_000_000.0),
+        (30, 1e30),
+    ] {
+        let day = AccountAnalyticsDay {
+            date: "2026-01-15".parse().unwrap(),
+            total,
+            values: vec![value("a", total)],
+        };
+        let days = [(day.date, Some(&day))];
+
         let rendered = chart(
             &days,
             &day.values,
@@ -328,9 +335,9 @@ fn oversized_axes_are_hidden_instead_of_truncated() {
             AccountAnalyticsUnit::Tokens,
         );
         let baseline = rendered.lines[5].to_string();
-        assert_eq!(baseline.starts_with('─'), width < 36);
+        assert_eq!(baseline.starts_with('─'), width < 30 || total == 1e30);
         if width == 8 {
-            assert!(rendered.lines[0].to_string().trim().is_empty());
+            assert!(rendered.lines[0].to_string().contains("100M"));
         }
         snapshots.push(format!("width={width}\n{}", display(&rendered)));
     }

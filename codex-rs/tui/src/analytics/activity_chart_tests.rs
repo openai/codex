@@ -1,8 +1,15 @@
+//! Calendar, aggregation, and chart rendering regressions.
 use super::*;
-use codex_app_server_protocol::AccountTokenUsageDailyBucket;
-use codex_app_server_protocol::AccountTokenUsageSummary;
+use codex_backend_client::TokenUsageProfileDailyBucket as AccountTokenUsageDailyBucket;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+
+fn graph_width(width: u16) -> u16 {
+    if width == u16::MAX {
+        return width;
+    }
+    (CHART_LEFT_WIDTH + shown_columns(width) * 2 - 1) as u16
+}
 
 #[test]
 fn duplicate_dates_sum_and_negative_values_clamp() {
@@ -86,7 +93,6 @@ fn daily_graph_snapshot_uses_distinct_empty_and_active_cells() {
     Sa □ □ □ □ □ □ □ □
 
       Less □ ■ ■ ■ ■ More
-      daily · weekly · cumulative
     ");
 }
 
@@ -105,9 +111,9 @@ fn daily_graph_snapshot_stays_left_aligned_in_wide_terminal() {
         .join("\n");
 
     assert_snapshot!(rendered, @"
-        Jun       Jul     Aug       Sep     Oct     Nov       Dec     Jan     Feb     Mar       Apr     May
-     Su □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □
-       daily · weekly · cumulative
+       Jun       Jul     Aug       Sep     Oct     Nov       Dec     Jan     Feb     Mar       Apr     May
+    Su □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □ □
+      Less □ ■ ■ ■ ■ More
     ");
 }
 
@@ -152,8 +158,7 @@ fn weekly_graph_snapshot_renders_bar_chart_and_caption() {
       0             █ █ █
 
        Each column = 1 week · tallest 9
-       daily · weekly · cumulative
-    ");
+     ");
 }
 
 #[test]
@@ -197,48 +202,38 @@ fn cumulative_graph_snapshot_renders_running_total_bar_chart_and_caption() {
       0             █ █ █
 
        Running total · top 18
-       daily · weekly · cumulative
-    ");
+     ");
 }
 
 #[test]
-fn summary_snapshot_left_aligns_and_splits_when_needed() {
-    let response = GetAccountTokenUsageResponse {
-        summary: AccountTokenUsageSummary {
-            lifetime_tokens: Some(21_400_000_000),
-            peak_daily_tokens: Some(835_000_000),
-            longest_running_turn_sec: Some(13_920),
-            current_streak_days: Some(54),
-            longest_streak_days: Some(54),
-        },
-        daily_usage_buckets: None,
-        thread_usage: None,
-    };
-    let rendered = |width| {
-        summary_lines(&response, graph_width(width))
-            .into_iter()
-            .map(|line| line.to_string().trim_end().to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    assert_snapshot!(
-        format!(
-            "wide:\n{}\n\nnarrow:\n{}\n\ntight:\n{}",
-            rendered(/*width*/ 120),
-            rendered(/*width*/ 80),
-            rendered(/*width*/ 62)
-        ),
-        @"
-    wide:
-     Lifetime 21.4B · Peak 835M · Streak 54d · Longest task 3h 52m
-
-    narrow:
-     Lifetime 21.4B · Peak 835M · Streak 54d · Longest task 3h 52m
-
-    tight:
-     Lifetime 21.4B · Peak 835M · Streak 54d
-     Longest task 3h 52m
-    "
-    );
+fn year_window_ignores_other_dates_and_saturates_extreme_totals() {
+    let today: NaiveDate = "2026-09-09".parse().unwrap();
+    let buckets = [
+        ("2025-01-01", 100),
+        ("2026-09-10", 100),
+        ("invalid", 100),
+        ("2026-09-08", i64::MAX),
+        ("2026-09-08", i64::MAX),
+        ("2026-09-09", i64::MAX),
+    ]
+    .map(|(date, tokens)| AccountTokenUsageDailyBucket {
+        start_date: date.into(),
+        tokens,
+    });
+    let values = daily_values(&buckets, today);
+    let mut expected = vec![0; CELL_COUNT];
+    let index = (today - chart_start(today)).num_days() as usize;
+    expected[index - 1] = i64::MAX;
+    expected[index] = i64::MAX;
+    assert_eq!(values, expected);
+    for view in [
+        TokenActivityView::Daily,
+        TokenActivityView::Weekly,
+        TokenActivityView::Cumulative,
+    ] {
+        let levels = levels_for_view(&values, view);
+        assert!(levels.iter().all(|level| *level <= 4));
+        assert!(levels.contains(&4));
+        assert!(!chart_lines(view, &buckets, today, /*width*/ 110).is_empty());
+    }
 }

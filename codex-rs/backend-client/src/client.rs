@@ -37,6 +37,7 @@ use std::fmt;
 pub(crate) mod analytics;
 mod chatgpt_turn_cost;
 pub(crate) mod plan_history;
+pub(crate) mod profile;
 mod rate_limit_resets;
 pub(crate) mod task_usage;
 mod thread_usage;

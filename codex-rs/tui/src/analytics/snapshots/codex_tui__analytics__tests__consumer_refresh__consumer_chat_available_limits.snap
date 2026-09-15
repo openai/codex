@@ -1,12 +1,11 @@
 ---
 source: tui/src/analytics/consumer_refresh_tests.rs
-assertion_line: 66
 expression: "screen(&mut view, 58, 30)"
 ---
 "  Analytics  ·  Live account                              "
 "                                                          "
-"  Total usage history  Messages  Plugins called  Skills   "
-"  used  [Top chats]                                       "
+"  Summary  Total usage history  Messages  Plugins called  "
+"  Skills used  [Top chats]                                "
 "                                                          "
 "  ▎ Top chats                                             "
 "  ──────────────────────────────────────────────────────  "
@@ -30,6 +29,6 @@ expression: "screen(&mut view, 58, 30)"
 "                                                          "
 "                                                          "
 "                                                          "
-"  tab/1–5 section · s sort · z dashboard · ↑/↓ row ·      "
+"  tab/1–6 section · s sort · z dashboard · ↑/↓ row ·      "
 "  enter details                                           "
 "  R refresh · pgup/pgdn scroll · esc back · q close       "

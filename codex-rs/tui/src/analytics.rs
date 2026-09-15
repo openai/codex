@@ -1,7 +1,11 @@
 //! Authenticated account analytics dashboard.
 //! A maximized section and an overview share bounded report loads, selection, and inline details.
 
+mod activity_chart;
 mod chart;
+mod summary;
+mod summary_panel;
+pub(crate) use activity_chart::TokenActivityView;
 mod chat_panel;
 mod chats;
 mod client;
@@ -53,6 +57,7 @@ pub(crate) struct AnalyticsView {
     chats: Load<chats::Chats>,
     tasks: Load<tasks::Chats>,
     chat_metric: usize,
+    profile: Load<codex_backend_client::AccountProfile>,
     plan: plan::State,
     show_zero_credit_groups: bool,
     account: Load<codex_protocol::account::PlanType>,
@@ -84,6 +89,7 @@ impl AnalyticsView {
             chats: Load::Unavailable,
             tasks: Load::Unavailable,
             chat_metric: 0,
+            profile: Load::Unavailable,
             plan: plan::State::default(),
             show_zero_credit_groups: false,
             account: Load::Unavailable,
@@ -91,7 +97,7 @@ impl AnalyticsView {
             connection: None,
             live: None,
             keymap,
-            section: Section::Usage,
+            section: Section::Summary,
             zoomed: true,
             scroll_offset: 0,
             follow_selection: true,
@@ -144,6 +150,7 @@ impl AnalyticsView {
         self.sections[Section::Chats].detail = None;
         self.chats = Load::Unavailable;
         self.tasks = Load::Unavailable;
+        self.profile = Load::Unavailable;
         self.plan.report = Load::Unavailable;
         self.reports_started = false;
         self.token_model = None;
@@ -176,6 +183,7 @@ impl AnalyticsView {
         }
         self.chats = Load::Unavailable;
         self.tasks = Load::Unavailable;
+        self.profile = Load::Unavailable;
         self.plan.report = Load::Unavailable;
         self.account = Load::Unavailable;
         self.live = None;
@@ -217,6 +225,7 @@ impl AnalyticsView {
             return &[];
         }
         match self.section {
+            Section::Summary => &[0, 1, 2],
             Section::Plan => &[1, 2, 0, 3],
             Section::Usage if self.business() => &[6, 2],
             Section::Usage if self.consumer_attribution() => &[1, 2, 0, 3],
@@ -246,6 +255,7 @@ impl AnalyticsView {
             Section::Skills => "Skills used",
             Section::Chats => "Top chats",
             Section::Plan => "Plan usage history",
+            Section::Summary => "Summary",
         }
     }
 
@@ -359,7 +369,10 @@ impl AnalyticsView {
             return;
         }
         if key_hint::plain(KeyCode::Char('r')).is_press(key)
-            && !matches!(self.section, Section::Chats | Section::Plan)
+            && !matches!(
+                self.section,
+                Section::Chats | Section::Plan | Section::Summary
+            )
             && !self.visible_sections().is_empty()
         {
             self.change_range();
@@ -382,7 +395,7 @@ impl AnalyticsView {
             .position(|section| *section == self.section)
             .unwrap_or_default();
         let target = match key.code {
-            KeyCode::Char(n @ '1'..='6') if key.modifiers.is_empty() => {
+            KeyCode::Char(n @ '1'..='7') if key.modifiers.is_empty() => {
                 visible.get(n as usize - '1' as usize).copied()
             }
             KeyCode::Tab => Some(visible[(current + 1) % visible.len()]),
@@ -395,6 +408,10 @@ impl AnalyticsView {
             }
             self.section = section;
             self.group_picker = None;
+            return;
+        }
+        if self.section == Section::Summary {
+            self.summary_action(action);
             return;
         }
         if self.section == Section::Plan {
@@ -494,6 +511,7 @@ impl AnalyticsView {
                     }
                     self.chats = Load::Unavailable;
                     self.tasks = Load::Unavailable;
+                    self.profile = Load::Unavailable;
                     self.plan.report = Load::Unavailable;
                     self.account = Load::Unavailable;
                     self.connection = None;

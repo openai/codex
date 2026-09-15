@@ -90,6 +90,7 @@ impl AnalyticsView {
         }
         let unit = match section {
             Section::Usage if history.unit == AccountAnalyticsUnit::Tokens => "tokens",
+            Section::Summary => "tokens",
             Section::Activity => "messages",
             Section::Plugins => "calls",
             Section::Skills => "uses",
@@ -107,6 +108,12 @@ impl AnalyticsView {
         } else {
             data::amount
         };
+        let total: f64 = history.data.iter().map(|day| day.total).sum();
+        let formatted_total = if total.abs() >= 1_000.0 {
+            data::compact_amount(total)
+        } else {
+            format_amount(total)
+        };
         let mut lines = vec![if relative {
             "Total usage · relative units"
                 .set_style(secondary_style())
@@ -114,7 +121,7 @@ impl AnalyticsView {
         } else {
             number(format!(
                 "{} {}{unit}",
-                format_amount(history.data.iter().map(|day| day.total).sum()),
+                formatted_total,
                 if section == Section::Activity {
                     "reported "
                 } else {
@@ -194,9 +201,11 @@ impl AnalyticsView {
                     Section::Plugins => "Plugin",
                     Section::Skills => "Skill",
                     Section::Chats => "Chat",
-                    Section::Usage | Section::Credits | Section::Activity | Section::Plan => {
-                        self.group_label(section, self.sections[section].group)
-                    }
+                    Section::Summary
+                    | Section::Usage
+                    | Section::Credits
+                    | Section::Activity
+                    | Section::Plan => self.group_label(section, self.sections[section].group),
                 }
                 .bold()
                 .into(),

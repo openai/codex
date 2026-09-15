@@ -44,11 +44,7 @@ impl Live {
 
     pub(super) fn account_label(&self) -> Option<String> {
         let session = self.session.get()?;
-        let account = session.backend.account();
-        Some(match &account.email {
-            Some(email) => format!("{email} · {}", account.id),
-            None => account.id.clone(),
-        })
+        session.backend.account().email.clone()
     }
 
     pub(super) fn credit_groups(&self) -> &[usize] {
@@ -261,6 +257,10 @@ pub(super) fn request_error(error: RequestError) -> String {
 #[cfg(test)]
 #[path = "client_tests.rs"]
 pub(super) mod tests;
+
+#[cfg(test)]
+#[path = "connection_tests.rs"]
+mod connection_tests;
 
 #[cfg(test)]
 #[path = "account_plan_tests.rs"]

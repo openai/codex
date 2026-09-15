@@ -43,7 +43,7 @@ impl AnalyticsView {
                     secondary_style().dim()
                 };
                 let mut content = Vec::new();
-                if !matches!(section, Section::Chats | Section::Plan) {
+                if !matches!(section, Section::Chats | Section::Plan | Section::Summary) {
                     content.push(
                         format!(
                             "{}d{}",
@@ -100,6 +100,7 @@ impl AnalyticsView {
                     ));
                 } else {
                     match section {
+                        Section::Summary => content.extend(self.summary_lines(inner_width)),
                         Section::Usage
                         | Section::Plugins
                         | Section::Credits

@@ -1,12 +1,11 @@
 ---
 source: tui/src/analytics_tests.rs
-assertion_line: 74
 expression: tools
 ---
 "  Analytics  ·  Live account                              "
 "  7d  [30d]  ·  Aug 4–Sep 2, 2026                         "
 "                                                          "
-"  ╭─ ▸ 4 Skills used ──────────────────────────────────╮  "
+"  ╭─ ▸ 5 Skills used ──────────────────────────────────╮  "
 "  │                                                    │  "
 "  │ 30d                                                │  "
 "  │ 169 uses                                           │  "
@@ -20,6 +19,6 @@ expression: tools
 "  │ ● Testing                                        4 │  "
 "  │ ● Code review                                    3 │  "
 "  │                                                    │  "
-"  tab/1–5 section · enter/z maximize                      "
+"  tab/1–6 section · enter/z maximize                      "
 "  r 7/30d · R refresh · pgup/pgdn scroll · esc back · q   "
 "  close                                                   "

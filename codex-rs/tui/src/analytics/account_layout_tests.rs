@@ -10,6 +10,7 @@ fn account_layouts_show_reports_and_wrap_navigation() {
         (
             models::AccountKind::Consumer,
             vec![
+                Section::Summary,
                 Section::Usage,
                 Section::Activity,
                 Section::Plugins,
@@ -20,6 +21,7 @@ fn account_layouts_show_reports_and_wrap_navigation() {
         (
             models::AccountKind::Enterprise,
             vec![
+                Section::Summary,
                 Section::Credits,
                 Section::Usage,
                 Section::Plugins,
@@ -52,6 +54,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
     let server = test_support::server().await;
     let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
     test_support::settle(&mut view).await;
+    view.section = Section::Usage;
     press(&mut view, KeyCode::Left);
     press(&mut view, KeyCode::Enter);
     press(&mut view, KeyCode::Char('r'));
@@ -67,7 +70,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             view.sections[Section::Usage].detail,
             view.sections[Section::Usage].group
         ),
-        ([1, 0, 0], [28, 6, 6, 0, 6, 6, 6], Some(28), 2)
+        ([1, 0, 0], [28, 6, 6, 0, 6, 6, 6, 6], Some(28), 2)
     );
     let context = (
         view.ranges,
@@ -87,7 +90,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
         ),
         context
     );
-    press(&mut view, KeyCode::Char('2'));
+    press(&mut view, KeyCode::Char('3'));
     press(&mut view, KeyCode::Char('r'));
     test_support::settle(&mut view).await;
     assert_eq!(view.ranges, [1, 1, 0]);
@@ -96,7 +99,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             .0
             .each_ref()
             .map(|state| state.history.ready().map(|history| history.data.len())),
-        [Some(30), Some(7), None, None, Some(30), Some(7), None]
+        [Some(30), Some(7), None, None, Some(30), Some(7), None, None]
     );
     let server = test_support::server().await;
     let (_business_home, _business_server, mut view) =
@@ -104,7 +107,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
     test_support::settle(&mut view).await;
     view.ranges = [1, 1, 0];
     view.load_report(Section::Usage);
-    press(&mut view, KeyCode::Char('1'));
+    press(&mut view, KeyCode::Char('2'));
     press(&mut view, KeyCode::Char('r'));
     test_support::settle(&mut view).await;
     assert_eq!(view.ranges, [0, 1, 0]);
@@ -113,7 +116,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
             .0
             .each_ref()
             .map(|state| state.history.ready().map(|history| history.data.len())),
-        [Some(30), Some(7), Some(7), None, None, Some(7), None]
+        [Some(30), Some(7), Some(7), None, None, Some(7), None, None]
     );
 }
 
@@ -124,7 +127,7 @@ async fn business_tokens_filter_models() {
     test_support::settle(&mut view).await;
     view.end_date = fixture::END_DATE;
     fixture::seed_reports(&mut view);
-    press(&mut view, KeyCode::Char('2'));
+    press(&mut view, KeyCode::Char('3'));
     let all = screen(&mut view, /*width*/ 100, /*height*/ 30);
     assert!(all.contains("All models") && all.contains("Cached input"));
     press(&mut view, KeyCode::Char('m'));
@@ -194,6 +197,14 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
         ),
     ] {
         let server = test_support::server().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/backend-api/wham/profiles/me"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(/*s*/ 200)
+                    .set_body_json(serde_json::json!({"stats":{}})),
+            )
+            .mount(&server)
+            .await;
         let (_home, _app_server, mut view) = client::tests::connected_view(&server, plan).await;
         test_support::settle(&mut view).await;
         let mut expected = [
@@ -202,6 +213,7 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
             activity,
             "analytics/daily-plugin-usage-metrics",
             "analytics/daily-skill-usage-metrics",
+            "profiles/me",
         ]
         .map(|endpoint| format!("/backend-api/wham/{endpoint}"));
         expected.sort();
@@ -223,9 +235,9 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
         assert_eq!(
             ready,
             if plan == "plus" {
-                [true, true, false, false, true, true, false]
+                [true, true, false, false, true, true, false, false]
             } else {
-                [true, true, true, false, false, true, false]
+                [true, true, true, false, false, true, false, false]
             }
         );
         press(&mut view, KeyCode::Char('R'));
@@ -245,7 +257,7 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
                 .iter()
                 .filter(|request| request.url.path().starts_with("/backend-api/wham/"))
                 .count(),
-            10
+            12
         );
         view.cancel_loads();
     }
@@ -255,6 +267,7 @@ async fn account_reports_request_only_eligible_endpoints_and_refresh() {
 async fn legacy_response_closes_an_attribution_picker_that_is_no_longer_valid() {
     let server = test_support::server().await;
     let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
+    view.section = Section::Usage;
     view.account = Load::Ready(codex_protocol::account::PlanType::Plus);
     view.start_reports();
     view.group_picker = Some(3);
@@ -275,6 +288,7 @@ async fn legacy_response_invalidates_picker_before_the_next_draw() {
     let server = test_support::server().await;
     for choice in [2, 3] {
         let (_home, _app_server, mut view) = client::tests::connected_view(&server, "plus").await;
+        view.section = Section::Usage;
         view.account = Load::Ready(codex_protocol::account::PlanType::Plus);
         view.start_reports();
         view.group_picker = Some(choice);
@@ -305,7 +319,7 @@ fn business_chats_display_only_supplied_dollars() {
             usage.estimated_usage_usd_micros = None;
         }
     }
-    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Char('6'));
     assert!(!screen(&mut view, /*width*/ 100, /*height*/ 30).contains("Est. $ spent"));
     if let Load::Ready(chats) = &mut view.chats {
         chats.rows[0]
@@ -338,6 +352,7 @@ async fn unsupported_workspace_plans_hide_top_chats_and_skip_loading() {
         assert_eq!(
             view.visible_sections(),
             &[
+                Section::Summary,
                 Section::Credits,
                 Section::Usage,
                 Section::Plugins,
@@ -347,7 +362,7 @@ async fn unsupported_workspace_plans_hide_top_chats_and_skip_loading() {
         );
         assert!(matches!(view.chats, Load::Unavailable), "{plan}");
         let selected = view.section;
-        press(&mut view, KeyCode::Char('5'));
+        press(&mut view, KeyCode::Char('6'));
         assert_eq!(view.section, selected);
     }
     for plan in [
@@ -359,10 +374,62 @@ async fn unsupported_workspace_plans_hide_top_chats_and_skip_loading() {
         let (_home, _app_server, mut view) = client::tests::connected_view(&server, plan).await;
         test_support::settle(&mut view).await;
         assert!(view.visible_sections().contains(&Section::Chats), "{plan}");
-        press(&mut view, KeyCode::Char('5'));
+        press(&mut view, KeyCode::Char('6'));
         assert_eq!(view.section, Section::Chats);
     }
     let mut view = fixture::view(models::AccountKind::Enterprise);
     view.account = Load::Ready(codex_protocol::account::PlanType::Enterprise);
     insta::assert_snapshot!(screen(&mut view, /*width*/ 110, /*height*/ 24));
+}
+
+#[tokio::test]
+async fn unknown_plan_keeps_summary_available_without_billing_reports() {
+    let server = test_support::server().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/backend-api/wham/profiles/me"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(/*s*/ 200)
+                .set_body_json(serde_json::json!({"stats":{"lifetime_tokens":12345}})),
+        )
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+    let (_home, _app_server, mut view) =
+        client::tests::connected_view(&server, "future-plan").await;
+    test_support::settle(&mut view).await;
+    assert_eq!(view.visible_sections(), &[Section::Summary]);
+    assert_eq!(
+        view.profile.ready().unwrap().stats.tokens.lifetime_tokens,
+        Some(12345)
+    );
+    assert!(
+        view.sections
+            .0
+            .iter()
+            .all(|section| matches!(section.history, Load::Unavailable))
+    );
+    let paths = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path().starts_with("/backend-api/wham/"))
+        .map(|request| request.url.path().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "/backend-api/wham/accounts/check",
+            "/backend-api/wham/profiles/me"
+        ]
+    );
+    view.end_date = "2026-09-09".parse().unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        /*width*/ 100, /*height*/ 40,
+    ))
+    .unwrap();
+    terminal
+        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+        .unwrap();
+    insta::assert_snapshot!(terminal.backend().to_string());
 }

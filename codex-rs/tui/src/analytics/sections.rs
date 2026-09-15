@@ -16,6 +16,7 @@ pub(super) enum Section {
     Activity,
     Skills,
     Plan,
+    Summary,
 }
 
 impl Section {
@@ -25,7 +26,7 @@ impl Section {
             Self::Usage => Some(Report::Usage),
             Self::Plugins => Some(Report::Plugins),
             Self::Credits => Some(Report::Credits),
-            Self::Chats | Self::Plan => None,
+            Self::Chats | Self::Plan | Self::Summary => None,
             Self::Activity => Some(Report::Messages),
             Self::Skills => Some(Report::Skills),
         }
@@ -33,7 +34,7 @@ impl Section {
 }
 
 /// Section-only indexing keeps report identity separate from array positions.
-pub(super) struct SectionStates(pub(super) [SectionState; 7]);
+pub(super) struct SectionStates(pub(super) [SectionState; 8]);
 
 impl std::ops::Index<Section> for SectionStates {
     type Output = SectionState;
@@ -82,6 +83,7 @@ impl AnalyticsView {
         }
         self.chats.poll();
         self.tasks.poll();
+        self.profile.poll();
         self.plan.poll();
         self.account.poll();
         self.start_reports();
@@ -112,13 +114,20 @@ impl AnalyticsView {
     pub(super) fn range_group(&self, section: Section) -> RangeGroup {
         match section {
             Section::Usage if self.business() => RangeGroup::Activity,
-            Section::Usage | Section::Credits | Section::Chats | Section::Plan => RangeGroup::Usage,
+            Section::Usage
+            | Section::Credits
+            | Section::Chats
+            | Section::Plan
+            | Section::Summary => RangeGroup::Usage,
             Section::Activity => RangeGroup::Activity,
             Section::Plugins | Section::Skills => RangeGroup::Tools,
         }
     }
 
     pub(super) fn group_label(&self, section: Section, group: usize) -> &'static str {
+        if section == Section::Summary {
+            return super::summary::VIEWS[group].label();
+        }
         if group == 0
             && (section == Section::Credits
                 || (section == Section::Usage && !self.consumer_attribution()))
@@ -146,6 +155,7 @@ impl AnalyticsView {
     pub(super) fn visible_sections(&self) -> &'static [Section] {
         match self.account_kind() {
             Some(AccountKind::Consumer) if self.plan.enabled => &[
+                Section::Summary,
                 Section::Usage,
                 Section::Plan,
                 Section::Activity,
@@ -154,6 +164,7 @@ impl AnalyticsView {
                 Section::Chats,
             ],
             Some(AccountKind::Consumer) => &[
+                Section::Summary,
                 Section::Usage,
                 Section::Activity,
                 Section::Plugins,
@@ -164,6 +175,7 @@ impl AnalyticsView {
                 if super::models::thread_usage_supported(self.account.ready().copied()) =>
             {
                 &[
+                    Section::Summary,
                     Section::Credits,
                     Section::Usage,
                     Section::Plugins,
@@ -172,12 +184,14 @@ impl AnalyticsView {
                 ]
             }
             Some(AccountKind::Business | AccountKind::Enterprise) => &[
+                Section::Summary,
                 Section::Credits,
                 Section::Usage,
                 Section::Plugins,
                 Section::Skills,
             ],
-            Some(AccountKind::Unknown) | None => &[],
+            Some(AccountKind::Unknown) => &[Section::Summary],
+            None => &[],
         }
     }
 
@@ -206,13 +220,15 @@ impl AnalyticsView {
                     usage_groups[0]
                 };
         }
-        if let Some(live) = &self.live
+        if visible.contains(&Section::Credits)
+            && let Some(live) = &self.live
             && !live
                 .credit_groups()
                 .contains(&self.sections[Section::Credits].group)
         {
             self.sections[Section::Credits].group = live.credit_groups()[0];
         }
+        self.load_summary();
         for section in visible {
             if section.report().is_some() {
                 self.load_report(*section);
@@ -259,7 +275,7 @@ impl AnalyticsView {
         let index = self.range_group(self.section);
         self.ranges[index as usize] ^= 1;
         for section in self.visible_sections() {
-            if matches!(section, Section::Chats | Section::Plan)
+            if matches!(section, Section::Chats | Section::Plan | Section::Summary)
                 || self.range_group(*section) != index
             {
                 continue;

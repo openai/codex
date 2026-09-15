@@ -1,11 +1,10 @@
 ---
 source: tui/src/analytics/chat_panel_tests.rs
-assertion_line: 123
 expression: output
 ---
 "  Analytics  ·  Live account                                                                                  "
 "                                                                                                              "
-"  1 Credits usage history  2 Token usage history  3 Plugins called  4 Skills used  [5 Top chats]              "
+"  1 Summary  2 Credits usage history  3 Token usage history  4 Plugins called  5 Skills used  [6 Top chats]   "
 "                                                                                                              "
 "  ▎ Top chats                                                                                                 "
 "  ──────────────────────────────────────────────────────────────────────────────────────────────────────────  "
@@ -31,5 +30,5 @@ expression: output
 "                                                                                                              "
 "                                                                                                              "
 "                                                                                                              "
-"  tab/1–5 section · z dashboard · ↑/↓ row · enter details                                                     "
+"  tab/1–6 section · z dashboard · ↑/↓ row · enter details                                                     "
 "  R refresh · pgup/pgdn scroll · esc back · q close                                                           "

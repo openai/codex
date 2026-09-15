@@ -1,8 +1,12 @@
 //! Dashboard layout, local detail, shared ranges, grouping, and scroll/focus retention.
 
 use crate::analytics::sections::Section;
+#[path = "analytics/compact_tests.rs"]
+mod compact;
 #[path = "analytics/dashboard_tests.rs"]
 mod dashboard;
+#[path = "analytics/summary_tests.rs"]
+mod summary;
 
 #[path = "analytics/account_layout_tests.rs"]
 mod account_layout;
@@ -50,7 +54,7 @@ fn analytics_overview() {
 fn analytics_narrow_charts_and_small_terminals_keep_valid_cursors() {
     let mut view = fixture::view(models::AccountKind::Consumer);
     press(&mut view, KeyCode::Char('z'));
-    for section in ['1', '2', '3'] {
+    for section in ['2', '3', '4'] {
         press(&mut view, KeyCode::Char(section));
         press(&mut view, KeyCode::Char('r'));
         fixture::seed_reports(&mut view);
@@ -69,7 +73,7 @@ fn analytics_narrow_charts_and_small_terminals_keep_valid_cursors() {
     }
     let empty = ratatui::layout::Rect::default();
     view.render(empty, &mut ratatui::buffer::Buffer::empty(empty));
-    press(&mut view, KeyCode::Char('4'));
+    press(&mut view, KeyCode::Char('5'));
     let tools = screen(&mut view, /*width*/ 58, /*height*/ 20);
     insta::assert_snapshot!(tools);
 }
@@ -79,7 +83,7 @@ async fn analytics_credits_grouping_preserves_selected_day_and_total() {
     let server = test_support::server().await;
     let (_home, _app_server, mut view) = client::tests::connected_view(&server, "business").await;
     test_support::settle(&mut view).await;
-    press(&mut view, KeyCode::Char('1'));
+    press(&mut view, KeyCode::Char('2'));
     press(&mut view, KeyCode::Left);
     let before = view.sections[Section::Credits]
         .history
@@ -274,7 +278,7 @@ fn analytics_dates_distinguish_zero_missing_and_exact_details() {
     history.data[1].values.truncate(/*len*/ 1);
     history.data.remove(/*index*/ 2);
     view.sections[Section::Credits].history = Load::Ready(history.clone());
-    press(&mut view, KeyCode::Char('1'));
+    press(&mut view, KeyCode::Char('2'));
     press(&mut view, KeyCode::Home);
     let mut screens = Vec::new();
     for keys in [
@@ -334,11 +338,11 @@ fn analytics_model_labels_and_tool_remainders_are_unambiguous() {
         day.values[1].label = "Other".into();
     }
     view.sections[Section::Skills].history = Load::Ready(tools);
-    press(&mut view, KeyCode::Char('2'));
+    press(&mut view, KeyCode::Char('3'));
     let overview = screen(&mut view, /*width*/ 140, /*height*/ 64);
     assert!(overview.contains("Friendly model"));
     assert!(overview.contains("Skills used"));
-    press(&mut view, KeyCode::Char('4'));
+    press(&mut view, KeyCode::Char('5'));
     press(&mut view, KeyCode::Enter);
     let skills = screen(&mut view, /*width*/ 100, /*height*/ 32);
     assert!(skills.contains("Other"));
@@ -356,7 +360,7 @@ fn analytics_maximized_refunds_leave_room_for_both_bands() {
         value: -0.000004,
     }];
     view.sections[Section::Credits].history = Load::Ready(history);
-    press(&mut view, KeyCode::Char('1'));
+    press(&mut view, KeyCode::Char('2'));
     let output = screen(&mut view, /*width*/ 100, /*height*/ 32);
     assert!(output.contains("Sep 2 · -0.000004 credits"));
     assert!(
@@ -375,7 +379,7 @@ fn analytics_day_navigation_keeps_geometry_and_legend() {
     history.data[1].total = history.data[1].values[0].value;
     history.data.remove(/*index*/ 2);
     view.sections[Section::Credits].history = Load::Ready(history);
-    press(&mut view, KeyCode::Char('1'));
+    press(&mut view, KeyCode::Char('2'));
     let mut snapshots = Vec::new();
     for width in [58, 160] {
         let mut terminal = Terminal::new(TestBackend::new(width, /*height*/ 38)).unwrap();
@@ -578,7 +582,7 @@ fn analytics_empty_turns_keep_geometry_and_disable_details() {
     }
     history.data.remove(/*index*/ 6);
     view.sections[Section::Activity].history = Load::Ready(history);
-    press(&mut view, KeyCode::Char('2'));
+    press(&mut view, KeyCode::Char('3'));
     let mut snapshots = Vec::new();
     for width in [58, 100] {
         view.sections[Section::Activity].cursor = 4;
@@ -631,7 +635,7 @@ fn analytics_details_reflow_and_keep_focus() {
     let mut view = fixture::view(models::AccountKind::Enterprise);
     view.chats = Load::Ready(fixture::chats());
     press(&mut view, KeyCode::Char('z'));
-    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Char('6'));
     press(&mut view, KeyCode::Enter);
     assert!(view.zoomed);
     press(&mut view, KeyCode::Enter);
@@ -656,7 +660,7 @@ fn analytics_details_reflow_and_keep_focus() {
         before
     );
     press(&mut view, KeyCode::Tab);
-    press(&mut view, KeyCode::Char('5'));
+    press(&mut view, KeyCode::Char('6'));
     assert_eq!(
         (
             view.section,
@@ -671,7 +675,7 @@ fn analytics_details_reflow_and_keep_focus() {
             view.is_done,
             view.sections.0.each_ref().map(|state| state.detail)
         ),
-        (false, [None; 7])
+        (false, [None; 8])
     );
     press(&mut view, KeyCode::Esc);
     assert!(view.is_done);

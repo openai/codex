@@ -47,8 +47,12 @@ async fn analytics_preserves_the_draft_and_retains_the_view_on_reopen() -> Resul
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.chat_widget
         .apply_external_edit("preserved draft".into());
-    app.handle_event(&mut tui, &mut app_server, AppEvent::OpenAnalytics)
-        .await?;
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::OpenAnalytics { view: None },
+    )
+    .await?;
     for code in [
         KeyCode::Char('4'),
         KeyCode::Enter,
@@ -62,8 +66,12 @@ async fn analytics_preserves_the_draft_and_retains_the_view_on_reopen() -> Resul
     press_key(&mut app, &mut tui, &mut app_server, KeyCode::Char('q')).await?;
     assert!(app.overlay.is_none());
     assert!(app.retained_analytics.is_some());
-    app.handle_event(&mut tui, &mut app_server, AppEvent::OpenAnalytics)
-        .await?;
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        AppEvent::OpenAnalytics { view: None },
+    )
+    .await?;
     assert!(matches!(app.overlay, Some(Overlay::Analytics(_))));
     assert!(app.retained_analytics.is_none());
     press_key(&mut app, &mut tui, &mut app_server, KeyCode::Char('q')).await?;
@@ -71,6 +79,138 @@ async fn analytics_preserves_the_draft_and_retains_the_view_on_reopen() -> Resul
         app.chat_widget.composer_text_with_pending(),
         "preserved draft"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn analytics_menu_reopen_preserves_navigation_and_explicit_view_selects_summary() -> Result<()>
+{
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let http = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/backend-api/wham/accounts/check"))
+        .and(wiremock::matchers::header(
+            "chatgpt-account-id",
+            "test-account",
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_json(
+            serde_json::json!({"accounts": [{"id": "test-account", "plan_type": "plus"}]}),
+        ))
+        .expect(/*r*/ 3)
+        .mount(&http)
+        .await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(/*s*/ 200)
+                .set_body_json(serde_json::json!({"stats":{"lifetime_tokens":12345},"data":[]})),
+        )
+        .mount(&http)
+        .await;
+    app.config.chatgpt_base_url = format!("{}/backend-api", http.uri());
+    app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
+    app_test_support::write_chatgpt_auth(
+        &app.config.codex_home,
+        app_test_support::ChatGptAuthFixture::new("test-access-token")
+            .account_id("test-account")
+            .chatgpt_account_id("test-account")
+            .chatgpt_user_id("test-user")
+            .plan_type("plus"),
+        codex_login::AuthCredentialsStoreMode::File,
+    )
+    .unwrap();
+    let mut app_server = start_config_write_test_app_server(&app).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut screens = Vec::new();
+    for explicit in [
+        None,
+        None,
+        Some(crate::analytics::TokenActivityView::Weekly),
+    ] {
+        app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::OpenAnalytics { view: explicit },
+        )
+        .await?;
+        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 10), async {
+            loop {
+                app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+                    .await?;
+                let text = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+                    &tui.terminal,
+                ));
+                if screens.is_empty() && text.contains("Lifetime tokens") {
+                    press_key(&mut app, &mut tui, &mut app_server, KeyCode::Char('4')).await?;
+                    continue;
+                }
+                if text.contains("Lifetime tokens")
+                    || text.contains("No activity")
+                    || text.contains("No data reported")
+                {
+                    return Ok::<(), color_eyre::Report>(());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 5)).await;
+            }
+        })
+        .await??;
+        let screen = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+            &tui.terminal,
+        ));
+        screens.push(screen);
+        press_key(&mut app, &mut tui, &mut app_server, KeyCode::Char('q')).await?;
+    }
+    assert_eq!(screens[0], screens[1]);
+    assert!(screens[1].contains("[4 Plugins called]"));
+    assert!(screens[2].contains("[1 Summary]"));
+    assert!(screens[2].contains("[Weekly]"));
+    let snapshot = screens.join("\n\n");
+    let snapshot = snapshot
+        .lines()
+        .map(|line| {
+            if line.starts_with("  [7d]  30d  · ") {
+                "  [7d]  30d  · [date range]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(snapshot);
+    Ok(())
+}
+
+#[tokio::test]
+async fn analytics_keeps_queued_and_late_startup_history_out_of_the_overlay() -> Result<()> {
+    for alternate_screen in [true, false] {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server = start_config_write_test_app_server(&app).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_alt_screen_enabled(alternate_screen);
+        app.insert_history_cell(
+            &mut tui,
+            Box::new(PlainHistoryCell::new(vec!["Startup header".into()])),
+        );
+        assert!(!tui.pending_history_lines_for_test().is_empty());
+        app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::OpenAnalytics { view: None },
+        )
+        .await?;
+        assert!(tui.pending_history_lines_for_test().is_empty());
+        app.insert_history_cell(
+            &mut tui,
+            Box::new(PlainHistoryCell::new(vec![
+                "Late startup announcement".into(),
+            ])),
+        );
+        assert!(tui.pending_history_lines_for_test().is_empty());
+        let deferred = app.deferred_history_lines.clone();
+        assert!(!deferred.is_empty());
+        press_key(&mut app, &mut tui, &mut app_server, KeyCode::Char('q')).await?;
+        assert_eq!(tui.pending_history_lines_for_test(), deferred);
+        assert_eq!(app.transcript_cells.len(), 2);
+    }
     Ok(())
 }
 

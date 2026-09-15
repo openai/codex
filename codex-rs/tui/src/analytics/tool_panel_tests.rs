@@ -7,10 +7,10 @@ use pretty_assertions::assert_eq;
 #[test]
 fn analytics_tools_reflow_and_keep_independent_days() {
     let mut view = fixture::view(models::AccountKind::Consumer);
-    press(&mut view, KeyCode::Char('3'));
+    press(&mut view, KeyCode::Char('4'));
     let wide = screen(&mut view, /*width*/ 140, /*height*/ 48);
     assert!(wide.contains("186 calls"));
-    press(&mut view, KeyCode::Char('4'));
+    press(&mut view, KeyCode::Char('5'));
     press(&mut view, KeyCode::Left);
     press(&mut view, KeyCode::Enter);
     assert_eq!(
@@ -56,7 +56,7 @@ fn analytics_tools_handle_empty_days_and_independent_failures() {
     }
     history.data.remove(/*index*/ 5);
     view.sections[Section::Skills].history = Load::Ready(history);
-    press(&mut view, KeyCode::Char('4'));
+    press(&mut view, KeyCode::Char('5'));
     let empty = screen(&mut view, /*width*/ 140, /*height*/ 44);
     assert!(empty.contains("No uses reported for Sep 2."));
     assert!(!empty.contains("details"));
@@ -73,7 +73,7 @@ fn analytics_tools_handle_empty_days_and_independent_failures() {
         Load::Error("Skills could not be loaded. Press R to retry.".into());
     let partial = screen(&mut view, /*width*/ 140, /*height*/ 44);
     assert!(partial.contains("Skills could not be loaded"));
-    press(&mut view, KeyCode::Char('3'));
+    press(&mut view, KeyCode::Char('4'));
     assert!(screen(&mut view, /*width*/ 140, /*height*/ 44).contains("186 calls"));
     insta::assert_snapshot!(format!("{empty}\n{missing}\n{partial}"));
 }

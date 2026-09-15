@@ -146,6 +146,27 @@ pub(super) fn amount(value: f64) -> String {
     grouped
 }
 
+/// Compact headline and axis labels to one decimal, preserving small signed adjustments.
+pub(super) fn compact_amount(value: f64) -> String {
+    if value.abs() < 1_000.0 || !value.is_finite() {
+        return amount(value);
+    }
+    let units = ["K", "M", "B", "T"];
+    let mut scaled = value / 1_000.0;
+    let mut unit = 0;
+    // Promote before rounding would produce a label such as 1000K.
+    while scaled.abs() >= 999.95 && unit + 1 < units.len() {
+        scaled /= 1_000.0;
+        unit += 1;
+    }
+    let rounded = format!("{:.1}", (scaled * 10.0).round() / 10.0);
+    format!(
+        "{}{}",
+        rounded.trim_end_matches('0').trim_end_matches('.'),
+        units[unit]
+    )
+}
+
 /// Align ordinary credit amounts to two decimals without hiding tiny adjustments.
 pub(super) fn credit_amount(value: f64) -> String {
     let formatted = amount(value);

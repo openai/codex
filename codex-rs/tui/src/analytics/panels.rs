@@ -79,7 +79,10 @@ impl AnalyticsView {
                     }),
             );
         }
-        if section == Section::Plan {
+        if section == Section::Summary {
+            selection = 0..1;
+            lines.extend(self.summary_lines(width));
+        } else if section == Section::Plan {
             let (plan, detail) = self.plan_lines(width);
             selection = lines.len() + detail.start..lines.len() + detail.end;
             lines.extend(plan);

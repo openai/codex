@@ -147,7 +147,7 @@ async fn analytics_requests_use_reloaded_credentials_for_the_same_identity() {
     let authenticated = &session.backend;
     assert_eq!(
         live.account_label().as_deref(),
-        Some("analytics@example.test · account-a")
+        Some("analytics@example.test")
     );
     let auth_path = home.path().join("auth.json");
     let mut auth: serde_json::Value =
@@ -846,3 +846,6 @@ async fn plan_history_rejects_account_change_during_response() {
         );
     }
 }
+
+#[path = "profile_identity_tests.rs"]
+mod profile_identity;

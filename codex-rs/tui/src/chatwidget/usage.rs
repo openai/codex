@@ -45,17 +45,18 @@ impl ChatWidget {
                     (false, "No usage limit resets available.".to_string())
                 }
             };
-        let mut params = SelectionViewParams {
+
+        SelectionViewParams {
             view_id: Some(USAGE_MENU_VIEW_ID),
             title: Some("Usage".to_string()),
             subtitle: Some("View account usage or redeem an earned reset.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items: vec![
                 SelectionItem {
-                    name: "Show usage".to_string(),
-                    description: Some("View recent account token usage.".to_string()),
+                    name: "View analytics".to_string(),
+                    description: Some("Browse account usage and activity.".to_string()),
                     actions: vec![Box::new(|tx| {
-                        tx.send(AppEvent::OpenTokenActivity);
+                        tx.send(AppEvent::OpenAnalytics { view: None });
                     })],
                     dismiss_on_select: true,
                     ..Default::default()
@@ -72,20 +73,7 @@ impl ChatWidget {
                 },
             ],
             ..Default::default()
-        };
-        if self.has_chatgpt_account {
-            params.items.insert(
-                /*index*/ 1,
-                SelectionItem {
-                    name: "Explore analytics".to_string(),
-                    description: Some("Browse account usage and activity.".to_string()),
-                    actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAnalytics))],
-                    dismiss_on_select: true,
-                    ..Default::default()
-                },
-            );
         }
-        params
     }
 
     pub(crate) fn finish_usage_menu_rate_limit_refresh(

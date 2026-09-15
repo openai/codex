@@ -30,8 +30,6 @@ use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-const TOKEN_ACTIVITY_FETCH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(/*secs*/ 15);
 pub(super) const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(/*secs*/ 65);
 const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
@@ -121,25 +119,6 @@ impl App {
                 hard_stop_generation,
                 result,
             });
-        });
-    }
-
-    pub(super) fn refresh_token_activity(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: u64,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                TOKEN_ACTIVITY_FETCH_TIMEOUT,
-                fetch_account_token_activity(request_handle),
-            )
-            .await
-            .map_err(|_| "account/usage/read timed out in TUI".to_string())
-            .and_then(|result| result.map_err(|err| err.to_string()));
-            app_event_tx.send(AppEvent::TokenActivityLoaded { request_id, result });
         });
     }
 
@@ -829,19 +808,6 @@ pub(super) async fn fetch_account_rate_limits(
             .wrap_err("account/rateLimits/read failed in TUI");
     }
     result.wrap_err("account/rateLimits/read failed in TUI")
-}
-
-pub(super) async fn fetch_account_token_activity(
-    request_handle: AppServerRequestHandle,
-) -> Result<codex_app_server_protocol::GetAccountTokenUsageResponse> {
-    let request_id = RequestId::String(format!("account-token-usage-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::GetAccountTokenUsage {
-            request_id,
-            params: None,
-        })
-        .await
-        .wrap_err("account/usage/read failed in TUI")
 }
 
 pub(super) async fn fetch_thread_usage(

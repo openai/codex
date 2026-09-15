@@ -747,8 +747,10 @@ impl ChatWidget {
             }
             SlashCommand::Usage => {
                 if self.ensure_usage_command_available() {
-                    match tokens::TokenActivityView::parse(trimmed) {
-                        Some(view) => self.add_token_activity_output(view),
+                    match crate::analytics::TokenActivityView::parse(trimmed) {
+                        Some(view) => self
+                            .app_event_tx
+                            .send(AppEvent::OpenAnalytics { view: Some(view) }),
                         None => self.add_error_message(
                             "Usage: /usage [daily|weekly|cumulative]".to_string(),
                         ),

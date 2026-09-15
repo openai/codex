@@ -12,7 +12,10 @@ fn dashboard_focus_uses_marker_and_default_foreground_title() {
     for section in [Section::Usage, Section::Activity] {
         view.section = section;
         let (lines, _) = view.dashboard_lines(/*width*/ 140, /*height*/ 56);
-        let title = &lines[0];
+        let title = lines
+            .iter()
+            .find(|line| line.spans.iter().any(|span| span.content == "▸"))
+            .unwrap();
         let marker = title.spans.iter().find(|span| span.content == "▸").unwrap();
         assert_eq!(marker.style, accent_style());
         let focused_title = title
@@ -32,8 +35,9 @@ fn dashboard_cards_align_and_keep_stable_summary_heights() {
     press(&mut view, KeyCode::Char('z'));
     let wide = screen(&mut view, /*width*/ 144, /*height*/ 64);
     for (left, right) in [
-        ("1 Total usage history", "2 Messages"),
-        ("3 Plugins called", "4 Skills used"),
+        ("1 Summary", "2 Total usage history"),
+        ("3 Messages", "4 Plugins called"),
+        ("5 Skills used", "6 Top chats"),
     ] {
         assert!(
             wide.lines()
@@ -64,7 +68,7 @@ fn dashboard_cards_align_and_keep_stable_summary_heights() {
         );
     }
     let narrow = screen(&mut view, /*width*/ 72, /*height*/ 48);
-    assert!(narrow.contains("1 Total usage history"));
+    assert!(narrow.contains("1 Summary"));
     let context = (
         view.section,
         view.sections.0.each_ref().map(|state| state.cursor),

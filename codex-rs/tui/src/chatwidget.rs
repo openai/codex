@@ -445,12 +445,11 @@ use self::status_surfaces::CachedProjectRootName;
 mod thread_title_status;
 mod thread_usage;
 pub(crate) use self::thread_usage::ThreadUsageOutcome;
-mod tokens;
-pub(crate) use self::tokens::TokenActivityView;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
 mod transcript_export;
+mod usage_history;
 use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
@@ -610,9 +609,6 @@ pub(crate) struct ChatWidget {
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     refreshing_status_outputs: Vec<(u64, StatusHistoryHandle)>,
     next_status_refresh_request_id: u64,
-    refreshing_token_activity_output: Option<tokens::PendingTokenActivityOutput>,
-    completed_token_activity_output: Option<history_cell::CompositeHistoryCell>,
-    next_token_activity_request_id: u64,
     pending_rate_limit_reset_request_id: Option<u64>,
     pending_rate_limit_reset_idempotency_key: Option<String>,
     rate_limit_reset_picker_request_id: Option<u64>,
@@ -1985,7 +1981,6 @@ impl ChatWidget {
     pub(crate) fn active_cell_transcript_key(&self) -> Option<ActiveCellTranscriptKey> {
         let cell = self.transcript.active_cell.as_ref();
         let mut realtime_cells = self.realtime_conversation.live_transcript_cells();
-        let token_activity_cell = self.pending_token_activity_output();
         let rate_limit_reset_hint = self.pending_rate_limit_reset_hint();
         if cell.is_none()
             && self
@@ -1994,7 +1989,6 @@ impl ChatWidget {
                 .next()
                 .is_none()
             && self.realtime_conversation.pending_history_cells.is_empty()
-            && token_activity_cell.is_none()
             && rate_limit_reset_hint.is_none()
         {
             return None;
@@ -2035,13 +2029,6 @@ impl ChatWidget {
                 lines.push(HyperlinkLine::from(""));
             }
             lines.extend(realtime_lines);
-        }
-        if let Some(token_activity_cell) = self.pending_token_activity_output() {
-            let token_activity_lines = token_activity_cell.transcript_hyperlink_lines(width);
-            if !token_activity_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
-            }
-            lines.extend(token_activity_lines);
         }
         if let Some(rate_limit_reset_hint) = self.pending_rate_limit_reset_hint() {
             let hint_lines = rate_limit_reset_hint.transcript_hyperlink_lines(width);

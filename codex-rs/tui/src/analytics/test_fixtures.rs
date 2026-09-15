@@ -208,6 +208,11 @@ pub(super) fn view(kind: super::models::AccountKind) -> super::AnalyticsView {
         }
         super::models::AccountKind::Unknown => codex_protocol::account::PlanType::Unknown,
     });
+    view.section = if view.business() {
+        super::sections::Section::Credits
+    } else {
+        super::sections::Section::Usage
+    };
     view.start_reports();
     seed_reports(&mut view);
     view

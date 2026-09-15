@@ -8,6 +8,7 @@ mod painting;
 use self::layout::Layout;
 use self::painting::Band;
 use super::data;
+use super::data::compact_amount as tick;
 use super::render::parts;
 use crate::analytics::models::AccountAnalyticsDay;
 use crate::analytics::models::AccountAnalyticsUnit;
@@ -110,8 +111,7 @@ pub(super) fn chart(
         &[Band::Positive][..]
     };
     let peak = axis_max(peak(days, categories), unit);
-    let label_width =
-        tick(peak, unit).width().max(tick(peak / 2.0, unit).width()) + bands.len() - 1 + 2;
+    let label_width = tick(peak).width().max(tick(peak / 2.0).width()) + bands.len() - 1 + 2;
     let layout = Layout::new(days.len(), cursor, width, height, label_width, bands);
     let renderer = Renderer {
         days,
@@ -164,17 +164,10 @@ struct Renderer<'a> {
 fn amount(value: f64, unit: AccountAnalyticsUnit) -> String {
     match unit {
         AccountAnalyticsUnit::RelativeUsage => data::amount(value),
-        AccountAnalyticsUnit::Count | AccountAnalyticsUnit::Tokens => data::amount(value.round()),
+        AccountAnalyticsUnit::Count | AccountAnalyticsUnit::Tokens => {
+            data::compact_amount(value.round())
+        }
         AccountAnalyticsUnit::Credits => data::credit_amount(value),
-    }
-}
-
-fn tick(value: f64, unit: AccountAnalyticsUnit) -> String {
-    match unit {
-        AccountAnalyticsUnit::Credits => data::amount(value),
-        AccountAnalyticsUnit::RelativeUsage
-        | AccountAnalyticsUnit::Count
-        | AccountAnalyticsUnit::Tokens => amount(value, unit),
     }
 }
 

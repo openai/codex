@@ -94,3 +94,39 @@ async fn extended_chat_load_budget_still_times_out_and_can_be_cancelled() {
     load.poll();
     assert_eq!(load.message(), Some("Request timed out. Press R to retry."));
 }
+
+#[test]
+fn compact_counts_round_promote_units_and_preserve_small_adjustments() {
+    let values = [
+        0.0,
+        959.0,
+        1_000.0,
+        9_749.0,
+        2_901.0,
+        12_280_365_226.0,
+        142_300_000_000.0,
+        999_999.0,
+        999_999_999.0,
+        -1_250.0,
+        -0.000004,
+        1_200_000_000_000.0,
+    ];
+    assert_eq!(
+        values.map(compact_amount),
+        [
+            "0",
+            "959",
+            "1K",
+            "9.7K",
+            "2.9K",
+            "12.3B",
+            "142.3B",
+            "1M",
+            "1B",
+            "-1.3K",
+            "-0.000004",
+            "1.2T"
+        ]
+        .map(str::to_string)
+    );
+}

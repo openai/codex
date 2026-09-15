@@ -1,11 +1,11 @@
 ---
 source: tui/src/analytics/consumer_refresh_tests.rs
-assertion_line: 43
 expression: "screen(&mut view, 90, 30)"
 ---
 "  Analytics  ·  Live account                                                              "
 "                                                                                          "
-"  1 Total usage history  2 Messages  3 Plugins called  4 Skills used  [5 Top chats]       "
+"  1 Summary  2 Total usage history  3 Messages  4 Plugins called  5 Skills used  [6 Top   "
+"  chats]                                                                                  "
 "                                                                                          "
 "  ▎ Top chats                                                                             "
 "  ──────────────────────────────────────────────────────────────────────────────────────  "
@@ -30,6 +30,5 @@ expression: "screen(&mut view, 90, 30)"
 "  Local chats · includes discovered descendants · excludes archived roots                 "
 "                                                                                          "
 "                                                                                          "
-"                                                                                          "
-"  tab/1–5 section · s sort · z dashboard · ↑/↓ row · enter details                        "
+"  tab/1–6 section · s sort · z dashboard · ↑/↓ row · enter details                        "
 "  R refresh · pgup/pgdn scroll · esc back · q close                                       "
