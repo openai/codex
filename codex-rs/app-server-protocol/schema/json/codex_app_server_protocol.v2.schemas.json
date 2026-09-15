@@ -5756,7 +5756,7 @@
         },
         "allowedWindowsSandboxImplementations": {
           "items": {
-            "$ref": "#/definitions/WindowsSandboxSetupMode"
+            "$ref": "#/definitions/WindowsSandboxImplementation"
           },
           "type": [
             "array",
@@ -23504,6 +23504,14 @@
         }
       },
       "type": "object"
+    },
+    "WindowsSandboxImplementation": {
+      "enum": [
+        "elevated",
+        "unelevated",
+        "mxc"
+      ],
+      "type": "string"
     },
     "WindowsSandboxReadiness": {
       "enum": [

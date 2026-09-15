@@ -616,6 +616,7 @@ export type { TurnsPage } from "./TurnsPage";
 export type { UserInput } from "./UserInput";
 export type { WarningNotification } from "./WarningNotification";
 export type { WebSearchAction } from "./WebSearchAction";
+export type { WindowsSandboxImplementation } from "./WindowsSandboxImplementation";
 export type { WindowsSandboxReadiness } from "./WindowsSandboxReadiness";
 export type { WindowsSandboxReadinessResponse } from "./WindowsSandboxReadinessResponse";
 export type { WindowsSandboxSetupCompletedNotification } from "./WindowsSandboxSetupCompletedNotification";

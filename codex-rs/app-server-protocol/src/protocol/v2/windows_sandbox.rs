@@ -23,6 +23,15 @@ pub enum WindowsSandboxSetupMode {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum WindowsSandboxImplementation {
+    Elevated,
+    Unelevated,
+    Mxc,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum WindowsSandboxReadiness {
     Ready,

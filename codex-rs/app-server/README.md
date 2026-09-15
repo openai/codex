@@ -245,3 +245,16 @@ The experimental `account/read.workspaceRouting` response field returns the sele
 App-server discovers routing for saved ChatGPT logins at startup and for new logins or workspace switches. After requirements and routing are ready, it sends the existing `account/updated` notification. Newly initialized connections also receive this notification once saved-workspace routing is ready, including when discovery finished before the connection initialized. Clients then reread `configRequirements/read` and `account/read`. Saved ChatGPT credentials without a selected workspace ID retain their account information and return `workspaceRouting: null`; app-server does not guess a workspace from the backend's default account. Discovery failures for a selected workspace, including missing or null fields from older backends, return an `account/read` error. They never produce a successful unrestricted result. A later read retries failed discovery. Logout clears the cached routing, and results from earlier authentication owners are discarded. Token refreshes for the same known user and workspace invalidate cached routing without cancelling discovery or failing sign-in. Configuration is reloaded after discovery; a changed backend, model provider, or required backend rejects the result so the next read discovers against current configuration. Account notifications recheck the auth owner generation after waiting for outbound queue capacity. Superseded sign-in attempts emit a failed `account/login/completed` event instead of silently dropping completion. Notifications remain snapshots: clients reread current account and requirements state rather than treating a queued notification as authorization.
 
 The origin of a required `chatgpt_base_url` must match the discovered origin by scheme, host, and effective port. The base URL's API path is not part of this comparison. Either origin alone is sufficient. If requirements specify no base URL and discovery explicitly returns `NO_CONSTRAINT`, the effective `chatgpt_base_url` supplies the origin, including its existing default. `backendOrigin` is always a resolved origin; `accountRoutingOverride` preserves `NO_CONSTRAINT` when the backend explicitly returns it. Discovering an origin does not change API paths or apply routing headers to requests.
+
+## Windows sandbox implementation selection
+
+`windowsSandbox/setupStart` and `windowsSandbox/readiness` apply only to the
+legacy `elevated` and `unelevated` backends. Clients resolve the desired sandbox
+implementation from configuration. When it is `mxc`, they skip both methods;
+`allowedWindowsSandboxImplementations` can allow `mxc` independently of the
+legacy setup modes. Non-Windows hosts report `notConfigured` for the legacy
+readiness API.
+
+MXC uses the standard `command/exec` streaming and process-control path, including
+ConPTY when `tty` is enabled. The buffered legacy Windows sandbox restrictions on
+process control and custom output caps do not apply to MXC.

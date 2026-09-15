@@ -41,7 +41,7 @@ use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::NewThreadModelDefaults;
 use codex_app_server_protocol::SandboxMode;
-use codex_app_server_protocol::WindowsSandboxSetupMode;
+use codex_app_server_protocol::WindowsSandboxImplementation;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
 use codex_config::HookHandlerConfig as CoreHookHandlerConfig;
@@ -470,10 +470,10 @@ fn map_requirements_to_api(
                         .into_iter()
                         .map(|implementation| match implementation {
                             codex_config::types::WindowsSandboxModeToml::Elevated => {
-                                WindowsSandboxSetupMode::Elevated
+                                WindowsSandboxImplementation::Elevated
                             }
                             codex_config::types::WindowsSandboxModeToml::Unelevated => {
-                                WindowsSandboxSetupMode::Unelevated
+                                WindowsSandboxImplementation::Unelevated
                             }
                         })
                         .collect()
@@ -854,7 +854,7 @@ mod tests {
     use codex_app_server_protocol::ComputerUseWindowsExeRequirement;
     use codex_app_server_protocol::ComputerUseWindowsRequirements;
     use codex_app_server_protocol::FeedbackRequirements;
-    use codex_app_server_protocol::WindowsSandboxSetupMode;
+    use codex_app_server_protocol::WindowsSandboxImplementation;
     use codex_config::AllowDenyRequirementToml;
     use codex_config::AutoReviewRequirementsToml;
     use codex_config::BrowserUseAccessApprovalLifetimeToml;
@@ -1110,8 +1110,8 @@ mod tests {
         assert_eq!(
             mapped.allowed_windows_sandbox_implementations,
             Some(vec![
-                WindowsSandboxSetupMode::Elevated,
-                WindowsSandboxSetupMode::Unelevated,
+                WindowsSandboxImplementation::Elevated,
+                WindowsSandboxImplementation::Unelevated,
             ])
         );
         assert_eq!(mapped.windows_sandbox_private_desktop, Some(false));
