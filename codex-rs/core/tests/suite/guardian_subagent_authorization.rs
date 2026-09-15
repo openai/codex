@@ -73,6 +73,7 @@ enum RootAnswer {
 enum RootContext {
     Legacy,
     Retained,
+    Migrating,
     RetainedAtMessageLimit,
 }
 
@@ -141,6 +142,8 @@ async fn mount_completion(
 #[test_case(RootAnswer::Oversized, RootContext::Legacy; "legacy_oversized_answer")]
 #[test_case(RootAnswer::Complete, RootContext::Retained; "retained_complete_answer")]
 #[test_case(RootAnswer::Oversized, RootContext::Retained; "retained_oversized_answer")]
+#[test_case(RootAnswer::Complete, RootContext::Migrating; "migrating_complete_answer")]
+#[test_case(RootAnswer::Oversized, RootContext::Migrating; "migrating_oversized_answer")]
 #[test_case(RootAnswer::Complete, RootContext::RetainedAtMessageLimit; "bounded_retained_root_messages")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_subagent_review_preserves_late_root_user_authorization(
@@ -156,7 +159,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     let retained_context_enabled = !matches!(root_context, RootContext::Legacy);
     let evidence_complete =
         matches!(root_context, RootContext::Legacy) || matches!(root_answer, RootAnswer::Complete);
-    let queued_approval = matches!(root_context, RootContext::Retained)
+    let queued_approval = matches!(root_context, RootContext::Retained | RootContext::Migrating)
         && matches!(root_answer, RootAnswer::Complete);
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
@@ -181,7 +184,30 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             .set_permission_profile(PermissionProfile::workspace_write())
             .expect("set workspace-write permissions");
     });
-    let test = builder.build_with_auto_env(&server).await?;
+    let mut test = builder.build_with_auto_env(&server).await?;
+    if matches!(root_context, RootContext::Migrating) {
+        let mut checkpoint: CompactedItem = serde_json::from_value(json!({
+            "message": "Old checkpoint before the current user instructions.",
+            "replacement_history": [{
+                "type": "compaction", "id": "old", "encrypted_content": "unknown producer"
+            }]
+        }))?;
+        checkpoint.retained_context = Some(Default::default());
+        test.codex.ensure_rollout_materialized().await;
+        test.codex = super::guardian_checkpoint_migration::resume(
+            &test,
+            &test.codex,
+            vec![RolloutItem::Compacted(checkpoint)],
+        )
+        .await?;
+        assert!(
+            test.codex
+                .conversation_history_snapshot()
+                .await
+                .retained_context()
+                .is_none()
+        );
+    }
     let root_thread_id = test.session_configured.thread_id;
     let mut created_threads = test.thread_manager.subscribe_thread_created();
 
@@ -227,7 +253,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     // Exceed both the retained-record storage cap and the reviewer text budget.
     let oversized_instruction = "Root instruction 0. ".repeat(1_000);
     let mut root_history_items = Vec::new();
-    if !matches!(root_context, RootContext::RetainedAtMessageLimit) {
+    if matches!(root_context, RootContext::Legacy | RootContext::Retained) {
         // Older saved histories can contain these unannotated synthetic messages.
         root_history_items.extend(
             [
@@ -493,7 +519,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             messages.extend(answer_message);
             messages
         }
-        RootContext::Retained => {
+        RootContext::Retained | RootContext::Migrating => {
             let mut messages = vec![GuardianRootMessage::RetainedContextScope];
             if !evidence_complete {
                 messages.push(GuardianRootMessage::IncompleteVerifiedAnswers);

@@ -97,7 +97,8 @@ enum ReviewCheckpoint {
 #[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, Some("matching"), Some("different"), 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "incompatible checkpoint")]
 #[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, Some("matching"), None, 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "unknown Luna compatibility")]
 #[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, Some("matching"), Some(""), 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "empty Luna compatibility")]
-#[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, None, Some("matching"), 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "unknown producer remains unknown after model switch")]
+#[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, None, Some("matching"), 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "unknown producer preserves retained evidence")]
+#[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, Some(""), Some("matching"), 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "empty producer preserves retained evidence")]
 #[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, Some("matching"), Some("matching"), 140, EvidenceSize::Normal, ReviewCheckpoint::Valid; "source call evicted")]
 #[test_case(ContextPath::ThreadOwned, CheckpointReuse::Enabled, Some("matching"), Some("matching"), 0, EvidenceSize::OversizedAnswer, ReviewCheckpoint::Valid; "incomplete answers reject fresh low score")]
 #[test_case(ContextPath::Legacy, CheckpointReuse::Enabled, Some("matching"), Some("matching"), 0, EvidenceSize::Normal, ReviewCheckpoint::Valid; "legacy answers remain runtime only")]
@@ -398,7 +399,7 @@ async fn guardians_retain_evidence_after_compaction_and_resume(
             .await?;
             classifier.allow_luna.notify_one();
         }
-        if reject_sync_checkpoint && (1..=2).contains(&index) {
+        if reject_sync_checkpoint && index > 0 {
             let notification = timeout(
                 TIMEOUT,
                 app_server.read_stream_until_matching_notification(
@@ -439,7 +440,7 @@ async fn guardians_retain_evidence_after_compaction_and_resume(
         let completed: TurnCompletedNotification =
             timeout(TIMEOUT, app_server.read_notification("turn/completed")).await??;
         assert_eq!(completed.turn.status, TurnStatus::Completed);
-        if reject_sync_checkpoint && (1..=2).contains(&index) {
+        if reject_sync_checkpoint && index > 0 {
             // The first review established a cached session before compaction. Neither
             // that session nor a new one may review unusable evidence, including after resume.
             let reviews = review_requests.lock().expect("request log lock");
@@ -778,10 +779,8 @@ async fn guardians_retain_evidence_after_compaction_and_resume(
                             .metadata
                             .as_ref()
                             .and_then(|metadata| metadata.compaction_model_hash.as_deref()),
-                        matches!(context_path, ContextPath::ThreadOwned)
-                            .then_some(parent_hash)
-                            .flatten(),
-                        "only the enabled path records checkpoint producer provenance",
+                        parent_hash,
+                        "every compaction records its producer provenance",
                     );
                 }
             }

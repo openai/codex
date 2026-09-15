@@ -73,6 +73,8 @@ mod external_auth;
 mod fork_thread;
 mod git_enrichment;
 mod guardian_authorization;
+#[path = "guardian_checkpoint_migration_tests.rs"]
+mod guardian_checkpoint_migration;
 // Uses the same command-approval harness as guardian_review below.
 mod canonical_plugin_connectors;
 #[cfg(not(target_os = "windows"))]

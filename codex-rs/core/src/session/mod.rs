@@ -24,7 +24,6 @@ use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
-use crate::context::GuardianContextMode;
 use crate::context::GuardianPolicy;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
@@ -4003,14 +4002,12 @@ impl Session {
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
         }
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned
-            && let Some(checkpoint) = items.iter_mut().rev().find(|envelope| {
-                matches!(
-                    envelope.item,
-                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
-                )
-            })
-        {
+        if let Some(checkpoint) = items.iter_mut().rev().find(|envelope| {
+            matches!(
+                envelope.item,
+                ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+            )
+        }) {
             checkpoint
                 .metadata
                 .get_or_insert_default()

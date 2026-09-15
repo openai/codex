@@ -961,11 +961,9 @@ impl Session {
             thread_id.to_string(),
             thread_extension_init,
         );
-        // Resolve once for live history, replay, and all reviewer consumers.
+        // Capture follows the flag; replay selects reviewer policy from the saved checkpoint.
         let guardian_context_mode = GuardianContextMode::from_features(&config.features);
-        thread_extension_data.insert(crate::context::GuardianReviewEvidence::new(
-            guardian_context_mode,
-        ));
+        thread_extension_data.insert(crate::context::GuardianReviewEvidence::default());
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info

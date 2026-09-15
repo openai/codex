@@ -469,10 +469,10 @@ async fn run_review_on_session(
                 .sync_session_approved_hosts_to(&review_session.session.services.network_approval)
                 .await;
 
-            let history = if params.parent_session.guardian_context_mode
-                == GuardianContextMode::ThreadOwned
-            {
-                params.parent_history.conversation_history_snapshot()
+            let parent_history = params.parent_history.conversation_history_snapshot();
+            let history = if GuardianContextMode::from_history(parent_history.as_ref())
+                == GuardianContextMode::ThreadOwned {
+                parent_history
             } else {
                 params.parent_session.conversation_history_snapshot().await
             };

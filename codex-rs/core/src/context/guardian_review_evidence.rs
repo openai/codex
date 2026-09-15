@@ -1,7 +1,6 @@
-//! Selects Guardian answer evidence once per thread and retains completed reviews.
-//! The temporary legacy mode preserves its bounded runtime buffer; thread-owned
-//! mode reads retained answers from history. Capture uses the same thread feature setting;
-//! legacy mode does not produce new retained-answer events.
+//! Selects Guardian answer evidence from the review's history snapshot and retains reviews.
+//! Legacy review uses a bounded runtime buffer while thread-owned review uses retained answers.
+//! A migrating session captures both until its checkpoint can support thread-owned review.
 
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -43,7 +42,6 @@ pub struct GuardianUserInputSnapshot {
 /// completed reviews remain thread-local, and authorization changes invalidate stale records.
 #[derive(Debug, Default)]
 pub struct GuardianReviewEvidence {
-    mode: GuardianContextMode,
     state: Mutex<GuardianReviewEvidenceState>,
 }
 
@@ -57,26 +55,15 @@ struct GuardianReviewEvidenceState {
 }
 
 impl GuardianReviewEvidence {
-    /// Reports the fixed thread mode used for both capture and reviewer policy.
-    pub fn context_mode(&self) -> GuardianContextMode {
-        self.mode
-    }
-
-    pub(crate) fn new(mode: GuardianContextMode) -> Self {
-        Self {
-            mode,
-            state: Mutex::default(),
-        }
-    }
-
     /// Preserves the legacy capture limits before hooks can replace the tool output.
     pub(crate) fn record_user_input(
         &self,
+        history: &dyn ConversationHistorySnapshot,
         call_id: &str,
         questions: &[RequestUserInputQuestion],
         response: &RequestUserInputResponse,
     ) {
-        if !matches!(self.mode, GuardianContextMode::Legacy) {
+        if GuardianContextMode::from_history(history) != GuardianContextMode::Legacy {
             return;
         }
         let fragment = questions
@@ -128,7 +115,7 @@ impl GuardianReviewEvidence {
         &self,
         history: &dyn ConversationHistorySnapshot,
     ) -> GuardianUserInputSnapshot {
-        match self.mode {
+        match GuardianContextMode::from_history(history) {
             GuardianContextMode::ThreadOwned => {
                 let answers = history
                     .retained_context()
@@ -181,7 +168,7 @@ impl GuardianReviewEvidence {
         history: &dyn ConversationHistorySnapshot,
         call_id: &str,
     ) -> Option<String> {
-        match self.mode {
+        match GuardianContextMode::from_history(history) {
             GuardianContextMode::ThreadOwned => history
                 .retained_context()?
                 .verified_answers()

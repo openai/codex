@@ -5,9 +5,11 @@ use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_core::context::ContextualUserFragment;
+use codex_core::context::GuardianContextMode;
 use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
 use codex_features::Feature;
+use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -42,11 +44,14 @@ enum PendingReviewChange {
     VerifiedAnswer,
 }
 
-#[test_case(PendingReviewChange::UserInstruction; "new user instruction")]
-#[test_case(PendingReviewChange::VerifiedAnswer; "verified answer")]
+#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::ThreadOwned; "new user instruction")]
+#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::ThreadOwned; "verified answer")]
+#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::Legacy; "migration user instruction")]
+#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::Legacy; "migration verified answer")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_revalidates_owning_session_before_allow(
     change: PendingReviewChange,
+    review_mode: GuardianContextMode,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -116,7 +121,7 @@ async fn guardian_revalidates_owning_session_before_allow(
     ]).await;
     let base_url = format!("{}/v1", streaming_server.uri());
     let server = responses::start_mock_server().await;
-    let test = test_codex()
+    let mut test = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
@@ -140,6 +145,26 @@ async fn guardian_revalidates_owning_session_before_allow(
         .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
         .build_with_auto_env(&server)
         .await?;
+    if review_mode == GuardianContextMode::Legacy {
+        test.codex.ensure_rollout_materialized().await;
+        test.codex = super::guardian_checkpoint_migration::resume(
+            &test,
+            &test.codex,
+            vec![RolloutItem::Compacted(serde_json::from_value(json!({
+                "message": "old checkpoint",
+                "replacement_history": [{
+                    "type": "compaction", "id": "old", "encrypted_content": "unknown producer"
+                }]
+            }))?)],
+        )
+        .await?;
+    }
+    assert_eq!(
+        GuardianContextMode::from_history(
+            test.codex.conversation_history_snapshot().await.as_ref()
+        ),
+        review_mode,
+    );
     test.codex
         .start_or_steer_turn(
             TurnInputRequest::user_input(vec![UserInput::Text {

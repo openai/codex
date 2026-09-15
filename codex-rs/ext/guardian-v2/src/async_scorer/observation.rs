@@ -214,7 +214,7 @@ impl GuardianV2Extension {
         let guardian_evidence = input
             .thread_store
             .get_or_init(GuardianReviewEvidence::default);
-        let context_mode = guardian_evidence.context_mode();
+        let context_mode = GuardianContextMode::from_history(input.conversation_history.as_ref());
         let selected_compaction = match select_parent_compaction(
             context_mode,
             &guardian_config,

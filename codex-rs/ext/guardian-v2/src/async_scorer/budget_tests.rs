@@ -175,6 +175,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             .await?;
         let history: Arc<dyn ConversationHistorySnapshot> = match evidence {
             BudgetEvidence::Checkpoint => Arc::new(TestRetainedHistory {
+                retained_context: None,
                 retained: history.clone(),
                 current: TestConversationHistory(history),
                 compaction_model_hash: Some("budget-checkpoint".to_owned()),

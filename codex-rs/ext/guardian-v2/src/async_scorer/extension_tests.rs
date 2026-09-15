@@ -411,9 +411,14 @@ struct TestRetainedHistory {
     current: TestConversationHistory,
     retained: Vec<ResponseItem>,
     compaction_model_hash: Option<String>,
+    retained_context: Option<codex_history::RetainedContext>,
 }
 
 impl ConversationHistorySnapshot for TestRetainedHistory {
+    fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
+        self.retained_context.as_ref()
+    }
+
     fn latest_compaction_model_hash(&self) -> Option<&str> {
         self.compaction_model_hash.as_deref()
     }
@@ -2997,6 +3002,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
         retained,
         current: conversation_history,
         compaction_model_hash: parent_model.comp_hash.clone(),
+        retained_context: thread_context_enabled.then(codex_history::RetainedContext::default),
     };
     thread_store.insert(parent_model);
 
@@ -3091,6 +3097,8 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             conversation_history: Arc::new(TestRetainedHistory {
                 current: TestConversationHistory(vec![latest_compaction, oversized_compaction]),
                 retained: Vec::new(),
+                retained_context: thread_context_enabled
+                    .then(codex_history::RetainedContext::default),
                 compaction_model_hash: thread_store
                     .get::<ModelInfo>()
                     .and_then(|model| model.comp_hash.clone()),

@@ -33,6 +33,7 @@ use codex_history::CodexHarnessMetadata;
 use codex_history::GuardianHistoryCheckpoint;
 use codex_history::ResponseItemEnvelope;
 use codex_history::RetainedContext;
+use codex_history::RetainedContextEntry;
 use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
@@ -78,8 +79,10 @@ pub(crate) struct ContextManager {
     review_history: Option<TranscriptHistory>,
     /// Host facts independent of the model window; snapshots share immutable state.
     retained_context: Arc<RetainedContext>,
-    /// Capture, replay, and snapshot selection share the immutable session mode.
+    /// Capture follows the session flag, including while an older checkpoint uses legacy review.
     guardian_context_mode: GuardianContextMode,
+    /// Reviewer policy travels with the history snapshot, independently of capture.
+    guardian_review_mode: GuardianContextMode,
     retain_inherited_user_messages: bool,
     /// Bumped whenever history is rewritten, such as compaction or rollback.
     history_version: u64,
@@ -181,6 +184,7 @@ impl ContextManager {
             review_history: None,
             retained_context: Arc::default(),
             guardian_context_mode: GuardianContextMode::Legacy,
+            guardian_review_mode: GuardianContextMode::Legacy,
             retain_inherited_user_messages: false,
             history_version: 0,
             reset_version: 0,
@@ -198,7 +202,7 @@ impl ContextManager {
             items: Arc::clone(&self.items),
             review_history: self.review_history.clone(),
             retained_context: Arc::clone(&self.retained_context),
-            guardian_context_mode: self.guardian_context_mode,
+            guardian_context_mode: self.guardian_review_mode,
             history_version: self.history_version,
             user_message_revision: self.user_message_revision,
         })
@@ -214,6 +218,7 @@ impl ContextManager {
     ) -> Self {
         Self {
             guardian_context_mode,
+            guardian_review_mode: guardian_context_mode,
             retain_inherited_user_messages: guardian_context_mode
                 == GuardianContextMode::ThreadOwned
                 && !source.is_non_root_agent(),
@@ -234,7 +239,7 @@ impl ContextManager {
     }
 
     pub(crate) fn guardian_history_checkpoint(&self) -> Option<GuardianHistoryCheckpoint> {
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
+        if self.guardian_review_mode == GuardianContextMode::ThreadOwned {
             return None;
         }
         self.review_history
@@ -247,8 +252,53 @@ impl ContextManager {
         retained_context: Option<&RetainedContext>,
         checkpoint: Option<&GuardianHistoryCheckpoint>,
     ) {
+        // Replay captures ordinary messages too. Legacy review can keep using those messages
+        // while their original text survives in its selected transcript. Retained-only facts
+        // and missing-answer markers still require strict checkpoint compatibility.
+        let has_retained_only_evidence = retained_context.is_some_and(|context| {
+            !context.verified_answers_complete()
+                || context.ordered_entries().any(|(_, entry)| match entry {
+                    RetainedContextEntry::VerifiedAnswer(_) => true,
+                    RetainedContextEntry::UserMessage(message) => {
+                        let contains_message = |item: &ResponseItem| {
+                            if item.id().map(codex_protocol::ResponseItemId::as_str)
+                                != message.message_id.as_deref()
+                                || item.turn_id().unwrap_or_default() != message.turn_id
+                            {
+                                return false;
+                            }
+                            let ResponseItem::Message { role, content, .. } = item else {
+                                return false;
+                            };
+                            if role != "user" || is_contextual_user_message_content(content) {
+                                return false;
+                            }
+                            let text = content
+                                .iter()
+                                .filter_map(|content| match content {
+                                    ContentItem::InputText { text }
+                                    | ContentItem::OutputText { text } => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0
+                                == message.text
+                        };
+                        !checkpoint.map_or_else(
+                            || self.raw_items().any(contains_message),
+                            |checkpoint| checkpoint.0.iter().any(contains_message),
+                        )
+                    }
+                })
+        });
+        self.guardian_review_mode = if has_retained_only_evidence {
+            self.guardian_context_mode
+        } else {
+            self.guardian_context_mode.for_checkpoint(&self.items)
+        };
         self.restore_retained_context(retained_context);
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
+        if self.guardian_review_mode == GuardianContextMode::ThreadOwned {
             // Older retained checkpoints cleared oversized instructions. Recover their
             // bounded root excerpts before discarding the legacy source transcript.
             let items = &self.items;
@@ -507,8 +557,7 @@ impl ContextManager {
 
     /// Compaction changes the model's history without changing the user's authorization.
     pub(crate) fn replace_compacted(&mut self, items: Vec<ResponseItemEnvelope>) {
-        if self.guardian_context_mode == GuardianContextMode::Legacy
-            && self.review_history.is_none()
+        if self.guardian_review_mode == GuardianContextMode::Legacy && self.review_history.is_none()
         {
             let mut retained = TranscriptHistory::new(self.history_version.saturating_add(1));
             for item in self.raw_items().filter(|item| {

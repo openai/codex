@@ -12,7 +12,6 @@ use super::score::GuardianV2ScoreProgress;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::context::GuardianContextMode;
-use codex_core::context::GuardianReviewEvidence;
 use codex_extension_api::ApprovalDecision;
 use codex_extension_api::ApprovalDecisionInput;
 use codex_extension_api::ApprovalReviewContributor;
@@ -160,14 +159,12 @@ async fn cached_evidence(
         record_fast_decision(metrics, "deferred", "scoring_failure");
         return Err(GuardianReviewReason::ScoringFailure);
     }
-    let context_mode = store
-        .get_or_init(GuardianReviewEvidence::default)
-        .context_mode();
+    let history = thread.conversation_history_snapshot().await;
+    let context_mode = GuardianContextMode::from_history(history.as_ref());
     if context_mode == GuardianContextMode::ThreadOwned {
         let sampler = store
             .get::<LunaSampler>()
             .ok_or(GuardianReviewReason::MissingScore)?;
-        let history = thread.conversation_history_snapshot().await;
         if select_parent_compaction(
             context_mode,
             config,

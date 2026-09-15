@@ -1,5 +1,5 @@
-//! Projects bounded root evidence for worker reviewers using the thread's context mode.
-//! Legacy mode keeps parent-window selection; retained mode preserves original source scope.
+//! Projects bounded root evidence for worker reviewers using the session's capture policy.
+//! Retained root instructions stay authoritative while old checkpoints use legacy review.
 //! Projection limits do not change authorization completeness; unavailable source text does.
 //! Retained-history reconciliation owns recovery order and missing-instruction provenance.
 
@@ -52,12 +52,13 @@ impl AgentControl {
             .services
             .thread_extension_data
             .get_or_init(GuardianReviewEvidence::default);
+        let context_mode = root_thread.session.guardian_context_mode;
         let mut latest_user_turn_id = None;
-        let (messages, authorization_version) = if root_evidence.context_mode()
-            == GuardianContextMode::ThreadOwned
+        let (messages, authorization_version) = if context_mode == GuardianContextMode::ThreadOwned
         {
+            let retained_context = root_history.retained_context();
             let reconciled = ReconciledRetainedContext::new(
-                history.retained_context(),
+                Some(retained_context),
                 root_history
                     .annotated_items()
                     .iter()
@@ -158,6 +159,12 @@ impl AgentControl {
             assistant_messages.drain(..assistant_messages.len().saturating_sub(available));
             messages.extend(assistant_messages);
             let mut authorization_version = root_evidence.authorization_version(history.as_ref());
+            if history.retained_context().is_none() {
+                // Legacy checkpoint review hides retained answers from its snapshot, but
+                // root authorization still needs their completeness and original restrictions.
+                authorization_version.retained_context_complete =
+                    codex_guardian_context::render_verified_answers(retained_context).complete;
+            }
             if !authorization_version.retained_context_complete {
                 messages.insert(
                     /*index*/ 0,
@@ -174,8 +181,8 @@ impl AgentControl {
             messages.insert(/*index*/ 0, GuardianRootMessage::RetainedContextScope);
             (messages, authorization_version)
         } else {
-            let mut messages = root_history
-                .raw_items()
+            let mut messages = history
+                .review_items()
                 .filter_map(|item| match (parse_turn_item(item), item) {
                     (Some(TurnItem::UserMessage(message)), _) => {
                         let message = message.message();

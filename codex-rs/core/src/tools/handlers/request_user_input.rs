@@ -103,14 +103,14 @@ impl RequestUserInputHandler {
             ))
         })?;
         if turn.config.features.enabled(Feature::GuardianApproval) {
+            let history = session.conversation_history_snapshot().await;
             session
                 .services
                 .thread_extension_data
                 .get_or_init(GuardianReviewEvidence::default)
-                .record_user_input(&call_id, &questions, &response);
+                .record_user_input(history.as_ref(), &call_id, &questions, &response);
         }
-        // Capture and consumption use the same fixed thread feature setting. Legacy
-        // threads must not construct retained answers, persist them, or advance their revision.
+        // Capture follows the session flag even while an older checkpoint uses legacy review.
         if turn.config.features.enabled(Feature::GuardianApproval)
             && session.guardian_context_mode == GuardianContextMode::ThreadOwned
         {

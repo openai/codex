@@ -30,15 +30,16 @@ impl PreparedGuardianContext {
         if reset_version != history.reset_version {
             history_reset.cancel();
         }
-        let context_policy =
-            ReviewContextPolicy::for_context(parent.guardian_context_mode, &config.features);
+        let context_mode =
+            GuardianContextMode::from_history(history.conversation_history_snapshot().as_ref());
+        let context_policy = ReviewContextPolicy::for_context(context_mode, &config.features);
         let root_authorization_version = context_policy.root_authorization_version(&parent).await;
         let parent_compaction = context_policy.parent_compaction(history, compaction_model_hash)?;
         let mut key = GuardianReviewSessionReuseKey::from_spawn_config(
             &config,
             parent.inherited_instructions().await,
             history.history_version(),
-            parent.guardian_context_mode,
+            context_mode,
         )
         .with_environments(context.environments())
         .with_node_repl_policy_eligibility(context.model_info.computer_use_review_required())
