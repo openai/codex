@@ -1,0 +1,8 @@
+---
+source: tui/src/streaming/math_tests.rs
+assertion_line: 134
+expression: "stream.current_tail_lines().iter().map(|line|\nline.line.to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+$$
+ \frac{|
+a+b+c+d+e+f|}{g+h}

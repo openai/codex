@@ -1,7 +1,8 @@
 //! Recognize math before Markdown consumes TeX escapes, retaining exact source offsets.
 //!
 //! Only the rendering copy is masked. Unsupported expressions are restored verbatim; code,
-//! links, HTML, and display equations stay under the ordinary Markdown renderer.
+//! links, and HTML stay under the ordinary Markdown renderer. Standalone display tracking outlives
+//! the conversion budget; rejected prose-prefixed openers have bounded pairing lookahead.
 
 use itertools::Either;
 use pulldown_cmark::Event;
@@ -17,14 +18,16 @@ const MAX_MATH_BYTES: usize = 4096;
 
 pub(super) struct MathMarkdown<'a> {
     pub(super) markdown: Cow<'a, str>,
+    pub(super) pending_start: Option<usize>,
     pub(super) display_ranges: Vec<Range<usize>>,
     replacements: Vec<(Range<usize>, String)>,
 }
 
 impl<'a> MathMarkdown<'a> {
-    pub(super) fn new(input: &'a str, options: Options) -> Self {
+    pub(super) fn new(input: &'a str, options: Options, width: Option<usize>) -> Self {
         let mut result = Self {
             markdown: Cow::Borrowed(input),
+            pending_start: None,
             display_ranges: Vec::new(),
             replacements: Vec::new(),
         };
@@ -37,7 +40,11 @@ impl<'a> MathMarkdown<'a> {
             .iter()
             .map(|(_, def)| def.span.clone())
             .collect();
+        let mut containers = Vec::new();
         protected.extend(parser.into_offset_iter().filter_map(|(event, range)| {
+            if matches!(event, Event::Start(Tag::List(_) | Tag::BlockQuote)) {
+                containers.push(range.clone());
+            }
             matches!(
                 event,
                 Event::Code(_)
@@ -48,16 +55,22 @@ impl<'a> MathMarkdown<'a> {
             .then_some(range)
         }));
         protected.sort_unstable_by_key(|range| range.start);
-        let mut protected = protected.into_iter().peekable();
+        let mut protected = protected.iter().peekable();
+        containers.sort_unstable_by_key(|range| range.start);
+        let mut containers = containers.into_iter().peekable();
         let mut offset = 0;
         let mut scanned = 0;
         let mut line_start = 0;
+        let mut line_has_text = false;
         while offset < input.len() {
             if let Some(index) = input[scanned..offset].rfind('\n') {
                 line_start = scanned + index + 1;
+                line_has_text = false;
             }
+            line_has_text |= !input[scanned.max(line_start)..offset].trim().is_empty();
             scanned = offset;
             while protected.next_if(|range| range.end <= offset).is_some() {}
+            while containers.next_if(|range| range.end <= offset).is_some() {}
             if let Some(range) = protected.peek()
                 && range.contains(&offset)
             {
@@ -96,30 +109,102 @@ impl<'a> MathMarkdown<'a> {
                 .map(|(i, _)| i)
                 .find(|i| *i >= MAX_MATH_BYTES)
                 .unwrap_or(body.len());
-            // Display boundaries outlive the conversion budget; a distant closer still owns its opener.
-            let search = if display { body } else { &body[..limit] };
-            let end = search.match_indices(close).find_map(|(index, _)| {
+            let rejected_display = display && line_has_text;
+            // Only standalone displays can retain an arbitrarily distant closer.
+            let search = if display && !rejected_display {
+                body
+            } else {
+                &body[..limit]
+            };
+            let mut multiline_close = false;
+            let mut closing_protected = protected.clone();
+            let mut rejected_close = false;
+            let end = search.match_indices(&close[..1]).find_map(|(index, _)| {
                 let end = offset + index;
-                (!escaped(input, end)).then_some(end)
-            });
-            if display {
-                if open == "$$" && end.is_none() && !input[line_start..start].trim().is_empty() {
-                    continue;
+                if !search[index..].starts_with(close) || escaped(input, end) {
+                    return None;
                 }
-                // Exclude display equations from inline recognition, including unfinished ones.
-                offset = end.map_or(input.len(), |end| end + close.len());
-                result.display_ranges.push(start..offset);
+                if display {
+                    while closing_protected
+                        .next_if(|range| range.end <= end)
+                        .is_some()
+                    {}
+                    if closing_protected
+                        .peek()
+                        .is_some_and(|range| range.start < end + close.len())
+                    {
+                        return None;
+                    }
+                    if !rejected_display
+                        && input[end + close.len()..]
+                            .chars()
+                            .take_while(|ch| *ch != '\n')
+                            .any(|ch| !ch.is_whitespace())
+                    {
+                        if multiline_close || input[offset..end].contains('\n') {
+                            multiline_close = true;
+                            return None;
+                        }
+                        rejected_close = true;
+                    }
+                }
+                Some(end)
+            });
+            if display && (!rejected_display || end.is_some() || body.len() < MAX_MATH_BYTES) {
+                result
+                    .display_ranges
+                    .push(start..end.map_or(input.len(), |end| end + close.len()));
+            }
+            // Retain rejected pairing only within the lookahead window, so shell PID dollars
+            // cannot keep the entire streamed response mutable in the rendering cache.
+            if rejected_display || rejected_close {
+                if let Some(end) = end
+                    && !input[offset..end].trim().is_empty()
+                {
+                    // A later line's opening $$ must remain available to its own equation.
+                    if rejected_display
+                        && open == "$$"
+                        && input[offset..end]
+                            .rsplit_once('\n')
+                            .is_some_and(|(_, prefix)| prefix.trim().is_empty())
+                        && input[end + close.len()..]
+                            .chars()
+                            .take_while(|ch| *ch != '\n')
+                            .any(|ch| !ch.is_whitespace())
+                    {
+                        continue;
+                    }
+                    offset = end + close.len();
+                } else if end.is_none() && open == "\\[" && body.len() < MAX_MATH_BYTES {
+                    break;
+                }
                 continue;
             }
             let Some(end) = end else {
+                if display {
+                    if body.len() < MAX_MATH_BYTES {
+                        result.pending_start.get_or_insert(line_start);
+                    }
+                    let span = start..input.len();
+                    result
+                        .markdown
+                        .to_mut()
+                        .replace_range(span.clone(), &"$".repeat(span.len()));
+                    result.replacements.push((span, input[start..].to_owned()));
+                    break;
+                }
                 continue;
             };
             let span = start..end + close.len();
+            let formula = &input[offset..end];
+            // Every matched display owns its closer, including rejected expressions.
+            if display {
+                offset = span.end;
+            }
             if protected.peek().is_some_and(|range| range.start < span.end) {
                 continue;
             }
-            let formula = &input[offset..end];
-            if formula.contains('\n') {
+            if !display && formula.contains('\n') {
                 continue;
             }
             if open == "$" {
@@ -136,8 +221,27 @@ impl<'a> MathMarkdown<'a> {
                     continue;
                 }
             }
-            let rendered =
-                render::render(formula).unwrap_or_else(|| input[span.clone()].to_owned());
+            let rendered = if formula.len() < MAX_MATH_BYTES {
+                render::render(formula, display)
+            } else {
+                None
+            };
+            let rendered = rendered
+                .filter(|text| {
+                    // Nested Markdown prefixes have their own width; keep spatial layouts at the top level.
+                    // Never wrap a spatial layout into misleading pieces.
+                    !text.contains('\n')
+                        || !containers
+                            .peek()
+                            .is_some_and(|range| range.contains(&start))
+                            && width.is_none_or(|width| {
+                                text.lines().all(|line| {
+                                    crate::width::display_width(line)
+                                        <= width.saturating_sub(/*rhs*/ 4)
+                                })
+                            })
+                })
+                .unwrap_or_else(|| input[span.clone()].to_owned());
             // Dollars are ordinary text in the Markdown parser and cannot form an HTML tag.
             result
                 .markdown
@@ -204,3 +308,7 @@ fn escaped(input: &str, offset: usize) -> bool {
 #[cfg(test)]
 #[path = "math_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "math_display_tests.rs"]
+mod display_tests;

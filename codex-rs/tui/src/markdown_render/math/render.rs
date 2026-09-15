@@ -2,18 +2,77 @@
 
 use crate::width::display_width;
 
-pub(super) fn render(source: &str) -> Option<String> {
+const MAX_ROWS: usize = 16;
+const MAX_COLUMNS: usize = 256;
+
+struct Layout {
+    rows: Vec<String>,
+    baseline: usize,
+}
+
+impl Layout {
+    fn text(text: impl Into<String>) -> Self {
+        Self {
+            rows: vec![text.into()],
+            baseline: 0,
+        }
+    }
+
+    fn width(&self) -> usize {
+        self.rows
+            .iter()
+            .map(|row| display_width(row))
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn join(self, right: Self) -> Option<Self> {
+        let baseline = self.baseline.max(right.baseline);
+        let height = (baseline + self.rows.len() - self.baseline)
+            .max(baseline + right.rows.len() - right.baseline);
+        // Separate neighboring fraction bars so their numerators cannot become one number.
+        let width = self.width() + usize::from(self.rows.len() > 1 && right.rows.len() > 1);
+        if height > MAX_ROWS || width + right.width() > MAX_COLUMNS {
+            return None;
+        }
+        let mut rows = vec![String::new(); height];
+        for (index, row) in rows.iter_mut().enumerate() {
+            if let Some(left) = index
+                .checked_sub(baseline - self.baseline)
+                .and_then(|i| self.rows.get(i))
+            {
+                row.push_str(left);
+            }
+            row.push_str(&" ".repeat(width - display_width(row)));
+            if let Some(right) = index
+                .checked_sub(baseline - right.baseline)
+                .and_then(|i| right.rows.get(i))
+            {
+                row.push_str(right);
+            }
+        }
+        Some(Self { rows, baseline })
+    }
+
+    fn single(&self) -> Option<&str> {
+        (self.rows.len() == 1).then(|| self.rows[0].as_str())
+    }
+}
+
+pub(super) fn render(source: &str, display: bool) -> Option<String> {
     let mut parser = MathParser {
         remaining: source.trim(),
         depth: 0,
+        display,
     };
     let result = parser.sequence(/*group*/ false)?;
-    (!result.trim().is_empty()).then_some(result)
+    (!result.rows.iter().all(|row| row.trim().is_empty())).then(|| result.rows.join("\n"))
 }
 
 struct MathParser<'a> {
     remaining: &'a str,
     depth: usize,
+    display: bool,
 }
 
 impl MathParser<'_> {
@@ -23,12 +82,12 @@ impl MathParser<'_> {
         Some(ch)
     }
 
-    fn sequence(&mut self, group: bool) -> Option<String> {
+    fn sequence(&mut self, group: bool) -> Option<Layout> {
         if self.depth >= 32 {
             return None;
         }
         self.depth += 1;
-        let mut result = String::new();
+        let mut result = Layout::text("");
         let mut scripts = 0;
         let mut has_base = false;
         while let Some(ch) = self.remaining.chars().next() {
@@ -52,18 +111,15 @@ impl MathParser<'_> {
             let atom = self.atom()?;
             if !ch.is_whitespace() && ch != '^' && ch != '_' {
                 // Flattening a compound base would change the scope of a following script.
-                has_base = atom.chars().count() == 1;
+                has_base = atom.single().is_some_and(|text| text.chars().count() == 1);
             }
-            result.push_str(&atom);
-            if display_width(&result) > 256 {
-                return None;
-            }
+            result = result.join(atom)?;
         }
         self.depth -= 1;
         (!group).then_some(result)
     }
 
-    fn argument(&mut self) -> Option<String> {
+    fn argument(&mut self) -> Option<Layout> {
         self.remaining = self.remaining.trim_start();
         if self.remaining.starts_with(['^', '_']) {
             return None;
@@ -71,7 +127,7 @@ impl MathParser<'_> {
         self.atom()
     }
 
-    fn atom(&mut self) -> Option<String> {
+    fn atom(&mut self) -> Option<Layout> {
         if self.depth >= 32 {
             return None;
         }
@@ -81,7 +137,7 @@ impl MathParser<'_> {
         result
     }
 
-    fn atom_inner(&mut self) -> Option<String> {
+    fn atom_inner(&mut self) -> Option<Layout> {
         let ch = self.take()?;
         match ch {
             '{' => self.sequence(/*group*/ true),
@@ -100,23 +156,23 @@ impl MathParser<'_> {
                     )
                 };
                 let mut output = String::new();
-                for value in arg.chars() {
+                for value in arg.single()?.chars() {
                     let index = plain.chars().position(|ch| ch == value)?;
                     output.push(alphabet.chars().nth(index)?);
                 }
-                Some(output)
+                Some(Layout::text(output))
             }
             '}' | '$' | '%' | '#' | '&' | '`' => None,
             ch if ch.is_whitespace() => {
                 self.remaining = self.remaining.trim_start();
-                Some(String::from(" "))
+                Some(Layout::text(" "))
             }
             ch if ch.is_control() => None,
-            ch => Some(ch.to_string()),
+            ch => Some(Layout::text(ch.to_string())),
         }
     }
 
-    fn command(&mut self) -> Option<String> {
+    fn command(&mut self) -> Option<Layout> {
         let length = self
             .remaining
             .bytes()
@@ -124,11 +180,11 @@ impl MathParser<'_> {
             .count();
         if length == 0 {
             return match self.take()? {
-                ',' | ';' | ':' | ' ' => Some(String::from(" ")),
-                '!' => Some(String::new()),
-                '{' => Some(String::from("{")),
-                '}' => Some(String::from("}")),
-                '|' => Some(String::from("‖")),
+                ',' | ';' | ':' | ' ' => Some(Layout::text(" ")),
+                '!' => Some(Layout::text("")),
+                '{' => Some(Layout::text("{")),
+                '}' => Some(Layout::text("}")),
+                '|' => Some(Layout::text("‖")),
                 _ => None,
             };
         }
@@ -138,18 +194,47 @@ impl MathParser<'_> {
             "frac" | "dfrac" | "tfrac" => {
                 let numerator = self.argument()?;
                 let denominator = self.argument()?;
-                Some(format!("(({numerator})/({denominator}))"))
+                if !self.display {
+                    return Some(Layout::text(format!(
+                        "(({})/({}))",
+                        numerator.single()?,
+                        denominator.single()?
+                    )));
+                }
+                // Nested bars need a richer layout to preserve fraction hierarchy.
+                let numerator = numerator.single()?;
+                let denominator = denominator.single()?;
+                let width = display_width(numerator)
+                    .max(display_width(denominator))
+                    .max(/*other*/ 1);
+                if width > MAX_COLUMNS {
+                    return None;
+                }
+                Some(Layout {
+                    rows: vec![
+                        format!(
+                            "{}{numerator}",
+                            " ".repeat((width - display_width(numerator)) / 2)
+                        ),
+                        "─".repeat(width),
+                        format!(
+                            "{}{denominator}",
+                            " ".repeat((width - display_width(denominator)) / 2)
+                        ),
+                    ],
+                    baseline: 1,
+                })
             }
             "sqrt" => {
                 if self.remaining.trim_start().starts_with('[') {
                     return None;
                 }
                 let radicand = self.argument()?;
-                Some(format!("√({radicand})"))
+                Some(Layout::text(format!("√({})", radicand.single()?)))
             }
             "mathbb" => {
                 let arg = self.argument()?;
-                let text = match arg.as_str() {
+                let text = match arg.single()? {
                     "R" => "ℝ",
                     "C" => "ℂ",
                     "N" => "ℕ",
@@ -158,7 +243,7 @@ impl MathParser<'_> {
                     "P" => "ℙ",
                     _ => return None,
                 };
-                Some(String::from(text))
+                Some(Layout::text(text))
             }
             "mathrm" | "mathbf" | "mathit" => self.argument(),
             "text" | "operatorname" => {
@@ -171,21 +256,21 @@ impl MathParser<'_> {
                     return None;
                 }
                 self.remaining = &self.remaining[end + 1..];
-                Some(String::from(text))
+                Some(Layout::text(text))
             }
             "left" | "right" => {
                 self.remaining = self.remaining.trim_start();
                 match self.take()? {
-                    '.' => Some(String::new()),
-                    ch @ ('(' | ')' | '[' | ']' | '|') => Some(ch.to_string()),
+                    '.' => Some(Layout::text("")),
+                    ch @ ('(' | ')' | '[' | ']' | '|') => Some(Layout::text(ch.to_string())),
                     _ => None,
                 }
             }
-            "quad" | "qquad" => Some(String::from(" ")),
+            "quad" | "qquad" => Some(Layout::text(" ")),
             "sin" | "cos" | "tan" | "log" | "ln" | "exp" | "lim" | "max" | "min" => {
-                Some(String::from(name))
+                Some(Layout::text(name))
             }
-            _ => symbol(name).map(String::from),
+            _ => symbol(name).map(Layout::text),
         }
     }
 }

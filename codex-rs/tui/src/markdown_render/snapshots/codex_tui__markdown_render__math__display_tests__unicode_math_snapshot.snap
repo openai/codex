@@ -1,0 +1,37 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(source, 80)"
+---
+The spectrum is λ₁ ≤ λ₂ on ℝⁿ.
+
+  -b±√(b²-4ac)
+x=────────────
+       2a
+
+1 3
+─ ─
+2 4
+
+          1
+∫₀¹ x² dx=─
+          3
+
+$$
+x
+$$ trailing
+$$
+
+Inline α² + β₁₀, root √(x²+y²),
+and fraction ((a)/(b)).
+
+Unsupported: $\begin{matrix}a&b\end{matrix}$.
+
+Code: $\alpha$; money: $5.00 and $10.00; shell: $HOME.
+
+\frac{a}{b}
+
+Shell examples: $HOME and echo $$.
+
+After rejected equations: α.
+
+β

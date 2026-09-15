@@ -59,10 +59,6 @@ fn unicode_math_preserves_markdown_contexts() {
     ] {
         assert_eq!(plain(source, /*width*/ 80), expected);
     }
-    // This stage leaves display equations and TeX fences to ordinary Markdown rendering.
-    for source in [r"$$x^2$$", "$$\nx^2\n$$", r"\[x^2\]", "```latex\nx^2\n```"] {
-        assert!(!plain(source, /*width*/ 80).contains('²'));
-    }
 }
 
 #[test]
@@ -84,7 +80,7 @@ fn unicode_math_bounds_and_unsupported_input() {
         r"\text{\alpha}",
         r"\begin{matrix}a&b\end{matrix}",
     ] {
-        assert_eq!(render(source), None, "{source}");
+        assert_eq!(render(source, /*display*/ false), None, "{source}");
         assert_eq!(
             plain(&format!("\\({source}\\)"), /*width*/ 80),
             format!("\\({source}\\)")
@@ -95,7 +91,7 @@ fn unicode_math_bounds_and_unsupported_input() {
         "x".repeat(/*n*/ 300),
         format!("{}x", "\\sqrt".repeat(/*n*/ 100)),
     ] {
-        assert_eq!(render(&source), None);
+        assert_eq!(render(&source, /*display*/ false), None);
     }
 }
 

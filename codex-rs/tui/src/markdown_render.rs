@@ -339,7 +339,7 @@ pub(crate) fn render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
-    let math = math::MathMarkdown::new(input, options);
+    let math = math::MathMarkdown::new(input, options, width);
     let parser = DecodedTextMerge::new(
         math.events(Parser::new_ext(&math.markdown, options).into_offset_iter()),
     );

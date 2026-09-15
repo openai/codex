@@ -52,6 +52,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use super::StreamState;
+use super::prose_preview::PreviewMode;
 use super::prose_preview::ProsePreview;
 use super::render::StreamingRender;
 use super::render::render_source;
@@ -168,12 +169,21 @@ impl StreamCore {
     }
 
     fn refresh_preview(&mut self) -> bool {
-        if self.holdback_scanner.allows_prose_preview() {
+        let pending = self.state.collector.pending_source();
+        let prose_preview = self.holdback_scanner.allows_prose_preview();
+        let math = self.render_mode == HistoryRenderMode::Rich
+            && (self.render.pending_math_start.is_some()
+                || prose_preview && (pending.starts_with("$$") || pending.starts_with("\\[")));
+        if math || prose_preview {
             self.preview.update(
-                self.state.collector.pending_source(),
+                pending,
                 self.width,
                 &self.cwd,
-                self.render_mode,
+                if math {
+                    PreviewMode::Math
+                } else {
+                    PreviewMode::Prose(self.render_mode)
+                },
                 self.inline_visualization_context.as_ref(),
             )
         } else {
@@ -278,9 +288,9 @@ impl StreamCore {
         let had_live_tail = self.has_tail();
         self.width = width;
         self.state.collector.set_width(width);
-        self.refresh_preview();
         let source = self.state.collector.committed_source();
         if source.is_empty() {
+            self.refresh_preview();
             return;
         }
 
@@ -291,6 +301,7 @@ impl StreamCore {
             self.render_mode,
             self.inline_visualization_context.as_ref(),
         );
+        self.refresh_preview();
         self.emitted_stable_len = self.emitted_stable_len.min(self.render.lines.len());
         if had_pending_queue
             && self.emitted_stable_len == self.render.lines.len()
@@ -331,9 +342,9 @@ impl StreamCore {
         let had_pending_queue = self.state.queued_len() > 0;
         let had_live_tail = self.has_tail();
         self.render_mode = render_mode;
-        self.refresh_preview();
         let source = self.state.collector.committed_source();
         if source.is_empty() {
+            self.refresh_preview();
             return;
         }
 
@@ -344,6 +355,7 @@ impl StreamCore {
             self.render_mode,
             self.inline_visualization_context.as_ref(),
         );
+        self.refresh_preview();
         self.emitted_stable_len = self.emitted_stable_len.min(self.render.lines.len());
         if had_pending_queue
             && self.emitted_stable_len == self.render.lines.len()
@@ -419,7 +431,7 @@ impl StreamCore {
     /// column widths. For `PendingHeader`, only content from the speculative
     /// header line onward is kept mutable so earlier prose can continue
     /// streaming. When no table is detected, everything flows directly to
-    /// stable. This is the core decision point for the holdback mechanism.
+    /// stable. Unclosed display math also stays mutable until its closing delimiter arrives.
     fn active_tail_budget_lines(&mut self) -> usize {
         if self.render_mode == HistoryRenderMode::Raw {
             return 0;
@@ -439,7 +451,11 @@ impl StreamCore {
             elapsed_us = scan_start.elapsed().as_micros(),
             "table holdback decision",
         );
-        tail_budget
+        let math_budget = self
+            .render
+            .pending_math_start
+            .map_or(0, |start| self.tail_budget_from_source_start(start));
+        tail_budget.max(math_budget)
     }
 
     /// Convert a raw-source boundary into the number of rendered tail lines.
@@ -786,6 +802,10 @@ impl PlanStreamController {
         out_lines
     }
 }
+
+#[cfg(test)]
+#[path = "math_tests.rs"]
+mod math_tests;
 
 #[cfg(test)]
 #[path = "controller_preview_tests.rs"]

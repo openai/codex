@@ -19,6 +19,8 @@ use std::path::Path;
 pub(crate) struct StreamingMarkdownRender {
     /// Styled output produced by the same parser pass that collected the metadata below.
     pub(crate) lines: Vec<HyperlinkLine>,
+    /// Source line containing an unfinished display equation, which must not enter scrollback.
+    pub(crate) pending_math_start: Option<usize>,
     /// Byte offset of the final top-level block when at least one earlier block exists.
     pub(crate) last_top_level_block_start: Option<usize>,
     /// Whether a reference definition can retroactively change another block's rendering.
@@ -41,7 +43,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
     let citations = FileCitations::new(input, options);
-    let math = MathMarkdown::new(&citations.markdown, options);
+    let math = MathMarkdown::new(&citations.markdown, options, width);
     let parser = Parser::new_ext(&math.markdown, options);
     let has_reference_link_definition = parser.reference_definitions().iter().next().is_some();
     let parser = TopLevelBlockTracker {
@@ -55,14 +57,15 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     writer.run();
     StreamingMarkdownRender {
         lines: writer.text,
+        pending_math_start: math.pending_start,
         last_top_level_block_start: (writer.iter.block_count > 1)
             .then_some(writer.iter.last_start)
-            // A cached suffix must not mistake a display closer for a new opener.
-            .filter(|boundary| {
+            .filter(|start| math.pending_start.is_none_or(|pending| *start <= pending))
+            .filter(|start| {
                 !math
                     .display_ranges
                     .iter()
-                    .any(|range| range.start < *boundary && *boundary < range.end)
+                    .any(|range| range.start < *start && *start < range.end)
             }),
         has_reference_link_definition,
         first_top_level_block_is_html: writer.iter.first_is_html,

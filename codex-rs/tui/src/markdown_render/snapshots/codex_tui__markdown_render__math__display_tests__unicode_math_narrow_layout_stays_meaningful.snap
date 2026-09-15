@@ -1,0 +1,11 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+assertion_line: 46
+expression: "plain(\"$$\\\\frac{a+b}{c+d}$$\\n\\nWords $\\\\alpha^2$ more words.\", 12)"
+---
+a+b
+───
+c+d
+
+Words α²
+more words.

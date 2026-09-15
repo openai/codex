@@ -1,0 +1,5 @@
+---
+source: tui/src/streaming/math_tests.rs
+expression: "preview[0].line.to_string()"
+---
+$$\frac{abcdefghijk}{lmnop}
