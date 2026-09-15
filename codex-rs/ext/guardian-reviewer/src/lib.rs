@@ -56,10 +56,10 @@ pub use completion::guardian_timeout_message;
 pub use execution::ReviewerRuntime;
 pub use execution::start_review_turn;
 pub use execution::wait_for_guardian_review;
-pub use settings::ReviewerConfigOverrides;
+pub use settings::ReviewerConfig;
 pub use settings::ReviewerTurn;
 pub use settings::reviewer_allowed_tools;
-pub use settings::reviewer_config_overrides;
+pub use settings::reviewer_permission_profile;
 
 pub use feedback::FailedReviewFeedback;
 pub use feedback::ReviewFeedbackContext;

@@ -1,11 +1,10 @@
-//! Defines the reviewer's runtime settings. Hosts apply these settings to their
-//! concrete configuration; context construction and managed constraints stay with the host.
+//! Defines reviewer tools, read-only permissions and per-turn input.
+//! Guardian supplies concrete session configuration to the temporary host context adapter.
 
 use std::collections::HashMap;
 
 use codex_extension_api::AllowedTools;
 use codex_extension_api::ToolName;
-use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -23,6 +22,11 @@ use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 
+/// Guardian's configuration function for the host's concrete config type.
+/// The host applies it to each captured parent config before building context and reuse keys.
+/// Keeping it in thread data avoids caching settings that can change between reviews.
+pub struct ReviewerConfig<C>(pub fn(&C) -> anyhow::Result<C>);
+
 /// Reviewer tools, including the existing Code Mode dispatchers when enabled.
 /// The host still applies feature flags and sandbox restrictions to these tools.
 pub fn reviewer_allowed_tools() -> AllowedTools {
@@ -34,62 +38,8 @@ pub fn reviewer_allowed_tools() -> AllowedTools {
     )
 }
 
-/// Configuration policy for a reviewer. The host retains managed constraints and
-/// live network rules while applying these values to its concrete runtime config.
-pub struct ReviewerConfigOverrides {
-    pub model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub request_max_retries: u64,
-    pub stream_max_retries: u64,
-    pub include_skill_instructions: bool,
-    pub use_memories: bool,
-    pub dedicated_memory_tools: bool,
-    pub inherit_token_budget: bool,
-    pub notify: Option<Vec<String>>,
-    pub developer_instructions: Option<String>,
-    pub approval_policy: AskForApproval,
-    pub permission_profile: PermissionProfile,
-    pub include_apps_instructions: bool,
-    pub inherit_mcp_servers: bool,
-    pub disabled_features: Vec<Feature>,
-}
-
-pub fn reviewer_config_overrides(
-    parent_permissions: &PermissionProfile,
-    model: &str,
-    reasoning_effort: Option<ReasoningEffort>,
-) -> ReviewerConfigOverrides {
-    ReviewerConfigOverrides {
-        model: model.to_owned(),
-        reasoning_effort,
-        request_max_retries: 1,
-        stream_max_retries: 1,
-        include_skill_instructions: false,
-        use_memories: false,
-        dedicated_memory_tools: false,
-        inherit_token_budget: false,
-        notify: None,
-        developer_instructions: None,
-        approval_policy: AskForApproval::Never,
-        permission_profile: read_only_guardian_permission_profile(parent_permissions),
-        include_apps_instructions: false,
-        inherit_mcp_servers: false,
-        disabled_features: vec![
-            Feature::Collab,
-            Feature::MultiAgentV2,
-            Feature::GuardianV2,
-            Feature::TokenBudget,
-            Feature::ContextManagement,
-            Feature::CodexHooks,
-            Feature::Apps,
-            Feature::Plugins,
-            Feature::WebSearchRequest,
-            Feature::WebSearchCached,
-        ],
-    }
-}
-
-fn read_only_guardian_permission_profile(profile: &PermissionProfile) -> PermissionProfile {
+/// Applies the same read-only ceiling to the reviewer and each inherited environment.
+pub fn reviewer_permission_profile(profile: &PermissionProfile) -> PermissionProfile {
     profile
         .intersect_with_read_only()
         .unwrap_or(PermissionProfile::External {
@@ -117,10 +67,9 @@ impl ReviewerTurn {
         // Apply the same read-only ceiling to every inherited environment.
         for environment in &mut self.environments.environments {
             if let EnvironmentConfigState::Ready(config) = &mut environment.config {
-                config.permission_profile =
-                    PermissionProfileSnapshot::legacy(read_only_guardian_permission_profile(
-                        config.permission_profile.permission_profile(),
-                    ));
+                config.permission_profile = PermissionProfileSnapshot::legacy(
+                    reviewer_permission_profile(config.permission_profile.permission_profile()),
+                );
             }
         }
         TurnInputRequest::user_input(self.items)

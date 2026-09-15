@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use codex_extension_api::SessionIsolation;
 use codex_home::CodexHomeUserInstructionsProvider;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
@@ -13,9 +12,19 @@ use codex_protocol::protocol::ThreadSource;
 use super::GuardianReviewSessionManager;
 use crate::config::Config;
 use crate::config::Constrained;
+use crate::config::TokenBudgetConfig;
 use crate::session::session::Session;
 
+// Compile the extension's actual setup with this test crate's Config type, rather
+// than keeping a second settings implementation in the context-adapter test host.
+#[path = "../../../ext/guardian-v2/src/sync_reviewer/reviewer_config.rs"]
+mod reviewer_config;
+pub(super) use reviewer_config::build_reviewer_config;
+
 pub(crate) fn install(session: &Session, config: &Config) {
+    session.services.thread_extension_data.insert(
+        codex_guardian_reviewer::ReviewerConfig::<Config>(build_reviewer_config),
+    );
     let manager = Arc::new(crate::ThreadManager::new(
         config,
         Arc::clone(&session.services.auth_manager),
@@ -56,8 +65,6 @@ pub(crate) fn install(session: &Session, config: &Config) {
                     ) {
                         options.config.ephemeral = true;
                     }
-                    options.config.permissions.approval_policy =
-                        Constrained::allow_only(AskForApproval::Never);
                     options.session_source =
                         Some(SessionSource::Internal(InternalSessionSource::Guardian));
                     options.thread_source = Some(ThreadSource::GuardianReview);

@@ -16,7 +16,6 @@ workspace = true
 anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-extension-api = { workspace = true }
-codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-guardian-context = { workspace = true }
 codex-mcp = { workspace = true }

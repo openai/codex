@@ -4,6 +4,9 @@ codex_rust_crate(
     name = "core",
     compile_data = glob(["assets/**"]),
     crate_name = "codex_core",
+    crate_srcs = glob(["src/**/*.rs"]) + [
+        "//codex-rs/ext/guardian-v2:src/sync_reviewer/reviewer_config.rs",
+    ],
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
         "//codex-rs/code-mode-host:codex-code-mode-host",

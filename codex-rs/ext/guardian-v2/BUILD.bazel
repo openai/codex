@@ -1,5 +1,11 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+# Core's context-adapter unit tests compile the same setup function with their Config type.
+exports_files(
+    ["src/sync_reviewer/reviewer_config.rs"],
+    visibility = ["//codex-rs/core:__pkg__"],
+)
+
 codex_rust_crate(
     name = "guardian-v2",
     compile_data = [

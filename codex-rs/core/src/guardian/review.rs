@@ -167,8 +167,13 @@ pub(super) async fn guardian_review_session_config(
                     .await,
             )
         };
+    let reviewer_config = session
+        .services
+        .thread_extension_data
+        .get::<codex_guardian_reviewer::ReviewerConfig<crate::config::Config>>()
+        .ok_or_else(|| anyhow::anyhow!("Guardian reviewer configuration is not installed"))?;
     let mut spawn_config = build_guardian_review_session_config(
-        turn.config.as_ref(),
+        (reviewer_config.0)(turn.config.as_ref())?,
         live_network_config,
         review_model.model.as_str(),
         review_model.reasoning_effort.clone(),
