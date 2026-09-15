@@ -121,6 +121,7 @@ pub(super) fn run(state: &ServiceState, package_lifecycle: &PackageLifecycle) ->
 
 /// Retries the current teardown step, never a phase recovered from stored intent.
 pub(crate) fn retry_cleanup(mut operation: impl FnMut() -> Result<()>) -> Result<()> {
+    let mut stop_failures = 0;
     loop {
         let Err(error) = operation() else {
             return Ok(());
@@ -132,7 +133,15 @@ pub(crate) fn retry_cleanup(mut operation: impl FnMut() -> Result<()>) -> Result
             EVENT_SERVICE_FAILED,
             &format!("sandbox cleanup deferred: {error:#}"),
         );
-        if !wait_for_cleanup_retry(state) {
+        if state.stop_requested.load(Ordering::Acquire) {
+            // SCM stop initiates uninstall cleanup rather than cancelling it.
+            // Four one-second retry waits fit within the 10-second SCM wait hint.
+            stop_failures += 1;
+            if stop_failures == 5 {
+                return Err(error);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        } else if !wait_for_cleanup_retry(state) && !state.stop_requested.load(Ordering::Acquire) {
             return Err(error);
         }
     }
@@ -147,3 +156,7 @@ fn wait_for_cleanup_retry(state: &ServiceState) -> bool {
     }
     !state.shutdown.load(Ordering::Acquire)
 }
+
+#[cfg(test)]
+#[path = "runtime_lifecycle_tests.rs"]
+mod tests;

@@ -51,6 +51,7 @@ pub(crate) const EVENT_PROVISIONING_FAILED: u32 = 2001;
 pub(crate) const EVENT_REQUEST_REJECTED: u32 = 2002;
 pub(crate) const EVENT_CLEANUP_STARTED: u32 = 3002;
 pub(crate) const EVENT_CLEANUP_FINISHED: u32 = 3003;
+pub(crate) const EVENT_CLEANUP_DETAIL: u32 = 3004;
 const MAX_EVENT_MESSAGE_UNITS: usize = 1024;
 
 static SERVICE_STATE: OnceLock<ServiceState> = OnceLock::new();

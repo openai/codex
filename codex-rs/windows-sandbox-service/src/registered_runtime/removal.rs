@@ -19,7 +19,6 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
-use base64::Engine;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
 use windows_sys::Win32::Foundation::HANDLE;
@@ -95,6 +94,16 @@ pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Resul
         }));
         tokens.push(token);
     }
+    let group_sid = if tokens.is_empty() {
+        None
+    } else {
+        Some(
+            codex_windows_sandbox::string_from_sid_bytes(&codex_windows_sandbox::resolve_sid(
+                codex_windows_sandbox::SANDBOX_USERS_GROUP,
+            )?)
+            .map_err(anyhow::Error::msg)?,
+        )
+    };
     let mut system = [0u16; 32768];
     let length = unsafe { GetSystemDirectoryW(system.as_mut_ptr(), system.len() as u32) } as usize;
     ensure!(
@@ -113,13 +122,9 @@ pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Resul
                 == 0,
         "invalid Windows PowerShell executable"
     );
-    let bytes = include_str!("removal.ps1")
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect::<Vec<_>>();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let script = include_str!("removal.ps1");
     ensure!(
-        executable.as_os_str().len() + encoded.len() + 64 < 32767,
+        executable.as_os_str().len() + script.len() * 2 + 64 < 32767,
         "cleanup command exceeds the Windows command-line limit"
     );
     let mut child = Command::new(executable)
@@ -127,8 +132,8 @@ pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Resul
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
-            "-EncodedCommand",
-            &encoded,
+            "-Command",
+            script,
         ])
         .current_dir(system)
         .stdin(Stdio::piped())
@@ -166,6 +171,7 @@ pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Resul
         "record": record,
         "targets": targets,
         "service_name": codex_windows_sandbox::windows_sandbox_service_name()?,
+        "group_sid": group_sid,
     });
     let input = child.stdin.as_mut().context("capture cleanup input")?;
     serde_json::to_writer(&mut *input, &plan)?;

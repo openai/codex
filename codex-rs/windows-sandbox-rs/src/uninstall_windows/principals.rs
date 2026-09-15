@@ -1,4 +1,4 @@
-//! Disables sandbox accounts for cleanup and removes sandbox principals.
+//! Disables sandbox accounts for cleanup and removes their profiles and principals.
 //! Callers must restore original flags if preparation for cleanup fails.
 
 use std::ptr::null;
@@ -6,14 +6,21 @@ use std::ptr::null;
 use anyhow::Result;
 use anyhow::bail;
 use anyhow::ensure;
+use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
+use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::NetworkManagement::NetManagement as network;
+use windows_sys::Win32::System::Registry as registry;
+use windows_sys::Win32::UI::Shell::DeleteProfileW;
 
 use crate::setup::OFFLINE_USERNAME;
 use crate::setup::ONLINE_USERNAME;
 use crate::winutil::local_user_flags;
 use crate::winutil::resolve_sid;
 use crate::winutil::set_local_user_flags;
+use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
+
+use super::retained_logons::RetainedLogons;
 
 #[derive(Default)]
 pub(super) struct DisabledSandboxUsers {
@@ -80,6 +87,70 @@ impl DisabledSandboxUsers {
         }
         Ok(())
     }
+
+    pub(super) fn remove_users(
+        &self,
+        retained: &RetainedLogons,
+        report: impl Fn(&str),
+    ) -> Result<()> {
+        let mut errors = Vec::new();
+        for user in &self.users {
+            if retained.contains_sid(&user.sid) {
+                report(&format!(
+                    "deferring {} profile and account to runtime cleanup",
+                    user.name
+                ));
+                continue;
+            }
+            match user.remove() {
+                Ok(()) => report(&format!("removed {} profile and account", user.name)),
+                Err(error) => {
+                    report(&format!(
+                        "remove {} profile and account: failed, {error:#}",
+                        user.name
+                    ));
+                    errors.push(format!("{error:#}"));
+                }
+            }
+        }
+        ensure!(errors.is_empty(), "{}", errors.join("; "));
+        Ok(())
+    }
+}
+
+impl SandboxUser {
+    fn remove(&self) -> Result<()> {
+        let Self { name, sid, .. } = self;
+        let sid = string_from_sid_bytes(sid).map_err(anyhow::Error::msg)?;
+        let profile_key = to_wide(format!(
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}"
+        ));
+        let mut key = 0;
+        let status = unsafe {
+            registry::RegOpenKeyExW(
+                registry::HKEY_LOCAL_MACHINE,
+                profile_key.as_ptr(),
+                /*uloptions*/ 0,
+                registry::KEY_READ | registry::KEY_WOW64_64KEY,
+                &mut key,
+            )
+        };
+        match status {
+            ERROR_SUCCESS => {
+                unsafe { registry::RegCloseKey(key) };
+                // Keep the account's SID available for retry if its profile is still loaded.
+                if unsafe { DeleteProfileW(to_wide(sid).as_ptr(), null(), null()) } == 0 {
+                    bail!(
+                        "remove sandbox profile for {name}: {}",
+                        std::io::Error::last_os_error()
+                    );
+                }
+            }
+            ERROR_FILE_NOT_FOUND => {}
+            status => bail!("open sandbox profile for {name}: {status}"),
+        }
+        remove_sandbox_principal(name)
+    }
 }
 
 #[cfg(test)]
@@ -108,3 +179,7 @@ pub(super) fn remove_sandbox_principal(name: &str) -> Result<()> {
         status => bail!("remove local sandbox principal {name}: {status}"),
     }
 }
+
+#[cfg(test)]
+#[path = "principals_tests.rs"]
+mod tests;

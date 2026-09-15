@@ -264,7 +264,7 @@ impl PackageLifecycle {
         let installation = installation
             .as_mut()
             .context("the authenticated package installation was not recorded")?;
-        cleanup::clean_up(installation, prepared, runtime)
+        cleanup::clean_up(installation, prepared, runtime, &self.uninstalling)
     }
 }
 

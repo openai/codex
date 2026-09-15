@@ -21,6 +21,7 @@ pub(super) struct RetainedLogons {
     // Keeping each token open prevents its AuthenticationId from being recycled.
     _tokens: Vec<OwnedHandle>,
     ids: Vec<LUID>,
+    sids: Vec<Vec<u8>>,
 }
 
 impl RetainedLogons {
@@ -30,14 +31,13 @@ impl RetainedLogons {
     ) -> Result<Self> {
         ensure!(tokens.len() <= 2, "too many retained cleanup tokens");
         let mut retained = Self::default();
-        let mut seen_sids = Vec::new();
         for token in tokens {
             let token = token.try_clone_to_owned()?;
             let handle = token.as_raw_handle() as HANDLE;
             let sid = unsafe { crate::token::get_user_sid_bytes(handle) }?;
             ensure!(
                 users.sids().any(|candidate| candidate == sid.as_slice())
-                    && !seen_sids.contains(&sid),
+                    && !retained.sids.contains(&sid),
                 "cleanup token does not identify a distinct managed sandbox account"
             );
             let mut stats: TOKEN_STATISTICS = unsafe { std::mem::zeroed() };
@@ -58,7 +58,7 @@ impl RetainedLogons {
                 returned as usize == std::mem::size_of::<TOKEN_STATISTICS>(),
                 "unexpected cleanup token statistics length"
             );
-            seen_sids.push(sid);
+            retained.sids.push(sid);
             retained.ids.push(stats.AuthenticationId);
             retained._tokens.push(token);
         }
@@ -69,6 +69,10 @@ impl RetainedLogons {
         self.ids
             .iter()
             .any(|held| held.LowPart == id.LowPart && held.HighPart == id.HighPart)
+    }
+
+    pub(super) fn contains_sid(&self, sid: &[u8]) -> bool {
+        self.sids.iter().any(|held| held == sid)
     }
 }
 

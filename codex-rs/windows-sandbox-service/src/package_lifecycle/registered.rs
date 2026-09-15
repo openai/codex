@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
 use codex_windows_sandbox::prepare_packaged_windows_sandbox_cleanup_with_retained_tokens;
+use windows::ApplicationModel::Package;
 use windows::ApplicationModel::PackageUninstallingEventArgs;
 use windows::Management::Deployment::PackageManager;
 use windows::core::HSTRING;
@@ -60,9 +61,7 @@ pub(super) fn clean_up(lifecycle: &PackageLifecycle, record: InstallationRecord)
         "interrupted runtime cleanup requires repair"
     );
     ensure!(
-        !runtime_owner_has_package(&record)?
-            || (lifecycle.uninstalling.load(Ordering::Acquire)
-                && !crate::registered_runtime::has_retaining_registration(&record)?),
+        owner_allows_cleanup(&lifecycle.uninstalling, &record)?,
         "registered runtime owner still has the app installed"
     );
     ensure!(
@@ -88,9 +87,7 @@ pub(super) fn clean_up(lifecycle: &PackageLifecycle, record: InstallationRecord)
         prepare_packaged_windows_sandbox_cleanup_with_retained_tokens(&removal.tokens())?;
     // A reinstall before this boundary cancels without retiring resources.
     ensure!(
-        (lifecycle.uninstalling.load(Ordering::Acquire)
-            && !crate::registered_runtime::has_retaining_registration(&record)?)
-            || !runtime_owner_has_package(&record)?,
+        owner_allows_cleanup(&lifecycle.uninstalling, &record)?,
         "owner reinstalled before native cleanup started"
     );
     crate::installation_record::save_runtime(&record)?;
@@ -98,6 +95,36 @@ pub(super) fn clean_up(lifecycle: &PackageLifecycle, record: InstallationRecord)
     // A stored retirement fence is never proof that native cleanup finished.
     crate::service::retry_cleanup(|| lifecycle.clean_up_resources(&prepared, Some(&record)))?;
     removal.commit()
+}
+
+pub(super) fn owner_allows_cleanup(
+    uninstalling: &AtomicBool,
+    record: &InstallationRecord,
+) -> Result<bool> {
+    let packages = PackageManager::new()?.FindPackagesByUserSecurityIdPackageFamilyName(
+        &HSTRING::from(&record.user_sid),
+        &HSTRING::from(&record.runtime()?.package_family),
+    )?;
+    let iterator = packages.First()?;
+    let mut has_current = iterator.HasCurrent()?;
+    if !has_current {
+        return Ok(true);
+    }
+    if !uninstalling.load(Ordering::Acquire)
+        || crate::registered_runtime::has_retaining_registration(record)?
+    {
+        return Ok(false);
+    }
+    // SCM may stop us before this exact package is removed. A successor version
+    // belongs to an update or reinstall and must keep its desktop data.
+    let retiring_package = Package::Current()?.Id()?.FullName()?;
+    while has_current {
+        if iterator.Current()?.Id()?.FullName()? != retiring_package {
+            return Ok(false);
+        }
+        has_current = iterator.MoveNext()?;
+    }
+    Ok(true)
 }
 
 /// The managed registration must not keep the package alive after its owner
