@@ -231,6 +231,19 @@ Read the selection from `threadSettings.disabledPluginIds` in
 across resume. Forks restore the selection from the history retained at the
 requested fork boundary.
 
+# Deprecated thread personality setting
+
+`thread/start`, `thread/resume`, `thread/settings/update`, and `turn/start` still
+accept `personality`, but `friendly` and `pragmatic` no longer select a style.
+`model/list` returns `supportsPersonality: false` for every model.
+
+`none` removes the literal `# Personality` section when Codex prepares
+instructions from the model catalog, for example when starting a thread or
+switching models. Setting `friendly` or `pragmatic` can replace a previous
+`none` setting for that purpose. Changing the setting does not rewrite the
+thread's existing instructions or change explicitly supplied base instructions.
+The old `features.personality` flag is ignored.
+
 # MCP server capabilities
 
 `mcpServerStatus/list` returns `serverCapabilities` for each initialized MCP server

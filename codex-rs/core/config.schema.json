@@ -1164,7 +1164,12 @@
           "type": "string"
         },
         "personality": {
-          "$ref": "#/definitions/Personality"
+          "allOf": [
+            {
+              "$ref": "#/definitions/Personality"
+            }
+          ],
+          "description": "Deprecated: `friendly` and `pragmatic` no longer select a style."
         },
         "plan_mode_reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
@@ -3200,6 +3205,7 @@
       "type": "object"
     },
     "Personality": {
+      "description": "Deprecated: `friendly` and `pragmatic` no longer select a style.",
       "enum": [
         "none",
         "friendly",
@@ -7028,7 +7034,7 @@
           "$ref": "#/definitions/Personality"
         }
       ],
-      "description": "Optionally specify a personality for the model"
+      "description": "Deprecated: `friendly` and `pragmatic` no longer select a style."
     },
     "plan_mode_reasoning_effort": {
       "$ref": "#/definitions/ReasoningEffort"

@@ -11,7 +11,7 @@ fn mock_responses_config_composes_model_provider_features_and_extra_tables() {
         .with_provider_base_url("http://127.0.0.1:1234/api/codex")
         .with_approval_policy("on-request")
         .with_sandbox_mode("workspace-write")
-        .enable_feature(Feature::Personality)
+        .enable_feature(Feature::FastMode)
         .disable_feature(Feature::ShellSnapshot)
         .with_root_config("chatgpt_base_url = \"http://127.0.0.1:1234\"")
         .with_provider_config("requires_openai_auth = true")
@@ -28,7 +28,7 @@ fn mock_responses_config_composes_model_provider_features_and_extra_tables() {
         "chatgpt_base_url = \"http://127.0.0.1:1234\"",
         "model_provider = \"openai-custom\"",
         "shell_snapshot = false",
-        "personality = true",
+        "fast_mode = true",
         "[model_providers.openai-custom]\nname = \"OpenAI\"",
         "base_url = \"http://127.0.0.1:1234/api/codex\"",
         "requires_openai_auth = true",
@@ -44,10 +44,7 @@ fn legacy_mock_responses_writer_preserves_provider_auth_and_feature_overrides() 
     write_mock_responses_config_toml(
         home.path(),
         "http://127.0.0.1:1234",
-        &BTreeMap::from([
-            (Feature::Personality, true),
-            (Feature::ShellSnapshot, false),
-        ]),
+        &BTreeMap::from([(Feature::FastMode, true), (Feature::ShellSnapshot, false)]),
         /*auto_compact_limit*/ 321,
         Some(true),
         "openai",
@@ -62,7 +59,7 @@ fn legacy_mock_responses_writer_preserves_provider_auth_and_feature_overrides() 
         "model_auto_compact_token_limit = 321",
         "openai_base_url = \"http://127.0.0.1:1234/v1\"",
         "shell_snapshot = false",
-        "personality = true",
+        "fast_mode = true",
         "[model_providers.openai]\nname = \"OpenAI\"",
         "supports_websockets = false",
         "requires_openai_auth = true",

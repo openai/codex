@@ -640,7 +640,7 @@ pub struct Config {
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
 
-    /// Optionally specify the personality of the model
+    /// Deprecated: `friendly` and `pragmatic` no longer select a style.
     pub personality: Option<Personality>,
 
     /// Effective permission configuration for shell tool execution.
@@ -1622,7 +1622,6 @@ impl Config {
                     Some(BaseInstructionsProvenance::Model { .. })
                 )
             }),
-            personality_enabled: self.features.enabled(Feature::Personality),
             personality: self.personality,
             model_catalog: self.model_catalog.clone(),
         }
@@ -2575,6 +2574,7 @@ pub struct ConfigOverrides {
     pub default_zsh_path: Option<AbsolutePathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    /// Deprecated: `friendly` and `pragmatic` no longer select a style.
     pub personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub show_raw_agent_reasoning: Option<bool>,

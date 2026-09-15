@@ -248,7 +248,8 @@ pub struct TurnStartParams {
     /// Override the reasoning summary for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub summary: Option<ReasoningSummary>,
-    /// Override the personality for this turn and subsequent turns.
+    /// @deprecated `friendly` and `pragmatic` no longer select a style.
+    /// Changing this does not rewrite the thread's existing instructions.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
     /// Optional JSON Schema used to constrain the final assistant message for

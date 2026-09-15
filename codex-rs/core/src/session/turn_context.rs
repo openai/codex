@@ -1018,7 +1018,6 @@ impl Session {
             .resolve_model_info(
                 self.services.models_manager.as_ref(),
                 &session_configuration.model_info_overrides,
-                self.features.enabled(Feature::Personality),
             )
             .await;
         let multi_agent_version = match multi_agent_runtime {

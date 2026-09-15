@@ -311,6 +311,7 @@ pub enum WindowsSandboxProxySettingsMode {
     Preserve,
 }
 
+/// Deprecated: `friendly` and `pragmatic` no longer select a style.
 #[derive(
     Debug,
     Serialize,

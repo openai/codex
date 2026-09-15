@@ -1178,13 +1178,9 @@ stream_max_retries = 0
 async fn thread_resume_preserves_goal_first_and_fork_approvals_reviewer() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
 
     let (thread_id, fork_thread_id) = {
         let mut mcp = TestAppServer::builder()
@@ -1271,6 +1267,7 @@ async fn thread_resume_preserves_goal_first_and_fork_approvals_reviewer() -> Res
         (thread.id, fork_thread.id)
     };
 
+    let config_path = codex_home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(
         config_path,
@@ -1943,13 +1940,9 @@ fn write_dev_permission_config(
 async fn thread_goal_get_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -2244,13 +2237,9 @@ async fn goal_first_live_thread_appears_in_state_db_thread_list() -> Result<()> 
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let codex_home_path = normalized_existing_path(codex_home.path())?;
-    mock_responses_config(&server.uri()).write(&codex_home_path)?;
-    let config_path = codex_home_path.join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(&codex_home_path)?;
 
     let sqlite_home = codex_home_path
         .as_path()
@@ -3000,13 +2989,9 @@ async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
     ])
     .await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3088,14 +3073,10 @@ async fn thread_resume_keeps_tool_paused_goal_paused() -> Result<()> {
 async fn thread_goal_set_enforces_configured_maximum_token_budget() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    let config = config.replace("personality = true\n", "personality = true\ngoals = true\n");
-    std::fs::write(
-        config_path,
-        format!("{config}\n[goals]\nmax_goal_token_budget = 200\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .with_extra_config("[goals]\nmax_goal_token_budget = 200")
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3185,13 +3166,9 @@ async fn thread_goal_set_enforces_configured_maximum_token_budget() -> Result<()
 async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3275,13 +3252,9 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
 async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -3357,13 +3330,9 @@ async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
 async fn thread_goal_set_edits_objective_without_resetting_usage() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    mock_responses_config(&server.uri()).write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
+    mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
+        .write(codex_home.path())?;
     let thread_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
@@ -3686,14 +3655,9 @@ async fn thread_goal_lifecycle_emits_analytics_and_clear_deletes_goal() -> Resul
     .await;
     let codex_home = TempDir::new()?;
     mock_responses_config(&server.uri())
+        .enable_feature(Feature::Goals)
         .with_root_config(&format!(r#"chatgpt_base_url = "{}""#, server.uri()))
         .write(codex_home.path())?;
-    let config_path = codex_home.path().join("config.toml");
-    let config = std::fs::read_to_string(&config_path)?;
-    std::fs::write(
-        &config_path,
-        config.replace("personality = true\n", "personality = true\ngoals = true\n"),
-    )?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
@@ -6263,9 +6227,7 @@ async fn thread_resume_accepts_deprecated_personality_override() -> Result<()> {
 }
 
 fn mock_responses_config(server_uri: &str) -> MockResponsesConfig {
-    MockResponsesConfig::new(server_uri)
-        .with_model("gpt-5.4")
-        .enable_feature(Feature::Personality)
+    MockResponsesConfig::new(server_uri).with_model("gpt-5.4")
 }
 
 #[allow(dead_code)]

@@ -470,6 +470,7 @@
       ]
     },
     "Personality": {
+      "description": "Deprecated: `friendly` and `pragmatic` no longer select a style.",
       "enum": [
         "none",
         "friendly",
@@ -1545,7 +1546,8 @@
         {
           "type": "null"
         }
-      ]
+      ],
+      "description": "@deprecated `friendly` and `pragmatic` no longer select a style. Changing this does not rewrite the thread's existing instructions."
     },
     "sandbox": {
       "anyOf": [

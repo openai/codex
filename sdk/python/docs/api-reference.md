@@ -40,6 +40,7 @@ from openai_codex.types import (
     CancelLoginAccountStatus,
     GetAccountResponse,
     InitializeResponse,
+    Personality,
     ThreadItem,
     ThreadTokenUsage,
     TurnError,
@@ -88,6 +89,27 @@ server's default behavior. This does not remove history from the model's
 context. Both methods return a thread handle; use `thread.read(include_turns=True)`
 to retrieve its history.
 
+### Deprecated personality selection
+
+`thread_start(...)`, `thread_resume(...)`, and the thread's `run(...)` and
+`turn(...)` still accept `personality` for compatibility. The current app-server
+accepts `Personality.friendly` and `Personality.pragmatic`, but they no longer
+select a style; model instructions define the tone.
+
+Python `None` or omitting the option leaves it unset. Explicit `Personality.none`
+(wire value `"none"`) strips the literal `# Personality` section the next time
+Codex prepares instructions from the model catalog, such as when starting a
+thread or switching models. It does not change explicitly supplied base
+instructions or rewrite an existing thread's instructions when resuming or
+starting a turn. Either legacy value can replace a previous `Personality.none`
+setting for future model instructions. The old `features.personality` flag is
+ignored.
+
+Models returned by `models(...)` still expose `supports_personality` for
+compatibility. This field is deprecated and always `False` on the current
+app-server; it describes selectable personality, not the separate
+`Personality.none` opt-out.
+
 ## AsyncCodex (async parity)
 
 ```python
@@ -120,6 +142,9 @@ Properties/methods:
 - `thread_archive(thread_id: str) -> Awaitable[ThreadArchiveResponse]`
 - `thread_unarchive(thread_id: str) -> Awaitable[AsyncThread]`
 - `models(*, include_hidden: bool = False) -> Awaitable[ModelListResponse]`
+
+The [deprecated personality selection](#deprecated-personality-selection)
+notes also apply to the async methods and model results.
 
 Async context manager:
 
@@ -198,6 +223,7 @@ These options have the same behavior on sync and async `run(...)` and `turn(...)
 
 | Option | Behavior |
 | --- | --- |
+| `personality: Personality \| None = None` | `Personality.friendly` and `Personality.pragmatic` are deprecated and no longer select a style. See [deprecated personality selection](#deprecated-personality-selection). |
 | `service_tier: str | None = None` | Sets the thread's service tier for this and subsequent turns. |
 | `turn_service_tier: str | None = None` | Overrides the tier for a newly started turn only. `None` inherits the thread setting; `"default"` selects standard speed. Does not change the thread default and is ignored when input joins an active turn. |
 | `source: str | None = None` | Labels the caller that initiated a new turn, such as `"review_ui"`. This is metadata; it does not schedule work or grant authority. Ignored when input joins an active turn. |

@@ -18,7 +18,6 @@ use pretty_assertions::assert_eq;
 
 fn config_with_personality(personality: Option<Personality>) -> ModelsManagerConfig {
     ModelsManagerConfig {
-        personality_enabled: true,
         personality,
         ..Default::default()
     }
@@ -26,7 +25,7 @@ fn config_with_personality(personality: Option<Personality>) -> ModelsManagerCon
 
 #[test]
 fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
-    let override_instructions = "override {{ personality }}";
+    let override_instructions = "override {{ personality }}\n# Personality\nKeep me";
     let persistent_instructions = "Follow up on the active task.";
     let async_message_description = "Catalog async message description.";
     let mut model = model_info_from_slug("unknown-model");
@@ -104,6 +103,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
     });
     let config = ModelsManagerConfig {
         base_instructions: Some(override_instructions.to_string()),
+        personality: Some(Personality::None),
         ..Default::default()
     };
 
@@ -131,7 +131,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         })
     );
     assert_eq!(
-        updated.get_model_instructions(/*personality*/ None),
+        updated.get_model_instructions(Some(Personality::None)),
         override_instructions
     );
 }
@@ -193,16 +193,12 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
 }
 
 #[test]
-fn baked_personality_section_is_preserved_without_enabled_explicit_none() {
+fn baked_personality_section_is_preserved_without_explicit_none() {
     let instructions = "Intro\n# Personality\nKeep me\n# General\nKeep me too";
     let configs = [
         config_with_personality(/*personality*/ None),
         config_with_personality(Some(Personality::Friendly)),
         config_with_personality(Some(Personality::Pragmatic)),
-        ModelsManagerConfig {
-            personality: Some(Personality::None),
-            ..Default::default()
-        },
     ];
 
     for config in configs {
@@ -218,6 +214,32 @@ fn baked_personality_section_is_preserved_without_enabled_explicit_none() {
             instructions
         );
     }
+}
+
+#[test]
+fn explicit_empty_base_instructions_stay_empty_with_personality_none() {
+    let mut model = model_info_from_slug("unknown-model");
+    model
+        .model_messages
+        .as_mut()
+        .expect("fallback model messages")
+        .instructions_template = Some("Intro\n# Personality\nRemove me".to_string());
+    let config = ModelsManagerConfig {
+        base_instructions: Some(String::new()),
+        personality: Some(Personality::None),
+        ..Default::default()
+    };
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(
+        updated
+            .model_messages
+            .as_ref()
+            .and_then(|messages| messages.instructions_template.as_deref()),
+        Some("")
+    );
+    assert_eq!(updated.get_model_instructions(config.personality), "");
 }
 
 #[test]

@@ -9463,7 +9463,7 @@
             ]
           },
           "reloadUserConfig": {
-            "description": "When true, hot-reload updated runtime settings into loaded threads after writing. Session-static model, reasoning-effort, Plan-mode reasoning-effort, service-tier, and personality defaults are not reloaded.",
+            "description": "When true, hot-reload updated runtime settings into loaded threads after writing. Session-static model, reasoning-effort, Plan-mode reasoning-effort, and service-tier defaults are not reloaded. The deprecated personality setting is also not reloaded.",
             "type": "boolean"
           }
         },
@@ -15256,6 +15256,7 @@
           },
           "supportsPersonality": {
             "default": false,
+            "description": "@deprecated Always false; models no longer support personality selection.",
             "type": "boolean"
           },
           "upgrade": {
@@ -15969,6 +15970,7 @@
         "type": "object"
       },
       "Personality": {
+        "description": "Deprecated: `friendly` and `pragmatic` no longer select a style.",
         "enum": [
           "none",
           "friendly",
@@ -23389,7 +23391,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "@deprecated `friendly` and `pragmatic` no longer select a style. Changing this does not rewrite the thread's existing instructions."
           },
           "sandbox": {
             "anyOf": [
@@ -23925,7 +23928,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "@deprecated Reports the saved setting; `friendly` and `pragmatic` no longer select a style."
           },
           "sandboxPolicy": {
             "$ref": "#/definitions/v2/SandboxPolicy"
@@ -24108,7 +24112,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "@deprecated `friendly` and `pragmatic` no longer select a style."
           },
           "sandbox": {
             "anyOf": [
@@ -25258,7 +25263,7 @@
                 "type": "null"
               }
             ],
-            "description": "Override the personality for this turn and subsequent turns."
+            "description": "@deprecated `friendly` and `pragmatic` no longer select a style. Changing this does not rewrite the thread's existing instructions."
           },
           "sandboxPolicy": {
             "anyOf": [

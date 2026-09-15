@@ -140,6 +140,7 @@
       "type": "string"
     },
     "Personality": {
+      "description": "Deprecated: `friendly` and `pragmatic` no longer select a style.",
       "enum": [
         "none",
         "friendly",
@@ -355,7 +356,8 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "@deprecated Reports the saved setting; `friendly` and `pragmatic` no longer select a style."
         },
         "sandboxPolicy": {
           "$ref": "#/definitions/SandboxPolicy"

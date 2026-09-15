@@ -181,14 +181,8 @@ async fn first_turn_model_change_appends_model_instructions_developer_message(
     let server = MockServer::start().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
-    let mut builder = test_codex()
-        .with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture)
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
-        });
+    let mut builder =
+        test_codex().with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture);
     let test = builder.build_with_auto_env(&server).await?;
     let next_model = "gpt-5.5";
 
@@ -401,12 +395,7 @@ async fn model_change_with_legacy_personality_override_only_appends_model_instru
     )
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.5").with_config(|config| {
-        config
-            .features
-            .enable(Feature::Personality)
-            .expect("test config should allow feature update");
-    });
+    let mut builder = test_codex().with_model("gpt-5.5");
     let test = builder.build(&server).await?;
     let next_model = "exp-codex-personality";
 

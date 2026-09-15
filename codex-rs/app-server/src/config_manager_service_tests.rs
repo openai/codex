@@ -1535,7 +1535,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
         CloudConfigBundleFixture::loader_with_enterprise_requirement(
             r#"
 [features]
-personality = true
+fast_mode = true
 "#,
         ),
     );
@@ -1543,7 +1543,7 @@ personality = true
     let error = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
-            key_path: "features.personality".to_string(),
+            key_path: "features.fast_mode".to_string(),
             value: serde_json::json!(false),
             merge_strategy: MergeStrategy::Replace,
             expected_version: None,
@@ -1558,7 +1558,7 @@ personality = true
     assert!(
         error
             .to_string()
-            .contains("invalid value for `features`: `features.personality=false`"),
+            .contains("invalid value for `features`: `features.fast_mode=false`"),
         "{error}"
     );
     assert_eq!(

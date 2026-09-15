@@ -451,28 +451,14 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
     // Capture the same filtered explicit overrides that session startup owns.
     let overrides = ModelInfoOverrides::from(config.to_models_manager_config());
 
-    for (personality, personality_enabled, catalog_instructions) in [
+    for (personality, catalog_instructions) in [
         (
             Personality::Friendly,
-            true,
             "Catalog B.\n# Personality\nfixed\n# Rules\nKeep the rules.",
         ),
-        (
-            Personality::None,
-            true,
-            "Catalog B.\n# Rules\nKeep the rules.",
-        ),
-        (
-            Personality::Friendly,
-            false,
-            "Catalog B.\n# Personality\nfixed\n# Rules\nKeep the rules.",
-        ),
+        (Personality::None, "Catalog B.\n# Rules\nKeep the rules."),
     ] {
         config.personality = Some(personality);
-        config
-            .features
-            .set_enabled(Feature::Personality, personality_enabled)
-            .expect("test config should allow personality changes");
         let mut settings = configured_settings();
         settings.collaboration_mode = settings.collaboration_mode.with_updates(
             Some("model-b".to_string()),
@@ -485,11 +471,7 @@ async fn model_resolution_preserves_startup_overrides_and_instruction_provenance
             .get_model_info("model-b", &config.to_models_manager_config())
             .await;
         let resolved = settings
-            .resolve_model_info(
-                &models_manager,
-                &overrides,
-                config.features.enabled(Feature::Personality),
-            )
+            .resolve_model_info(&models_manager, &overrides)
             .await;
         assert_eq!(resolved, legacy);
         assert_eq!(

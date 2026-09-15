@@ -50,7 +50,8 @@ effort?: ReasoningEffort | null, /**
  * Override the reasoning summary for this turn and subsequent turns.
  */
 summary?: ReasoningSummary | null, /**
- * Override the personality for this turn and subsequent turns.
+ * @deprecated `friendly` and `pragmatic` no longer select a style.
+ * Changing this does not rewrite the thread's existing instructions.
  */
 personality?: Personality | null, /**
  * Optional JSON Schema used to constrain the final assistant message for

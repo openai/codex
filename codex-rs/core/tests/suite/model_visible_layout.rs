@@ -549,10 +549,6 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
         .with_config(|config| {
             config.update_plan_enabled = true;
             config.model = Some("gpt-5.4".to_string());
-            config
-                .features
-                .enable(Feature::Personality)
-                .expect("test config should allow feature update");
             config.personality = Some(Personality::Pragmatic);
         });
     let resumed = resume_builder.restart(&server, &initial).await?;

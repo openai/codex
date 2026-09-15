@@ -251,6 +251,22 @@ async fn apply_role_refreshes_model_instructions_only_when_personality_opt_out_c
             false,
         ),
         (
+            "none",
+            "[features]\npersonality = false",
+            BaseInstructionsProvenance::Model {
+                model: "parent-model".to_string(),
+            },
+            false,
+        ),
+        (
+            "friendly",
+            "personality = \"none\"\n[features]\npersonality = false",
+            BaseInstructionsProvenance::Model {
+                model: "parent-model".to_string(),
+            },
+            true,
+        ),
+        (
             "friendly",
             "personality = \"pragmatic\"",
             BaseInstructionsProvenance::Model {

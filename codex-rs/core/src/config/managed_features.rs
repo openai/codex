@@ -218,6 +218,9 @@ fn parse_feature_requirements(
 ) -> BTreeMap<Feature, bool> {
     let mut pinned_features = BTreeMap::new();
     for (key, enabled) in feature_requirements.entries {
+        if key == Feature::Personality.key() {
+            continue;
+        }
         if key == "auto_review" {
             pinned_features.insert(Feature::GuardianApproval, enabled);
             continue;

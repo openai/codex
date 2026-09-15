@@ -374,7 +374,6 @@ impl Session {
                 &constraints,
                 self.services.models_manager.as_ref(),
                 &overrides,
-                self.features.enabled(Feature::Personality),
                 self.features.enabled(Feature::FastMode),
             )
             .await

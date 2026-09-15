@@ -312,6 +312,7 @@
       "type": "string"
     },
     "Personality": {
+      "description": "Deprecated: `friendly` and `pragmatic` no longer select a style.",
       "enum": [
         "none",
         "friendly",
@@ -827,7 +828,7 @@
           "type": "null"
         }
       ],
-      "description": "Override the personality for this turn and subsequent turns."
+      "description": "@deprecated `friendly` and `pragmatic` no longer select a style. Changing this does not rewrite the thread's existing instructions."
     },
     "sandboxPolicy": {
       "anyOf": [

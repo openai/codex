@@ -131,6 +131,7 @@ pub struct Model {
     pub default_reasoning_effort: ReasoningEffort,
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
+    /// @deprecated Always false; models no longer support personality selection.
     #[serde(default)]
     pub supports_personality: bool,
     /// Multi-agent runtime declared by this model, when available.

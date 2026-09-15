@@ -60,8 +60,7 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
         });
         model_messages.instructions_template = Some(base_instructions.clone());
         model_messages.instructions_variables = None;
-    } else if config.personality_enabled
-        && config.personality == Some(Personality::None)
+    } else if config.personality == Some(Personality::None)
         && let Some(instructions_template) = model
             .model_messages
             .as_mut()

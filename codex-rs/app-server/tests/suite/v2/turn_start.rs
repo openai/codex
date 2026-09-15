@@ -842,9 +842,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -911,9 +909,7 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -989,9 +985,7 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;
     let cache_path = codex_home.path().join("models_cache.json");
     let mut cache: serde_json::Value =
@@ -1826,9 +1820,7 @@ async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1876,9 +1868,7 @@ async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
 #[tokio::test]
 async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new("http://localhost/unused")
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new("http://localhost/unused").write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1969,9 +1959,7 @@ async fn turn_start_rejects_combined_oversized_text_input() -> Result<()> {
 #[tokio::test]
 async fn turn_start_rejects_invalid_permission_selection_before_starting_turn() -> Result<()> {
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new("http://localhost/unused")
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new("http://localhost/unused").write(codex_home.path())?;
     std::fs::write(
         codex_home.path().join("managed_config.toml"),
         "sandbox_mode = \"read-only\"\n",
@@ -2403,9 +2391,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -2679,9 +2665,7 @@ async fn turn_start_accepts_deprecated_personality_override_v2() -> Result<()> {
     let response_mock = responses::mount_sse_once(&server, body).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -2892,9 +2876,7 @@ async fn turn_start_ignores_personality_change_mid_thread_v2() -> Result<()> {
     let response_mock = responses::mount_sse_sequence(&server, vec![sse1, sse2]).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -5762,9 +5744,7 @@ async fn turn_start_with_elevated_override_does_not_persist_project_trust() -> R
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Personality)
-        .write(codex_home.path())?;
+    MockResponsesConfig::new(&server.uri()).write(codex_home.path())?;
 
     let workspace = TempDir::new()?;
 
