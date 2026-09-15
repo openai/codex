@@ -43,17 +43,15 @@ pub(super) fn run(
         let previous = crate::installation_record::load_runtime()?
             .context("registration refresh requires completed setup")?;
         let runtime = previous.runtime()?;
-        let ready = runtime
-            .ready_package
-            .as_deref()
-            .context("registration refresh requires a ready runtime")?;
+        // Windows may restart this service during registration, after readiness was
+        // revoked. Resume only the same provisioned accounts; never repair setup.
         ensure!(
             previous.user_sid == identity.user_sid
                 && previous.codex_home == identity.codex_home
                 && crate::installation_record::is_current_package_family(&previous)?
-                && runtime.ready_for_package(ready)
+                && runtime.can_resume_registration()
                 && setup_complete,
-            "registration refresh requires unchanged, ready sandbox ownership and settings"
+            "registration refresh requires unchanged sandbox ownership and settings"
         );
         for entry in &runtime.accounts {
             let account = entry.account.username();

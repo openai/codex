@@ -35,6 +35,7 @@ use windows_sys::Win32::System::Services;
 const PROVISIONING_TIMEOUT: Duration = Duration::from_secs(120);
 
 mod group_change;
+mod refresh_retry;
 
 impl WindowsSandboxProvisioningSettings {
     /// Derives the full firewall settings using the same environment handling as elevated setup.
@@ -203,6 +204,12 @@ fn send_service_request(
     let Some(mut pipe) = connect(deadline)? else {
         return Ok(crate::SandboxProvisioningResponse::Unavailable);
     };
+    if let crate::ProvisioningMessage::ProvisionSandboxRequest { payload } = &request.message
+        && payload.registered_core
+        && payload.refresh_only
+    {
+        return refresh_retry::send(pipe, request, deadline);
+    }
     let response = match exchange_request(&mut pipe, request, deadline) {
         Ok(response) => response,
         Err(error)
@@ -241,6 +248,13 @@ fn exchange_request(
         .context("authenticate provisioning pipe server")?;
     crate::write_provisioning_frame(&mut *pipe, request)
         .context("send sandbox provisioning request")?;
+    read_response(pipe, deadline)
+}
+
+fn read_response(
+    pipe: &mut File,
+    deadline: Instant,
+) -> anyhow::Result<crate::SandboxProvisioningResponse> {
     crate::framed_io::wait_for_complete_frame(pipe, deadline)
         .context("wait for sandbox provisioning response")?;
     let response = crate::read_provisioning_frame(pipe)
@@ -304,12 +318,27 @@ fn connect(deadline: Instant) -> anyhow::Result<Option<File>> {
     }
 }
 
-fn verify_server(pipe: HANDLE) -> anyhow::Result<()> {
+fn pipe_server_process_id(pipe: HANDLE) -> anyhow::Result<u32> {
     let mut pipe_process_id = 0;
     if unsafe { GetNamedPipeServerProcessId(pipe, &mut pipe_process_id) } == 0 {
         return Err(io::Error::last_os_error()).context("identify provisioning pipe server");
     }
+    Ok(pipe_process_id)
+}
 
+fn verify_server(pipe: HANDLE) -> anyhow::Result<u32> {
+    let pipe_process_id = pipe_server_process_id(pipe)?;
+    let status = query_service_status()?;
+    if status.dwCurrentState != Services::SERVICE_RUNNING
+        || status.dwProcessId == 0
+        || status.dwProcessId != pipe_process_id
+    {
+        bail!("the provisioning pipe server does not match the running service");
+    }
+    Ok(pipe_process_id)
+}
+
+fn query_service_status() -> anyhow::Result<Services::SERVICE_STATUS_PROCESS> {
     let manager =
         unsafe { Services::OpenSCManagerW(ptr::null(), ptr::null(), Services::SC_MANAGER_CONNECT) };
     if manager == 0 {
@@ -344,13 +373,7 @@ fn verify_server(pipe: HANDLE) -> anyhow::Result<()> {
     {
         return Err(io::Error::last_os_error()).context("query sandbox provisioning service");
     }
-    if status.dwCurrentState != Services::SERVICE_RUNNING
-        || status.dwProcessId == 0
-        || status.dwProcessId != pipe_process_id
-    {
-        bail!("the provisioning pipe server does not match the running service");
-    }
-    Ok(())
+    Ok(status)
 }
 
 struct ServiceHandle(SC_HANDLE);

@@ -52,10 +52,12 @@ fn ready_runtime() -> RuntimeRegistration {
 fn readiness_requires_a_receipt_for_the_current_package_version() {
     let mut runtime = ready_runtime();
     assert!(runtime.ready_for_package(READY_PACKAGE));
+    assert!(runtime.can_resume_registration());
     assert!(!runtime.ready_for_package("OpenAI.Codex_2.0.0.0_arm64__publisher"));
 
     runtime.ready_package = None;
     assert!(!runtime.ready_for_package(READY_PACKAGE));
+    assert!(runtime.can_resume_registration());
 }
 
 #[test]
@@ -78,6 +80,7 @@ fn readiness_requires_both_distinct_account_receipts() {
         extra_account,
     ] {
         assert!(!runtime.ready_for_package(READY_PACKAGE));
+        assert!(!runtime.can_resume_registration());
     }
 }
 
@@ -86,6 +89,7 @@ fn readiness_is_revoked_by_the_retirement_fence() {
     let mut runtime = ready_runtime();
     runtime.retiring = Some("one-cleanup-generation".into());
     assert!(!runtime.ready_for_package(READY_PACKAGE));
+    assert!(!runtime.can_resume_registration());
 }
 
 #[test]

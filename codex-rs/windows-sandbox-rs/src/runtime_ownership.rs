@@ -80,8 +80,13 @@ pub struct RuntimeRegistration {
 
 impl RuntimeRegistration {
     pub fn ready_for_package(&self, full_name: &str) -> bool {
+        self.can_resume_registration() && self.ready_package.as_deref() == Some(full_name)
+    }
+
+    /// Complete account ownership allows registration to resume, not runtime execution.
+    /// Callers must still authenticate the owner and verify the live account SIDs/settings.
+    pub fn can_resume_registration(&self) -> bool {
         self.retiring.is_none()
-            && self.ready_package.as_deref() == Some(full_name)
             && self.accounts.len() == 2
             && self.accounts[0].account != self.accounts[1].account
             && self
