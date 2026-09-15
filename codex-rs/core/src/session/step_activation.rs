@@ -95,7 +95,7 @@ fn check_legacy_model_safety(
         return Err("the destination model has only fallback metadata".to_string());
     }
     let retained_models = [admitted, current];
-    // guardian::review::record_guardian_denial still selects its circuit-breaker
+    // The Guardian reviewer extension still selects its circuit-breaker
     // policy from the admitted model's Cyber classification.
     let destination_is_cyber =
         destination.model_specialty.as_deref() == Some(MODEL_SPECIALTY_CYBER);

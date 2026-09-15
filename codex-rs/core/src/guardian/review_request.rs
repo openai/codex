@@ -1,5 +1,5 @@
-//! Captures and reports one review on the host's original action and authorization state.
-//! Guardian's extension owns orchestration; this adapter preserves event and evidence behavior.
+//! Captures a review on the host's original action and authorization state.
+//! The extension chooses effects; this adapter supplies evidence, validation and publication.
 
 use super::*;
 use crate::codex_thread::GuardianAuthorizationVersion;
@@ -8,8 +8,6 @@ use codex_protocol::approvals::GuardianReviewReason;
 
 pub(in crate::guardian) struct PreparedApproval {
     request: GuardianApprovalRequest,
-    turn: Arc<TurnContext>,
-    report: codex_guardian_reviewer::ReviewReport,
     root_authorization_version: Option<GuardianAuthorizationVersion>,
     user_message_revision: u64,
     review_evidence: Option<(
@@ -27,11 +25,19 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         self.options.external_cancel.as_ref()
     }
 
+    async fn servicing_turn(
+        &self,
+    ) -> Option<(String, Arc<codex_protocol::openai_models::ModelInfo>)> {
+        let active = self.session.active_turn.lock().await;
+        let turn = &active.as_ref()?.task.as_ref()?.turn_context;
+        Some((turn.sub_id.clone(), Arc::clone(turn.model_info())))
+    }
+
     async fn prepare(
         &self,
         review_reason: GuardianReviewReason,
         deadline: Instant,
-    ) -> Result<PreparedApproval, ReviewDecision> {
+    ) -> Result<(PreparedApproval, codex_guardian_reviewer::ReviewReport), ReviewDecision> {
         let super::super::runtime::ReviewRuntime {
             session,
             history_reset: _,
@@ -105,37 +111,6 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 review_reason,
                 model_context,
             });
-        session
-            .send_event(
-                turn.as_ref(),
-                EventMsg::GuardianAssessment(report.started_event()),
-            )
-            .await;
-        if external_cancel
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-        {
-            let completed_at_ms = now_unix_timestamp_ms();
-            let completed = report.complete(
-                GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
-                turn.model_info(),
-                self.options.require_guardian,
-                GuardianReviewAnalyticsResult::without_session(),
-                completed_at_ms,
-            );
-            report.track(
-                &session.services.session_telemetry,
-                &session.services.analytics_events_client,
-                completed.analytics,
-                completed_at_ms.try_into().unwrap_or_default(),
-            );
-            session
-                .send_event(turn.as_ref(), EventMsg::GuardianAssessment(completed.event))
-                .await;
-            record_guardian_non_denial(&session).await;
-            return Err(ReviewDecision::Abort);
-        }
-
         let root_authorization_version = session
             .services
             .agent_control
@@ -163,14 +138,15 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             None
         };
         drop(history);
-        Ok(PreparedApproval {
-            request,
-            turn,
+        Ok((
+            PreparedApproval {
+                request,
+                root_authorization_version,
+                user_message_revision,
+                review_evidence,
+            },
             report,
-            root_authorization_version,
-            user_message_revision,
-            review_evidence,
-        })
+        ))
     }
 
     async fn attempt(
@@ -178,7 +154,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         prepared: &PreparedApproval,
         deadline: Instant,
     ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-        run_guardian_review_session_before_deadline(
+        let (mut outcome, analytics) = run_guardian_review_session_before_deadline(
             Arc::clone(&self.session),
             self.context.clone(),
             prepared.request.clone(),
@@ -187,24 +163,10 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             self.options.external_cancel.clone(),
             deadline,
         )
-        .await
-    }
-
-    async fn complete(
-        &self,
-        prepared: PreparedApproval,
-        mut outcome: GuardianReviewOutcome,
-        analytics_result: GuardianReviewAnalyticsResult,
-    ) -> Option<ReviewDecision> {
-        let PreparedApproval {
-            request: _,
-            turn,
-            report,
-            root_authorization_version,
-            user_message_revision,
-            review_evidence,
-        } = prepared;
-        let session = Arc::clone(&self.session);
+        .await;
+        let session = &self.session;
+        let root_authorization_version = prepared.root_authorization_version;
+        let user_message_revision = prepared.user_message_revision;
         if matches!(&outcome, GuardianReviewOutcome::Completed(assessment) if assessment.outcome == GuardianAssessmentOutcome::Allow)
             && ((session.guardian_context_mode == GuardianContextMode::ThreadOwned
                 && (root_authorization_version
@@ -231,47 +193,33 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             outcome = GuardianReviewOutcome::Error(GuardianReviewError::Cancelled);
         }
 
-        let completed_at_ms = now_unix_timestamp_ms();
-        let completed = report.complete(
-            outcome,
-            turn.model_info(),
-            self.options.require_guardian,
-            analytics_result,
-            completed_at_ms,
-        );
-        report.track(
-            &session.services.session_telemetry,
-            &session.services.analytics_events_client,
-            completed.analytics,
-            completed_at_ms.try_into().unwrap_or_default(),
-        );
-        if let Some(message) = completed.warning {
-            session
-                .send_event(
-                    turn.as_ref(),
-                    EventMsg::GuardianWarning(WarningEvent { message }),
-                )
-                .await;
-        }
-        if completed.assessment_outcome.is_some()
-            && let Some((evidence, action, authorization_version, root_authorization_version)) =
-                review_evidence
+        (outcome, analytics)
+    }
+
+    async fn emit(&self, event: EventMsg) {
+        self.session.send_event(self.context.turn(), event).await;
+    }
+
+    async fn record_evidence(
+        &self,
+        prepared: &PreparedApproval,
+        event: &codex_protocol::protocol::GuardianAssessmentEvent,
+    ) {
+        if let Some((evidence, action, authorization_version, root_authorization_version)) =
+            &prepared.review_evidence
         {
             evidence.record(
-                &completed.event,
-                &action,
-                authorization_version,
-                root_authorization_version,
+                event,
+                action,
+                *authorization_version,
+                *root_authorization_version,
             );
         }
-        session
-            .send_event(turn.as_ref(), EventMsg::GuardianAssessment(completed.event))
+    }
+
+    async fn interrupt(&self, turn_id: &str, warning: EventMsg) {
+        self.session
+            .interrupt_turn_with_warning(turn_id, warning)
             .await;
-        if completed.assessment_outcome == Some(GuardianAssessmentOutcome::Deny) {
-            record_guardian_denial(&session).await;
-        } else {
-            record_guardian_non_denial(&session).await;
-        }
-        completed.decision
     }
 }

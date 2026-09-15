@@ -53,8 +53,6 @@ pub(crate) use prompt::guardian_truncate_text;
 pub(crate) use review::GuardianReviewOptions;
 pub(crate) use review::is_basic_session_source;
 pub(crate) use review::new_guardian_review_id;
-#[cfg(test)]
-pub(crate) use review::record_guardian_denial_for_test;
 pub(crate) use review::routes_approval_policy_to_guardian;
 pub use review_session::GuardianReviewSession;
 pub(crate) use review_session::GuardianReviewSessionManager;

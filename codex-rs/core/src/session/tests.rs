@@ -10604,27 +10604,32 @@ impl SessionTask for NeverEndingTask {
 }
 
 #[derive(Clone, Copy)]
-struct GuardianDeniedApprovalTask;
+struct ExtensionInterruptedTask;
 
-impl SessionTask for GuardianDeniedApprovalTask {
+impl SessionTask for ExtensionInterruptedTask {
     fn kind(&self) -> TaskKind {
         TaskKind::Regular
     }
 
     fn span_name(&self) -> &'static str {
-        "session_task.guardian_denied_approval"
+        "session_task.extension_interrupted"
     }
 
     async fn run(
         self: Arc<Self>,
         session: Arc<Session>,
-        _ctx: Arc<TurnContext>,
+        ctx: Arc<TurnContext>,
         _input: Vec<TurnInput>,
         cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
-        for _ in 0..3 {
-            crate::guardian::record_guardian_denial_for_test(&session).await;
-        }
+        session
+            .interrupt_turn_with_warning(
+                &ctx.sub_id,
+                EventMsg::Warning(codex_protocol::protocol::WarningEvent {
+                    message: "extension interrupted this turn".into(),
+                }),
+            )
+            .await;
 
         cancellation_token.cancelled().await;
         Ok(None)
@@ -10938,7 +10943,7 @@ async fn interrupting_compaction_fallback_retains_last_known_step_context() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_auto_review_emits_thread_idle_after_interrupt() {
+async fn extension_interrupt_emits_thread_idle() {
     struct ThreadIdleRecorder(async_channel::Sender<()>);
 
     impl codex_extension_api::ThreadLifecycleContributor<crate::config::Config> for ThreadIdleRecorder {
@@ -10959,26 +10964,22 @@ async fn guardian_auto_review_emits_thread_idle_after_interrupt() {
     session.services.extensions = Arc::new(builder.build());
 
     Arc::new(session)
-        .spawn_task(
-            Arc::new(turn_context),
-            Vec::new(),
-            GuardianDeniedApprovalTask,
-        )
+        .spawn_task(Arc::new(turn_context), Vec::new(), ExtensionInterruptedTask)
         .await;
 
     timeout(StdDuration::from_secs(5), idle_rx.recv())
         .await
-        .expect("guardian interrupt should emit thread idle lifecycle")
+        .expect("extension interrupt should emit thread idle lifecycle")
         .expect("idle receiver open");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
+async fn extension_interrupt_survives_the_calling_runtime() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
     let input = vec![TurnInput::UserInput {
         acceptance_order: None,
         content: vec![UserInput::Text {
-            text: "keep turn active for helper reviews".to_string(),
+            text: "keep turn active for extension interruption".to_string(),
             text_elements: Vec::new(),
         }],
         client_id: None,
@@ -11000,9 +11001,14 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
             .build()
             .expect("helper review runtime");
         runtime.block_on(async move {
-            for _ in 0..3 {
-                crate::guardian::record_guardian_denial_for_test(&session_for_review).await;
-            }
+            session_for_review
+                .interrupt_turn_with_warning(
+                    &tc.sub_id,
+                    EventMsg::Warning(codex_protocol::protocol::WarningEvent {
+                        message: "extension interrupted this turn".into(),
+                    }),
+                )
+                .await;
         });
     });
     review_thread.join().expect("helper review thread");
@@ -11021,9 +11027,7 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
     })
     .await
     .unwrap_or_else(|_| {
-        panic!(
-            "helper review circuit breaker should interrupt the turn; observed events: {observed:?}"
-        )
+        panic!("extension should interrupt the turn; observed events: {observed:?}")
     });
     assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
 }

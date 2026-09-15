@@ -132,18 +132,23 @@ pub(crate) async fn decide_approval(
             ));
         }
     };
-    let runtime = codex_guardian_reviewer::SynchronousReview::new(ReviewRuntime {
-        session: Arc::clone(&session),
-        history_reset: history_reset.clone(),
-        context: context.clone(),
-        review_id: review_id.clone(),
-        request: request.clone(),
-        reasons,
-        options: GuardianReviewOptions {
-            require_guardian,
-            ..options
+    let runtime = codex_guardian_reviewer::SynchronousReview {
+        host: ReviewRuntime {
+            session: Arc::clone(&session),
+            history_reset: history_reset.clone(),
+            context: context.clone(),
+            review_id: review_id.clone(),
+            request: request.clone(),
+            reasons,
+            options,
         },
-    });
+        thread_store: &session.services.thread_extension_data,
+        // Keep the existing turn-level reporting policy during this ownership move.
+        model: turn.model_info(),
+        require_guardian,
+        telemetry: &session.services.session_telemetry,
+        analytics: &session.services.analytics_events_client,
+    };
     let input = ApprovalDecisionInput {
         approval_id: &review_id,
         tool_call_id: request

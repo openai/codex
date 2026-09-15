@@ -1,5 +1,5 @@
-//! Supplies host review preparation, interruption and runtime configuration.
-//! Guardian's extension owns the synchronous review loop and pool.
+//! Supplies host review preparation and context-dependent configuration.
+//! Guardian's extension owns execution, reporting and denial accounting.
 
 #[path = "review_request.rs"]
 mod request;
@@ -8,7 +8,6 @@ use crate::context::GuardianContextMode;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_core_plugins::PluginCommandAttribution;
-use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_guardian_reviewer::GuardianReviewError;
 use codex_guardian_reviewer::GuardianReviewOutcome;
@@ -21,8 +20,6 @@ use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -31,8 +28,6 @@ use tokio_util::sync::CancellationToken;
 use crate::context::GuardianNodeReplPolicy;
 use crate::context::GuardianReviewEvidence;
 use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
-use crate::turn_timing::now_unix_timestamp_ms;
 
 use super::ApprovalRequestReasons;
 #[cfg(test)]
@@ -132,56 +127,6 @@ pub(super) async fn record_guardian_non_denial(session: &Arc<Session>) {
     codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
         .record_non_denial(&turn_id)
         .await;
-}
-
-async fn record_guardian_denial(session: &Arc<Session>) {
-    let turn = {
-        let active = session.active_turn.lock().await;
-        let Some(task) = active.as_ref().and_then(|active| active.task.as_ref()) else {
-            return;
-        };
-        Arc::clone(&task.turn_context)
-    };
-    let turn_id = &turn.sub_id;
-    let Some(message) =
-        codex_guardian_reviewer::ReviewDenials::for_thread(&session.services.thread_extension_data)
-            .record_denial(turn_id, turn.model_info())
-            .await
-    else {
-        return;
-    };
-
-    if session.turn_context_for_sub_id(turn_id).await.is_none() {
-        return;
-    }
-
-    session
-        .send_event(
-            turn.as_ref(),
-            EventMsg::GuardianWarning(WarningEvent { message }),
-        )
-        .await;
-
-    let runtime_handle = session.services.runtime_handle.clone();
-    let session = Arc::clone(session);
-    let turn_id = turn_id.to_string();
-    let _abort_task = runtime_handle.spawn(async move {
-        let aborted = session
-            .abort_turn_if_active(&turn_id, TurnAbortReason::Interrupted)
-            .await;
-        if aborted {
-            // Guardian aborts bypass normal task completion, so emit its idle lifecycle here.
-            // User interrupts deliberately do not take this path.
-            session
-                .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Interrupted)
-                .await;
-        }
-    });
-}
-
-#[cfg(test)]
-pub(crate) async fn record_guardian_denial_for_test(session: &Arc<Session>) {
-    record_guardian_denial(session).await;
 }
 
 #[derive(Clone)]
