@@ -14,10 +14,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(remote_exec_server)]
 async fn mxc_tmpdir_uses_command_environment_over_rpc() -> Result<()> {
-    if !selected_windows_sandbox_available(WindowsSandboxLevel::Mxc) {
-        eprintln!("skipping MXC enforcement test: native MXC is unavailable on this host");
-        return Ok(());
-    }
+    crate::skip_if_mxc_unavailable!(Ok(()));
     let root = TempDir::new()?;
     let command_temp = root.path().join("command temp");
     let server_temp = root.path().join("server temp");
@@ -53,7 +50,7 @@ async fn mxc_tmpdir_uses_command_environment_over_rpc() -> Result<()> {
         PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted),
         cwd.clone(),
     );
-    sandbox.windows_sandbox_level = WindowsSandboxLevel::Mxc;
+    sandbox.windows_sandbox_selection = codex_exec_server::WindowsSandboxSelection::Mxc;
     let command_temp = command_temp.to_string_lossy().into_owned();
     let started = environment
         .get_exec_backend()

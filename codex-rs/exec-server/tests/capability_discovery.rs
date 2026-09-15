@@ -12,20 +12,15 @@ use codex_exec_server::CapabilityRootsDiscoverResponse;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
+use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server_protocol::CapabilityRootDiscoverRequest;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
-#[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
-#[cfg(unix)]
 use codex_protocol::permissions::FileSystemAccessMode;
-#[cfg(unix)]
 use codex_protocol::permissions::FileSystemSandboxEntry;
-#[cfg(unix)]
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-#[cfg(unix)]
 use codex_protocol::permissions::NetworkSandboxPolicy;
-#[cfg(unix)]
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use common::exec_server::exec_server;
@@ -188,10 +183,11 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
     Ok(())
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_discovery_batches_roots_without_combining_different_permissions()
 -> anyhow::Result<()> {
+    #[cfg(windows)]
+    crate::skip_if_mxc_unavailable!(Ok(()));
     let workspace = tempfile::tempdir()?;
     let first_root = workspace.path().join("first");
     let second_root = workspace.path().join("second");
@@ -216,6 +212,7 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         workspace_uri,
     );
+    let shared_sandbox = with_native_sandbox(shared_sandbox);
 
     #[cfg(target_os = "linux")]
     let fake_bwrap_directory = tempfile::tempdir()?;
@@ -338,6 +335,7 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
         ),
         first_uri.clone(),
     );
+    let first_only_sandbox = with_native_sandbox(first_only_sandbox);
     let read_second_root = FileSystemSandboxEntry::new(
         AbsolutePathBuf::from_absolute_path(&second_root)?.into(),
         FileSystemAccessMode::Read,
@@ -350,6 +348,7 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
         ),
         second_uri.clone(),
     );
+    let second_only_sandbox = with_native_sandbox(second_only_sandbox);
     let response = discover_roots(
         &mut server,
         vec![
@@ -545,4 +544,11 @@ fn write_file(path: &std::path::Path, contents: &str) -> anyhow::Result<()> {
     std::fs::create_dir_all(parent)?;
     std::fs::write(path, contents)?;
     Ok(())
+}
+
+fn with_native_sandbox(mut sandbox: FileSystemSandboxContext) -> FileSystemSandboxContext {
+    if cfg!(windows) {
+        sandbox.windows_sandbox_selection = WindowsSandboxSelection::Mxc;
+    }
+    sandbox
 }

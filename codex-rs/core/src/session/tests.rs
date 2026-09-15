@@ -8970,7 +8970,11 @@ async fn capability_discovery_uses_environment_permission_profile() {
         workspace_roots: environment.workspace_roots().to_vec(),
         user_home_dir: environment.user_home_dir.clone(),
         temporary_directories: environment.temporary_directories.clone(),
-        windows_sandbox_level: WindowsSandboxLevel::Elevated,
+        windows_sandbox_selection: if cfg!(windows) {
+            codex_file_system::WindowsSandboxSelection::Elevated
+        } else {
+            codex_file_system::WindowsSandboxSelection::Disabled
+        },
         windows_sandbox_private_desktop: false,
         windows_sandbox_proxy_settings_mode: None,
         use_legacy_landlock: true,

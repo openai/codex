@@ -299,7 +299,6 @@ pub enum WindowsSandboxLevel {
     Disabled,
     RestrictedToken,
     Elevated,
-    Mxc,
 }
 
 /// Controls whether a Windows sandbox launch reconciles persistent proxy settings or preserves

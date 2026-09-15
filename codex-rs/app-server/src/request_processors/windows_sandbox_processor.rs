@@ -303,9 +303,7 @@ fn determine_windows_sandbox_readiness_from_state(
 ) -> WindowsSandboxReadinessResponse {
     let status = match windows_sandbox_level {
         WindowsSandboxLevel::Disabled => WindowsSandboxReadiness::NotConfigured,
-        WindowsSandboxLevel::RestrictedToken | WindowsSandboxLevel::Mxc => {
-            WindowsSandboxReadiness::Ready
-        }
+        WindowsSandboxLevel::RestrictedToken => WindowsSandboxReadiness::Ready,
         WindowsSandboxLevel::Elevated => {
             if sandbox_setup_is_complete {
                 WindowsSandboxReadiness::Ready

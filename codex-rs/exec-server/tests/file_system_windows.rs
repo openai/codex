@@ -20,9 +20,10 @@ use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::GetMetadataOptions;
 use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
+use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server::WriteFileOptions;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
 use futures::TryStreamExt;
 use pretty_assertions::assert_eq;
@@ -346,8 +347,12 @@ async fn file_system_no_follow_operations_reject_named_pipes(
     Ok(())
 }
 
+#[test_case(SandboxType::WindowsRestrictedToken; "restricted_token")]
+#[test_case(SandboxType::WindowsMxc; "mxc")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() -> Result<()> {
+async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
+    sandbox_type: SandboxType,
+) -> Result<()> {
     let context = create_file_system_context(FileSystemImplementation::Remote).await?;
     let file_system = context.file_system;
     let tmp = tempfile::TempDir::new()?;
@@ -355,7 +360,39 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
     std::fs::create_dir_all(&readonly_dir)?;
 
     let mut sandbox = read_only_sandbox_for_cwd(readonly_dir.clone())?;
-    sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    match sandbox_type {
+        SandboxType::WindowsRestrictedToken => {
+            sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+        }
+        SandboxType::WindowsMxc => {
+            sandbox.windows_sandbox_selection = WindowsSandboxSelection::Mxc;
+        }
+        SandboxType::None | SandboxType::MacosSeatbelt | SandboxType::LinuxSeccomp => {
+            anyhow::bail!("expected a Windows sandbox type")
+        }
+    }
+
+    let blocked_file = readonly_dir.join("blocked.txt");
+    if sandbox_type == SandboxType::WindowsMxc && !codex_sandboxing::windows_mxc_available() {
+        let error = file_system
+            .write_file(
+                &PathUri::from_host_native_path(&blocked_file)?,
+                b"blocked".to_vec(),
+                WriteFileOptions::default(),
+                Some(&sandbox),
+            )
+            .await
+            .expect_err("unavailable MXC must fail closed");
+        assert_eq!(
+            (error.kind(), error.to_string()),
+            (
+                std::io::ErrorKind::InvalidInput,
+                "failed to prepare fs sandbox: failed to prepare MXC sandbox: native MXC is unavailable on this executor".to_owned(),
+            )
+        );
+        assert!(!blocked_file.exists());
+        return Ok(());
+    }
 
     let readable_file = readonly_dir.join("readable.txt");
     std::fs::write(&readable_file, b"readable")?;
@@ -369,12 +406,13 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy() ->
     // Some local Windows hosts cannot create restricted tokens. Reaching that
     // error still proves the remote fs helper went through the Windows sandbox
     // launcher; before the wrapper fix this read would have run unsandboxed.
-    if is_unsupported_restricted_token_host(&read_result) {
+    if sandbox_type == SandboxType::WindowsRestrictedToken
+        && is_unsupported_restricted_token_host(&read_result)
+    {
         return Ok(());
     }
     assert_eq!(read_result?, b"readable");
 
-    let blocked_file = readonly_dir.join("blocked.txt");
     let error = file_system
         .write_file(
             &PathUri::from_host_native_path(&blocked_file)?,
@@ -450,7 +488,7 @@ async fn file_system_private_desktop_survives_helper_exits_and_separates_permiss
     }
 
     let mut readonly = read_only_sandbox_for_cwd(tmp.path().to_path_buf())?;
-    readonly.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    readonly.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
     readonly.windows_sandbox_private_desktop = true;
     assert_eq!(
         file_system

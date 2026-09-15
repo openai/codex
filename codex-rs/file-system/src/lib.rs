@@ -325,6 +325,30 @@ impl TryFrom<ExecPermissionProfile> for PermissionProfile {
     }
 }
 
+/// Windows sandbox choice encoded in executor RPCs.
+///
+/// The serialized field retains its legacy `windowsSandboxLevel` name for compatibility, but MXC
+/// is a sandbox implementation rather than a RestrictedToken level.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowsSandboxSelection {
+    #[default]
+    Disabled,
+    RestrictedToken,
+    Elevated,
+    Mxc,
+}
+
+impl From<WindowsSandboxLevel> for WindowsSandboxSelection {
+    fn from(level: WindowsSandboxLevel) -> Self {
+        match level {
+            WindowsSandboxLevel::Disabled => Self::Disabled,
+            WindowsSandboxLevel::RestrictedToken => Self::RestrictedToken,
+            WindowsSandboxLevel::Elevated => Self::Elevated,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
@@ -339,7 +363,8 @@ pub struct FileSystemSandboxContext {
     /// Executor-local default directories used to resolve `:tmpdir` policy entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temporary_directories: Option<Vec<PathUri>>,
-    pub windows_sandbox_level: WindowsSandboxLevel,
+    #[serde(rename = "windowsSandboxLevel")]
+    pub windows_sandbox_selection: WindowsSandboxSelection,
     #[serde(default)]
     pub windows_sandbox_private_desktop: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -385,7 +410,7 @@ impl FileSystemSandboxContext {
             workspace_roots,
             user_home_dir: None,
             temporary_directories: None,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_selection: WindowsSandboxSelection::Disabled,
             windows_sandbox_private_desktop: false,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
@@ -400,6 +425,11 @@ impl FileSystemSandboxContext {
         let file_system_policy = permissions.file_system_sandbox_policy();
         matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
             && !file_system_policy.has_full_disk_write_access()
+    }
+
+    /// Whether this context selects either supported Windows sandbox implementation.
+    pub fn windows_sandbox_is_requested(&self) -> bool {
+        self.windows_sandbox_selection != WindowsSandboxSelection::Disabled
     }
 
     /// Borrows the executor-owned paths needed to interpret filesystem policy entries.

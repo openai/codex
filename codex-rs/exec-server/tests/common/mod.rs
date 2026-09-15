@@ -32,6 +32,16 @@ pub(crate) const SYSTEM_PROXY_URL_ENV: &str = "CODEX_EXEC_SERVER_TEST_SYSTEM_PRO
 const CODEX_WINDOWS_SANDBOX_ARG1: &str = "--run-as-windows-sandbox";
 const DELAYED_OUTPUT_AFTER_EXIT_CHILD_ARG: &str = "--codex-test-delayed-output-after-exit-child";
 
+#[macro_export]
+macro_rules! skip_if_mxc_unavailable {
+    ($return_value:expr $(,)?) => {{
+        if !codex_sandboxing::windows_mxc_available() {
+            eprintln!("skipping test: native MXC is unavailable on this host");
+            return $return_value;
+        }
+    }};
+}
+
 #[ctor]
 pub static TEST_BINARY_DISPATCH_GUARD: Option<TestBinaryDispatchGuard> = {
     let guard = configure_test_binary_dispatch("codex-exec-server-tests", |exe_name, argv1| {

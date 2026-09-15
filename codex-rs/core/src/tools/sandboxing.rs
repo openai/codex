@@ -13,6 +13,7 @@ use crate::state::SessionServices;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_file_system::FileSystemSandboxContext;
+use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -417,6 +418,17 @@ pub(crate) fn executor_windows_sandbox_level(
     }
 }
 
+pub(crate) fn executor_windows_sandbox_selection(
+    windows_sandbox_level: WindowsSandboxLevel,
+    cwd: &PathUri,
+) -> WindowsSandboxSelection {
+    if cwd.infer_path_convention() == Some(PathConvention::Windows) {
+        executor_windows_sandbox_level(windows_sandbox_level, cwd).into()
+    } else {
+        WindowsSandboxSelection::Disabled
+    }
+}
+
 impl<'a> SandboxAttempt<'a> {
     /// Whether this attempt bypasses sandboxing required by its ambient policy.
     /// Use the requested policy, not the controller's wrapper, for remote executors.
@@ -513,7 +525,7 @@ impl<'a> SandboxAttempt<'a> {
                 workspace_roots: self.workspace_roots.to_vec(),
                 user_home_dir: None,
                 temporary_directories: None,
-                windows_sandbox_level: executor_windows_sandbox_level(
+                windows_sandbox_selection: executor_windows_sandbox_selection(
                     self.windows_sandbox_level,
                     self.sandbox_cwd,
                 ),

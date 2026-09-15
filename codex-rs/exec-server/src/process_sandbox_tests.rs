@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCErrorError;
+#[cfg(unix)]
+use codex_file_system::WindowsSandboxSelection;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::NetworkPolicyAuditObserver;
@@ -135,8 +137,7 @@ async fn sandbox_request_wraps_native_argv_on_executor() {
     );
 
     let mut params = params;
-    params.sandbox.as_mut().unwrap().windows_sandbox_level =
-        codex_protocol::config_types::WindowsSandboxLevel::Mxc;
+    params.sandbox.as_mut().unwrap().windows_sandbox_selection = WindowsSandboxSelection::Mxc;
     let error = prepare_exec_request(
         &params,
         HashMap::new(),
@@ -620,7 +621,7 @@ async fn managed_network_honors_windows_sandbox_level(windows_sandbox_level: Win
         permissions.clone(),
         cwd_uri.clone(),
     );
-    sandbox.windows_sandbox_level = windows_sandbox_level;
+    sandbox.windows_sandbox_selection = windows_sandbox_level.into();
     sandbox.windows_sandbox_proxy_settings_mode =
         Some(codex_sandboxing::WindowsSandboxProxySettingsMode::Preserve);
     let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {

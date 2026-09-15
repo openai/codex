@@ -25,7 +25,7 @@ pub fn prepare_windows_sandbox_config(
     let selected_mode = configured_mode.or(match feature_level {
         WindowsSandboxLevel::Elevated => Some(WindowsSandboxModeToml::Elevated),
         WindowsSandboxLevel::RestrictedToken => Some(WindowsSandboxModeToml::Unelevated),
-        WindowsSandboxLevel::Disabled | WindowsSandboxLevel::Mxc => None,
+        WindowsSandboxLevel::Disabled => None,
     });
     apply_requirement_constrained_value("windows.sandbox", selected_mode, constraint, warnings)?;
     let effective_mode = *constraint.get();

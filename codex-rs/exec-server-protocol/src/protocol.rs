@@ -920,6 +920,7 @@ mod tests {
     use super::ProcessSandboxType;
     use super::ShellInfo;
     use codex_file_system::FileSystemSandboxContext;
+    use codex_file_system::WindowsSandboxSelection;
     use codex_network_proxy::ManagedNetworkSandboxContext;
     use codex_network_proxy::NetworkProxyAuditMetadata;
     use codex_network_proxy::NetworkProxyConfig;
@@ -1274,9 +1275,11 @@ mod tests {
         let mut sandbox =
             FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
         sandbox.user_home_dir = Some(cwd.clone());
+        sandbox.windows_sandbox_selection = WindowsSandboxSelection::Mxc;
 
         let serialized = serde_json::to_value(&sandbox).expect("serialize sandbox");
 
+        assert_eq!(serialized["windowsSandboxLevel"], "mxc");
         assert_eq!(
             serialized["userHomeDir"],
             serde_json::json!(cwd.to_string())

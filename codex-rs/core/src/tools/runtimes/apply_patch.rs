@@ -13,7 +13,7 @@ use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
-use crate::tools::sandboxing::executor_windows_sandbox_level;
+use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use codex_apply_patch::AppliedPatchDelta;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchOptions;
@@ -102,7 +102,7 @@ impl ApplyPatchRuntime {
             workspace_roots: attempt.workspace_roots.to_vec(),
             user_home_dir: req.turn_environment.user_home_dir.clone(),
             temporary_directories: None,
-            windows_sandbox_level: executor_windows_sandbox_level(
+            windows_sandbox_selection: executor_windows_sandbox_selection(
                 attempt.windows_sandbox_level,
                 attempt.sandbox_cwd,
             ),

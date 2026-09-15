@@ -27,6 +27,8 @@ use codex_exec_server::ShellInfo;
 #[cfg(unix)]
 use codex_exec_server::ShellSnapshotRequest;
 use codex_exec_server::StartedExecProcess;
+#[cfg(any(unix, windows))]
+use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server::WriteStatus;
 #[cfg(unix)]
 use codex_network_proxy::NetworkProxyConfig;
@@ -36,7 +38,6 @@ use codex_network_proxy::RemoteNetworkProxyConfig;
 use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
 #[cfg(unix)]
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
-use codex_protocol::config_types::WindowsSandboxLevel;
 #[cfg(unix)]
 use codex_protocol::models::PermissionProfile;
 #[cfg(unix)]
@@ -102,10 +103,6 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
             _server: None,
         })
     }
-}
-
-fn selected_windows_sandbox_available(windows_sandbox_level: WindowsSandboxLevel) -> bool {
-    windows_sandbox_level != WindowsSandboxLevel::Mxc || codex_sandboxing::windows_mxc_available()
 }
 
 #[cfg(target_os = "macos")]
@@ -1295,13 +1292,11 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
 }
 
 async fn assert_remote_windows_sandbox_process_write(
-    windows_sandbox_level: WindowsSandboxLevel,
     expected_sandbox_type: codex_sandboxing::SandboxType,
     tty: bool,
 ) -> Result<()> {
-    if !selected_windows_sandbox_available(windows_sandbox_level) {
-        eprintln!("skipping MXC enforcement test: native MXC is unavailable on this host");
-        return Ok(());
+    if expected_sandbox_type == codex_sandboxing::SandboxType::WindowsMxc {
+        crate::skip_if_mxc_unavailable!(Ok(()));
     }
     let context = create_process_context(/*use_remote*/ true).await?;
     let workspace = TempDir::new()?;
@@ -1311,7 +1306,19 @@ async fn assert_remote_windows_sandbox_process_write(
         SandboxPolicy::new_read_only_policy(),
         cwd.clone(),
     )?;
-    sandbox.windows_sandbox_level = windows_sandbox_level;
+    match expected_sandbox_type {
+        codex_sandboxing::SandboxType::WindowsRestrictedToken => {
+            sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+        }
+        codex_sandboxing::SandboxType::WindowsMxc => {
+            sandbox.windows_sandbox_selection = WindowsSandboxSelection::Mxc;
+        }
+        codex_sandboxing::SandboxType::None
+        | codex_sandboxing::SandboxType::MacosSeatbelt
+        | codex_sandboxing::SandboxType::LinuxSeccomp => {
+            anyhow::bail!("expected a Windows sandbox type")
+        }
+    }
 
     let session = match context
         .backend
@@ -1767,19 +1774,16 @@ async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()
 }
 
 #[test_case(
-    WindowsSandboxLevel::RestrictedToken,
     codex_sandboxing::SandboxType::WindowsRestrictedToken,
     false;
     "restricted_token"
 )]
 #[test_case(
-    WindowsSandboxLevel::Mxc,
     codex_sandboxing::SandboxType::WindowsMxc,
     false;
     "mxc_pipe"
 )]
 #[test_case(
-    WindowsSandboxLevel::Mxc,
     codex_sandboxing::SandboxType::WindowsMxc,
     true;
     "mxc_conpty"
@@ -1788,12 +1792,10 @@ async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial_test::serial(remote_exec_server)]
 async fn remote_windows_sandbox_process_accepts_process_write(
-    windows_sandbox_level: WindowsSandboxLevel,
     expected_sandbox_type: codex_sandboxing::SandboxType,
     tty: bool,
 ) -> Result<()> {
-    assert_remote_windows_sandbox_process_write(windows_sandbox_level, expected_sandbox_type, tty)
-        .await
+    assert_remote_windows_sandbox_process_write(expected_sandbox_type, tty).await
 }
 
 #[test_case(false ; "local")]

@@ -9,7 +9,7 @@ use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use crate::shell_snapshot::ShellSnapshotSandbox;
-use crate::tools::sandboxing::executor_windows_sandbox_level;
+use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use arc_swap::ArcSwap;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::ResolvedPluginMetricsOperation;
@@ -227,7 +227,7 @@ impl TurnEnvironment {
             workspace_roots: self.workspace_roots().to_vec(),
             user_home_dir: self.user_home_dir.clone(),
             temporary_directories: self.temporary_directories.clone(),
-            windows_sandbox_level: executor_windows_sandbox_level(
+            windows_sandbox_selection: executor_windows_sandbox_selection(
                 config.windows_sandbox_level,
                 self.cwd(),
             ),

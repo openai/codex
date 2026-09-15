@@ -26,48 +26,6 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 
 #[test]
-fn mxc_selection_preserves_unsandboxed_requests_and_other_platforms() {
-    let manager = SandboxManager::new();
-    let platform_sandbox = if cfg!(windows) {
-        SandboxType::WindowsMxc
-    } else {
-        get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None)
-    };
-    for (permissions, preference, expected) in [
-        (
-            PermissionProfile::read_only(),
-            SandboxablePreference::Auto,
-            platform_sandbox,
-        ),
-        (
-            PermissionProfile::Disabled,
-            SandboxablePreference::Require,
-            platform_sandbox,
-        ),
-        (
-            PermissionProfile::read_only(),
-            SandboxablePreference::Forbid,
-            SandboxType::None,
-        ),
-        (
-            PermissionProfile::Disabled,
-            SandboxablePreference::Auto,
-            SandboxType::None,
-        ),
-    ] {
-        assert_eq!(
-            manager.select_initial(
-                &permissions,
-                preference,
-                WindowsSandboxLevel::Mxc,
-                /*has_managed_network_requirements*/ false,
-            ),
-            expected,
-        );
-    }
-}
-
-#[test]
 fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
     let manager = SandboxManager::new();
     let sandbox = manager.select_initial(

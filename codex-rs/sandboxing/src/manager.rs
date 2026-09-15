@@ -333,9 +333,6 @@ impl SandboxManager {
         if !self.should_sandbox(permission_profile, pref, has_managed_network_requirements) {
             return SandboxType::None;
         }
-        if cfg!(windows) && windows_sandbox_level == WindowsSandboxLevel::Mxc {
-            return SandboxType::WindowsMxc;
-        }
         get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
             .unwrap_or(SandboxType::None)
     }

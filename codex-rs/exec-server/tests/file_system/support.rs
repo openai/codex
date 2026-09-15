@@ -7,7 +7,7 @@ use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LocalFileSystem;
-use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_exec_server::WindowsSandboxSelection;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -141,7 +141,7 @@ pub(crate) fn workspace_write_sandbox(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         PathUri::from_abs_path(&writable_root),
     );
-    sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+    sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
     sandbox
 }
 
@@ -163,7 +163,7 @@ fn sandbox_context(mut entries: Vec<FileSystemSandboxEntry>) -> FileSystemSandbo
         ),
     );
     if cfg!(windows) {
-        sandbox.windows_sandbox_level = WindowsSandboxLevel::RestrictedToken;
+        sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
     }
     sandbox
 }

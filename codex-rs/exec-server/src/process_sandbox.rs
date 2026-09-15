@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::process_telemetry::ProcessTelemetry;
 use codex_exec_server_protocol::JSONRPCErrorError;
+use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ManagedNetworkSandboxContext;
 use codex_network_proxy::ManagedProxyRouting;
@@ -22,7 +23,6 @@ use codex_sandboxing::SandboxDirectSpawnTransformRequest;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
-use codex_sandboxing::SandboxablePreference;
 use codex_sandboxing::WindowsSandboxFilesystemOverrides;
 use codex_sandboxing::WindowsSandboxProxySettingsMode;
 use codex_sandboxing::WindowsSandboxSpawnRequest;
@@ -39,6 +39,7 @@ use crate::ExecServerRuntimePaths;
 use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
+use crate::sandbox_selection::select_sandbox;
 
 pub(crate) struct PreparedExecRequest {
     pub(crate) command: Vec<String>,
@@ -53,7 +54,7 @@ pub(crate) struct PreparedExecRequest {
 struct PreparedWindowsSandboxRequest {
     permission_profile: PermissionProfile,
     workspace_roots: Vec<AbsolutePathBuf>,
-    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    windows_sandbox_level: WindowsSandboxLevel,
     proxy_enforced: bool,
     network_proxy_restricting_sid: Option<String>,
     proxy_settings_mode: WindowsSandboxProxySettingsMode,
@@ -87,7 +88,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     telemetry: &ProcessTelemetry,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
     if let Some(sandbox) = params.sandbox.as_ref()
-        && sandbox.windows_sandbox_level == codex_protocol::config_types::WindowsSandboxLevel::Mxc
+        && sandbox.windows_sandbox_selection == WindowsSandboxSelection::Mxc
     {
         if params.arg0.is_some() || sandbox.windows_sandbox_private_desktop {
             return Err(invalid_params(
@@ -120,11 +121,9 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
         prepare_managed_network(
             params.managed_network.as_ref(),
             network_proxy,
-            if params
-                .sandbox
-                .as_ref()
-                .is_some_and(|sandbox| sandbox.windows_sandbox_level == WindowsSandboxLevel::Mxc)
-            {
+            if params.sandbox.as_ref().is_some_and(|sandbox| {
+                sandbox.windows_sandbox_selection == WindowsSandboxSelection::Mxc
+            }) {
                 ManagedProxyRouting::DedicatedListeners
             } else {
                 ManagedProxyRouting::SharedIngress
@@ -213,10 +212,10 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     #[cfg(target_os = "macos")]
     let sandbox_manager = sandbox_manager
         .with_allowed_symlinked_codex_home(runtime_paths.allowed_symlinked_codex_home.clone());
-    let sandbox = sandbox_manager.select_initial(
+    let (sandbox, windows_sandbox_level) = select_sandbox(
+        &sandbox_manager,
         &permissions,
-        SandboxablePreference::Require,
-        sandbox_context.windows_sandbox_level,
+        sandbox_context,
         params.enforce_managed_network,
     );
     if sandbox == SandboxType::None {
@@ -272,7 +271,7 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
                 runtime_paths.codex_linux_sandbox_exe.as_deref()
             },
             use_legacy_landlock: sandbox_context.use_legacy_landlock,
-            windows_sandbox_level: sandbox_context.windows_sandbox_level,
+            windows_sandbox_level: windows_sandbox_level.unwrap_or(WindowsSandboxLevel::Disabled),
             windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
         },
     };
@@ -284,10 +283,12 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     }
     .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?;
     let windows_sandbox = if sandbox == SandboxType::WindowsRestrictedToken {
+        let windows_sandbox_level = windows_sandbox_level.ok_or_else(|| {
+            invalid_params("restricted token sandbox requires a sandbox level".to_string())
+        })?;
         request.arg0 = params.arg0.clone();
         let proxy_enforced = params.enforce_managed_network;
-        let use_elevated =
-            windows_sandbox_uses_elevated_backend(sandbox_context.windows_sandbox_level);
+        let use_elevated = windows_sandbox_uses_elevated_backend(windows_sandbox_level);
         let filesystem_overrides = if use_elevated {
             resolve_windows_elevated_filesystem_overrides(
                 sandbox,
@@ -300,14 +301,14 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
                 sandbox,
                 &permissions,
                 &native_sandbox_policy_cwd,
-                sandbox_context.windows_sandbox_level,
+                windows_sandbox_level,
             )
         }
         .map_err(|err| invalid_params(format!("failed to prepare process sandbox: {err}")))?;
         Some(PreparedWindowsSandboxRequest {
             permission_profile: permissions,
             workspace_roots: native_workspace_roots,
-            windows_sandbox_level: sandbox_context.windows_sandbox_level,
+            windows_sandbox_level,
             proxy_enforced,
             network_proxy_restricting_sid,
             proxy_settings_mode: windows_sandbox_proxy_settings_mode,
