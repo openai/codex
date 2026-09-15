@@ -1,0 +1,66 @@
+---
+source: tui/src/analytics/plot_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+sign=1
+           100.00
+ 100    ████████████
+        ████████████
+  50    ████████████
+        ████████████        ▁▁▁▁▁▁▁▁▁▁▁▁
+   0 ───────────────────────────────────────
+              ▲
+           Jan 14             Jan 15
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+2: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+Rows (column:palette):
+0: 0:0 11:1 17:0
+1: 0:0 1:2 4:0 8:3 20:0
+2: 0:0 8:3 20:0
+3: 0:0 2:2 4:0 8:3 20:0
+4: 0:0 8:3 20:0 28:3 40:0
+5: 0:0 3:2 4:0 5:2
+6: 0:0 14:1 15:0
+7: 0:0 11:4 17:0 30:2 36:0
+
+sign=-1
+            100.00
+  100    ████████████
+         ████████████
+   50    ████████████
+         ████████████
+    0 ──────────────────────────────────────
+                            ▇▇▇▇▇▇▇▇▇▇▇▇
+
+
+ -100
+
+               ▲
+            Jan 14             Jan 15
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+2: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).reversed()
+5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+Rows (column:palette):
+0: 0:0 12:1 18:0
+1: 0:0 2:2 5:0 9:3 21:0
+2: 0:0 9:3 21:0
+3: 0:0 3:2 5:0 9:3 21:0
+4: 0:0 9:3 21:0
+5: 0:0 4:2 5:0 6:2
+6: 0:0 28:4 40:0
+7: 0:0
+8: 0:0
+9: 0:0 1:2 5:0
+10: 0:0
+11: 0:0 15:1 16:0
+12: 0:0 12:5 18:0 31:2 37:0

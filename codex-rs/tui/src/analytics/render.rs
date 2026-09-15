@@ -1,4 +1,4 @@
-//! Shared report category aggregation for token model filtering.
+//! Shared report category aggregation and stacked-chart partitioning.
 
 use super::models::AccountAnalyticsHistory;
 use super::models::AccountAnalyticsValue;
@@ -23,4 +23,21 @@ pub(super) fn categories(history: &AccountAnalyticsHistory) -> Vec<AccountAnalyt
             .then_with(|| a.key.cmp(&b.key))
     });
     values
+}
+
+/// The last plotted category collects all remaining values without renormalizing them.
+pub(super) fn parts(
+    values: &[AccountAnalyticsValue],
+    categories: &[AccountAnalyticsValue],
+) -> [f64; 4] {
+    let mut parts = [0.0; 4];
+    for value in values {
+        let index = categories
+            .iter()
+            .take(/*n*/ 3)
+            .position(|category| category.key == value.key)
+            .unwrap_or(/*default*/ 3);
+        parts[index] += value.value;
+    }
+    parts
 }

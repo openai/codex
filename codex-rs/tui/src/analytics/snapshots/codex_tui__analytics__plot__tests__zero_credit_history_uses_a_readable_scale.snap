@@ -1,0 +1,27 @@
+---
+source: tui/src/analytics/plot_tests.rs
+expression: display(&rendered)
+---
+
+   1
+
+ 0.5
+       0    0     0    0     0    0   0.00
+   0 ───────────────────────────────────────
+                                        ▲
+       9   10    11   12    13   14    15
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+Rows (column:palette):
+0: 0:0
+1: 0:0 3:1 4:0
+2: 0:0
+3: 0:0 1:1 4:0
+4: 0:0 7:1 8:0 12:1 13:0 18:1 19:0 23:1 24:0 29:1 30:0 34:1 35:0 38:2 42:0
+5: 0:0 3:1 4:0 5:1
+6: 0:0 40:2 41:0
+7: 0:0 7:1 8:0 11:1 13:0 17:1 19:0 22:1 24:0 28:1 30:0 33:1 35:0 39:3 41:0

@@ -1,0 +1,98 @@
+---
+source: tui/src/analytics/plot_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+width=1
+
+1
+▄
+█
+─
+▲
+
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+Rows (column:palette):
+0: 0:0
+1: 0:1
+2: 0:2
+3: 0:2
+4: 0:3
+5: 0:1
+6: 0:0
+
+width=2
+
+ 1
+▄▄
+██
+──
+ ▲
+15
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+Rows (column:palette):
+0: 0:0
+1: 0:0 1:1
+2: 0:2
+3: 0:2
+4: 0:3
+5: 0:0 1:1
+6: 0:4
+
+width=5
+
+    1
+▄▄▄▄▄
+█████
+─────
+    ▲
+   15
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+Rows (column:palette):
+0: 0:0
+1: 0:0 4:1
+2: 0:2
+3: 0:2
+4: 0:3
+5: 0:0 4:1
+6: 0:0 3:4
+
+width=6
+
+     1
+▄▄▄▄▄▄
+██████
+──────
+     ▲
+Jan 15
+
+Palette:
+0: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
+3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
+4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+Rows (column:palette):
+0: 0:0
+1: 0:0 5:1
+2: 0:2
+3: 0:2
+4: 0:3
+5: 0:0 5:1
+6: 0:4
