@@ -42,6 +42,11 @@ pub(crate) fn ensure_v8_initialized() -> Result<(), String> {
 fn initialize_v8_with_mode(jit_mode: V8JitMode) -> Result<V8Initialization, String> {
     v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA)
         .map_err(|error_code| format!("failed to initialize ICU data: {error_code}"))?;
+    // The pinned V8 can inline Array.prototype.sort with incompatible element kinds.
+    // Disable the affected paths in TurboFan and the Maglev/Turbolev frontend until
+    // our V8 artifacts include the upstream fix for mixed-element sorting:
+    // https://github.com/v8/v8/commit/e0562d87ad9c17042b581582c99237d798572e67
+    v8::V8::set_flags_from_string("--no-maglev --no-turbolev --no-turbo-inline-array-builtins");
     match jit_mode {
         V8JitMode::Enabled => {}
         V8JitMode::Disabled => v8::V8::set_flags_from_string("--jitless"),
