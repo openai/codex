@@ -14,7 +14,7 @@ use tokio::fs;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-/// Dedicated daemon packages take precedence over standalone installations.
+/// New daemons own their packages, regardless of how the calling CLI was installed.
 /// Preserve legacy launch state, including logs left after a daemon is stopped;
 /// settings, installer selections, and lock files alone do not prove a prior launch.
 pub(crate) fn package_root(codex_home: &Path) -> PathBuf {
@@ -51,13 +51,6 @@ pub(crate) fn package_root(codex_home: &Path) -> PathBuf {
         }) {
             return codex_home.join("packages").join(package);
         }
-    }
-    // Retain CLI installs until the next stage adds dedicated package seeding.
-    let standalone = codex_home.join("packages/standalone");
-    if !matches!(standalone.join("current").symlink_metadata(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-    {
-        return standalone;
     }
     dedicated
 }

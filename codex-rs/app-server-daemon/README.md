@@ -45,7 +45,7 @@ should parse that JSON rather than relying on human-readable text. Lifecycle
 responses report the resolved backend, socket path, local CLI version, and
 running app-server version when applicable.
 
-Standalone-managed daemons check for updates after five minutes, then hourly by
+Eligible managed daemons check for updates after five minutes, then hourly by
 default. Edit `CODEX_HOME/app-server-daemon/settings.json` to change this:
 
 ```json
@@ -59,8 +59,9 @@ enabled state; the next updater wait reads a new interval. The preference does
 not affect an explicit `codex update` command or `daemon update`.
 
 `daemon update` checks the latest stable release once, even with automatic
-updates disabled. It requires a Codex installer-owned latest-channel standalone
-install. JSON reports `updated`, `noUpdate`, or `unsupported`, with installed
+updates disabled. It requires an installer-owned latest-channel package in either
+the dedicated daemon root or the retained legacy root. JSON reports `updated`,
+`noUpdate`, or `unsupported`, with installed
 and running versions. The updater owns scheduled and manual installs. A manual
 update restarts a running managed daemon, so active or queued work may be
 interrupted.
@@ -90,17 +91,29 @@ $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.c
 & "$codexHome\packages\standalone\current\bin\codex.exe" app-server daemon bootstrap --remote-control
 ```
 
-`bootstrap` requires the standalone managed install. It records the daemon
-settings under `CODEX_HOME/app-server-daemon/`, starts app-server as a
+`bootstrap` can use any complete CLI package. If no daemon package is installed,
+it copies the invoking package into `CODEX_HOME/packages/app-server-daemon` and
+prints an installation message without asking for confirmation. Existing daemon
+packages are reused, including legacy installations; a broken selection is not
+silently replaced. A bare executable cannot supply a new installation.
+
+It records the daemon settings under `CODEX_HOME/app-server-daemon/`, starts app-server as a
 pidfile-backed detached process. It launches a detached updater loop when
 automatic updates are enabled, the installer selected the stable `latest`
 channel, and the managed binary supports the updater command.
 
 ## Installation and update cases
 
-The daemon uses the standalone installer (`install.sh` on Unix, `install.ps1`
-on Windows) and its managed binary under `CODEX_HOME/packages/standalone/current`:
-`bin/codex` or `bin/codex.exe`, falling back to the legacy flat layout when present.
+New daemons use `CODEX_HOME/packages/app-server-daemon/current/bin/codex`
+(`codex.exe` on Windows). The package contains the executable and its helpers.
+Daemon-only installer updates leave the user's CLI command and shell setup alone.
+
+Previously launched legacy daemons retain `CODEX_HOME/packages/standalone/current`,
+including its flat binary layout when present. Starts and scheduled updates keep
+using that location. An explicit production update prepares and validates a
+compatible dedicated package before stopping the legacy updater and daemon,
+selecting the new package, and restarting only a previously running daemon.
+The old CLI package files and selection remain unchanged.
 
 | Situation | What starts | Does this daemon fetch new binaries? | Does a running app-server eventually move to a newer binary on its own? |
 | --- | --- | --- | --- |
@@ -108,11 +121,12 @@ on Windows) and its managed binary under `CODEX_HOME/packages/standalone/current
 | Installer selected an explicit release; `bootstrap` is used | Managed binary only | No; the selected release stays pinned. | No; an explicit restart uses the selected binary. |
 | Another tool updates the managed binary | A fresh start or explicit restart uses it; a running server is reused. | Yes, when a latest-channel updater is running, on the configured cadence. | An updater that was running through the change compares binary contents on its next successful installer pass and refreshes the server first. |
 
-### Standalone installs
+### Managed packages
 
-For installs created by either platform's standalone installer:
+For dedicated and retained legacy daemon installations:
 
-- lifecycle commands always use the standalone managed binary path
+- lifecycle commands use the selected daemon package, regardless of the invoking
+  CLI version; they do not implicitly replace an existing package
 - `bootstrap` is supported
 - managed `start`, `restart`, and `bootstrap` ensure a single detached pid-backed
   updater loop only when automatic updates are enabled for a stable latest-channel

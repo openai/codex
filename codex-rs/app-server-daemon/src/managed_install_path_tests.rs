@@ -21,7 +21,7 @@ fn discovers_package_and_legacy_installs() {
     // A CLI install and a previous stop/status operation do not establish ownership.
     assert_eq!(
         super::package_root(home.path()),
-        home.path().join("packages/standalone")
+        home.path().join("packages/app-server-daemon")
     );
     std::fs::write(state.join("app-server.stderr.log"), b"").unwrap();
     assert_eq!(super::managed_codex_bin(home.path()), legacy);

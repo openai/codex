@@ -6,6 +6,7 @@ use backend::windows::try_lock_file;
 mod client;
 mod install_lock;
 mod managed_install;
+mod prepare_install;
 mod remote_control_client;
 mod settings;
 mod thread_recovery;
@@ -217,23 +218,22 @@ pub async fn run(command: LifecycleCommand) -> Result<LifecycleOutput> {
     if matches!(command, LifecycleCommand::Start | LifecycleCommand::Restart) {
         backend::windows::ensure_not_elevated()?;
     }
-    Daemon::from_environment()?.run(command).await
+    // Keep daemon package preparation off callers' async stack frames.
+    Box::pin(Daemon::from_environment()?.run(command)).await
 }
 
 pub async fn bootstrap(options: BootstrapOptions) -> Result<BootstrapOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    Daemon::from_environment()?.bootstrap(options).await
+    Box::pin(Daemon::from_environment()?.bootstrap(options)).await
 }
 
 pub async fn ensure_remote_control_ready() -> Result<RemoteControlReadyOutput> {
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    Daemon::from_environment()?
-        .ensure_remote_control_ready()
-        .await
+    Box::pin(Daemon::from_environment()?.ensure_remote_control_ready()).await
 }
 
 pub async fn enable_remote_control_on_socket(
@@ -261,7 +261,7 @@ pub async fn set_remote_control(mode: RemoteControlMode) -> Result<RemoteControl
     ensure_supported_platform()?;
     #[cfg(windows)]
     backend::windows::ensure_not_elevated()?;
-    Daemon::from_environment()?.set_remote_control(mode).await
+    Box::pin(Daemon::from_environment()?.set_remote_control(mode)).await
 }
 
 pub async fn run_pid_update_loop(
@@ -381,6 +381,7 @@ impl Daemon {
     }
 
     async fn start(&self) -> Result<LifecycleOutput> {
+        let mut managed = self.clone();
         let settings = self.load_settings().await?;
         let (status, backend, pid, info) = if let Ok(info) = client::probe(&self.socket_path).await
         {
@@ -402,8 +403,10 @@ impl Daemon {
             if let Err(err) = thread_recovery::discard_pending(self) {
                 eprintln!("warning: failed to clear stale daemon recovery before start: {err}");
             }
-            self.ensure_managed_codex_bin()?;
-            let pid = self.start_managed_backend(&settings).await?;
+            prepare_install::prepare(self, &settings).await?;
+            managed.managed_codex_bin = self.current_managed_codex_bin()?;
+            managed.ensure_managed_codex_bin()?;
+            let pid = managed.start_managed_backend(&settings).await?;
             (
                 LifecycleStatus::Started,
                 Some(BackendKind::Pid),
@@ -412,11 +415,11 @@ impl Daemon {
             )
         };
         if backend.is_some()
-            && let Err(err) = self.ensure_managed_updater(&settings).await
+            && let Err(err) = managed.ensure_managed_updater(&settings).await
         {
             eprintln!("warning: failed to ensure managed updater after app-server start: {err:#}");
         }
-        Ok(self
+        Ok(managed
             .output(status, backend, pid, Some(info.app_server_version))
             .await)
     }
@@ -430,13 +433,16 @@ impl Daemon {
                 "app server is running but is not managed by codex app-server daemon"
             ));
         }
+        prepare_install::prepare(self, &settings).await?;
+        let mut managed = self.clone();
+        managed.managed_codex_bin = self.current_managed_codex_bin()?;
         if !settings.auto_update_enabled {
             backend::pid_update_loop_backend(self.backend_paths(&settings))
                 .stop()
                 .await?;
         }
 
-        self.ensure_managed_codex_bin()?;
+        managed.ensure_managed_codex_bin()?;
         if let Some(backend) = self.running_backend_instance(&settings).await? {
             if let Err(err) = thread_recovery::discard_pending(self) {
                 eprintln!("warning: failed to clear stale daemon recovery before restart: {err}");
@@ -446,14 +452,14 @@ impl Daemon {
                 .await?;
         }
 
-        let pid = self.start_managed_backend(&settings).await?;
+        let pid = managed.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
-        if let Err(err) = self.ensure_managed_updater(&settings).await {
+        if let Err(err) = managed.ensure_managed_updater(&settings).await {
             eprintln!(
                 "warning: failed to ensure managed updater after app-server restart: {err:#}"
             );
         }
-        Ok(self
+        Ok(managed
             .output(
                 LifecycleStatus::Restarted,
                 Some(BackendKind::Pid),
@@ -746,8 +752,6 @@ impl Daemon {
     }
 
     async fn bootstrap_locked(&self, options: BootstrapOptions) -> Result<BootstrapOutput> {
-        self.ensure_managed_codex_bin()?;
-
         let mut settings = self.load_settings().await?;
         settings.remote_control_enabled = options.remote_control_enabled;
         if client::probe(&self.socket_path).await.is_ok()
@@ -757,6 +761,10 @@ impl Daemon {
                 "app server is running but is not managed by codex app-server daemon"
             ));
         }
+        prepare_install::prepare(self, &settings).await?;
+        let mut managed = self.clone();
+        managed.managed_codex_bin = self.current_managed_codex_bin()?;
+        managed.ensure_managed_codex_bin()?;
         settings.save(&self.settings_file).await?;
 
         backend::pid_update_loop_backend(self.backend_paths(&settings))
@@ -771,17 +779,17 @@ impl Daemon {
                 .await?;
         }
 
-        let backend = backend::pid_backend(self.backend_paths(&settings));
+        let backend = backend::pid_backend(managed.backend_paths(&settings));
         backend.start().await?;
         let info = self.wait_until_ready().await?;
-        let auto_update_enabled = self.ensure_managed_updater(&settings).await?;
-        let managed_codex_version = self.managed_codex_version_best_effort().await;
+        let auto_update_enabled = managed.ensure_managed_updater(&settings).await?;
+        let managed_codex_version = managed.managed_codex_version_best_effort().await;
         Ok(BootstrapOutput {
             status: BootstrapStatus::Bootstrapped,
             backend: BackendKind::Pid,
             auto_update_enabled,
             remote_control_enabled: settings.remote_control_enabled,
-            managed_codex_path: self.managed_codex_bin.clone(),
+            managed_codex_path: managed.managed_codex_bin,
             managed_codex_version,
             socket_path: self.socket_path.clone(),
             cli_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -913,17 +921,8 @@ impl Daemon {
         }
 
         let managed_codex_path = self.managed_codex_bin.display();
-        let install_command = if cfg!(windows) {
-            "irm https://chatgpt.com/codex/install.ps1 | iex"
-        } else {
-            "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
-        };
         Err(anyhow!(
-            "managed standalone Codex install not found at {managed_codex_path}\n\n\
-             This command requires the standalone install managed by the Codex installer, because \
-             the daemon starts and updates app-server from that fixed path.\n\n\
-             Install it with:\n  {install_command}\n\n\
-             Then rerun the command you just tried."
+            "daemon executable not found at {managed_codex_path}; repair the existing installation, or run `codex app-server daemon start` to install a missing daemon"
         ))
     }
 

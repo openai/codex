@@ -323,3 +323,107 @@ fn manual_update_rejects_an_unowned_installation() -> Result<()> {
     assert!(daemon.pid("app-server-updater.pid").is_err());
     Ok(())
 }
+
+fn packaged_daemon_launch(action: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut daemon = TestDaemon::new()?;
+    let standalone = daemon.home.path().join("packages/standalone");
+    let package = if action == "start" {
+        standalone.join("releases/caller")
+    } else {
+        daemon.home.path().join("cli-package")
+    };
+    for directory in ["bin", "codex-path", "codex-resources"] {
+        std::fs::create_dir_all(package.join(directory))?;
+    }
+    std::fs::copy(&daemon.codex, package.join("bin/codex"))?;
+    daemon.codex = package.join("bin/codex");
+    for helper in [
+        "bin/codex-code-mode-host",
+        "codex-path/rg",
+        "codex-resources/bwrap",
+    ] {
+        std::fs::write(package.join(helper), b"runtime fixture")?;
+        std::fs::set_permissions(package.join(helper), std::fs::Permissions::from_mode(0o755))?;
+    }
+    let target = format!(
+        "{}-{}",
+        std::env::consts::ARCH,
+        if cfg!(target_os = "macos") {
+            "apple-darwin"
+        } else if cfg!(target_env = "gnu") {
+            "unknown-linux-gnu"
+        } else {
+            "unknown-linux-musl"
+        }
+    );
+    std::fs::write(
+        package.join("codex-package.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"), "target": target, "entrypoint": "bin/codex"
+        }))?,
+    )?;
+    if action == "start" {
+        std::fs::remove_file(standalone.join("current"))?;
+        std::os::unix::fs::symlink(&package, standalone.join("current"))?;
+    }
+    let cli_selection = standalone.join("current").canonicalize()?;
+    let state = daemon.home.path().join("app-server-daemon");
+    std::fs::remove_file(state.join("app-server.stderr.log"))?;
+    std::fs::write(
+        state.join("settings.json"),
+        br#"{"shutdownGraceSeconds":0}"#,
+    )?;
+    let cli_before = daemon.codex.canonicalize()?;
+    let result = daemon
+        .command()
+        .args(["app-server", "daemon", action])
+        .output()?;
+    ensure!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Installing daemon from CLI version"));
+    let output: Value = serde_json::from_slice(&result.stdout)?;
+    let dedicated = daemon
+        .home
+        .path()
+        .canonicalize()?
+        .join("packages/app-server-daemon");
+    assert_eq!(
+        output["managedCodexPath"],
+        dedicated
+            .join("current/bin/codex")
+            .to_str()
+            .context("managed path is not UTF-8")?
+    );
+    assert_eq!(
+        std::fs::read(dedicated.join("current/codex-path/rg"))?,
+        b"runtime fixture"
+    );
+    assert_eq!(daemon.codex.canonicalize()?, cli_before);
+    assert_eq!(standalone.join("current").canonicalize()?, cli_selection);
+    assert!(state.join("daemon.pid").exists());
+    assert!(!state.join("app-server.pid").exists());
+    assert!(!state.join("app-server-updater.pid").exists());
+    if action == "bootstrap" {
+        assert_eq!(output["autoUpdateEnabled"], false);
+    }
+    Ok(())
+}
+
+#[test]
+fn packaged_daemon_start_seeds_local_package() -> Result<()> {
+    packaged_daemon_launch("start")
+}
+
+#[test]
+fn packaged_daemon_restart_seeds_local_package() -> Result<()> {
+    packaged_daemon_launch("restart")
+}
+
+#[test]
+fn packaged_daemon_bootstrap_seeds_local_package() -> Result<()> {
+    packaged_daemon_launch("bootstrap")
+}
