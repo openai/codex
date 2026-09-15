@@ -185,6 +185,7 @@ pub(super) fn completed_item(
                         .unwrap_or(serde_json::Value::Null),
                     connector_id: event.connector_id.clone(),
                     mcp_app_resource_uri: event.mcp_app_resource_uri.clone(),
+                    mcp_app_ui: event.mcp_app_ui.clone(),
                     link_id: event.link_id.clone(),
                     app_name: event.app_name.clone(),
                     action_name: event.action_name.clone(),

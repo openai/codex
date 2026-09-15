@@ -2461,6 +2461,21 @@ class MarketplaceUpgradeResponse(BaseModel):
     upgraded_roots: Annotated[list[AbsolutePathBuf], Field(alias="upgradedRoots")]
 
 
+class McpAppDisplayMode(Enum):
+    inline = "inline"
+    fullscreen = "fullscreen"
+
+
+class McpAppUi(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    preferred_model_display_mode: Annotated[
+        McpAppDisplayMode, Field(alias="preferredModelDisplayMode")
+    ]
+    resource_uri: Annotated[str, Field(alias="resourceUri")]
+
+
 class McpAuthStatus(Enum):
     unknown = "unknown"
     unsupported = "unsupported"
@@ -5303,7 +5318,14 @@ class McpToolCallThreadItem(BaseModel):
         str | None,
         Field(
             alias="mcpAppResourceUri",
-            description="Deprecated: use `appContext.resourceUri` instead.",
+            description="Legacy compatibility field; prefer `mcpAppUi.resourceUri` when available.",
+        ),
+    ] = None
+    mcp_app_ui: Annotated[
+        McpAppUi | None,
+        Field(
+            alias="mcpAppUi",
+            description="Presentation captured from the invoked descriptor; absent in older history.",
         ),
     ] = None
     plugin_id: Annotated[str | None, Field(alias="pluginId")] = None

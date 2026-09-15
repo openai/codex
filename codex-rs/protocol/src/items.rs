@@ -425,6 +425,25 @@ pub struct FileChangeItem {
     pub stderr: Option<String>,
 }
 
+/// UI resource and display preference for model invocations, captured from the tool descriptor.
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpAppUi {
+    pub resource_uri: String,
+    pub preferred_model_display_mode: McpAppDisplayMode,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum McpAppDisplayMode {
+    Inline,
+    Fullscreen,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -436,9 +455,13 @@ pub struct McpToolCallItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub connector_id: Option<String>,
+    /// Legacy compatibility field; prefer `mcp_app_ui.resource_uri` when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_ui: Option<McpAppUi>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub link_id: Option<String>,

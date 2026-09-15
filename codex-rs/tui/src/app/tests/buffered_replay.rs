@@ -654,6 +654,7 @@ async fn misalignment_buffered_replay_preserves_input_after_continuation() {
             arguments: serde_json::json!({}),
             app_context: None,
             mcp_app_resource_uri: None,
+            mcp_app_ui: None,
             plugin_id: None,
             read_only_hint: None,
             result: None,

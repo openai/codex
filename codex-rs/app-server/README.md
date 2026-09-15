@@ -1,3 +1,15 @@
+# MCP App UI
+
+`mcpToolCall.mcpAppUi` records the invoked descriptor's `resourceUri`
+and `preferredModelDisplayMode` (`inline` or `fullscreen`). Descriptors with a widget
+URI default to `inline` when the preference is missing or unsupported. The
+UI information is preserved in tool-call events and saved history so clients can
+render without waiting for the full MCP catalog.
+
+The field is null for older history and tools that declare widgets only in
+result metadata; clients retain catalog discovery for those calls. Existing
+resource URI fields remain available for older clients.
+
 # Initial Daybreak choice (experimental)
 
 Persistent threads accept `daybreakEnabled` on `thread/start` with the

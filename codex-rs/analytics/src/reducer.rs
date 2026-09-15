@@ -3869,6 +3869,7 @@ mod tests {
                             arguments: serde_json::json!({}),
                             app_context: None,
                             mcp_app_resource_uri: None,
+                            mcp_app_ui: None,
                             plugin_id: None,
                             read_only_hint: None,
                             result: None,

@@ -10462,6 +10462,29 @@
       "title": "MarketplaceUpgradeResponse",
       "type": "object"
     },
+    "McpAppDisplayMode": {
+      "enum": [
+        "inline",
+        "fullscreen"
+      ],
+      "type": "string"
+    },
+    "McpAppUi": {
+      "description": "UI resource and display preference for model invocations, captured from the tool descriptor.",
+      "properties": {
+        "preferredModelDisplayMode": {
+          "$ref": "#/definitions/McpAppDisplayMode"
+        },
+        "resourceUri": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "preferredModelDisplayMode",
+        "resourceUri"
+      ],
+      "type": "object"
+    },
     "McpAuthStatus": {
       "enum": [
         "unknown",
@@ -19540,11 +19563,22 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
-              "description": "Deprecated: use `appContext.resourceUri` instead.",
+              "description": "Legacy compatibility field; prefer `mcpAppUi.resourceUri` when available.",
               "type": [
                 "string",
                 "null"
               ]
+            },
+            "mcpAppUi": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpAppUi"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Presentation captured from the invoked descriptor; absent in older history."
             },
             "pluginId": {
               "type": [

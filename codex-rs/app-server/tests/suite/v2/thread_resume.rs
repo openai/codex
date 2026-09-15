@@ -2770,6 +2770,7 @@ fn append_resume_redaction_history(
             },
             connector_id: Some("calendar".to_string()),
             mcp_app_resource_uri: Some("ui://widget/lookup.html".to_string()),
+            mcp_app_ui: None,
             link_id: Some("link_calendar".to_string()),
             app_name: Some("Calendar".to_string()),
             action_name: Some("lookup".to_string()),

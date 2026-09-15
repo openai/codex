@@ -14,6 +14,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::items::McpAppDisplayMode;
+use codex_protocol::items::McpAppUi;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::NetworkPermissions;
@@ -23,6 +25,8 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ElicitationAction;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -70,6 +74,142 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(json!({"ui": {"resourceUri": "ui://calendar/widget"}, "openai/ui": {"preferredModelDisplayMode": "fullscreen"}}), Some(McpAppDisplayMode::Fullscreen); "fullscreen")]
+#[test_case(json!({"ui": {"resourceUri": "ui://calendar/widget"}}), Some(McpAppDisplayMode::Inline); "missing preference")]
+#[test_case(json!({"ui": {"resourceUri": "ui://calendar/widget"}, "openai/ui": {"preferredModelDisplayMode": "unsupported"}}), Some(McpAppDisplayMode::Inline); "unsupported preference")]
+#[test_case(json!({"openai/outputTemplate": "ui://calendar/widget"}), Some(McpAppDisplayMode::Inline); "legacy uri")]
+#[test_case(json!({}), None; "result only ui")]
+async fn mcp_app_ui_survives_tool_events_and_resume(
+    mut metadata: Value,
+    expected_mode: Option<McpAppDisplayMode>,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount(&server).await?;
+    metadata["connector_id"] = json!("calendar");
+    metadata["connector_name"] = json!("Calendar");
+    Mock::given(method("POST"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
+        .and(body_partial_json(json!({"method": "tools/list"})))
+        .respond_with(move |request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("valid tools/list");
+            ResponseTemplate::new(/*status*/ 200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {"tools": [{
+                    "name": "calendar_create_event",
+                    "description": "Create a calendar event.",
+                    "inputSchema": {"type": "object", "properties": {}},
+                    "annotations": {"readOnlyHint": true},
+                    "_meta": metadata
+                }]}
+            }))
+        })
+        .with_priority(/*priority*/ 1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex("^/api/codex/ps/mcp/?$"))
+        .and(body_partial_json(json!({"method": "tools/call"})))
+        .respond_with(|request: &Request| {
+            let body: Value = serde_json::from_slice(&request.body).expect("valid tools/call");
+            ResponseTemplate::new(/*status*/ 200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {
+                    "content": [{"type": "text", "text": "Calendar opened."}],
+                    "_meta": {"openai/outputTemplate": "ui://calendar/result-widget"},
+                    "isError": false
+                }
+            }))
+        })
+        .with_priority(/*priority*/ 1)
+        .mount(&server)
+        .await;
+    let call_id = "calendar-ui";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-calendar"),
+                ev_function_call_with_namespace(
+                    call_id,
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    "{}",
+                ),
+                ev_completed("resp-calendar"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url);
+    let test = builder.build_with_auto_env(&server).await?;
+    submit_user_turn(
+        &test,
+        "Use [$calendar](app://calendar) to open the calendar widget.",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+        /*collaboration_mode*/ None,
+    )
+    .await?;
+
+    let expected_ui = expected_mode.map(|preferred_model_display_mode| McpAppUi {
+        resource_uri: "ui://calendar/widget".to_string(),
+        preferred_model_display_mode,
+    });
+    let expected_uri = expected_ui.as_ref().map(|ui| ui.resource_uri.clone());
+    let mut observed = Vec::new();
+    let mut completed = None;
+    wait_for_event(&test.codex, |event| {
+        match event {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::McpToolCall(item),
+                ..
+            })
+            | EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::McpToolCall(item),
+                ..
+            }) => {
+                observed.push((item.mcp_app_ui.clone(), item.mcp_app_resource_uri.clone()));
+            }
+            EventMsg::McpToolCallBegin(begin) => {
+                observed.push((begin.mcp_app_ui.clone(), begin.mcp_app_resource_uri.clone()));
+            }
+            EventMsg::McpToolCallEnd(end) => {
+                assert!(end.result.is_ok());
+                observed.push((end.mcp_app_ui.clone(), end.mcp_app_resource_uri.clone()));
+                completed = Some(event.clone());
+            }
+            _ => {}
+        }
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(observed, vec![(expected_ui, expected_uri); 4]);
+    assert_eq!(responses.requests().len(), 2);
+
+    let resumed = builder.restart(&server, &test).await?;
+    let completed_history = resumed
+        .session_configured
+        .initial_messages
+        .expect("resumed history")
+        .into_iter()
+        .filter(|event| matches!(event, EventMsg::McpToolCallEnd(end) if end.call_id == call_id))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        serde_json::to_value(completed_history)?,
+        serde_json::to_value(vec![completed.expect("completed MCP call")])?
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_session_approval_is_scoped_to_tool_link_id() -> Result<()> {

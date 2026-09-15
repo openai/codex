@@ -95,6 +95,7 @@ fn mcp_tool_call(id: &str, server: &str, status: McpToolCallStatus) -> TurnItem 
         arguments: serde_json::Value::Null,
         connector_id: None,
         mcp_app_resource_uri: None,
+        mcp_app_ui: None,
         link_id: None,
         app_name: None,
         action_name: None,

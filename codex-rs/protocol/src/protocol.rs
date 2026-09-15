@@ -2670,6 +2670,9 @@ pub struct McpToolCallBeginEvent {
     pub mcp_app_resource_uri: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub mcp_app_ui: Option<crate::items::McpAppUi>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub link_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -2700,6 +2703,9 @@ pub struct McpToolCallEndEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub mcp_app_resource_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mcp_app_ui: Option<crate::items::McpAppUi>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub link_id: Option<String>,
@@ -5392,6 +5398,7 @@ mod tests {
                 arguments: json!({"arg": "value"}),
                 connector_id: Some("connector".into()),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                mcp_app_ui: None,
                 link_id: Some("link_123".into()),
                 app_name: Some("Calendar".into()),
                 action_name: Some("create_event".into()),
@@ -5513,6 +5520,7 @@ mod tests {
                 arguments: json!({"arg": "value"}),
                 connector_id: Some("connector".into()),
                 mcp_app_resource_uri: Some("app://connector".into()),
+                mcp_app_ui: None,
                 link_id: Some("link_123".into()),
                 app_name: Some("Calendar".into()),
                 action_name: Some("create_event".into()),

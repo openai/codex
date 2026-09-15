@@ -251,6 +251,8 @@ export type { MarketplaceRemoveResponse } from "./MarketplaceRemoveResponse";
 export type { MarketplaceUpgradeErrorInfo } from "./MarketplaceUpgradeErrorInfo";
 export type { MarketplaceUpgradeParams } from "./MarketplaceUpgradeParams";
 export type { MarketplaceUpgradeResponse } from "./MarketplaceUpgradeResponse";
+export type { McpAppDisplayMode } from "./McpAppDisplayMode";
+export type { McpAppUi } from "./McpAppUi";
 export type { McpAuthStatus } from "./McpAuthStatus";
 export type { McpElicitationArrayType } from "./McpElicitationArrayType";
 export type { McpElicitationBooleanSchema } from "./McpElicitationBooleanSchema";

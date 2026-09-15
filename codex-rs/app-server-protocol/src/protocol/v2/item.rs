@@ -31,6 +31,8 @@ use codex_protocol::items::CollabAgentTool as CoreCollabAgentTool;
 use codex_protocol::items::CollabAgentToolCallStatus as CoreCollabAgentToolCallStatus;
 use codex_protocol::items::CommandExecutionStatus as CoreCommandExecutionStatus;
 use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
+pub use codex_protocol::items::McpAppDisplayMode;
+pub use codex_protocol::items::McpAppUi;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
@@ -337,8 +339,10 @@ pub enum ThreadItem {
         app_context: Option<McpToolCallAppContext>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
-        /// Deprecated: use `appContext.resourceUri` instead.
+        /// Legacy compatibility field; prefer `mcpAppUi.resourceUri` when available.
         mcp_app_resource_uri: Option<String>,
+        /// Presentation captured from the invoked descriptor; absent in older history.
+        mcp_app_ui: Option<McpAppUi>,
         plugin_id: Option<String>,
         read_only_hint: Option<bool>,
         result: Option<Box<McpToolCallResult>>,
@@ -1038,6 +1042,7 @@ impl From<CoreTurnItem> for ThreadItem {
                         action_name: mcp.action_name,
                     }),
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
+                    mcp_app_ui: mcp.mcp_app_ui,
                     plugin_id: mcp.plugin_id,
                     read_only_hint: mcp.read_only_hint,
                     result: mcp.result.map(McpToolCallResult::from).map(Box::new),
