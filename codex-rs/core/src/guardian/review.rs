@@ -13,6 +13,7 @@ use codex_guardian_reviewer::GuardianReviewError;
 use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
 use codex_guardian_reviewer::GuardianReviewSessionLimits;
+use codex_guardian_reviewer::ReviewModel;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -144,12 +145,7 @@ pub(super) struct GuardianReviewSessionConfig {
     pub(super) spawn_config: crate::config::Config,
     pub(super) node_repl_policy: GuardianNodeReplPolicy,
     pub(super) compaction_model_hash: Option<String>,
-    model: String,
-    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
-    default_review_model_id: String,
-    catalog_contains_auto_review: bool,
-    model_overridden: bool,
-    model_override: Option<String>,
+    review_model: ReviewModel,
 }
 
 pub(super) async fn guardian_review_session_config(
@@ -171,14 +167,7 @@ pub(super) async fn guardian_review_session_config(
         )
         .await;
     let default_review_model_id = turn.provider.approval_review_preferred_model();
-    let codex_guardian_reviewer::ReviewModel {
-        model: guardian_model,
-        reasoning_effort: guardian_reasoning_effort,
-        default_review_model_id,
-        catalog_contains_auto_review: guardian_catalog_contains_auto_review,
-        model_overridden: guardian_review_model_overridden,
-        model_override: guardian_review_model_override,
-    } = codex_guardian_reviewer::select_review_model(
+    let review_model = codex_guardian_reviewer::select_review_model(
         &context.model_info,
         context.reasoning_effort.as_ref(),
         default_review_model_id,
@@ -188,7 +177,7 @@ pub(super) async fn guardian_review_session_config(
     // Resolve a separate reviewer against the current catalog on every attempt.
     // Parent fallback must retain the action's metadata even after a catalog refresh.
     let guardian_model_info =
-        if !guardian_catalog_contains_auto_review && !guardian_review_model_overridden {
+        if !review_model.catalog_contains_auto_review && !review_model.model_overridden {
             Arc::clone(&context.model_info)
         } else {
             Arc::new(
@@ -196,7 +185,7 @@ pub(super) async fn guardian_review_session_config(
                     .services
                     .models_manager
                     .get_model_info(
-                        guardian_model.as_str(),
+                        review_model.model.as_str(),
                         &turn.config.to_models_manager_config(),
                     )
                     .await,
@@ -205,8 +194,8 @@ pub(super) async fn guardian_review_session_config(
     let mut spawn_config = build_guardian_review_session_config(
         turn.config.as_ref(),
         live_network_config,
-        guardian_model.as_str(),
-        guardian_reasoning_effort.clone(),
+        review_model.model.as_str(),
+        review_model.reasoning_effort.clone(),
         context.reasoning_summary,
         context.personality,
         guardian_model_info.model_messages.as_ref(),
@@ -221,7 +210,7 @@ pub(super) async fn guardian_review_session_config(
                 )
             })?;
     }
-    if guardian_model != context.model_info.slug {
+    if review_model.model != context.model_info.slug {
         spawn_config.model_context_window = None;
         spawn_config.model_auto_compact_token_limit = None;
     }
@@ -231,12 +220,7 @@ pub(super) async fn guardian_review_session_config(
         node_repl_policy: GuardianNodeReplPolicy::from_model_messages(
             guardian_model_info.model_messages.as_ref(),
         ),
-        model: guardian_model,
-        reasoning_effort: guardian_reasoning_effort,
-        default_review_model_id,
-        catalog_contains_auto_review: guardian_catalog_contains_auto_review,
-        model_overridden: guardian_review_model_overridden,
-        model_override: guardian_review_model_override,
+        review_model,
     })
 }
 
@@ -292,13 +276,8 @@ async fn run_guardian_review_session_before_deadline(
                 request,
                 reasons,
                 schema,
-                model: session_config.model,
+                review_model: session_config.review_model,
                 compaction_model_hash: session_config.compaction_model_hash,
-                reasoning_effort: session_config.reasoning_effort,
-                guardian_default_review_model_id: session_config.default_review_model_id,
-                guardian_catalog_contains_auto_review: session_config.catalog_contains_auto_review,
-                guardian_review_model_overridden: session_config.model_overridden,
-                guardian_review_model_override: session_config.model_override,
                 reasoning_summary: context.reasoning_summary,
                 personality: context.personality,
                 external_cancel,
