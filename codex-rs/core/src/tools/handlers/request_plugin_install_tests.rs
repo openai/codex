@@ -4,6 +4,9 @@ use crate::plugins::test_support::load_plugins_config;
 use crate::plugins::test_support::write_curated_plugin_sha;
 use crate::plugins::test_support::write_openai_api_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
+use crate::session::step_context::StepContext;
+use crate::session::tests::make_session_and_context;
+use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::ToolSuggestConfig;
@@ -13,6 +16,9 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_login::test_support::auth_manager_from_optional_auth;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_rmcp_client::ElicitationResponse;
 use codex_tools::DiscoverablePluginInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -21,6 +27,61 @@ use pretty_assertions::assert_eq;
 use rmcp::model::ElicitationAction;
 use serde_json::json;
 use tempfile::tempdir;
+use test_case::test_case;
+use tokio::sync::Mutex;
+
+#[test_case(ToolSuggestPresentation::ListTool; "legacy install")]
+#[test_case(ToolSuggestPresentation::RecommendationContext; "recommended plugin")]
+#[tokio::test]
+async fn request_plugin_install_rejects_subagent_threads(presentation: ToolSuggestPresentation) {
+    let (session, mut turn) = make_session_and_context().await;
+    turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: ThreadId::new(),
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let turn = Arc::new(turn);
+    let arguments = match presentation {
+        ToolSuggestPresentation::ListTool => json!({
+            "tool_type": "connector",
+            "action_type": "install",
+            "tool_id": "connector_calendar",
+            "suggest_reason": "Read the calendar for this request"
+        }),
+        ToolSuggestPresentation::RecommendationContext => json!({
+            "plugin_id": "google-calendar@openai-curated-remote",
+            "suggest_reason": "Read the calendar for this request"
+        }),
+    };
+
+    let result = RequestPluginInstallHandler::new(Vec::new(), presentation)
+        .handle(ToolInvocation {
+            session: Arc::new(session),
+            step_context: StepContext::for_test(Arc::clone(&turn)),
+            turn,
+            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
+            call_id: "call-1".to_string(),
+            tool_name: codex_tools::ToolName::plain(REQUEST_PLUGIN_INSTALL_TOOL_NAME),
+            source: crate::tools::context::ToolCallSource::Direct,
+            payload: ToolPayload::Function {
+                arguments: arguments.to_string(),
+            },
+        })
+        .await;
+
+    let Err(err) = result else {
+        panic!("subagent request_plugin_install should fail");
+    };
+    assert_eq!(
+        err,
+        FunctionCallError::RespondToModel(
+            "request_plugin_install can only be used by the root thread".to_string(),
+        )
+    );
+}
 
 #[test]
 fn request_plugin_install_does_not_support_parallel_tool_calls() {
