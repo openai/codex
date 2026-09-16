@@ -7,6 +7,7 @@ use crate::setup::SandboxSetupRequest;
 use crate::setup::SetupRootOverrides;
 use crate::spawn_prep::legacy_session_capability_roots;
 use crate::spawn_prep::prepare_legacy_session_security;
+use crate::winutil::current_account_name;
 use anyhow::Result;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -20,10 +21,6 @@ use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use tempfile::TempDir;
-use windows_sys::Win32::NetworkManagement::NetManagement::DNLEN;
-use windows_sys::Win32::NetworkManagement::NetManagement::UNLEN;
-use windows_sys::Win32::Security::Authentication::Identity::GetUserNameExW;
-use windows_sys::Win32::Security::Authentication::Identity::NameSamCompatible;
 
 #[test]
 fn private_desktop_rejects_interactive_and_injected_names() {
@@ -217,16 +214,6 @@ fn legacy_desktop_reuses_only_equivalent_permissions() -> Result<()> {
     );
     assert_eq!(desktop(&[])?.startup_name, name);
     Ok(())
-}
-
-fn current_account_name() -> Result<String> {
-    // Bazel does not provide USERDOMAIN or USERNAME in the test environment.
-    let mut account = [0; (DNLEN + UNLEN + 2) as usize];
-    let mut length = account.len() as u32;
-    if unsafe { GetUserNameExW(NameSamCompatible, account.as_mut_ptr(), &mut length) } == 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    Ok(String::from_utf16(&account[..length as usize])?)
 }
 
 fn workspace_permissions(workspace: &Path) -> Result<ResolvedWindowsSandboxPermissions> {

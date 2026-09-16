@@ -170,6 +170,8 @@ pub use acl::ensure_allow_write_aces;
 #[cfg(target_os = "windows")]
 pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
+pub use acl::grant_read_execute_aces;
+#[cfg(target_os = "windows")]
 pub use acl::path_has_standard_user_mutation_allow;
 #[cfg(target_os = "windows")]
 pub use acl::path_has_trusted_system_owner;

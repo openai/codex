@@ -6,6 +6,7 @@ use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::NetworkManagement::NetManagement::DNLEN;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_UserNotFound;
@@ -13,8 +14,11 @@ use windows_sys::Win32::NetworkManagement::NetManagement::NetApiBufferFree;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserGetInfo;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserSetInfo;
+use windows_sys::Win32::NetworkManagement::NetManagement::UNLEN;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1008;
+use windows_sys::Win32::Security::Authentication::Identity::GetUserNameExW;
+use windows_sys::Win32::Security::Authentication::Identity::NameSamCompatible;
 use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::CopySid;
@@ -28,6 +32,16 @@ use windows_sys::Win32::System::Diagnostics::Debug::FormatMessageW;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
+
+pub(crate) fn current_account_name() -> Result<String> {
+    // Sandbox launchers can filter USERNAME, so resolve the caller from its Windows token.
+    let mut account = [0; (DNLEN + UNLEN + 2) as usize];
+    let mut length = account.len() as u32;
+    if unsafe { GetUserNameExW(NameSamCompatible, account.as_mut_ptr(), &mut length) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("resolve current Windows account");
+    }
+    Ok(String::from_utf16(&account[..length as usize])?)
+}
 
 pub fn to_wide<S: AsRef<OsStr>>(s: S) -> Vec<u16> {
     let mut v: Vec<u16> = s.as_ref().encode_wide().collect();
