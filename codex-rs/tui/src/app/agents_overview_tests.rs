@@ -1830,8 +1830,40 @@ async fn overview_cold_resume_honors_working_directory_selection() -> Result<()>
             test_path_buf("/").abs()
         };
         let mut tui = crate::tui::test_support::make_test_tui()?;
+        // On this current-thread runtime, the server cannot answer until we yield. Cancel the
+        // pending selection to release its terminal borrow and inspect what the user sees now.
+        let mut selection =
+            Box::pin(app.select_agents_overview_thread(&mut tui, &mut app_server, thread_id));
+        assert!(futures::poll!(&mut selection).is_pending());
+        drop(selection);
+        let pending_loading =
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
         app.select_agents_overview_thread(&mut tui, &mut app_server, thread_id)
             .await?;
+        // The widget replacement clears the terminal; feedback must remain until the next draw.
+        let loading =
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
+        assert_eq!(pending_loading, loading);
+        let loading_text = loading
+            .content
+            .chunks(usize::from(loading.area.width))
+            .map(|row| {
+                row.iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            })
+            .map(|line| line.trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(loading_text.trim_end(), @"Loading task…");
+        }
+        app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+            .await?;
+        assert_ne!(
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+            &loading,
+        );
         let observed = app_server
             .resume_thread(
                 &app.local_settings,
