@@ -2335,8 +2335,10 @@ impl App {
                         error = %err,
                         "failed to persist approvals reviewer update"
                     );
-                    self.chat_widget
-                        .add_error_message(format!("Failed to save approvals reviewer: {err}"));
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to save approvals reviewer: {}",
+                        format_config_error(&err)
+                    ));
                 }
             }
             AppEvent::FetchExperimentalFeatures { thread_id, response_tx } => {
