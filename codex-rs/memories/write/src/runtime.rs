@@ -1,3 +1,5 @@
+use crate::metrics::MEMORY_STORAGE_BYTES;
+use crate::workspace::memory_storage_bytes;
 use codex_core::CodexThread;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -38,6 +40,7 @@ use codex_rollout_trace::InferenceTraceContext;
 use codex_state::MemoryStore;
 use codex_terminal_detection::user_agent;
 use futures::StreamExt;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -208,6 +211,36 @@ impl MemoryStartupContext {
 
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id
+    }
+
+    pub(crate) async fn record_storage_size(&self, root: &Path) {
+        let bytes = match memory_storage_bytes(root).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                tracing::warn!("failed measuring memory storage size: {err}");
+                return;
+            }
+        };
+        self.session_telemetry.histogram_with_boundaries(
+            MEMORY_STORAGE_BYTES,
+            i64::try_from(bytes).unwrap_or(i64::MAX),
+            // Log-spaced byte buckets cover small summaries through large memory collections.
+            &[
+                0.0,
+                1_024.0,
+                4_096.0,
+                16_384.0,
+                65_536.0,
+                262_144.0,
+                1_048_576.0,
+                4_194_304.0,
+                16_777_216.0,
+                67_108_864.0,
+                268_435_456.0,
+                1_073_741_824.0,
+            ],
+            &memory_metric_tags(self.version, &[]),
+        );
     }
 
     pub(crate) async fn memory_store(&self) -> Option<MemoryStore> {

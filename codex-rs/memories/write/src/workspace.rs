@@ -48,6 +48,26 @@ pub async fn reset_memory_workspace_baseline(root: &Path) -> anyhow::Result<()> 
     reset_git_repository(root).await
 }
 
+/// Sums regular-file contents without reading them, excluding git metadata and symbolic links.
+pub(crate) async fn memory_storage_bytes(root: &Path) -> std::io::Result<u64> {
+    let mut paths = vec![root.to_path_buf()];
+    let mut bytes = 0_u64;
+    while let Some(path) = paths.pop() {
+        let metadata = tokio::fs::symlink_metadata(&path).await?;
+        if metadata.is_file() {
+            bytes = bytes.saturating_add(metadata.len());
+        } else if metadata.is_dir() {
+            let mut entries = tokio::fs::read_dir(&path).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                if entry.file_name() != ".git" {
+                    paths.push(entry.path());
+                }
+            }
+        }
+    }
+    Ok(bytes)
+}
+
 /// Verifies that a completed consolidation run left the required memory artifacts in place.
 pub async fn validate_consolidation_artifacts(root: &Path) -> anyhow::Result<()> {
     validate_consolidation_artifacts_for_version(root, MemoryVersion::V1).await

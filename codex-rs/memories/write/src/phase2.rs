@@ -135,7 +135,7 @@ pub async fn run(
     {
         tracing::error!("Phase 2 no changes");
         // We check only after sync of the file system.
-        job::succeed(
+        if job::succeed(
             context.as_ref(),
             &db,
             &claim,
@@ -143,7 +143,11 @@ pub async fn run(
             &raw_memories,
             "succeeded_no_workspace_changes",
         )
-        .await;
+        .await
+        {
+            drop(phase_two_e2e_timer);
+            context.record_storage_size(&root).await;
+        }
         return;
     }
 
@@ -373,7 +377,6 @@ mod agent {
             let Some(db) = context.memory_store().await else {
                 return;
             };
-            let _phase_two_e2e_timer = phase_two_e2e_timer;
             let SpawnedConsolidationAgent { thread_id, thread } = agent;
 
             // Loop the agent until we have the final status.
@@ -457,6 +460,9 @@ mod agent {
                         tracing::error!(
                             "failed marking global memory consolidation job succeeded after resetting workspace baseline"
                         );
+                    } else {
+                        drop(phase_two_e2e_timer);
+                        context.record_storage_size(&memory_root).await;
                     }
                 }
             } else if !agent_completed {
