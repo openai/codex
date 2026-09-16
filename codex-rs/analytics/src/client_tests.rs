@@ -75,6 +75,7 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadArchivedNotification;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
@@ -149,6 +150,7 @@ fn sample_skill_track_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEv
             remote_plugin_id: None,
             thread_id: Some(thread_id.to_string()),
             turn_id: Some("turn-1".to_string()),
+            voice_session_id: None,
             invoke_type: Some(InvocationType::Explicit),
             model_slug: Some("gpt-5.1-codex".to_string()),
         },
@@ -236,6 +238,7 @@ fn sample_mcp_tool_call_event(thread_id: &str, plugin_id: Option<&str>) -> Track
             mcp_error_present: false,
             plugin_id: plugin_id.map(str::to_string),
             connector_id: None,
+            voice_session_id: None,
             elicitation_type: None,
         },
     })
@@ -996,6 +999,34 @@ fn track_notification_only_enqueues_analytics_relevant_notifications() {
         });
 
     client.track_notification(&ignored_notification);
+    assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn realtime_handoff_tracks_only_marker_without_transcript() {
+    let (client, mut receiver) = client_with_receiver();
+    client.track_notification(&ServerNotification::ThreadRealtimeItemAdded(
+        ThreadRealtimeItemAddedNotification {
+            thread_id: "thread-1".to_string(),
+            item: serde_json::json!({
+                "type": "handoff_request",
+                "input_transcript": "private speech",
+            }),
+        },
+    ));
+    let Ok(AnalyticsEventsQueueMessage::Fact(input)) = receiver.try_recv() else {
+        panic!("expected realtime handoff marker");
+    };
+    assert!(matches!(
+        *input,
+        AnalyticsFact::RealtimeHandoffRequested { thread_id } if thread_id == "thread-1"
+    ));
+    client.track_notification(&ServerNotification::ThreadRealtimeItemAdded(
+        ThreadRealtimeItemAddedNotification {
+            thread_id: "thread-1".to_string(),
+            item: serde_json::json!({"type": "input_transcript"}),
+        },
+    ));
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }
 

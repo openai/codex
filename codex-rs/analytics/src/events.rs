@@ -212,6 +212,7 @@ pub(crate) struct SkillInvocationEventParams {
     pub(crate) remote_plugin_id: Option<String>,
     pub(crate) thread_id: Option<String>,
     pub(crate) turn_id: Option<String>,
+    pub(crate) voice_session_id: Option<String>,
     pub(crate) invoke_type: Option<InvocationType>,
     pub(crate) model_slug: Option<String>,
 }
@@ -860,6 +861,7 @@ pub(crate) struct CodexMcpToolCallEventParams {
     pub(crate) mcp_error_present: bool,
     pub(crate) plugin_id: Option<String>,
     pub(crate) connector_id: Option<String>,
+    pub(crate) voice_session_id: Option<String>,
     pub(crate) elicitation_type: Option<ElicitationType>,
 }
 
@@ -973,6 +975,7 @@ pub(crate) struct CodexAppMentionedEventRequest {
 pub(crate) struct CodexAppUsedMetadata {
     #[serde(flatten)]
     pub(crate) app: CodexAppMetadata,
+    pub(crate) voice_session_id: Option<String>,
     pub(crate) elicitation_type: Option<ElicitationType>,
 }
 
@@ -1065,6 +1068,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
     pub(crate) session_id: String,
     pub(crate) turn_id: String,
+    pub(crate) voice_session_id: Option<String>,
     pub(crate) root_turn_id: Option<String>,
     pub(crate) turn_trigger: Option<String>,
     pub(crate) codex_turn_source: Option<String>,

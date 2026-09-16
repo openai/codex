@@ -227,6 +227,9 @@ struct ThreadAnalyticsState {
     connection_id: Option<u64>,
     metadata: Option<ThreadMetadataState>,
     originator: Option<String>,
+    active_voice_session_id: Option<String>,
+    active_turn_id: Option<String>,
+    pending_voice_handoffs: VecDeque<Option<String>>,
 }
 
 impl ThreadAnalyticsState {
@@ -428,6 +431,7 @@ struct CompletedTurnState {
 struct TurnState {
     connection_id: Option<u64>,
     thread_id: Option<String>,
+    voice_session_id: Option<String>,
     num_input_images: Option<usize>,
     image_preparations: Vec<ImagePreparationMetadata>,
     resolved_config: Option<TurnResolvedConfigFact>,
@@ -608,6 +612,16 @@ impl AnalyticsReducer {
                 request_id,
             } => {
                 self.ingest_server_request_aborted(completed_at_ms, request_id, out);
+            }
+            AnalyticsFact::RealtimeHandoffRequested { thread_id } => {
+                let thread = self.threads.entry(thread_id).or_default();
+                // ThreadRealtimeStarted already attributes an active turn; only a new turn
+                // needs the handoff queued after the realtime session closes.
+                if thread.active_turn_id.is_none() {
+                    thread
+                        .pending_voice_handoffs
+                        .push_back(thread.active_voice_session_id.clone());
+                }
             }
             AnalyticsFact::Custom(input) => match input {
                 CustomAnalyticsFact::ArtifactOperation(input) => {
@@ -1374,6 +1388,10 @@ impl AnalyticsReducer {
                     event_params: SkillInvocationEventParams {
                         thread_id: Some(tracking.thread_id.clone()),
                         turn_id: Some(tracking.turn_id.clone()),
+                        voice_session_id: self
+                            .turns
+                            .get(&tracking.turn_id)
+                            .and_then(|turn| turn.voice_session_id.clone()),
                         invoke_type: Some(invocation.invocation_type),
                         model_slug: Some(tracking.model_slug.clone()),
                         product_client_id: Some(tracking.product_client_id.clone()),
@@ -1405,6 +1423,10 @@ impl AnalyticsReducer {
         } = input;
         let event_params = CodexAppUsedMetadata {
             app: codex_app_metadata(&tracking, app),
+            voice_session_id: self
+                .turns
+                .get(&tracking.turn_id)
+                .and_then(|turn| turn.voice_session_id.clone()),
             elicitation_type,
         };
         out.push(TrackEventRequest::AppUsed(CodexAppUsedEventRequest {
@@ -2009,7 +2031,7 @@ impl AnalyticsReducer {
                 else {
                     return;
                 };
-                if let Some(event) = tool_item_event(ToolItemEventInput {
+                if let Some(mut event) = tool_item_event(ToolItemEventInput {
                     thread_id: &notification.thread_id,
                     turn_id: &notification.turn_id,
                     item: &notification.item,
@@ -2022,6 +2044,12 @@ impl AnalyticsReducer {
                     review_summary: self.item_review_summaries.get(&key),
                     elicitation_type,
                 }) {
+                    if let TrackEventRequest::McpToolCall(mcp) = &mut event {
+                        mcp.event_params.voice_session_id = self
+                            .turns
+                            .get(&notification.turn_id)
+                            .and_then(|turn| turn.voice_session_id.clone());
+                    }
                     let root_turn_id = self
                         .turns
                         .get(&notification.turn_id)
@@ -2072,9 +2100,39 @@ impl AnalyticsReducer {
                 self.code_mode_cells.remove(&notification.thread_id);
                 self.pending_mcp_tool_elicitations
                     .retain(|(key, _)| key.thread_id != notification.thread_id);
+                if let Some(thread) = self.threads.get_mut(&notification.thread_id) {
+                    thread.active_voice_session_id = None;
+                    thread.active_turn_id = None;
+                    thread.pending_voice_handoffs.clear();
+                }
+            }
+            ServerNotification::ThreadRealtimeStarted(notification) => {
+                let thread = self.threads.entry(notification.thread_id).or_default();
+                thread.active_voice_session_id =
+                    notification.realtime_session_id.filter(|id| !id.is_empty());
+                if let Some(turn_id) = &thread.active_turn_id {
+                    self.turns
+                        .entry(turn_id.clone())
+                        .or_default()
+                        .voice_session_id = thread.active_voice_session_id.clone();
+                }
+            }
+            ServerNotification::ThreadRealtimeClosed(notification) => {
+                if let Some(thread) = self.threads.get_mut(&notification.thread_id) {
+                    thread.active_voice_session_id = None;
+                }
             }
             ServerNotification::TurnStarted(notification) => {
+                let voice_session_id = {
+                    let thread = self.threads.entry(notification.thread_id).or_default();
+                    thread.active_turn_id = Some(notification.turn.id.clone());
+                    thread
+                        .pending_voice_handoffs
+                        .pop_front()
+                        .unwrap_or_else(|| thread.active_voice_session_id.clone())
+                };
                 let turn_state = self.turns.entry(notification.turn.id).or_default();
+                turn_state.voice_session_id = voice_session_id;
                 turn_state.started_at = notification
                     .turn
                     .started_at
@@ -2086,6 +2144,11 @@ impl AnalyticsReducer {
                 turn_state.latest_diff = Some(notification.diff);
             }
             ServerNotification::TurnCompleted(notification) => {
+                if let Some(thread) = self.threads.get_mut(&notification.thread_id)
+                    && thread.active_turn_id.as_deref() == Some(notification.turn.id.as_str())
+                {
+                    thread.active_turn_id = None;
+                }
                 self.flush_pending_tool_events(&notification.thread_id, &notification.turn.id, out);
                 let turn_state = self.turns.entry(notification.turn.id.clone()).or_default();
                 turn_state.completed = Some(CompletedTurnState {
@@ -2838,6 +2901,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                         connector_id: app_context
                             .as_ref()
                             .map(|app_context| app_context.connector_id.clone()),
+                        voice_session_id: None,
                         elicitation_type,
                     },
                 },
@@ -3594,6 +3658,7 @@ fn codex_turn_event_params(
         thread_id,
         session_id: thread_metadata.session_id.clone(),
         turn_id,
+        voice_session_id: turn_state.voice_session_id.clone(),
         root_turn_id: turn_metadata.root_turn_id(),
         turn_trigger: turn_metadata.turn_trigger(),
         codex_turn_source: turn_metadata.codex_turn_source(),
