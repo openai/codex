@@ -40,7 +40,7 @@ pub(crate) fn ensure_v8_initialized() -> Result<(), String> {
 }
 
 fn initialize_v8_with_mode(jit_mode: V8JitMode) -> Result<V8Initialization, String> {
-    v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA)
+    v8::icu::set_common_data_78(deno_core_icudata::ICU_DATA)
         .map_err(|error_code| format!("failed to initialize ICU data: {error_code}"))?;
     // The pinned V8 can inline Array.prototype.sort with incompatible element kinds.
     // Disable the affected paths in TurboFan and the Maglev/Turbolev frontend until

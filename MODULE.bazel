@@ -555,7 +555,7 @@ crate.annotation(
     },
     crate = "v8",
     # Keep the Rust feature aligned with the source-built Bazel artifacts.
-    # Windows MSVC still consumes upstream non-sandboxed prebuilts.
+    # Windows MSVC consumes Codex sandbox release archives.
     crate_features_select = {
         "aarch64-apple-darwin": ["v8_enable_sandbox"],
         "aarch64-pc-windows-gnullvm": ["v8_enable_sandbox"],
@@ -768,27 +768,28 @@ inject_repo(crate, "alsa_lib")
     ]
 ]
 
-bazel_dep(name = "v8", version = "15.0.245.2")
+bazel_dep(name = "v8", version = "15.2.124.1")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-Fk89PgqLTAKjhtOojRsRM9N+XCC+Ajn+zc3eQUpDQNU=",
+    integrity = "sha256-aNN5G427qQbP/5o+NXONgXR8ZvS6mjf6mfAI6jtxyzI=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
+        "//patches:v8_array_sort_elements_kind.patch",
     ],
-    strip_prefix = "v8-15.0.245.2",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/15.0.245.2.tar.gz"],
+    strip_prefix = "v8-15.2.124.1",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/15.2.124.1.tar.gz"],
 )
 
 http_archive(
-    name = "v8_crate_150_4_0",
+    name = "v8_crate_152_2_0",
     build_file = "//third_party/v8:v8_crate.BUILD.bazel",
-    sha256 = "42a978ff11f15b24e5c05a7123cf2b68f41e763546699781a924ef4e2cf43a49",
-    strip_prefix = "v8-150.4.0",
+    sha256 = "a10fe1a92da5c32c7c7f838ce36c0ccfcfd5edf0865b58bdde820aa64cea9888",
+    strip_prefix = "v8-152.2.0",
     type = "tar.gz",
-    urls = ["https://static.crates.io/crates/v8/v8-150.4.0.crate"],
+    urls = ["https://static.crates.io/crates/v8/v8-152.2.0.crate"],
 )
 
 git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
@@ -796,7 +797,7 @@ git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "g
 git_repository(
     name = "rusty_v8_libcxx",
     build_file = "//third_party/v8:libcxx.BUILD.bazel",
-    commit = "5abc7f839700f0f17338434e1c1c6a8c87c00c11",
+    commit = "b16984ce99c702355a5b2b4c52574e82cec41fb9",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git",
 )
 
@@ -810,10 +811,12 @@ git_repository(
 git_repository(
     name = "rusty_v8_llvm_libc",
     build_file = "//third_party/v8:llvm_libc.BUILD.bazel",
-    commit = "9309c117ebae84dd2f9df1ef99de4782162527d5",
+    commit = "75ae50cd48c8a9d70f552ccff040029968778da9",
     remote = "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git",
 )
 
+# TODO: Replace these unused 150.4.0 pins with the 152.2.0 Windows sandbox
+# artifacts and checksums produced by v8-canary before merging this candidate.
 http_file(
     name = "rusty_v8_150_4_0_aarch64_pc_windows_msvc_archive",
     downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",

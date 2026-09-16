@@ -3,14 +3,14 @@
 # Scope: upstream MODULE.bazel only; affects external repo resolution and Bazel
 # module wiring, not V8 source files.
 
-diff --git a/orig/v8-15.0.245.2/MODULE.bazel b/mod/v8-15.0.245.2/MODULE.bazel
+diff --git a/orig/v8-15.2.124.1/MODULE.bazel b/mod/v8-15.2.124.1/MODULE.bazel
 index b8bf8bd..573f463 100644
---- a/orig/v8-15.0.245.2/MODULE.bazel
-+++ b/mod/v8-15.0.245.2/MODULE.bazel
-@@ -8,193 +8,67 @@ bazel_dep(name = "rules_cc", version = "0.2.0")
- bazel_dep(name = "rules_python", version = "1.0.0")
+--- a/orig/v8-15.2.124.1/MODULE.bazel
++++ b/mod/v8-15.2.124.1/MODULE.bazel
+@@ -8,193 +8,67 @@ bazel_dep(name = "rules_cc", version = "0.2.17")
+ bazel_dep(name = "rules_python", version = "1.7.0")
  bazel_dep(name = "platforms", version = "1.0.0")
- bazel_dep(name = "abseil-cpp", version = "20250814.0")
+ bazel_dep(name = "abseil-cpp", version = "20250814.1")
 -bazel_dep(name = "highway", version = "1.2.0")
 -
 -pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
@@ -155,7 +155,7 @@ index b8bf8bd..573f463 100644
 +git_repository(
 +    name = "icu",
 +    build_file = "@v8//:bazel/BUILD.icu",
-+    commit = "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
++    commit = "d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738",
 +    patch_cmds = ["find source -name BUILD.bazel | xargs rm"],
 +    patch_cmds_win = ["Get-ChildItem -Path source -File -Include BUILD.bazel -Recurse | Remove-Item"],
 +    remote = "https://chromium.googlesource.com/chromium/deps/icu.git",
@@ -252,11 +252,11 @@ index b8bf8bd..573f463 100644
 +    ],
  )
 +use_repo(pip, "v8_python_deps")
-diff --git a/mod/v8-15.0.245.2/bazel/highway.patch b/mod/v8-15.0.245.2/bazel/highway.patch
+diff --git a/mod/v8-15.2.124.1/bazel/highway.patch b/mod/v8-15.2.124.1/bazel/highway.patch
 new file mode 100644
 index 0000000..5a13dd0
 --- /dev/null
-+++ b/mod/v8-15.0.245.2/bazel/highway.patch
++++ b/mod/v8-15.2.124.1/bazel/highway.patch
 @@ -0,0 +1,25 @@
 +diff --git a/BUILD b/BUILD
 +--- a/BUILD

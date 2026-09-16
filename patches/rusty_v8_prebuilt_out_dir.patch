@@ -4,14 +4,13 @@
 
 --- a/build.rs
 +++ b/build.rs
-@@ -543,10 +543,15 @@
+@@ -782,8 +782,13 @@
  }
  
  fn static_lib_name(suffix: &str) -> String {
--  let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
--  if target_os == "windows" {
 +  let target = env::var("TARGET").unwrap();
-+  let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+   let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
+-  if target_os == "windows" {
 +  if target.contains("windows-gnullvm") {
 +    // rustc looks for GNU-style archive names when bundling `-lstatic` on the
 +    // gnullvm targets, even though the prebuilt release is a COFF `.lib`.
@@ -20,9 +19,7 @@
      format!("rusty_v8{suffix}.lib")
    } else {
      format!("librusty_v8{suffix}.a")
-   }
- }
-@@ -577,7 +577,23 @@
+@@ -961,7 +966,23 @@
    path
  }
  
@@ -46,7 +43,7 @@
    build_dir().join("gn_out").join("obj")
  }
  
-@@ -794,22 +810,23 @@
+@@ -1679,9 +1700,11 @@
  }
  
  fn print_link_flags() {
@@ -58,13 +55,7 @@
      || env::var("GN_ARGS").is_ok_and(|gn_args| {
        gn_args
          .split_whitespace()
-         .any(|ba| ba == "use_custom_libcxx=false")
-     });
- 
-   if should_dyn_link_libcxx {
-     // Based on https://github.com/alexcrichton/cc-rs/blob/fba7feded71ee4f63cfe885673ead6d7b4f2f454/src/lib.rs#L2462
-     if let Ok(stdlib) = env::var("CXXSTDLIB") {
-       if !stdlib.is_empty() {
+@@ -1695,7 +1718,6 @@
          println!("cargo:rustc-link-lib=dylib={stdlib}");
        }
      } else {
