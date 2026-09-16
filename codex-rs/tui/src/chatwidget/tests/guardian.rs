@@ -237,6 +237,21 @@ async fn approving_recent_denial_emits_structured_core_op_once() {
 }
 
 #[tokio::test]
+async fn prompt_revert_discards_recent_denial_actions() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.on_guardian_assessment(auto_review_denial_event());
+    chat.reset_after_prompt_revert(/*rollout_path*/ None, &[]);
+    drain_insert_history(&mut rx);
+
+    chat.approve_recent_auto_review_denial(thread_id, "auto-review-recent-1".to_string());
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn guardian_denied_exec_renders_warning_and_denied_request() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.show_welcome_banner = false;

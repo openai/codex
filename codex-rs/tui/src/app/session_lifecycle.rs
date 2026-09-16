@@ -19,7 +19,6 @@ use std::collections::HashSet;
 #[derive(Clone, Copy)]
 pub(super) enum ThreadAttachPresentation {
     SessionLineage,
-    PromptEdit,
 }
 
 /// Reports whether a loaded-thread backfill completed and which descendants already had their
@@ -1197,11 +1196,6 @@ impl App {
             .adjacent_thread_id(self.current_displayed_thread_id(), direction)
     }
 
-    pub(super) fn fresh_session_config(&self) -> Config {
-        let mut config = self.config.clone();
-        config.service_tier = self.chat_widget.configured_service_tier();
-        config
-    }
     pub(super) async fn resume_target_session(
         &mut self,
         tui: &mut tui::Tui,

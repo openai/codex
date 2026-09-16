@@ -937,6 +937,63 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 }
 
 #[tokio::test]
+async fn prompt_edit_stops_streaming_without_submitting_queued_input() {
+    let (mut chat, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+    chat.on_agent_message_delta("removed response".into());
+    chat.queue_user_message("queued follow-up".into());
+    chat.enter_review_mode_with_hint("review".into(), /*from_replay*/ false);
+
+    let retained_turn = AppServerTurn {
+        items: vec![
+            AppServerThreadItem::AgentMessage {
+                id: "retained-response".to_string(),
+                text: "retained response".to_string(),
+                phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            },
+            AppServerThreadItem::UserMessage {
+                id: "voice-steer".to_string(),
+                client_id: None,
+                content: vec![UserInput::Text {
+                    text: "<realtime_delegation><input>voice input</input></realtime_delegation>"
+                        .to_string(),
+                    text_elements: Vec::new(),
+                }],
+            },
+            AppServerThreadItem::AgentMessage {
+                id: "private-commentary".to_string(),
+                text: "hidden voice commentary".to_string(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            },
+        ],
+        ..app_server_turn(
+            "retained-turn",
+            AppServerTurnStatus::Completed,
+            /*duration_ms*/ None,
+            /*error*/ None,
+        )
+    };
+    chat.reset_after_prompt_revert(/*rollout_path*/ None, &[retained_turn]);
+    chat.pre_draw_tick();
+
+    assert_eq!(
+        (
+            chat.is_user_turn_pending_or_running(),
+            chat.has_active_stream_tail(),
+            chat.maybe_send_next_queued_input(),
+            chat.last_agent_markdown_text(),
+        ),
+        (false, false, false, Some("retained response")),
+    );
+}
+
+#[tokio::test]
 async fn prompt_edit_thread_history_line_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

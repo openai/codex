@@ -1361,7 +1361,7 @@ mod tests {
 
             let default_effort =
                 app.on_apply_advanced_reasoning("gpt-5.5", ReasoningEffortConfig::Ultra);
-            let new_thread_config = app.fresh_session_config();
+            let new_thread_config = &app.config;
 
             assert_eq!(default_effort, Some(expected_default_effort.clone()));
             assert_eq!(app.chat_widget.current_model(), "gpt-5.5");
@@ -1372,7 +1372,7 @@ mod tests {
             assert_eq!(
                 (
                     new_thread_config.model.as_deref(),
-                    new_thread_config.model_reasoning_effort,
+                    new_thread_config.model_reasoning_effort.clone(),
                 ),
                 (Some("gpt-5.5"), Some(expected_default_effort))
             );
@@ -1401,7 +1401,7 @@ mod tests {
 
         let default_effort =
             app.on_apply_advanced_reasoning("ultra-only", ReasoningEffortConfig::Ultra);
-        let new_thread_config = app.fresh_session_config();
+        let new_thread_config = &app.config;
 
         assert_eq!(default_effort, None);
         assert_eq!(app.chat_widget.current_model(), "ultra-only");
@@ -1412,7 +1412,7 @@ mod tests {
         assert_eq!(
             (
                 new_thread_config.model.as_deref(),
-                new_thread_config.model_reasoning_effort,
+                new_thread_config.model_reasoning_effort.clone(),
             ),
             (Some("gpt-5.5"), Some(ReasoningEffortConfig::Low))
         );
@@ -1658,7 +1658,7 @@ enabled = false
         )?;
 
         let assert_cloud_requirements = |app: &App| {
-            let config = app.fresh_session_config();
+            let config = &app.config;
             assert_eq!(
                 config
                     .config_layer_stack

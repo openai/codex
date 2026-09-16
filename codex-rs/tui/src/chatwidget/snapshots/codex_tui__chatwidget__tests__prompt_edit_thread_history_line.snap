@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/history_replay.rs
 expression: combined
 ---
-• You’re continuing from this point in a new conversation
+• Conversation reverted to this point. File changes are unchanged.

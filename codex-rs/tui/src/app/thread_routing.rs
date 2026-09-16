@@ -1542,9 +1542,6 @@ impl App {
             ThreadAttachPresentation::SessionLineage => {
                 self.chat_widget.handle_thread_session(session);
             }
-            ThreadAttachPresentation::PromptEdit => {
-                self.chat_widget.handle_prompt_edit_thread_session(session);
-            }
         }
         let should_buffer_initial_replay = !turns.is_empty();
         let replayed_final_items = realtime_delivery::completed_agent_items_from_turns(&turns);
@@ -1570,9 +1567,6 @@ impl App {
             &replayed_final_items,
             retained_assistant_captions,
         );
-        if matches!(presentation, ThreadAttachPresentation::PromptEdit) {
-            self.chat_widget.emit_prompt_edit_thread_event();
-        }
         let pending = std::mem::take(&mut self.pending_primary_events);
         for pending_event in pending {
             match pending_event {

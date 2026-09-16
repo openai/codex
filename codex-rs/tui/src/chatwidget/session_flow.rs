@@ -158,10 +158,7 @@ impl ChatWidget {
         self.sync_goal_command_enabled();
         self.refresh_plugin_mentions();
         let model_for_header = self.current_model().to_string();
-        if matches!(
-            display,
-            SessionConfiguredDisplay::Normal | SessionConfiguredDisplay::PromptEdit
-        ) {
+        if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self
                 .should_show_fast_status(&model_for_header, self.effective_service_tier.as_deref());
@@ -224,16 +221,6 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn handle_prompt_edit_thread_session(&mut self, session: ThreadSessionState) {
-        self.instruction_source_paths = session.instruction_source_paths.clone();
-        let fork_parent_title = session.fork_parent_title.clone();
-        self.on_session_configured_with_display_and_fork_parent_title(
-            session,
-            SessionConfiguredDisplay::PromptEdit,
-            fork_parent_title,
-        );
-    }
-
     pub(crate) fn handle_side_thread_session(&mut self, session: ThreadSessionState) {
         self.instruction_source_paths = session.instruction_source_paths.clone();
         let fork_parent_title = session.fork_parent_title.clone();
@@ -275,10 +262,63 @@ impl ChatWidget {
         )));
     }
 
+    /// Clear history-derived state while preserving this thread's settings and goal.
+    pub(crate) fn reset_after_prompt_revert(
+        &mut self,
+        rollout_path: Option<PathBuf>,
+        retained_turns: &[Turn],
+    ) {
+        self.current_rollout_path = rollout_path;
+        self.input_queue.clear();
+        self.reset_realtime_conversation();
+        // Finish any output not yet drained from the old runtime without live completion actions.
+        self.on_task_complete(
+            /*last_agent_message*/ None, /*completion*/ None, /*from_replay*/ true,
+        );
+        self.turn_lifecycle.reset_thread();
+        self.review = Default::default();
+        self.transcript.take_active_cell();
+        self.transcript.reset_copy_history();
+        self.transcript.reset_turn_flags();
+        for turn in retained_turns {
+            let mut replaying_delegation = false;
+            for item in &turn.items {
+                if matches!(item, ThreadItem::UserMessage { content, .. }
+                    if realtime::realtime_delegation_input(content).is_some())
+                {
+                    replaying_delegation = true;
+                }
+                if replaying_delegation && realtime::is_private_realtime_agent_item(item) {
+                    continue;
+                }
+                let (markdown, source) = match item {
+                    ThreadItem::AgentMessage { text, .. } => (
+                        parse_assistant_markdown(text, self.config.cwd.as_path()).visible_markdown,
+                        text,
+                    ),
+                    ThreadItem::Plan { text, .. } => (text.clone(), text),
+                    _ => continue,
+                };
+                if !markdown.trim().is_empty() {
+                    self.transcript
+                        .record_agent_markdown(markdown, source.clone());
+                }
+            }
+        }
+        self.transcript.last_plan_progress = None;
+        self.last_rendered_user_message_display = None;
+        self.last_rendered_user_message_client_id = None;
+        self.clear_pending_rate_limit_reset_hint();
+        self.set_token_info(/*info*/ None);
+        self.bottom_pane.clear_pending_questions();
+        self.bottom_pane.set_task_running(/*running*/ false);
+        self.refresh_status_surfaces();
+    }
+
     pub(crate) fn emit_prompt_edit_thread_event(&mut self) {
         let line: Line<'static> = vec![
             "• ".dim(),
-            "You’re continuing from this point in a new conversation".into(),
+            "Conversation reverted to this point. File changes are unchanged.".into(),
         ]
         .into();
         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
