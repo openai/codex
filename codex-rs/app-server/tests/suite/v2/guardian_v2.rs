@@ -1186,7 +1186,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                     .collect::<Vec<_>>(),
                 vec![
                     json!(["additional_tools", "developer", null]),
-                    json!(["message", "developer", null]),
+                    json!(["message", "developer", ["guardian.classifier_instructions"]]),
                     json!(["message", "developer", null]),
                     json!(["message", "developer", ["guardian.trusted_tool"]]),
                     json!(["message", "developer", ["guardian.trusted_skills"]]),

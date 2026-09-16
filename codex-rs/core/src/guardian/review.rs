@@ -14,6 +14,7 @@ use codex_guardian_reviewer::GuardianReviewOutcome;
 #[cfg(test)]
 use codex_guardian_reviewer::GuardianReviewSessionLimits;
 use codex_guardian_reviewer::ReviewModel;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::ReviewDecision;
@@ -141,6 +142,7 @@ pub(super) async fn guardian_review_session_config(
         .thread_extension_data
         .get::<codex_guardian_reviewer::ReviewerConfig<crate::config::Config>>()
         .ok_or_else(|| anyhow::anyhow!("Guardian reviewer configuration is not installed"))?;
+    let model_messages = ResolvedModelMessages::from_model(&guardian_model_info);
     let mut spawn_config = build_guardian_review_session_config(
         (reviewer_config.0)(turn.config.as_ref())?,
         live_network_config,
@@ -148,7 +150,7 @@ pub(super) async fn guardian_review_session_config(
         review_model.reasoning_effort.clone(),
         context.reasoning_summary,
         context.personality,
-        guardian_model_info.model_messages.as_ref(),
+        model_messages,
     )?;
     if context.model_info.computer_use_review_required() {
         spawn_config
@@ -167,9 +169,7 @@ pub(super) async fn guardian_review_session_config(
     Ok(GuardianReviewSessionConfig {
         spawn_config,
         compaction_model_hash: guardian_model_info.comp_hash.clone(),
-        node_repl_policy: GuardianNodeReplPolicy::from_model_messages(
-            guardian_model_info.model_messages.as_ref(),
-        ),
+        node_repl_policy: GuardianNodeReplPolicy::from_messages(model_messages),
         review_model,
     })
 }

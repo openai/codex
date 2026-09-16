@@ -1,11 +1,14 @@
 use super::*;
 use crate::context::world_state::test_support::render_section_cases;
 use codex_execpolicy::Decision;
+use codex_models_manager::model_info::model_info_from_slug;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ApprovalMessages;
+use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::protocol::AskForApproval;
 use pretty_assertions::assert_eq;
@@ -55,8 +58,8 @@ fn approved_prefix_is_rendered_without_reinjecting_permissions() {
 
     assert_ne!(without_snapshot, with_snapshot);
     assert_ne!(
-        without_approved_prefix.instructions,
-        with_approved_prefix.instructions
+        without_approved_prefix.instructions.body(),
+        with_approved_prefix.instructions.body()
     );
     assert!(
         !without_approved_prefix
@@ -221,14 +224,17 @@ fn permissions_state(
         workspace_write: Some("Workspace write.".to_string()),
         read_only: Some("Read only.".to_string()),
     };
+    let mut model = model_info_from_slug("test-model");
+    model.model_messages = Some(ModelMessages {
+        approvals: Some(approval_messages),
+        permissions: Some(permission_messages),
+        ..Default::default()
+    });
+    let model_messages = ResolvedModelMessages::from_model(&model);
     PermissionsState::new(
         &permission_profile,
         approval_policy,
-        ApprovalPromptContext::new(
-            ApprovalsReviewer::User,
-            Some(&approval_messages),
-            Some(&permission_messages),
-        ),
+        ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages),
         &Policy::empty(),
         Path::new("/workspace"),
         /*exec_permission_approvals_enabled*/ false,
@@ -237,14 +243,11 @@ fn permissions_state(
 }
 
 fn permissions_state_with_default_messages(exec_policy: &Policy) -> PermissionsState {
+    let model_messages = ResolvedModelMessages::bundled();
     PermissionsState::new(
         &PermissionProfile::read_only(),
         AskForApproval::OnRequest,
-        ApprovalPromptContext::new(
-            ApprovalsReviewer::User,
-            /*messages*/ None,
-            /*permission_messages*/ None,
-        ),
+        ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages),
         exec_policy,
         Path::new("/workspace"),
         /*exec_permission_approvals_enabled*/ false,

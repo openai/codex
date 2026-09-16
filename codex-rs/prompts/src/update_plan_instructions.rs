@@ -1,4 +1,4 @@
-//! Omits checklist-tool guidance from Codex-owned prompts, before adding caller text.
+//! Purely omits checklist-tool guidance from Codex-owned prompts, before adding caller text.
 
 /// Call only for Codex-owned prompt text; custom instructions must remain unchanged.
 pub fn without_update_plan_instructions(instructions: &str) -> String {

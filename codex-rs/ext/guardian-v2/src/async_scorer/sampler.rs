@@ -15,6 +15,7 @@ use codex_api::ApiError;
 use codex_api::Reasoning;
 use codex_api::ReasoningContext;
 use codex_api::ResponsesApiRequest;
+use codex_context_fragments::RenderedFragment;
 use codex_extension_api::ExtensionMetrics;
 use codex_http_client::HttpClientFactory;
 use codex_login::AgentIdentityAuthPolicy;
@@ -66,8 +67,8 @@ pub struct LunaSamplerConfig {
 pub struct LunaSamplingRequest {
     /// ID of the response handling the classified tool.
     pub parent_response_id: Option<String>,
-    /// Trusted instructions describing the requested classification.
-    pub instructions: String,
+    /// Trusted classifier instructions with their role and content attribution.
+    pub instructions: RenderedFragment,
     /// Composed evidence messages, with roles, annotations and content order intact.
     pub input: Vec<ResponseItem>,
     /// Opaque parent compaction to reuse only for compatible model configurations.
@@ -166,15 +167,7 @@ impl LunaSampler {
                 role: "developer".to_owned(),
                 tools: Vec::new(),
             },
-            ResponseItem::Message {
-                id: None,
-                role: "developer".to_owned(),
-                content: vec![ContentItem::InputText {
-                    text: request.instructions,
-                }],
-                phase: None,
-                internal_chat_message_metadata_passthrough: None,
-            },
+            ResponseItem::from(request.instructions),
         ];
         if let Some(parent_compaction) = request.parent_compaction {
             input.push(parent_compaction);

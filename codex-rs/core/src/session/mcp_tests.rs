@@ -255,7 +255,7 @@ fn guardian_decisions_map_to_elicitation_responses_without_session_state() {
             content: None,
             meta: Some(json!({
                 "approvals_reviewer": ApprovalsReviewer::AutoReview,
-                "message": crate::guardian::guardian_timeout_message(&model),
+                "message": codex_prompts::ResolvedModelMessages::from_model(&model).auto_review().timeout_instructions,
             })),
         }
     );

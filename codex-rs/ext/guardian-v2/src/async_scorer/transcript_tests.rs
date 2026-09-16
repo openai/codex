@@ -2,6 +2,7 @@ use super::ContextInput;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ResponseItem;
 use codex_guardian_context::ContextTarget;
+use codex_guardian_context::truncate_text as truncate_entry;
 use codex_protocol::AgentPath;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
@@ -23,7 +24,6 @@ use super::MAX_TOOL_ENTRY_TOKENS;
 use super::MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::TranscriptConfig;
 use super::TranscriptSource;
-use super::truncate_entry;
 
 struct TestConversationHistory<'a>(&'a [ResponseItem]);
 

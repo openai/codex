@@ -16,6 +16,7 @@ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -175,16 +176,13 @@ async fn handle_spawn_agent(
                 ),
                 _ => None,
             };
-            let child_catalog = child_model_info
-                .as_ref()
-                .unwrap_or(turn.model_info())
-                .model_messages
-                .as_ref()
-                .and_then(|messages| messages.multi_agent.as_ref())
-                .and_then(|messages| messages.role.as_ref());
+            let child_multi_agent_messages = ResolvedModelMessages::from_model(
+                child_model_info.as_ref().unwrap_or(turn.model_info()),
+            )
+            .multi_agent();
             Some(resolve_usage_hints(
                 &config.multi_agent_v2,
-                child_catalog,
+                child_multi_agent_messages,
                 !config.update_plan_enabled && config.model_catalog.is_none(),
             ))
         } else {

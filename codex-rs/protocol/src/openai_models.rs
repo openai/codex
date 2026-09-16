@@ -26,7 +26,6 @@ use strum_macros::EnumIter;
 use tracing::warn;
 use ts_rs::TS;
 
-use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use crate::config_types::ServiceTier;
@@ -531,29 +530,13 @@ impl ModelInfo {
         }
         config_limit
     }
-
-    /// Returns the literal instruction template. The personality argument remains for older
-    /// callers; the `None` opt-out is applied separately by models-manager.
-    pub fn get_model_instructions(&self, _personality: Option<Personality>) -> String {
-        if let Some(model_messages) = &self.model_messages
-            && let Some(template) = &model_messages.instructions_template
-        {
-            template.clone()
-        } else {
-            warn!(
-                model = %self.slug,
-                "Model has no instruction template; returning empty instructions."
-            );
-            String::new()
-        }
-    }
 }
 
 /// A strongly-typed template for assembling model instructions and developer messages.
 ///
 /// `instructions_template` is literal text. The deprecated `instructions_variables` field is
 /// retained to decode catalogs produced before personality selection was removed.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelMessages {
     /// Additional developer instructions for persistent mode. Missing or null uses the built-in
     /// instructions; an empty string disables them.
@@ -754,9 +737,25 @@ where
 {
     models
         .iter()
-        .map(|model| ModelInfoWithLegacyBaseInstructionsRef {
-            model,
-            base_instructions: model.get_model_instructions(/*personality*/ None),
+        .map(|model| {
+            // Mirror the literal instruction template for clients using the deprecated wire field.
+            let base_instructions = if let Some(template) = model
+                .model_messages
+                .as_ref()
+                .and_then(|messages| messages.instructions_template.as_deref())
+            {
+                template.to_owned()
+            } else {
+                warn!(
+                    model = %model.slug,
+                    "Model has no instruction template; returning empty instructions."
+                );
+                String::new()
+            };
+            ModelInfoWithLegacyBaseInstructionsRef {
+                model,
+                base_instructions,
+            }
         })
         .collect::<Vec<_>>()
         .serialize(serializer)
@@ -786,20 +785,7 @@ where
                     .and_then(|messages| messages.instructions_template.as_ref())
                     .is_none()
             {
-                let messages = model.model_messages.get_or_insert(ModelMessages {
-                    persistent_instructions: None,
-                    tools: None,
-                    instructions_template: None,
-                    instructions_variables: None,
-                    approvals: None,
-                    collaboration_modes: None,
-                    auto_review: None,
-                    permissions: None,
-                    multi_agent: None,
-                    token_budget: None,
-                    confirmation_policies: None,
-                    guardian_v2: None,
-                });
+                let messages = model.model_messages.get_or_insert_default();
                 messages.instructions_template = Some(base_instructions);
             }
             if model
@@ -988,23 +974,7 @@ mod tests {
         )
         .expect("model messages should deserialize");
 
-        assert_eq!(
-            messages,
-            ModelMessages {
-                persistent_instructions: None,
-                tools: None,
-                instructions_template: None,
-                instructions_variables: None,
-                approvals: None,
-                collaboration_modes: None,
-                auto_review: None,
-                permissions: None,
-                multi_agent: None,
-                token_budget: None,
-                confirmation_policies: None,
-                guardian_v2: None,
-            }
-        );
+        assert_eq!(messages, ModelMessages::default());
     }
 
     #[test]
@@ -1198,21 +1168,11 @@ mod tests {
         assert_eq!(
             messages,
             ModelMessages {
-                persistent_instructions: None,
-                tools: None,
-                instructions_template: None,
-                instructions_variables: None,
-                approvals: None,
                 collaboration_modes: Some(CollaborationModeMessages {
                     default: Some(String::new()),
                     plan: None,
                 }),
-                auto_review: None,
-                permissions: None,
-                multi_agent: None,
-                token_budget: None,
-                confirmation_policies: None,
-                guardian_v2: None,
+                ..Default::default()
             }
         );
     }
@@ -1290,74 +1250,6 @@ mod tests {
     }
 
     #[test]
-    fn get_model_instructions_ignores_legacy_personality_variables() {
-        let model = test_model(Some(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
-            instructions_template: Some("Hello {{ personality }}".to_string()),
-            instructions_variables: Some(ModelInstructionsVariables {
-                personality_default: Some("default".to_string()),
-                personality_friendly: Some("friendly".to_string()),
-                personality_pragmatic: Some("pragmatic".to_string()),
-            }),
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
-        }));
-
-        let instructions = "Hello {{ personality }}";
-        for personality in [
-            Some(Personality::Friendly),
-            Some(Personality::Pragmatic),
-            Some(Personality::None),
-            None,
-        ] {
-            assert_eq!(model.get_model_instructions(personality), instructions);
-        }
-    }
-
-    #[test]
-    fn get_model_instructions_is_empty_when_template_is_missing() {
-        let model = test_model(Some(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
-            instructions_template: None,
-            instructions_variables: Some(ModelInstructionsVariables {
-                personality_default: None,
-                personality_friendly: None,
-                personality_pragmatic: None,
-            }),
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
-        }));
-
-        let instructions = model.get_model_instructions(Some(Personality::Friendly));
-
-        assert_eq!(instructions, "");
-    }
-
-    #[test]
-    fn get_model_instructions_is_empty_when_model_messages_is_missing() {
-        let model = test_model(/*spec*/ None);
-
-        assert_eq!(
-            model.get_model_instructions(Some(Personality::Friendly)),
-            ""
-        );
-    }
-
-    #[test]
     fn models_response_promotes_legacy_base_instructions() {
         let mut value = serde_json::to_value(ModelsResponse {
             models: vec![test_model(/*spec*/ None)],
@@ -1372,23 +1264,9 @@ mod tests {
         assert_eq!(
             model.model_messages,
             Some(ModelMessages {
-                persistent_instructions: None,
-                tools: None,
                 instructions_template: Some("legacy instructions".to_string()),
-                instructions_variables: None,
-                approvals: None,
-                collaboration_modes: None,
-                auto_review: None,
-                permissions: None,
-                multi_agent: None,
-                token_budget: None,
-                confirmation_policies: None,
-                guardian_v2: None,
+                ..Default::default()
             })
-        );
-        assert_eq!(
-            model.get_model_instructions(/*personality*/ None),
-            "legacy instructions"
         );
         let serialized = serde_json::to_value(response).expect("serialize canonical response");
         assert_eq!(
@@ -1421,33 +1299,28 @@ mod tests {
 
     #[test]
     fn models_response_serializes_literal_legacy_base_instructions() {
-        let response = ModelsResponse {
-            models: vec![test_model(Some(ModelMessages {
-                persistent_instructions: None,
-                tools: None,
-                instructions_template: Some("before {{ personality }} after".to_string()),
-                instructions_variables: Some(ModelInstructionsVariables {
-                    personality_default: Some("default".to_string()),
-                    personality_friendly: Some("friendly".to_string()),
-                    personality_pragmatic: Some("pragmatic".to_string()),
-                }),
-                approvals: None,
-                collaboration_modes: None,
-                auto_review: None,
-                permissions: None,
-                multi_agent: None,
-                token_budget: None,
-                confirmation_policies: None,
-                guardian_v2: None,
-            }))],
-        };
-
-        let serialized = serde_json::to_value(response).expect("serialize models response");
-
-        assert_eq!(
-            serialized["models"][0]["base_instructions"],
-            "before {{ personality }} after"
-        );
+        for (template, expected) in [
+            (
+                Some("before {{ personality }} after"),
+                "before {{ personality }} after",
+            ),
+            (Some(""), ""),
+            (None, ""),
+        ] {
+            let response = ModelsResponse {
+                models: vec![test_model(Some(ModelMessages {
+                    instructions_template: template.map(str::to_owned),
+                    instructions_variables: Some(ModelInstructionsVariables {
+                        personality_default: Some("default".to_string()),
+                        personality_friendly: Some("friendly".to_string()),
+                        personality_pragmatic: Some("pragmatic".to_string()),
+                    }),
+                    ..Default::default()
+                }))],
+            };
+            let serialized = serde_json::to_value(response).expect("serialize models response");
+            assert_eq!(serialized["models"][0]["base_instructions"], expected);
+        }
     }
 
     #[test]
@@ -1532,15 +1405,7 @@ mod tests {
                 }),
             }),
             instructions_template: Some("canonical instructions".to_string()),
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
+            ..Default::default()
         };
         let mut value = serde_json::to_value(ModelsResponse {
             models: vec![test_model(Some(canonical_messages.clone()))],

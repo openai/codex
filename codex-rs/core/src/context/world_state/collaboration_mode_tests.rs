@@ -2,10 +2,15 @@ use super::super::PreviousSectionState;
 use super::super::test_support::render_section_cases;
 use super::*;
 use crate::context::world_state::WorldState;
+use codex_models_manager::model_info::model_info_from_slug;
+use codex_prompts::ResolvedCollaborationModeMessages;
+use codex_prompts::ResolvedMessage;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CollaborationModeMessages;
+use codex_protocol::openai_models::ModelMessages;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -42,7 +47,7 @@ fn instruction_updates_are_applied_once_in_retained_history() {
         let mut world_state = WorldState::default();
         world_state.add_section(CollaborationModeState::from_collaboration_mode(
             &collaboration_mode(ModeKind::Default, instructions),
-            /*catalog_messages*/ None,
+            ResolvedModelMessages::bundled().collaboration_modes(),
             /*update_plan_enabled*/ true,
             /*custom_model_catalog*/ false,
         ));
@@ -74,35 +79,43 @@ fn instruction_updates_are_applied_once_in_retained_history() {
 
 #[test]
 fn catalog_collaboration_messages_select_mode_variant() {
-    let messages = CollaborationModeMessages {
-        default: Some("catalog default instructions".to_string()),
-        plan: Some("catalog plan instructions".to_string()),
-    };
-
-    for (mode, expected) in [
-        (ModeKind::Default, "catalog default instructions"),
-        (ModeKind::Plan, "catalog plan instructions"),
+    let bundled = ResolvedModelMessages::bundled().collaboration_modes();
+    for (default, plan) in [
+        ("catalog default instructions", "catalog plan instructions"),
+        (bundled.default.text(), bundled.plan.text()),
     ] {
-        let state = CollaborationModeState::from_collaboration_mode(
-            &collaboration_mode(mode, Some("legacy instructions")),
-            Some(&messages),
-            /*update_plan_enabled*/ true,
-            /*custom_model_catalog*/ false,
-        );
+        let mut model = model_info_from_slug("test-model");
+        model.model_messages = Some(ModelMessages {
+            collaboration_modes: Some(CollaborationModeMessages {
+                default: Some(default.to_string()),
+                plan: Some(plan.to_string()),
+            }),
+            ..Default::default()
+        });
+        let messages = ResolvedModelMessages::from_model(&model).collaboration_modes();
 
-        assert_eq!(state.instructions.as_deref(), Some(expected));
+        for (mode, expected) in [(ModeKind::Default, default), (ModeKind::Plan, plan)] {
+            let state = CollaborationModeState::from_collaboration_mode(
+                &collaboration_mode(mode, Some("legacy instructions")),
+                messages,
+                /*update_plan_enabled*/ true,
+                /*custom_model_catalog*/ false,
+            );
+
+            assert_eq!(state.instructions.as_deref(), Some(expected));
+        }
     }
 }
 
 #[test]
 fn empty_catalog_collaboration_message_suppresses_legacy_instructions() {
-    let messages = CollaborationModeMessages {
-        default: None,
-        plan: Some(String::new()),
+    let messages = ResolvedCollaborationModeMessages {
+        plan: ResolvedMessage::Catalog(""),
+        ..ResolvedModelMessages::bundled().collaboration_modes()
     };
     let state = CollaborationModeState::from_collaboration_mode(
         &collaboration_mode(ModeKind::Plan, Some("legacy plan instructions")),
-        Some(&messages),
+        messages,
         /*update_plan_enabled*/ true,
         /*custom_model_catalog*/ false,
     );
@@ -118,21 +131,22 @@ fn empty_catalog_collaboration_message_suppresses_legacy_instructions() {
 
 #[test]
 fn missing_catalog_collaboration_message_uses_legacy_instructions() {
-    let messages = CollaborationModeMessages {
-        default: Some("catalog default instructions".to_string()),
-        plan: None,
+    let messages = ResolvedCollaborationModeMessages {
+        default: ResolvedMessage::Catalog("catalog default instructions"),
+        ..ResolvedModelMessages::bundled().collaboration_modes()
     };
-    let state = CollaborationModeState::from_collaboration_mode(
-        &collaboration_mode(ModeKind::Plan, Some("legacy plan instructions")),
-        Some(&messages),
-        /*update_plan_enabled*/ true,
-        /*custom_model_catalog*/ false,
-    );
-
-    assert_eq!(
-        state.instructions.as_deref(),
-        Some("legacy plan instructions")
-    );
+    for instructions in [Some("legacy plan instructions"), Some(""), None] {
+        let state = CollaborationModeState::from_collaboration_mode(
+            &collaboration_mode(ModeKind::Plan, instructions),
+            messages,
+            /*update_plan_enabled*/ true,
+            /*custom_model_catalog*/ false,
+        );
+        assert_eq!(
+            state.instructions.as_deref(),
+            instructions.filter(|text| !text.is_empty())
+        );
+    }
 }
 
 #[test]
@@ -142,13 +156,13 @@ fn legacy_collaboration_mode_snapshots_refresh_catalog_messages_once() {
             .expect("legacy collaboration mode snapshot");
 
         for instructions in ["catalog instructions", ""] {
-            let messages = CollaborationModeMessages {
-                default: Some(instructions.to_string()),
-                plan: None,
+            let messages = ResolvedCollaborationModeMessages {
+                default: ResolvedMessage::Catalog(instructions),
+                ..ResolvedModelMessages::bundled().collaboration_modes()
             };
             let state = CollaborationModeState::from_collaboration_mode(
                 &collaboration_mode(ModeKind::Default, Some("stale legacy instructions")),
-                Some(&messages),
+                messages,
                 /*update_plan_enabled*/ true,
                 /*custom_model_catalog*/ false,
             );
@@ -185,7 +199,7 @@ fn collaboration_mode(mode: ModeKind, instructions: Option<&str>) -> Collaborati
 fn collaboration_mode_state(mode: ModeKind, instructions: &str) -> CollaborationModeState {
     CollaborationModeState::from_collaboration_mode(
         &collaboration_mode(mode, Some(instructions)),
-        /*catalog_messages*/ None,
+        ResolvedModelMessages::bundled().collaboration_modes(),
         /*update_plan_enabled*/ true,
         /*custom_model_catalog*/ false,
     )

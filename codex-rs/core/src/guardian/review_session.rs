@@ -90,8 +90,6 @@ use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
 use super::feedback::record_failed_review;
-#[cfg(test)]
-use super::prompt::BUNDLED_GUARDIAN_POLICY;
 use super::prompt::GUARDIAN_TRANSCRIPT_START;
 use super::prompt::GuardianPromptMode;
 #[cfg(test)]

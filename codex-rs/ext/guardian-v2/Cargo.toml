@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 codex-analytics = { workspace = true }
 codex-api = { workspace = true }
 codex-config = { workspace = true }
+codex-context-fragments = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
@@ -27,6 +28,7 @@ codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
+codex-prompts = { workspace = true }
 dirs = { workspace = true }
 http = { workspace = true }
 serde_json = { workspace = true }

@@ -45,6 +45,7 @@ use codex_mcp::auth_elicitation_completed_result;
 use codex_mcp::build_auth_elicitation_plan;
 use codex_mcp::is_connector_auth_failure_from_tool_result;
 use codex_mcp::mcp_permission_prompt_is_auto_approved;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::items::McpAppDisplayMode;
 use codex_protocol::items::McpAppUi;
@@ -330,7 +331,10 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     item_metadata.clone(),
-                    crate::guardian::guardian_timeout_message(turn_context.model_info()),
+                    ResolvedModelMessages::from_model(turn_context.model_info())
+                        .auto_review()
+                        .timeout_instructions
+                        .to_string(),
                     /*already_started*/ true,
                 )
                 .await
@@ -1355,12 +1359,8 @@ fn build_confirmation_policies_request_meta(
     }
 
     let mut policies = serde_json::Map::new();
-    if let Some(confirmation_policies) = step_context
-        .settings
-        .model_info
-        .model_messages
-        .as_ref()
-        .and_then(|messages| messages.confirmation_policies.as_ref())
+    if let Some(confirmation_policies) =
+        ResolvedModelMessages::from_model(&step_context.settings.model_info).confirmation_policies()
     {
         for (name, policy) in [
             ("browser_use", confirmation_policies.browser_use.as_ref()),

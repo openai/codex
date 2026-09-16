@@ -52,7 +52,6 @@ pub use review::ReviewHost;
 
 pub use completion::ReviewCompletion;
 pub use completion::complete_review;
-pub use completion::guardian_timeout_message;
 
 pub use execution::ReviewTurnResult;
 pub use execution::ReviewerRuntime;

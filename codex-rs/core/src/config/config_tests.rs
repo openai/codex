@@ -81,6 +81,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
+use codex_prompts::ResolvedMessage;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
@@ -91,7 +92,6 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::openai_models::MultiAgentRoleMessages;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -11835,12 +11835,13 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
+    let messages = ResolvedModelMessages::bundled().multi_agent();
     assert!(config.wait_agent_enabled);
     for wait_agent_enabled in [true, false] {
         let mut config = config.clone();
         config.wait_agent_enabled = wait_agent_enabled;
         let usage_hints = resolve_usage_hints(
-            &config, /*catalog*/ None, /*omit_update_plan_instructions*/ false,
+            &config, messages, /*omit_update_plan_instructions*/ false,
         );
         for hint in [usage_hints.root, usage_hints.subagent] {
             let hint = hint.expect("default usage hints should be present").body();
@@ -11852,12 +11853,12 @@ max_concurrent_threads_per_session = 17
         }
     }
 
+    let mut empty_messages = messages;
+    empty_messages.root = ResolvedMessage::Catalog("");
+    empty_messages.subagent = ResolvedMessage::Catalog("");
     let usage_hints = resolve_usage_hints(
         &config,
-        Some(&MultiAgentRoleMessages {
-            root: Some(String::new()),
-            subagent: Some(String::new()),
-        }),
+        empty_messages,
         /*omit_update_plan_instructions*/ false,
     );
     assert!(usage_hints.root.is_none() && usage_hints.subagent.is_none());
@@ -11885,13 +11886,11 @@ expose_spawn_agent_model_overrides = true
         config.subagent_usage_hint_text.as_deref(),
         Some("## `update_plan`\nSubagent guidance.")
     );
+    let mut messages = ResolvedModelMessages::bundled().multi_agent();
+    messages.root = ResolvedMessage::Catalog("Catalog root base.");
+    messages.subagent = ResolvedMessage::Catalog("Catalog subagent base.");
     let usage_hints = resolve_usage_hints(
-        &config,
-        Some(&MultiAgentRoleMessages {
-            root: Some("Catalog root base.".to_string()),
-            subagent: Some("Catalog subagent base.".to_string()),
-        }),
-        /*omit_update_plan_instructions*/ true,
+        &config, messages, /*omit_update_plan_instructions*/ true,
     );
     assert_eq!(
         (
@@ -11912,12 +11911,13 @@ fn multi_agent_v2_exposes_model_overrides_by_default() {
 
     let mut config = resolve_multi_agent_v2_config(&config_toml);
     assert!(config.expose_spawn_agent_model_overrides);
+    let messages = ResolvedModelMessages::bundled().multi_agent();
     let usage_hints = resolve_usage_hints(
-        &config, /*catalog*/ None, /*omit_update_plan_instructions*/ false,
+        &config, messages, /*omit_update_plan_instructions*/ false,
     );
     config.expose_spawn_agent_model_overrides = false;
     let usage_hints_without_model_overrides = resolve_usage_hints(
-        &config, /*catalog*/ None, /*omit_update_plan_instructions*/ false,
+        &config, messages, /*omit_update_plan_instructions*/ false,
     );
 
     for (hint, hint_without_model_overrides) in [
@@ -12027,12 +12027,12 @@ subagent_usage_hint_text = ""
         .build()
         .await?;
 
+    let mut messages = ResolvedModelMessages::bundled().multi_agent();
+    messages.root = ResolvedMessage::Catalog("catalog root");
+    messages.subagent = ResolvedMessage::Catalog("catalog subagent");
     let usage_hints = resolve_usage_hints(
         &config.multi_agent_v2,
-        Some(&MultiAgentRoleMessages {
-            root: Some("catalog root".to_string()),
-            subagent: Some("catalog subagent".to_string()),
-        }),
+        messages,
         /*omit_update_plan_instructions*/ false,
     );
     assert_eq!(

@@ -1,11 +1,13 @@
+//! Tracks model-visible permission instructions and approved-command prefix changes.
+
 use super::PreviousSectionState;
 use super::WorldStateHash;
 use super::WorldStateSection;
-use crate::context::ApprovalPromptContext;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::ContextualUserFragment;
 use crate::context::PermissionsInstructions;
 use codex_execpolicy::Policy;
+use codex_prompts::ApprovalPromptContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::protocol::AskForApproval;

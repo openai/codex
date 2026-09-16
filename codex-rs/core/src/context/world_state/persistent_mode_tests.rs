@@ -1,4 +1,4 @@
-//! Covers effort selection, catalog overrides, and persistent-context transitions.
+//! Covers effort selection and persistent-context transitions.
 
 use super::*;
 use crate::context::world_state::WorldState;
@@ -13,23 +13,19 @@ fn persistent_instructions_follow_effort_and_catalog_updates_without_duplicates(
     let replacement = format!("{REPLACEMENT_NOTICE}\n\nupdated instructions");
 
     for (effort, instructions, expected) in [
-        (None, None, None),
+        (None, "", None),
+        (persistent.clone(), "instructions", Some("instructions")),
+        (persistent.clone(), "instructions", None),
         (
             persistent.clone(),
-            Some("instructions"),
-            Some("instructions"),
-        ),
-        (persistent.clone(), Some("instructions"), None),
-        (
-            persistent.clone(),
-            Some("updated instructions"),
+            "updated instructions",
             Some(replacement.as_str()),
         ),
-        (persistent.clone(), Some(""), Some(REMOVAL_NOTICE)),
-        (persistent.clone(), Some(""), None),
-        (persistent, Some("instructions"), Some("instructions")),
-        (medium.clone(), None, Some(REMOVAL_NOTICE)),
-        (medium, None, None),
+        (persistent.clone(), "", Some(REMOVAL_NOTICE)),
+        (persistent.clone(), "", None),
+        (persistent, "instructions", Some("instructions")),
+        (medium.clone(), "", Some(REMOVAL_NOTICE)),
+        (medium, "", None),
     ] {
         let mut world_state = WorldState::default();
         world_state.add_section(PersistentModeState::new(
@@ -73,7 +69,7 @@ fn retained_persistent_instructions_are_replaced_or_retired_without_a_snapshot()
         let mut world_state = WorldState::default();
         world_state.add_section(PersistentModeState::new(
             Some(&effort),
-            Some("current instructions"),
+            "current instructions",
             /*send_user_message_async_available*/ false,
         ));
         assert_eq!(

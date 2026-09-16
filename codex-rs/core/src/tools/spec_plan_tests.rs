@@ -610,8 +610,7 @@ async fn internal_guardian_sessions_exclude_optional_core_tools() {
     let router = super::build_tool_router(
         &session,
         step_context.turn.as_ref(),
-        step_context.turn.model_info(),
-        step_context.settings.model_info.model_messages.as_ref(),
+        &step_context.settings.model_info,
         &step_context.environments,
         &step_context.mcp,
         /*apps_enabled*/ false,
@@ -664,8 +663,7 @@ async fn internal_guardian_sessions_respect_managed_shell_restrictions() {
         let router = super::build_tool_router(
             &session,
             step_context.turn.as_ref(),
-            step_context.turn.model_info(),
-            step_context.settings.model_info.model_messages.as_ref(),
+            &step_context.settings.model_info,
             &step_context.environments,
             &step_context.mcp,
             /*apps_enabled*/ false,
@@ -702,8 +700,7 @@ async fn internal_guardian_sessions_preserve_code_mode() {
     let router = super::build_tool_router(
         &session,
         step_context.turn.as_ref(),
-        step_context.turn.model_info(),
-        step_context.settings.model_info.model_messages.as_ref(),
+        &step_context.settings.model_info,
         &step_context.environments,
         &step_context.mcp,
         /*apps_enabled*/ false,
@@ -774,8 +771,7 @@ async fn internal_guardian_sessions_require_managed_secondary_environments() {
         let router = super::build_tool_router(
             &session,
             step_context.turn.as_ref(),
-            step_context.turn.model_info(),
-            step_context.settings.model_info.model_messages.as_ref(),
+            &step_context.settings.model_info,
             &step_context.environments,
             &step_context.mcp,
             /*apps_enabled*/ false,

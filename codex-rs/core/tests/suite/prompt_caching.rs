@@ -10,6 +10,7 @@ use codex_features::Feature;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use codex_models_manager::manager::StaticModelsManager;
+use codex_prompts::render_model_instructions;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
@@ -216,7 +217,7 @@ async fn prompt_tools_are_consistent_across_requests(
     let base_instructions = if custom_instructions {
         CUSTOM_BASE_INSTRUCTIONS.to_string()
     } else {
-        let original = model_info.get_model_instructions(config.personality);
+        let original = render_model_instructions(&model_info);
         if expected_update_plan_enabled {
             original
         } else {

@@ -1,7 +1,6 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::context::world_state::validate_managed_developer_instructions;
-use crate::guardian::BUNDLED_GUARDIAN_POLICY;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
@@ -96,6 +95,7 @@ use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
 use codex_models_manager::ModelsManagerConfig;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -116,7 +116,6 @@ use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::SandboxEnforcement;
-use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::DenyReadValidator;
@@ -1144,10 +1143,6 @@ impl Default for CodeModeConfig {
     }
 }
 
-pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
-    "Your context window is nearly exhausted (only {n_remaining} tokens remaining) and will be automatically reset for you soon. ",
-    "Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows."
-);
 const TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE_MAX_BYTES: usize = 2000;
 const TOKEN_BUDGET_GUIDANCE_MESSAGE_MAX_BYTES: usize = 2000;
 const AUTO_COMPACT_FALLBACK_PROMPT_MAX_BYTES: usize = 2000;
@@ -1249,7 +1244,9 @@ impl Default for TokenBudgetConfig {
         Self {
             use_history_notes_extension: false,
             reminder_threshold_tokens: None,
-            reminder_message_template: DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string(),
+            reminder_message_template: ResolvedModelMessages::bundled()
+                .token_budget_reminder_template()
+                .to_owned(),
             guidance_message: None,
             auto_compact_fallback_prompt: None,
             auto_compact_fallback_buffer_tokens: None,
@@ -1530,16 +1527,11 @@ impl Config {
     /// Resolves the configured, reviewer-catalog, or bundled Guardian policy.
     pub fn resolve_guardian_policy<'a>(
         &'a self,
-        model_messages: Option<&'a ModelMessages>,
+        model_messages: ResolvedModelMessages<'a>,
     ) -> &'a str {
         self.guardian_policy_config
             .as_deref()
-            .or_else(|| {
-                model_messages
-                    .and_then(|messages| messages.auto_review.as_ref())
-                    .and_then(|messages| messages.policy.as_deref())
-            })
-            .unwrap_or(BUNDLED_GUARDIAN_POLICY)
+            .unwrap_or(model_messages.auto_review().policy)
     }
 
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
@@ -2796,7 +2788,11 @@ pub(crate) fn resolve_token_budget_config(
         token_budget_config.and_then(|config| config.reminder_threshold_tokens);
     let reminder_message_template = token_budget_config
         .and_then(|config| config.reminder_message_template.clone())
-        .unwrap_or_else(|| DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE.to_string());
+        .unwrap_or_else(|| {
+            ResolvedModelMessages::bundled()
+                .token_budget_reminder_template()
+                .to_owned()
+        });
     let guidance_message = token_budget_config
         .and_then(|config| config.guidance_message.clone())
         .filter(|message| !message.trim().is_empty());

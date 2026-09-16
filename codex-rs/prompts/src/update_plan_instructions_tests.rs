@@ -1,4 +1,4 @@
-//! Checks that only the known checklist sections are omitted.
+//! Checks that filtering omits only the known checklist sections.
 
 use super::without_update_plan_instructions;
 use pretty_assertions::assert_eq;

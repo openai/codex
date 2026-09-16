@@ -60,6 +60,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::model_info;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
+use codex_prompts::render_model_instructions;
 use codex_protocol::AgentPath;
 use codex_protocol::ResponseItemId;
 use codex_protocol::SessionId;
@@ -3969,7 +3970,7 @@ async fn set_rate_limits_retains_previous_credits() {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -4091,7 +4092,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -4703,7 +4704,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -5789,7 +5790,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -5970,7 +5971,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -6279,7 +6280,7 @@ async fn make_session_with_config_and_rx(
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -6411,7 +6412,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -8153,7 +8154,7 @@ where
         base_instructions: config
             .base_instructions
             .clone()
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            .unwrap_or_else(|| render_model_instructions(&model_info)),
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         allow_login_shell: config.permissions.allow_login_shell,
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),

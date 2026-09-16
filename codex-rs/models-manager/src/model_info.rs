@@ -44,20 +44,7 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     }
 
     if let Some(base_instructions) = &config.base_instructions {
-        let model_messages = model.model_messages.get_or_insert(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
-            instructions_template: None,
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
-        });
+        let model_messages = model.model_messages.get_or_insert_default();
         model_messages.instructions_template = Some(base_instructions.clone());
         model_messages.instructions_variables = None;
     } else if config.personality == Some(Personality::None)
@@ -163,18 +150,8 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
 
 fn local_model_messages() -> ModelMessages {
     ModelMessages {
-        persistent_instructions: None,
-        tools: None,
         instructions_template: Some(BASE_INSTRUCTIONS.to_string()),
-        instructions_variables: None,
-        approvals: None,
-        collaboration_modes: None,
-        auto_review: None,
-        permissions: None,
-        multi_agent: None,
-        token_budget: None,
-        confirmation_policies: None,
-        guardian_v2: None,
+        ..Default::default()
     }
 }
 

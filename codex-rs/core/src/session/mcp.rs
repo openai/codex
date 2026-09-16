@@ -10,6 +10,7 @@ use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -1159,7 +1160,10 @@ fn mcp_elicitation_response_from_guardian_decision(
         },
         ReviewDecision::Denied { rejection } => mcp_elicitation_decline_with_message(rejection),
         ReviewDecision::TimedOut => mcp_elicitation_decline_with_message(
-            crate::guardian::guardian_timeout_message(model_info),
+            ResolvedModelMessages::from_model(model_info)
+                .auto_review()
+                .timeout_instructions
+                .to_string(),
         ),
         ReviewDecision::Abort => ElicitationResponse {
             action: ElicitationAction::Cancel,

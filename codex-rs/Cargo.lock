@@ -2219,6 +2219,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
+ "codex-prompts",
  "codex-protocol",
  "codex-queue-extension",
  "codex-rmcp-client",
@@ -3540,6 +3541,7 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-otel",
+ "codex-prompts",
  "codex-protocol",
  "codex-rollout",
  "codex-state",
@@ -3576,6 +3578,7 @@ dependencies = [
  "codex-guardian-context",
  "codex-mcp",
  "codex-otel",
+ "codex-prompts",
  "codex-protocol",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -3597,6 +3600,7 @@ dependencies = [
  "codex-analytics",
  "codex-api",
  "codex-config",
+ "codex-context-fragments",
  "codex-core",
  "codex-extension-api",
  "codex-features",
@@ -3607,6 +3611,7 @@ dependencies = [
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
+ "codex-prompts",
  "codex-protocol",
  "core_test_support",
  "dirs",
@@ -4076,10 +4081,10 @@ name = "codex-models-manager"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "codex-collaboration-mode-templates",
  "codex-http-client",
  "codex-login",
  "codex-otel",
+ "codex-prompts",
  "codex-protocol",
  "codex-utils-output-truncation",
  "pretty_assertions",
@@ -4248,13 +4253,16 @@ name = "codex-prompts"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-collaboration-mode-templates",
  "codex-context-fragments",
  "codex-execpolicy",
  "codex-git-utils",
+ "codex-guardian-context",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-template",
  "pretty_assertions",
+ "tracing",
 ]
 
 [[package]]

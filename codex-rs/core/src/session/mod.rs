@@ -94,6 +94,7 @@ use codex_network_proxy::normalize_host;
 use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
+use codex_prompts::render_model_instructions;
 use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
@@ -741,7 +742,7 @@ impl Session {
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+            .unwrap_or_else(|| render_model_instructions(&model_info));
 
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
@@ -1483,7 +1484,7 @@ impl Session {
             )
         {
             BaseInstructions {
-                text: crate::context::without_update_plan_instructions(&instructions.text),
+                text: codex_prompts::without_update_plan_instructions(&instructions.text),
                 ..instructions
             }
         } else {
@@ -3881,7 +3882,6 @@ impl Session {
             self.as_ref(),
             turn_context.as_ref(),
             &settings.model_info,
-            settings.model_info.model_messages.as_ref(),
             &environments,
             &mcp,
             &extension_data,

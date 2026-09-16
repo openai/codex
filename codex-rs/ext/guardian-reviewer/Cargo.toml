@@ -20,6 +20,7 @@ codex-feedback = { workspace = true }
 codex-guardian-context = { workspace = true }
 codex-mcp = { workspace = true }
 codex-otel = { workspace = true }
+codex-prompts = { workspace = true }
 codex-protocol = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }

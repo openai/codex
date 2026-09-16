@@ -25,6 +25,7 @@ use codex_external_agent_migration::sessions::detect_imported_cla_session_connec
 use codex_external_agent_migration::sessions::prepare_validated_session_import_with_metadata_mode;
 use codex_external_agent_migration::sessions::record_completed_session_imports;
 use codex_models_manager::manager::RefreshStrategy;
+use codex_prompts::render_model_instructions;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::BaseInstructionsProvenance;
@@ -467,7 +468,7 @@ impl ExternalAgentSessionImporter {
                 text: config
                     .base_instructions
                     .clone()
-                    .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+                    .unwrap_or_else(|| render_model_instructions(&model_info)),
                 provenance: Some(config.base_instructions_provenance.clone().unwrap_or_else(
                     || {
                         if config.base_instructions.is_some() {

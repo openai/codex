@@ -1,11 +1,14 @@
-use super::super::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
-use super::super::prompt::guardian_policy_prompt_with_config_and_template;
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
+use crate::context::ContextualUserFragment;
 use crate::context_manager::ContextManager;
 use codex_guardian_reviewer::ReviewerRequest;
+use codex_guardian_reviewer::guardian_output_contract_prompt;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
+use codex_models_manager::model_info::model_info_from_slug;
+use codex_prompts::GuardianPolicyInstructions;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::protocol::AgentStatus;
@@ -14,6 +17,7 @@ use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use pretty_assertions::assert_eq;
 
 #[tokio::test]
 async fn run_review_preserves_evidence_during_parent_compaction() {
@@ -40,7 +44,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         params.review_model.reasoning_effort.clone(),
         params.reasoning_summary,
         params.personality,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .unwrap();
     params.parent_session = Arc::clone(&parent);
@@ -216,7 +220,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         reasoning_effort.clone(),
         reasoning_summary,
         personality,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -225,7 +229,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         parent_session: Arc::new(session),
         parent_context: GuardianReviewContext::from(Arc::new(turn)),
         spawn_config,
-        node_repl_policy: GuardianNodeReplPolicy::from_model_messages(/*messages*/ None),
+        node_repl_policy: GuardianNodeReplPolicy::from_messages(ResolvedModelMessages::bundled()),
         request: GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
@@ -316,7 +320,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("cached guardian config");
     let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -337,7 +341,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("next guardian config");
     let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -391,17 +395,22 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
             .with_node_repl_policy_eligibility(/*required*/ true),
         "switching parent-model Node REPL eligibility must invalidate reviewer history"
     );
-    let messages = serde_json::from_value(serde_json::json!({
-        "auto_review": { "node_repl_policy": "Catalog REPL policy." }
-    }))
-    .expect("catalog model messages");
+    let mut model = model_info_from_slug("active-model");
+    model.model_messages = Some(
+        serde_json::from_value(serde_json::json!({
+            "auto_review": { "node_repl_policy": "Catalog REPL policy." }
+        }))
+        .expect("catalog model messages"),
+    );
     assert_ne!(
-        cached_reuse_key.clone().with_node_repl_policy(
-            &GuardianNodeReplPolicy::from_model_messages(/*messages*/ None),
-        ),
-        cached_reuse_key.with_node_repl_policy(&GuardianNodeReplPolicy::from_model_messages(Some(
-            &messages
-        )),),
+        cached_reuse_key
+            .clone()
+            .with_node_repl_policy(&GuardianNodeReplPolicy::from_messages(
+                ResolvedModelMessages::bundled()
+            ),),
+        cached_reuse_key.with_node_repl_policy(&GuardianNodeReplPolicy::from_messages(
+            ResolvedModelMessages::from_model(&model)
+        ),),
         "changing the effective Node REPL policy must invalidate reviewer history"
     );
 
@@ -527,7 +536,7 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("cached guardian config");
     let cached_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -548,7 +557,7 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("next guardian config");
     let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -576,7 +585,7 @@ async fn guardian_review_session_config_disables_hooks() {
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -595,137 +604,72 @@ async fn guardian_review_session_config_disables_skill_instructions() {
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
     assert!(!guardian_config.include_skill_instructions);
 }
 
+#[test_case::test_case(
+    Some("Use the managed Guardian policy."),
+    Some("Configured Guardian template:\n{{ tenant_policy_config }}"),
+    "Use the catalog Guardian policy.",
+    Some("Catalog Guardian template:\n{{ tenant_policy_config }}"),
+    "Use the managed Guardian policy.",
+    "Configured Guardian template:\n{{ tenant_policy_config }}";
+    "configured_policy_and_template"
+)]
+#[test_case::test_case(
+    Some("Use the managed Guardian policy."),
+    None,
+    "Use the catalog Guardian policy.",
+    Some("Catalog Guardian template:\n{{ tenant_policy_config }}"),
+    "Use the managed Guardian policy.",
+    "Catalog Guardian template:\n{{ tenant_policy_config }}";
+    "managed_policy_and_catalog_template"
+)]
+#[test_case::test_case(
+    None,
+    None,
+    "",
+    None,
+    "",
+    ResolvedModelMessages::bundled().auto_review().policy_template;
+    "explicit_empty_catalog_policy"
+)]
+#[test_case::test_case(
+    None,
+    None,
+    "Use the catalog Guardian policy.",
+    Some(""),
+    "Use the catalog Guardian policy.",
+    "";
+    "explicit_empty_catalog_template"
+)]
 #[tokio::test]
-async fn guardian_review_session_config_prefers_configured_policy_and_template() {
+async fn guardian_review_session_config_resolves_policy_and_template(
+    managed_policy: Option<&str>,
+    configured_template: Option<&str>,
+    catalog_policy: &str,
+    catalog_template: Option<&str>,
+    expected_policy: &str,
+    expected_template: &str,
+) {
     let mut parent_config = crate::config::test_config().await;
-    let managed_policy = "Use the managed Guardian policy.";
-    let configured_template = "Configured Guardian template:\n{{ tenant_policy_config }}";
-    let catalog_template = "Catalog Guardian template:\n{{ tenant_policy_config }}";
-    parent_config.guardian_policy_config = Some(managed_policy.to_string());
-    parent_config.guardian_policy_template = Some(configured_template.to_string());
-    let model_messages = ModelMessages {
-        persistent_instructions: None,
-        tools: None,
-        instructions_template: None,
-        instructions_variables: None,
-        approvals: None,
-        collaboration_modes: None,
-        auto_review: Some(AutoReviewMessages {
-            policy: Some("Use the catalog Guardian policy.".to_string()),
-            policy_template: Some(catalog_template.to_string()),
-            node_repl_policy: None,
-            rejection_instructions: None,
-            timeout_instructions: None,
-        }),
-        permissions: None,
-        multi_agent: None,
-        token_budget: None,
-        confirmation_policies: None,
-        guardian_v2: None,
-    };
-
-    let guardian_config = build_guardian_review_session_config(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummaryConfig::default(),
-        /*personality*/ None,
-        Some(&model_messages),
-    )
-    .expect("guardian config");
-
-    assert_eq!(
-        guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            managed_policy,
-            configured_template,
-        ))
-    );
-}
-
-#[tokio::test]
-async fn guardian_review_session_config_preserves_explicit_empty_catalog_policy() {
-    let parent_config = crate::config::test_config().await;
-    let model_messages = ModelMessages {
-        persistent_instructions: None,
-        tools: None,
-        instructions_template: None,
-        instructions_variables: None,
-        approvals: None,
-        collaboration_modes: None,
-        auto_review: Some(AutoReviewMessages {
-            policy: Some(String::new()),
-            policy_template: None,
-            node_repl_policy: None,
-            rejection_instructions: None,
-            timeout_instructions: None,
-        }),
-        permissions: None,
-        multi_agent: None,
-        token_budget: None,
-        confirmation_policies: None,
-        guardian_v2: None,
-    };
-
-    let guardian_config = build_guardian_review_session_config(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummaryConfig::default(),
-        /*personality*/ None,
-        Some(&model_messages),
-    )
-    .expect("guardian config");
-
-    assert_eq!(
-        guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            "",
-            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-        ))
-    );
-    assert_ne!(
-        guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            BUNDLED_GUARDIAN_POLICY,
-            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-        ))
-    );
-}
-
-#[tokio::test]
-async fn guardian_review_session_config_preserves_explicit_empty_catalog_template() {
-    let parent_config = crate::config::test_config().await;
-    let catalog_policy = "Use the catalog Guardian policy.";
-    let model_messages = ModelMessages {
-        persistent_instructions: None,
-        tools: None,
-        instructions_template: None,
-        instructions_variables: None,
-        approvals: None,
-        collaboration_modes: None,
+    parent_config.guardian_policy_config = managed_policy.map(str::to_owned);
+    parent_config.guardian_policy_template = configured_template.map(str::to_owned);
+    let mut model = model_info_from_slug("active-model");
+    model.model_messages = Some(ModelMessages {
         auto_review: Some(AutoReviewMessages {
             policy: Some(catalog_policy.to_string()),
-            policy_template: Some(String::new()),
+            policy_template: catalog_template.map(str::to_owned),
             node_repl_policy: None,
             rejection_instructions: None,
             timeout_instructions: None,
         }),
-        permissions: None,
-        multi_agent: None,
-        token_budget: None,
-        confirmation_policies: None,
-        guardian_v2: None,
-    };
+        ..Default::default()
+    });
 
     let guardian_config = build_guardian_review_session_config(
         crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
@@ -734,23 +678,20 @@ async fn guardian_review_session_config_preserves_explicit_empty_catalog_templat
         /*reasoning_effort*/ None,
         ReasoningSummaryConfig::default(),
         /*personality*/ None,
-        Some(&model_messages),
+        ResolvedModelMessages::from_model(&model),
     )
     .expect("guardian config");
 
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            catalog_policy,
-            "",
-        ))
-    );
-    assert_ne!(
-        guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            catalog_policy,
-            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-        ))
+        Some(
+            GuardianPolicyInstructions::new(
+                expected_policy,
+                expected_template,
+                guardian_output_contract_prompt(),
+            )
+            .render()
+        )
     );
 }
 

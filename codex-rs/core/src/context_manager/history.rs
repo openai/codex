@@ -37,6 +37,7 @@ use codex_history::RetainedContext;
 use codex_history::RetainedContextEntry;
 use codex_history::RetainedContextEvent;
 use codex_history::RetainedInputSource;
+use codex_prompts::render_model_instructions;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
@@ -504,11 +505,8 @@ impl ContextManager {
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
         let model_info = &turn_context.model_info();
-        let personality = turn_context
-            .personality()
-            .or(turn_context.config.personality);
         let base_instructions = BaseInstructions {
-            text: model_info.get_model_instructions(personality),
+            text: render_model_instructions(model_info),
             provenance: None,
         };
         self.estimate_token_count_with_base_instructions(&base_instructions)

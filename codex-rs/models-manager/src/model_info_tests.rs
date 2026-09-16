@@ -1,5 +1,6 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use codex_prompts::render_model_instructions;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
@@ -79,7 +80,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
         browser_use: Some("# Browser policy\n\n{{literal_markdown}}\n".to_string()),
         computer_use: Some("  # Native policy\r\n\n${native_markdown}\n".to_string()),
     };
-    model.model_messages = Some(ModelMessages {
+    let mut messages = ModelMessages {
         persistent_instructions: Some(persistent_instructions.to_string()),
         tools: Some(ToolMessages {
             send_user_message_async: Some(ToolMessage {
@@ -92,15 +93,16 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
         }),
-        approvals: Some(approvals.clone()),
-        collaboration_modes: Some(collaboration_modes.clone()),
-        auto_review: Some(auto_review.clone()),
-        permissions: Some(permissions.clone()),
-        multi_agent: Some(multi_agent.clone()),
-        token_budget: Some(token_budget.clone()),
-        confirmation_policies: Some(confirmation_policies.clone()),
-        guardian_v2: Some(guardian_v2.clone()),
-    });
+        approvals: Some(approvals),
+        collaboration_modes: Some(collaboration_modes),
+        auto_review: Some(auto_review),
+        permissions: Some(permissions),
+        multi_agent: Some(multi_agent),
+        token_budget: Some(token_budget),
+        confirmation_policies: Some(confirmation_policies),
+        guardian_v2: Some(guardian_v2),
+    };
+    model.model_messages = Some(messages.clone());
     let config = ModelsManagerConfig {
         base_instructions: Some(override_instructions.to_string()),
         personality: Some(Personality::None),
@@ -109,36 +111,16 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
 
     let updated = with_config_overrides(model, &config);
 
-    assert_eq!(
-        updated.model_messages,
-        Some(ModelMessages {
-            persistent_instructions: Some(persistent_instructions.to_string()),
-            tools: Some(ToolMessages {
-                send_user_message_async: Some(ToolMessage {
-                    description: Some(async_message_description.to_string()),
-                }),
-            }),
-            instructions_template: Some(override_instructions.to_string()),
-            instructions_variables: None,
-            approvals: Some(approvals),
-            collaboration_modes: Some(collaboration_modes),
-            auto_review: Some(auto_review),
-            permissions: Some(permissions),
-            multi_agent: Some(multi_agent),
-            token_budget: Some(token_budget),
-            confirmation_policies: Some(confirmation_policies),
-            guardian_v2: Some(guardian_v2),
-        })
-    );
-    assert_eq!(
-        updated.get_model_instructions(Some(Personality::None)),
-        override_instructions
-    );
+    messages.instructions_template = Some(override_instructions.to_string());
+    messages.instructions_variables = None;
+    assert_eq!(updated.model_messages, Some(messages));
+    assert_eq!(render_model_instructions(&updated), override_instructions);
 }
 
 #[test]
 fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
-    let cases = [
+    let config = config_with_personality(Some(Personality::None));
+    for (instructions, expected) in [
         (
             "Intro\n\n# Personality\n\nRemove me\n\n## Writing Style\n\nRemove me too\n\n# Safety\n\nKeep me",
             "Intro\n\n# Safety\n\nKeep me",
@@ -156,39 +138,30 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
             "Intro\r\n\r\n# Personality\r\n\r\nRemove me\r\n\r\n## Writing Style\r\n\r\nRemove me too\r\n\r\n# General\r\n\r\nKeep me",
             "Intro\r\n\r\n# General\r\n\r\nKeep me",
         ),
-    ];
-    let config = config_with_personality(Some(Personality::None));
-
-    for (instructions, expected) in cases {
-        let mut model = model_info_from_slug("unknown-model");
-        model.model_messages = Some(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
+    ] {
+        let mut messages = ModelMessages {
             instructions_template: Some(instructions.to_string()),
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
-        });
+            instructions_variables: Some(ModelInstructionsVariables {
+                personality_default: Some("default".to_string()),
+                personality_friendly: Some("friendly".to_string()),
+                personality_pragmatic: Some("pragmatic".to_string()),
+            }),
+            persistent_instructions: Some(String::new()),
+            approvals: Some(ApprovalMessages {
+                on_request: Some("user approvals".to_string()),
+                on_request_auto_review: None,
+                never: None,
+                unless_trusted: None,
+            }),
+            ..Default::default()
+        };
+        let mut model = model_info_from_slug("unknown-model");
+        model.model_messages = Some(messages.clone());
 
         let updated = with_config_overrides(model, &config);
-        let instructions_template = updated
-            .model_messages
-            .as_ref()
-            .and_then(|messages| messages.instructions_template.as_deref());
 
-        assert_eq!(
-            (
-                updated.get_model_instructions(Some(Personality::None)),
-                instructions_template
-            ),
-            (expected.to_string(), Some(expected))
-        );
+        messages.instructions_template = Some(expected.to_string());
+        assert_eq!(updated.model_messages, Some(messages));
     }
 }
 
@@ -210,7 +183,7 @@ fn baked_personality_section_is_preserved_without_explicit_none() {
             .instructions_template = Some(instructions.to_string());
 
         assert_eq!(
-            with_config_overrides(model, &config).get_model_instructions(config.personality),
+            render_model_instructions(&with_config_overrides(model, &config)),
             instructions
         );
     }
@@ -239,17 +212,14 @@ fn explicit_empty_base_instructions_stay_empty_with_personality_none() {
             .and_then(|messages| messages.instructions_template.as_deref()),
         Some("")
     );
-    assert_eq!(updated.get_model_instructions(config.personality), "");
+    assert_eq!(render_model_instructions(&updated), "");
 }
 
 #[test]
 fn unknown_model_uses_builtin_instruction_template() {
     let model = model_info_from_slug("unknown-model");
 
-    assert_eq!(
-        model.get_model_instructions(/*personality*/ None),
-        BASE_INSTRUCTIONS
-    );
+    assert_eq!(render_model_instructions(&model), BASE_INSTRUCTIONS);
     assert!(model.used_fallback_model_metadata);
 }
 

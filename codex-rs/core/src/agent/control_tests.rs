@@ -2000,8 +2000,8 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         expected_developer_message,
         expected_final_answer,
         expected_standalone_output,
-        ContextualUserFragment::into(MultiAgentRoleInstructions::unmarked(
-            "Child subagent guidance.",
+        ContextualUserFragment::into(MultiAgentRoleInstructions::Configured(
+            "Child subagent guidance.".to_string(),
         )),
     ];
     assert_eq!(
@@ -2141,6 +2141,14 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
     let parent_thread = new_thread.thread;
     let turn_context = parent_thread.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-compacted-usage-hints".to_string();
+    let catalog_role = |base: &str| MultiAgentRoleInstructions::Composed {
+        base: base.to_string(),
+        marked: true,
+        omit_update_plan_instructions: false,
+        max_concurrency: 2,
+        wait_agent_enabled: false,
+        expose_model_overrides: false,
+    };
     let parent_task = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::root().join("worker").expect("valid worker path"),
@@ -2159,9 +2167,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
-        ContextualUserFragment::into(MultiAgentRoleInstructions::catalog(
-            "Catalog parent root guidance.",
-        )),
+        ContextualUserFragment::into(catalog_role("Catalog parent root guidance.")),
         parent_task.to_model_input_item(),
         ResponseItem::Message {
             id: None,
@@ -2250,9 +2256,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
                 multi_agent_v2_usage_hints: Some(ResolvedMultiAgentV2UsageHints {
                     root: None,
-                    subagent: Some(MultiAgentRoleInstructions::catalog(
-                        "Catalog child subagent guidance.",
-                    )),
+                    subagent: Some(catalog_role("Catalog child subagent guidance.")),
                 }),
                 ..Default::default()
             },

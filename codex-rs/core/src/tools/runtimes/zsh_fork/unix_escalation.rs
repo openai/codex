@@ -16,6 +16,7 @@ use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -369,9 +370,12 @@ impl CoreShellActionProvider {
                             EscalationDecision::deny(Some(rejection))
                         }
                         ReviewDecision::TimedOut => EscalationDecision::deny(Some(
-                            crate::guardian::guardian_timeout_message(
+                            ResolvedModelMessages::from_model(
                                 self.review_context.turn().model_info(),
-                            ),
+                            )
+                            .auto_review()
+                            .timeout_instructions
+                            .to_string(),
                         )),
                         ReviewDecision::ApprovedMcpPolicyAmendment => {
                             error!("Shell escalation received ApprovedMcpPolicyAmendment");

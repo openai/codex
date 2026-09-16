@@ -20,7 +20,6 @@ use codex_guardian_context::TranscriptImageInput;
 use codex_guardian_context::TranscriptRetentionConfig;
 use codex_guardian_context::TrustedTool;
 use codex_guardian_context::default_registry;
-pub(crate) use codex_guardian_context::truncate_text as truncate_entry;
 
 pub(crate) const MAX_MESSAGE_ENTRY_TOKENS: usize = ContextProfile::asynchronous()
     .transcript

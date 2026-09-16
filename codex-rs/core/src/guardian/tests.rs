@@ -6,11 +6,9 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::PermissionProfileSnapshot;
 use crate::config::test_config;
+use crate::context::ContextualUserFragment;
 use crate::environment_selection::TurnEnvironmentState;
 use crate::guardian::approval_request::guardian_request_target_item_id;
-use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY;
-use crate::guardian::prompt::BUNDLED_GUARDIAN_POLICY_TEMPLATE;
-use crate::guardian::prompt::guardian_policy_prompt_with_config_and_template;
 use crate::guardian::review::guardian_review_session_config;
 use crate::session::session::Session;
 use crate::session::tests::update_turn_settings_for_test;
@@ -30,6 +28,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_guardian_context::ConversationTranscriptEntry;
 use codex_guardian_context::ConversationTranscriptEntryKind;
+use codex_guardian_reviewer::guardian_output_contract_prompt;
 use codex_history::RolloutItem;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
@@ -38,6 +37,8 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::StaticModelsManager;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_prompts::GuardianPolicyInstructions;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -1556,32 +1557,6 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning(
     assert!(warnings.is_empty());
 }
 
-#[test]
-fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
-    let mut model = codex_models_manager::model_info::model_info_from_slug("acting-model");
-    model.model_messages = None;
-    let message = guardian_timeout_message(&model);
-    assert!(message.contains("did not finish before its deadline"));
-    assert!(message.contains("retry once"));
-    assert!(!message.contains("unacceptable risk"));
-
-    for timeout_instructions in [None, Some("Catalog timeout instructions."), Some("")] {
-        model.model_messages = Some(
-            serde_json::from_value(serde_json::json!({
-                "auto_review": {
-                    "policy": "review policy",
-                    "timeout_instructions": timeout_instructions,
-                },
-            }))
-            .expect("model messages should deserialize"),
-        );
-        assert_eq!(
-            guardian_timeout_message(&model),
-            timeout_instructions.unwrap_or(&message),
-        );
-    }
-}
-
 #[tokio::test]
 async fn routes_approval_to_guardian_requires_guardian_reviewer() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
@@ -1835,22 +1810,17 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
     }
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
-    let initial_policy = configured_policy.unwrap_or("captured policy");
-    assert_eq!(
-        requests[0].instructions_text(),
-        guardian_policy_prompt_with_config_and_template(
-            initial_policy,
-            "captured template: {{ tenant_policy_config }}"
-        )
-    );
-    let changed_policy = configured_policy.unwrap_or("changed action policy");
-    assert_eq!(
-        requests[1].instructions_text(),
-        guardian_policy_prompt_with_config_and_template(
-            changed_policy,
-            "captured template: {{ tenant_policy_config }}"
-        )
-    );
+    let contract = guardian_output_contract_prompt();
+    for (request, policy) in requests
+        .iter()
+        .zip(["captured policy", "changed action policy"])
+    {
+        let policy = configured_policy.unwrap_or(policy);
+        assert_eq!(
+            request.instructions_text(),
+            format!("captured template: {policy}\n\n{contract}\n")
+        );
+    }
     let thread_ids = requests
         .iter()
         .map(|request| request.body_json()["client_metadata"]["thread_id"].clone())
@@ -3752,7 +3722,7 @@ async fn guardian_review_session_config_preserves_parent_network_proxy() {
         Some(codex_protocol::openai_models::ReasoningEffort::Low),
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -3842,6 +3812,7 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
 
 #[tokio::test]
 async fn guardian_review_session_config_clears_parent_developer_instructions() {
+    let defaults = ResolvedModelMessages::bundled().auto_review();
     let mut parent_config = test_config().await;
     parent_config.developer_instructions =
         Some("parent or managed config should not replace guardian policy".to_string());
@@ -3853,17 +3824,21 @@ async fn guardian_review_session_config_clears_parent_developer_instructions() {
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            BUNDLED_GUARDIAN_POLICY,
-            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-        ))
+        Some(
+            GuardianPolicyInstructions::new(
+                defaults.policy,
+                defaults.policy_template,
+                guardian_output_contract_prompt(),
+            )
+            .render()
+        )
     );
 }
 
@@ -3882,7 +3857,7 @@ async fn guardian_review_session_config_clears_legacy_notify() {
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -3919,7 +3894,7 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -3968,7 +3943,7 @@ async fn guardian_review_session_config_disables_mcp_apps_plugins_memories_and_g
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -4002,7 +3977,7 @@ async fn guardian_review_session_config_allows_pinned_disabled_feature() {
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config should continue when a disabled feature is pinned on");
 
@@ -4023,7 +3998,7 @@ async fn guardian_review_session_config_uses_parent_active_model_instead_of_hard
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -4044,7 +4019,7 @@ async fn guardian_review_session_config_keeps_bedrock_provider_for_bedrock_gpt_5
         Some(ReasoningEffort::Low),
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
@@ -4101,23 +4076,30 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            "Use the workspace-managed guardian policy.",
-            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-        ))
+        Some(
+            GuardianPolicyInstructions::new(
+                "Use the workspace-managed guardian policy.",
+                ResolvedModelMessages::bundled()
+                    .auto_review()
+                    .policy_template,
+                guardian_output_contract_prompt(),
+            )
+            .render()
+        )
     );
 }
 
 #[tokio::test]
 async fn guardian_review_session_config_uses_default_guardian_policy_without_requirements_override()
 {
+    let defaults = ResolvedModelMessages::bundled().auto_review();
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack =
@@ -4143,17 +4125,21 @@ async fn guardian_review_session_config_uses_default_guardian_policy_without_req
         /*reasoning_effort*/ None,
         ReasoningSummary::default(),
         /*personality*/ None,
-        /*model_messages*/ None,
+        ResolvedModelMessages::bundled(),
     )
     .expect("guardian config");
 
     assert_eq!(guardian_config.developer_instructions, None);
     assert_eq!(
         guardian_config.base_instructions,
-        Some(guardian_policy_prompt_with_config_and_template(
-            BUNDLED_GUARDIAN_POLICY,
-            BUNDLED_GUARDIAN_POLICY_TEMPLATE,
-        ))
+        Some(
+            GuardianPolicyInstructions::new(
+                defaults.policy,
+                defaults.policy_template,
+                guardian_output_contract_prompt(),
+            )
+            .render()
+        )
     );
 }
 

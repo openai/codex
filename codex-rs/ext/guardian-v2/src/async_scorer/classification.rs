@@ -33,6 +33,7 @@ use codex_guardian_context::ReviewEvidence;
 use codex_guardian_context::render_review_evidence;
 use codex_history::RolloutItem;
 use codex_model_provider::create_model_provider;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::models::ContentItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::security_risk::SecurityRiskScore;
@@ -239,7 +240,7 @@ impl Classification {
         let mut classification_risk = None;
         let mut classification_finished_at = None;
         let result: Result<ClassificationOutcome, String> = async {
-            let review_model_messages = if config.guardian_policy_config.is_none() {
+            let review_model = if config.guardian_policy_config.is_none() {
                 let review_model_id = review_model_override.as_deref().unwrap_or_else(|| {
                     create_model_provider(
                         config.model_provider.clone(),
@@ -252,16 +253,18 @@ impl Classification {
                     .get_model_info(review_model_id, &config.to_models_manager_config())
                     .await;
                 if review_model.used_fallback_model_metadata && review_model_override.is_none() {
-                    parent_model
-                        .as_ref()
-                        .and_then(|model| model.model_messages.clone())
+                    parent_model.clone()
                 } else {
-                    review_model.model_messages
+                    Some(Arc::new(review_model))
                 }
             } else {
                 None
             };
-            let policy = config.resolve_guardian_policy(review_model_messages.as_ref());
+            let model_messages = review_model
+                .as_deref()
+                .map(ResolvedModelMessages::from_model)
+                .unwrap_or_else(ResolvedModelMessages::bundled);
+            let policy = config.resolve_guardian_policy(model_messages);
             let instructions = guardian_config.render_classifier_instructions(policy);
             let output = match sampler
                 .sample(LunaSamplingRequest {

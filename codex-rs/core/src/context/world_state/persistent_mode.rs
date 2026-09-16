@@ -1,5 +1,5 @@
 //! Keeps persistent-mode developer instructions current without repeating unchanged context.
-//! Mode changes retire prior instructions; missing catalog values use the bundled default.
+//! Mode changes retire prior instructions; callers provide the resolved instruction template.
 
 use super::PreviousSectionState;
 use super::WorldStateHash;
@@ -10,7 +10,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
 use serde::Serialize;
 
-const DEFAULT_INSTRUCTIONS: &str = include_str!("../../../assets/persistent_mode.md");
 const REPLACEMENT_NOTICE: &str = "These persistent-mode instructions replace all previously provided persistent-mode instructions.";
 const REMOVAL_NOTICE: &str =
     "The previously provided persistent-mode instructions no longer apply.";
@@ -51,21 +50,18 @@ pub(crate) struct PersistentModeSnapshot {
 impl PersistentModeState {
     pub(crate) fn new(
         reasoning_effort: Option<&ReasoningEffort>,
-        catalog_instructions: Option<&str>,
+        instructions_template: &str,
         send_user_message_async_available: bool,
     ) -> Self {
         let instructions = if reasoning_effort == Some(&ReasoningEffort::Persistent) {
-            catalog_instructions
-                .unwrap_or(DEFAULT_INSTRUCTIONS)
-                .trim()
-                .replace(
-                    "{{ approval_request_channel }}",
-                    if send_user_message_async_available {
-                        " via functions.send_user_message_async"
-                    } else {
-                        ""
-                    },
-                )
+            instructions_template.trim().replace(
+                "{{ approval_request_channel }}",
+                if send_user_message_async_available {
+                    " via functions.send_user_message_async"
+                } else {
+                    ""
+                },
+            )
         } else {
             String::new()
         };

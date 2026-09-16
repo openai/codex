@@ -9,6 +9,7 @@ use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::BASE_INSTRUCTIONS;
+use codex_prompts::render_model_instructions;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -155,36 +156,16 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
     let specific = ModelInfo {
         display_name: "GPT 5.3 Codex".to_string(),
         model_messages: Some(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
             instructions_template: Some("use specific prefix".to_string()),
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
+            ..Default::default()
         }),
         ..specific
     };
     let generic = ModelInfo {
         display_name: "GPT 5.3".to_string(),
         model_messages: Some(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
             instructions_template: Some("use generic prefix".to_string()),
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
+            ..Default::default()
         }),
         ..generic
     };
@@ -223,8 +204,8 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
 
     assert_eq!(model_info.slug, "gpt-5.3-codex-test");
     assert_eq!(
-        model_info.get_model_instructions(config.personality),
-        specific.get_model_instructions(config.personality)
+        render_model_instructions(&model_info),
+        render_model_instructions(&specific)
     );
 
     Ok(())
@@ -450,17 +431,8 @@ async fn remote_models_long_model_slug_is_sent_with_supported_reasoning(
     remote_model.default_reasoning_summary = ReasoningSummary::Detailed;
     remote_model.model_messages = Some(ModelMessages {
         persistent_instructions: catalog_instructions.map(str::to_string),
-        tools: None,
         instructions_template: Some(base_instructions.to_string()),
-        instructions_variables: None,
-        approvals: None,
-        collaboration_modes: None,
-        auto_review: None,
-        permissions: None,
-        multi_agent: None,
-        token_budget: None,
-        guardian_v2: None,
-        confirmation_policies: None,
+        ..Default::default()
     });
     mount_models_once(
         &server,
@@ -901,18 +873,8 @@ async fn remote_models_apply_legacy_instructions(auth: CodexAuth) -> Result<()> 
         available_access_programs: None,
         upgrade: None,
         model_messages: Some(ModelMessages {
-            persistent_instructions: None,
-            tools: None,
             instructions_template: Some(remote_instructions.to_string()),
-            instructions_variables: None,
-            approvals: None,
-            collaboration_modes: None,
-            auto_review: None,
-            permissions: None,
-            multi_agent: None,
-            token_budget: None,
-            confirmation_policies: None,
-            guardian_v2: None,
+            ..Default::default()
         }),
         include_skills_usage_instructions: false,
         include_plugin_usage_instructions: false,
@@ -1043,7 +1005,7 @@ async fn remote_models_apply_legacy_instructions(auth: CodexAuth) -> Result<()> 
     let request = requests.last().expect("expected second model request");
     assert_eq!(
         request.instructions_text(),
-        base_model_info.get_model_instructions(config.personality)
+        render_model_instructions(&base_model_info)
     );
     assert!(
         request

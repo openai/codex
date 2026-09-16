@@ -1,8 +1,12 @@
 use codex_config::GuardianPolicyLoader;
+use codex_context_fragments::ContextualUserFragment;
+use codex_context_fragments::RenderedFragment;
 use codex_core::config::Config;
 use codex_features::FeatureToml;
 use codex_features::GuardianV2ConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
+use codex_prompts::GuardianClassifierInstructions;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::openai_models::GuardianModelPolicy;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -14,7 +18,6 @@ use super::transcript::MAX_TOOL_ENTRY_TOKENS;
 use super::transcript::MAX_TOOL_TRANSCRIPT_TOKENS;
 use super::transcript::TranscriptConfig;
 use super::transcript::TranscriptSource;
-use super::transcript::truncate_entry;
 
 pub(crate) const DEFAULT_MODEL_CONTEXT_ITEM_TOKENS: usize = 10_000;
 pub(crate) const DEFAULT_PARENT_COMPACTION_TOKENS: usize = 25_000;
@@ -23,7 +26,6 @@ const MAX_MODEL_CONTEXT_ITEM_TOKENS: usize = 100_000;
 const DEFAULT_REVIEW_THRESHOLD: f64 = 0.5;
 const LEGACY_REVIEW_THRESHOLD: f64 = 0.8;
 const DEFAULT_MAX_TOOL_CALL_LAG: usize = 2;
-pub(crate) const DEFAULT_CLASSIFIER_INSTRUCTIONS: &str = include_str!("classifier_instructions.md");
 pub(crate) const CLASSIFICATION_OUTPUT_INSTRUCTIONS: &str = "Your first output token is the entire classification: `high` for high risk or `low` for low risk. Output that token immediately and nothing else.";
 
 #[derive(Clone, Debug, PartialEq)]
@@ -250,9 +252,11 @@ impl GuardianV2Config {
         Ok(Self {
             local_overrides: configured.clone(),
             persist_scores: configured.persist_scores.unwrap_or(false),
-            classifier_instructions: configured
-                .classifier_instructions
-                .unwrap_or_else(|| DEFAULT_CLASSIFIER_INSTRUCTIONS.to_owned()),
+            classifier_instructions: configured.classifier_instructions.unwrap_or_else(|| {
+                ResolvedModelMessages::bundled()
+                    .guardian_classifier_instructions()
+                    .to_owned()
+            }),
             review_threshold,
             max_tool_call_lag: configured
                 .max_tool_call_lag
@@ -281,31 +285,14 @@ impl GuardianV2Config {
         })
     }
 
-    pub(crate) fn render_classifier_instructions(&self, policy: &str) -> String {
-        let instructions = if self
-            .classifier_instructions
-            .contains("{{ tenant_policy_config }}")
-        {
-            self.classifier_instructions
-                .replace("{{ tenant_policy_config }}", policy)
-        } else {
-            format!(
-                "{}\n\n# Security Policy\n{policy}",
-                self.classifier_instructions
-            )
-        };
-        let instructions = if instructions
-            .trim_end()
-            .ends_with(CLASSIFICATION_OUTPUT_INSTRUCTIONS)
-        {
-            instructions
-        } else {
-            format!("{instructions}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}")
-        };
-        match self.max_classifier_instruction_tokens {
-            Some(max_tokens) => truncate_entry(&instructions, max_tokens),
-            None => instructions,
-        }
+    pub(crate) fn render_classifier_instructions(&self, policy: &str) -> RenderedFragment {
+        GuardianClassifierInstructions::new(
+            &self.classifier_instructions,
+            policy,
+            CLASSIFICATION_OUTPUT_INSTRUCTIONS,
+            self.max_classifier_instruction_tokens,
+        )
+        .render_fragment()
     }
 }
 

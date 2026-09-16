@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 const TOOL_NAME: &str = "request_user_input_async";
 
 pub struct RequestUserInputAsyncHandler {
-    pub description: Option<String>,
+    pub description: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,10 +62,7 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputAsyncHandler {
 
         ToolSpec::Function(ResponsesApiTool {
             name: TOOL_NAME.to_string(),
-            description: self.description.clone().unwrap_or_else(|| {
-                "Ask the user one or more questions during ongoing work. Use this tool only to request missing information, preferences, constraints, clarification, or approval. The tool returns immediately without ending the turn or waiting for a reply; any reply arrives asynchronously as a new user message. Keep questions concise, self-contained, and easy to understand, using a level of detail appropriate to the user and task. The UI always allows a free-text answer, including when suggested options are provided. A preselected option is not submitted automatically."
-                    .to_string()
-            }),
+            description: self.description.clone(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(

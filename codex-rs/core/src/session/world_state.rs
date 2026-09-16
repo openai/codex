@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::session::Session;
 use super::step_context::StepContext;
 use crate::connectors;
-use crate::context::ApprovalPromptContext;
 use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
@@ -25,6 +24,9 @@ use crate::context::world_state::WorldState;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
+use codex_prompts::ApprovalPromptContext;
+use codex_prompts::ResolvedModelMessages;
+use codex_prompts::render_model_instructions;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructionsProvenance;
 
@@ -37,12 +39,12 @@ impl Session {
         let turn_context = step_context.turn.as_ref();
         let settings = &step_context.settings;
         let model_info = settings.model_info.as_ref();
-        let personality = settings.personality();
+        let model_messages = ResolvedModelMessages::from_model(model_info);
         tracing::trace!(
             selected_capability_root_count = step_context.selected_capability_roots.len(),
             "building step world state"
         );
-        let model_instructions = model_info.get_model_instructions(personality);
+        let model_instructions = render_model_instructions(model_info);
         let model_instructions = if !turn_context.config.update_plan_enabled
             && turn_context.config.model_catalog.is_none()
             && (turn_context.config.base_instructions.is_none()
@@ -50,7 +52,7 @@ impl Session {
                     turn_context.config.base_instructions_provenance,
                     Some(BaseInstructionsProvenance::Model { .. })
                 )) {
-            crate::context::without_update_plan_instructions(&model_instructions)
+            codex_prompts::without_update_plan_instructions(&model_instructions)
         } else {
             model_instructions
         };
@@ -142,15 +144,10 @@ impl Session {
             let cwd = environment
                 .and_then(|environment| environment.cwd().to_abs_path().ok())
                 .unwrap_or_else(|| turn_context.cwd.clone());
-            let model_messages = model_info.model_messages.as_ref();
             world_state.add_section(PermissionsState::new(
                 &permission_profile,
                 settings.approval_policy(),
-                ApprovalPromptContext::new(
-                    settings.approvals_reviewer(),
-                    model_messages.and_then(|messages| messages.approvals.as_ref()),
-                    model_messages.and_then(|messages| messages.permissions.as_ref()),
-                ),
+                ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages),
                 exec_policy.as_ref(),
                 &cwd,
                 turn_context
@@ -168,10 +165,7 @@ impl Session {
         if turn_context.config.include_collaboration_mode_instructions {
             world_state.add_section(CollaborationModeState::from_collaboration_mode(
                 &settings.effective_collaboration_mode(),
-                model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|messages| messages.collaboration_modes.as_ref()),
+                model_messages.collaboration_modes(),
                 turn_context.config.update_plan_enabled,
                 turn_context.config.model_catalog.is_some(),
             ));
@@ -187,12 +181,7 @@ impl Session {
                         .any(|tool| tool == "send_user_message_async");
             world_state.add_section(PersistentModeState::new(
                 step_context.settings.effective_reasoning_effort().as_ref(),
-                step_context
-                    .settings
-                    .model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|messages| messages.persistent_instructions.as_deref()),
+                model_messages.persistent_instructions(),
                 send_user_message_async_available,
             ));
         }

@@ -1,17 +1,27 @@
 use codex_features::GuardianV2ConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
+use codex_guardian_context::truncate_text as truncate_entry;
+use codex_prompts::ResolvedModelMessages;
+use codex_protocol::models::ContentItem;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
 use super::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
-use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
 use super::GuardianV2Config;
-use crate::async_scorer::transcript::truncate_entry;
+
+fn rendered_classifier_text(config: &GuardianV2Config, policy: &str) -> String {
+    let (_, content) = config.render_classifier_instructions(policy).into_parts();
+    let (ContentItem::InputText { text }, _) = content.into_parts() else {
+        panic!("classifier instructions must be text");
+    };
+    text
+}
 
 #[test]
 fn template_policy_is_substituted_before_the_single_truncation() {
+    let instructions = ResolvedModelMessages::bundled().guardian_classifier_instructions();
     for max_tokens in [256, 1_000, 2_000] {
         let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
             max_classifier_instruction_tokens: Some(max_tokens),
@@ -20,23 +30,21 @@ fn template_policy_is_substituted_before_the_single_truncation() {
         .unwrap();
         let policy = "The actual tenant policy.";
         assert_eq!(
-            config.render_classifier_instructions(policy),
+            rendered_classifier_text(&config, policy),
             truncate_entry(
-                &DEFAULT_CLASSIFIER_INSTRUCTIONS.replace("{{ tenant_policy_config }}", policy),
+                &instructions.replace("{{ tenant_policy_config }}", policy),
                 max_tokens,
             )
         );
-        assert_eq!(
-            config.classifier_instructions,
-            DEFAULT_CLASSIFIER_INSTRUCTIONS
-        );
+        assert_eq!(config.classifier_instructions, instructions);
     }
 }
 
 #[test]
 fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
+    let instructions = ResolvedModelMessages::bundled().guardian_classifier_instructions();
     let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
-        classifier_instructions: Some(DEFAULT_CLASSIFIER_INSTRUCTIONS.to_owned()),
+        classifier_instructions: Some(instructions.to_owned()),
         review_threshold: Some(0.5),
         reasoning_effort: Some(ReasoningEffort::Low),
         max_classifier_instruction_tokens: Some(30_000),
@@ -46,41 +54,59 @@ fn evaluated_configuration_preserves_rendered_prompt_and_gate() {
     assert_eq!(config.review_threshold, 0.5);
     assert_eq!(config.reasoning_effort, ReasoningEffort::Low);
     assert_eq!(config.max_classifier_instruction_tokens, Some(30_000));
-    assert_eq!(
-        config.classifier_instructions,
-        DEFAULT_CLASSIFIER_INSTRUCTIONS
-    );
+    assert_eq!(config.classifier_instructions, instructions);
 
     for policy in ["Tenant policy.".to_owned(), "é".repeat(80_000)] {
         // This is the exact pre-review rendering path used by the eval config.
         let previous = truncate_entry(
-            &truncate_entry(DEFAULT_CLASSIFIER_INSTRUCTIONS, /*max_tokens*/ 30_000)
+            &truncate_entry(instructions, /*max_tokens*/ 30_000)
                 .replace("{{ tenant_policy_config }}", &policy),
             /*max_tokens*/ 30_000,
         );
-        assert_eq!(config.render_classifier_instructions(&policy), previous);
+        assert_eq!(rendered_classifier_text(&config, &policy), previous);
     }
 }
 
 #[test]
 fn model_prompt_and_explicit_threshold_precedence_are_preserved() {
-    let defaults = GuardianV2ModelConfig {
-        classifier_instructions: Some("Model-owned instructions.".to_owned()),
-        ..Default::default()
-    };
     let builtin = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default()).unwrap();
     assert_eq!(builtin.review_threshold, 0.5);
-    assert_eq!(
-        builtin
-            .with_model_defaults(Some(&defaults))
-            .unwrap()
-            .review_threshold,
-        0.8,
-    );
+    for prompt in [
+        "Model-owned instructions.",
+        "",
+        ResolvedModelMessages::bundled().guardian_classifier_instructions(),
+    ] {
+        let defaults = GuardianV2ModelConfig {
+            classifier_instructions: Some(prompt.to_owned()),
+            ..Default::default()
+        };
+        let resolved = builtin.with_model_defaults(Some(&defaults)).unwrap();
+        assert_eq!(
+            (
+                resolved.classifier_instructions.clone(),
+                resolved.review_threshold
+            ),
+            (prompt.to_owned(), 0.8),
+        );
+        assert_eq!(
+            resolved
+                .with_model_defaults(/*model_defaults*/ None)
+                .unwrap(),
+            builtin
+        );
+
+        let local = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            classifier_instructions: Some(String::new()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(local.with_model_defaults(Some(&defaults)).unwrap(), local);
+    }
 
     let model_threshold = GuardianV2ModelConfig {
+        classifier_instructions: Some("Model-owned instructions.".to_owned()),
         review_threshold_basis_points: Some(6_000),
-        ..defaults
+        ..Default::default()
     };
     assert_eq!(
         builtin
@@ -124,7 +150,7 @@ fn legacy_classifier_prompts_keep_the_output_contract_after_truncation() {
         .unwrap();
 
     for config in [local_override, model_override] {
-        let rendered = config.render_classifier_instructions(policy);
+        let rendered = rendered_classifier_text(&config, policy);
         assert_eq!(
             rendered,
             truncate_entry(
@@ -197,7 +223,7 @@ fn model_runtime_settings_preserve_local_overrides() {
         .with_model_defaults(Some(&uncapped_defaults))
         .unwrap();
     assert_eq!(
-        uncapped.render_classifier_instructions("Tenant policy."),
+        rendered_classifier_text(&uncapped, "Tenant policy."),
         format!(
             "{prompt}\n\n# Security Policy\nTenant policy.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
         )

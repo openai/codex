@@ -18,6 +18,7 @@ use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 use codex_history::ResponseItemEnvelope;
+use codex_prompts::ResolvedModelMessages;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_utils_path_uri::PathUri;
@@ -917,7 +918,7 @@ impl AgentControl {
                 let parent_config = parent_thread.session.get_config().await;
                 let parent_usage_hints = resolve_usage_hints(
                     &parent_config.multi_agent_v2,
-                    /*catalog*/ None,
+                    ResolvedModelMessages::bundled().multi_agent(),
                     !parent_config.update_plan_enabled,
                 );
                 [parent_usage_hints.root, parent_usage_hints.subagent]
@@ -1105,7 +1106,7 @@ impl AgentControl {
                 .unwrap_or_else(|| {
                     resolve_usage_hints(
                         &config.multi_agent_v2,
-                        /*catalog*/ None,
+                        ResolvedModelMessages::bundled().multi_agent(),
                         !config.update_plan_enabled,
                     )
                     .subagent

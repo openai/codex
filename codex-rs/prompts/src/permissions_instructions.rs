@@ -1,3 +1,14 @@
+//! Composes selected permission text and prepared runtime facts into a stored fragment body.
+//! Only the profile adapter inspects the host filesystem; composition uses the supplied facts.
+//! Catalog text uses literal substitution; bundled sandbox templates are parsed and cached here.
+
+use crate::ResolvedMessage;
+use crate::ResolvedModelMessages;
+use crate::model_messages::permissions::DANGER_FULL_ACCESS_TEMPLATE;
+use crate::model_messages::permissions::READ_ONLY_TEMPLATE;
+use crate::model_messages::permissions::ResolvedApprovalMessages;
+use crate::model_messages::permissions::ResolvedPermissionMessages;
+use crate::model_messages::permissions::WORKSPACE_WRITE_TEMPLATE;
 use codex_context_fragments::ContextualUserFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -5,88 +16,118 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
-use codex_protocol::openai_models::ApprovalMessages;
-use codex_protocol::openai_models::PermissionMessages;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::WritableRoot;
 use codex_utils_template::Template;
 use std::path::Path;
 use std::sync::LazyLock;
 
-const APPROVAL_POLICY_NEVER: &str =
-    include_str!("../templates/permissions/approval_policy/never.md");
-const APPROVAL_POLICY_UNLESS_TRUSTED: &str =
-    include_str!("../templates/permissions/approval_policy/unless_trusted.md");
-const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
-    include_str!("../templates/permissions/approval_policy/on_request.md");
-const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
+const REQUEST_PERMISSION_RULE: &str =
     include_str!("../templates/permissions/approval_policy/on_request_rule_request_permission.md");
-const AUTO_REVIEW_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
-const NETWORK_ACCESS_PLACEHOLDER: &str = "{{ network_access }}";
+const REQUEST_PERMISSIONS_TOOL: &str = "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task.";
+const AUTO_REVIEW_SUFFIX: &str = "`approvals_reviewer` is `auto_review`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative, or inform the user of the risk and send a final message to ask for approval.";
+const APPROVED_PREFIXES: &str =
+    "## Approved command prefixes\nThe following prefix rules have already been approved: ";
+const GRANULAR_INTRO: &str = "# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user.";
+const GRANULAR_PROMPTED_CATEGORIES: &str =
+    "These approval categories may still prompt the user when needed:";
+const GRANULAR_REJECTED_CATEGORIES: &str =
+    "These approval categories are automatically rejected instead of prompting the user:";
 
-const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
-    include_str!("../templates/permissions/sandbox_mode/danger_full_access.md");
-const SANDBOX_MODE_WORKSPACE_WRITE: &str =
-    include_str!("../templates/permissions/sandbox_mode/workspace_write.md");
-const SANDBOX_MODE_READ_ONLY: &str =
-    include_str!("../templates/permissions/sandbox_mode/read_only.md");
-
-static SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SANDBOX_MODE_DANGER_FULL_ACCESS.trim_end())
+static DANGER_FULL_ACCESS: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(DANGER_FULL_ACCESS_TEMPLATE.trim_end())
         .unwrap_or_else(|err| panic!("danger-full-access sandbox template must parse: {err}"))
 });
-static SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SANDBOX_MODE_WORKSPACE_WRITE.trim_end())
+static WORKSPACE_WRITE: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(WORKSPACE_WRITE_TEMPLATE.trim_end())
         .unwrap_or_else(|err| panic!("workspace-write sandbox template must parse: {err}"))
 });
-static SANDBOX_MODE_READ_ONLY_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
-    Template::parse(SANDBOX_MODE_READ_ONLY.trim_end())
+static READ_ONLY: LazyLock<Template> = LazyLock::new(|| {
+    Template::parse(READ_ONLY_TEMPLATE.trim_end())
         .unwrap_or_else(|err| panic!("read-only sandbox template must parse: {err}"))
 });
-
-struct PermissionsPromptConfig<'a> {
-    approval_policy: AskForApproval,
-    approvals_reviewer: ApprovalsReviewer,
-    approval_messages: Option<&'a ApprovalMessages>,
-    permission_messages: Option<&'a PermissionMessages>,
-    exec_policy: &'a Policy,
-    exec_permission_approvals_enabled: bool,
-    request_permissions_tool_enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-/// Developer instructions that describe the active sandbox and approval policy.
-pub struct PermissionsInstructions {
-    text: String,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ApprovalPromptContext<'a> {
     reviewer: ApprovalsReviewer,
-    messages: Option<&'a ApprovalMessages>,
-    permission_messages: Option<&'a PermissionMessages>,
+    messages: ResolvedApprovalMessages<'a>,
+    permission_messages: ResolvedPermissionMessages<'a>,
 }
 
 impl<'a> ApprovalPromptContext<'a> {
-    pub fn new(
-        reviewer: ApprovalsReviewer,
-        messages: Option<&'a ApprovalMessages>,
-        permission_messages: Option<&'a PermissionMessages>,
-    ) -> Self {
+    pub fn new(reviewer: ApprovalsReviewer, model_messages: ResolvedModelMessages<'a>) -> Self {
         Self {
             reviewer,
-            messages,
-            permission_messages,
+            messages: model_messages.approvals(),
+            permission_messages: model_messages.permissions(),
         }
     }
 }
 
+/// Prepared runtime facts borrowed only while composing the fragment.
+/// Paths retain their resolved display spellings and order.
+#[derive(Debug, Clone, Copy)]
+struct PermissionsRenderContext<'a> {
+    sandbox_mode: SandboxMode,
+    network_access: NetworkAccess,
+    approval_policy: AskForApproval,
+    approved_command_prefixes: &'a [Vec<String>],
+    writable_roots: &'a [String],
+    denied_read_paths: &'a [String],
+    denied_read_globs: &'a [String],
+    exec_permission_approvals_enabled: bool,
+    request_permissions_tool_enabled: bool,
+}
+
+/// Developer fragment describing the active sandbox and approval policy.
+#[derive(Debug, Clone)]
+pub struct PermissionsInstructions {
+    text: String,
+}
+
 impl PermissionsInstructions {
-    /// Builds permissions instructions from the effective permission profile and approval policy.
+    /// Composes a permission fragment from resolved messages and caller-supplied facts.
+    /// Paths are used verbatim; this constructor does not inspect the filesystem or environment.
+    fn from_resolved(
+        context: PermissionsRenderContext<'_>,
+        approval_context: ApprovalPromptContext<'_>,
+    ) -> Self {
+        let mut text = String::new();
+        let sandbox = sandbox_text(
+            context.sandbox_mode,
+            context.network_access,
+            approval_context.permission_messages,
+        );
+        if !sandbox.is_empty() {
+            append_section(&mut text, &sandbox);
+        }
+        append_section(
+            &mut text,
+            &approval_text(
+                context.approval_policy,
+                approval_context.reviewer,
+                approval_context.messages,
+                context.approved_command_prefixes,
+                context.exec_permission_approvals_enabled,
+                context.request_permissions_tool_enabled,
+            ),
+        );
+        if let Some(writable_roots) = writable_roots_text(context.writable_roots) {
+            append_section(&mut text, &writable_roots);
+        }
+        if let Some(denied_reads) =
+            denied_reads_text(context.denied_read_paths, context.denied_read_globs)
+        {
+            append_section(&mut text, &denied_reads);
+        }
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        Self { text }
+    }
+
+    /// Resolves a permission profile against the host filesystem before rendering instructions.
     pub fn from_permission_profile(
         permission_profile: &PermissionProfile,
         approval_policy: AskForApproval,
@@ -96,80 +137,48 @@ impl PermissionsInstructions {
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
     ) -> Self {
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        let (sandbox_mode, writable_roots) =
-            sandbox_prompt_from_policy(&file_system_sandbox_policy, cwd);
-
-        Self::from_permissions_with_network_and_denied_reads(
-            sandbox_mode,
-            network_access_from_policy(permission_profile.network_sandbox_policy()),
-            PermissionsPromptConfig {
+        let file_system_policy = permission_profile.file_system_sandbox_policy();
+        let (sandbox_mode, mut writable_roots) = if file_system_policy.has_full_disk_write_access()
+        {
+            (SandboxMode::DangerFullAccess, Vec::new())
+        } else {
+            let roots = file_system_policy.get_writable_roots_with_cwd(cwd);
+            let mode = if roots.is_empty() {
+                SandboxMode::ReadOnly
+            } else {
+                SandboxMode::WorkspaceWrite
+            };
+            (mode, roots)
+        };
+        writable_roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
+        let writable_roots = writable_roots
+            .iter()
+            .map(|root| root.root.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let denied_read_paths = file_system_policy
+            .get_unreadable_roots_with_cwd(cwd)
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let denied_read_globs = file_system_policy.get_unreadable_globs_with_cwd(cwd);
+        Self::from_resolved(
+            PermissionsRenderContext {
+                sandbox_mode,
+                network_access: if permission_profile.network_sandbox_policy().is_enabled() {
+                    NetworkAccess::Enabled
+                } else {
+                    NetworkAccess::Restricted
+                },
                 approval_policy,
-                approvals_reviewer: approval_context.reviewer,
-                approval_messages: approval_context.messages,
-                permission_messages: approval_context.permission_messages,
-                exec_policy,
+                approved_command_prefixes: &exec_policy.get_allowed_prefixes(),
+                writable_roots: &writable_roots,
+                denied_read_paths: &denied_read_paths,
+                denied_read_globs: &denied_read_globs,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
             },
-            writable_roots,
-            denied_reads_text(&file_system_sandbox_policy, cwd),
+            approval_context,
         )
-    }
-
-    pub fn body(&self) -> String {
-        self.text.clone()
-    }
-
-    #[cfg(test)]
-    fn from_permissions_with_network(
-        sandbox_mode: SandboxMode,
-        network_access: NetworkAccess,
-        config: PermissionsPromptConfig<'_>,
-        writable_roots: Option<Vec<WritableRoot>>,
-    ) -> Self {
-        Self::from_permissions_with_network_and_denied_reads(
-            sandbox_mode,
-            network_access,
-            config,
-            writable_roots,
-            /*denied_reads*/ None,
-        )
-    }
-
-    fn from_permissions_with_network_and_denied_reads(
-        sandbox_mode: SandboxMode,
-        network_access: NetworkAccess,
-        config: PermissionsPromptConfig<'_>,
-        writable_roots: Option<Vec<WritableRoot>>,
-        denied_reads: Option<String>,
-    ) -> Self {
-        let mut text = String::new();
-        let sandbox = sandbox_text(sandbox_mode, network_access, config.permission_messages);
-        if !sandbox.is_empty() {
-            append_section(&mut text, &sandbox);
-        }
-        append_section(
-            &mut text,
-            &approval_text(
-                config.approval_policy,
-                config.approvals_reviewer,
-                config.approval_messages,
-                config.exec_policy,
-                config.exec_permission_approvals_enabled,
-                config.request_permissions_tool_enabled,
-            ),
-        );
-        if let Some(writable_roots) = writable_roots_text(writable_roots) {
-            append_section(&mut text, &writable_roots);
-        }
-        if let Some(denied_reads) = denied_reads {
-            append_section(&mut text, &denied_reads);
-        }
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        Self { text }
     }
 }
 
@@ -191,31 +200,7 @@ impl ContextualUserFragment for PermissionsInstructions {
     }
 
     fn body(&self) -> String {
-        PermissionsInstructions::body(self)
-    }
-}
-
-fn sandbox_prompt_from_policy(
-    file_system_policy: &FileSystemSandboxPolicy,
-    cwd: &Path,
-) -> (SandboxMode, Option<Vec<WritableRoot>>) {
-    if file_system_policy.has_full_disk_write_access() {
-        return (SandboxMode::DangerFullAccess, None);
-    }
-
-    let writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd);
-    if writable_roots.is_empty() {
-        (SandboxMode::ReadOnly, None)
-    } else {
-        (SandboxMode::WorkspaceWrite, Some(writable_roots))
-    }
-}
-
-fn network_access_from_policy(network_policy: NetworkSandboxPolicy) -> NetworkAccess {
-    if network_policy.is_enabled() {
-        NetworkAccess::Enabled
-    } else {
-        NetworkAccess::Restricted
+        self.text.clone()
     }
 }
 
@@ -229,68 +214,58 @@ fn append_section(text: &mut String, section: &str) {
 fn approval_text(
     approval_policy: AskForApproval,
     approvals_reviewer: ApprovalsReviewer,
-    approval_messages: Option<&ApprovalMessages>,
-    exec_policy: &Policy,
+    messages: ResolvedApprovalMessages<'_>,
+    approved_command_prefixes: &[Vec<String>],
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
-    if let Some(approval_messages) = approval_messages {
-        let selected = match &approval_policy {
-            AskForApproval::OnRequest => match approvals_reviewer {
-                ApprovalsReviewer::User => approval_messages.on_request.as_ref(),
-                ApprovalsReviewer::AutoReview => approval_messages.on_request_auto_review.as_ref(),
-            },
-            AskForApproval::Never => approval_messages.never.as_ref(),
-            AskForApproval::UnlessTrusted => approval_messages.unless_trusted.as_ref(),
-            AskForApproval::Granular(_) => None,
-        };
-        if let Some(selected) = selected {
-            return selected.clone();
-        }
-    }
-
-    let with_request_permissions_tool = |text: &str| {
-        if request_permissions_tool_enabled {
-            format!("{text}\n\n{}", request_permissions_tool_prompt_section())
-        } else {
-            text.to_string()
-        }
+    let selected = match approval_policy {
+        AskForApproval::OnRequest => match approvals_reviewer {
+            ApprovalsReviewer::User => messages.on_request,
+            ApprovalsReviewer::AutoReview => messages.on_request_auto_review,
+        },
+        AskForApproval::Never => messages.never,
+        AskForApproval::UnlessTrusted => messages.unless_trusted,
+        AskForApproval::Granular(_) => ResolvedMessage::Bundled(GRANULAR_INTRO),
     };
-    let on_request_instructions = || {
-        let on_request_rule = if exec_permission_approvals_enabled {
-            APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string()
-        } else {
-            APPROVAL_POLICY_ON_REQUEST_RULE.to_string()
-        };
-        let mut sections = vec![on_request_rule];
-        if request_permissions_tool_enabled {
-            sections.push(request_permissions_tool_prompt_section().to_string());
-        }
-        if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
-            sections.push(format!(
-                "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-            ));
-        }
-        sections.join("\n\n")
+    let base = match selected {
+        ResolvedMessage::Catalog(text) => return text.to_string(),
+        ResolvedMessage::Bundled(text) => text,
     };
     let text = match approval_policy {
-        AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
+        AskForApproval::Never => return base.to_string(),
         AskForApproval::UnlessTrusted => {
-            with_request_permissions_tool(APPROVAL_POLICY_UNLESS_TRUSTED)
+            if request_permissions_tool_enabled {
+                format!("{base}\n\n{REQUEST_PERMISSIONS_TOOL}")
+            } else {
+                base.to_string()
+            }
         }
-        AskForApproval::OnRequest => on_request_instructions(),
+        AskForApproval::OnRequest => {
+            let rule = if exec_permission_approvals_enabled {
+                REQUEST_PERMISSION_RULE
+            } else {
+                base
+            };
+            let mut sections = vec![rule.to_string()];
+            if request_permissions_tool_enabled {
+                sections.push(REQUEST_PERMISSIONS_TOOL.to_string());
+            }
+            if let Some(prefixes) = approved_command_prefixes_text(approved_command_prefixes) {
+                sections.push(format!("{APPROVED_PREFIXES}{prefixes}"));
+            }
+            sections.join("\n\n")
+        }
         AskForApproval::Granular(granular_config) => granular_instructions(
             granular_config,
-            exec_policy,
+            approved_command_prefixes,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
         ),
     };
 
-    if approvals_reviewer == ApprovalsReviewer::AutoReview
-        && approval_policy != AskForApproval::Never
-    {
-        format!("{text}\n\n{AUTO_REVIEW_APPROVAL_SUFFIX}")
+    if approvals_reviewer == ApprovalsReviewer::AutoReview {
+        format!("{text}\n\n{AUTO_REVIEW_SUFFIX}")
     } else {
         text
     }
@@ -299,42 +274,30 @@ fn approval_text(
 fn sandbox_text(
     mode: SandboxMode,
     network_access: NetworkAccess,
-    permission_messages: Option<&PermissionMessages>,
+    messages: ResolvedPermissionMessages<'_>,
 ) -> String {
-    let selected = permission_messages.and_then(|messages| match mode {
-        SandboxMode::DangerFullAccess => messages.danger_full_access.as_deref(),
-        SandboxMode::WorkspaceWrite => messages.workspace_write.as_deref(),
-        SandboxMode::ReadOnly => messages.read_only.as_deref(),
-    });
-    if let Some(selected) = selected {
-        if selected.is_empty() {
-            return String::new();
-        }
-        let network_access = network_access.to_string();
-        return selected.replace(NETWORK_ACCESS_PLACEHOLDER, network_access.as_str());
-    }
-
-    let template = match mode {
-        SandboxMode::DangerFullAccess => &*SANDBOX_MODE_DANGER_FULL_ACCESS_TEMPLATE,
-        SandboxMode::WorkspaceWrite => &*SANDBOX_MODE_WORKSPACE_WRITE_TEMPLATE,
-        SandboxMode::ReadOnly => &*SANDBOX_MODE_READ_ONLY_TEMPLATE,
+    let (selected, template) = match mode {
+        SandboxMode::DangerFullAccess => (messages.danger_full_access, &DANGER_FULL_ACCESS),
+        SandboxMode::WorkspaceWrite => (messages.workspace_write, &WORKSPACE_WRITE),
+        SandboxMode::ReadOnly => (messages.read_only, &READ_ONLY),
     };
     let network_access = network_access.to_string();
-    template
-        .render([("network_access", network_access.as_str())])
-        .unwrap_or_else(|err| panic!("sandbox template must render: {err}"))
+    match selected {
+        ResolvedMessage::Catalog(text) => text.replace("{{ network_access }}", &network_access),
+        ResolvedMessage::Bundled(_) => template
+            .render([("network_access", network_access.as_str())])
+            .unwrap_or_else(|err| panic!("sandbox template must render: {err}")),
+    }
 }
 
-fn writable_roots_text(writable_roots: Option<Vec<WritableRoot>>) -> Option<String> {
-    let mut roots = writable_roots?;
-    if roots.is_empty() {
+fn writable_roots_text(writable_roots: &[String]) -> Option<String> {
+    if writable_roots.is_empty() {
         return None;
     }
-    roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
 
-    let roots_list: Vec<String> = roots
+    let roots_list: Vec<String> = writable_roots
         .iter()
-        .map(|r| format!("`{}`", r.root.to_string_lossy()))
+        .map(|root| format!("`{root}`"))
         .collect();
     Some(if roots_list.len() == 1 {
         format!(" The writable root is {}.", roots_list[0])
@@ -343,18 +306,12 @@ fn writable_roots_text(writable_roots: Option<Vec<WritableRoot>>) -> Option<Stri
     })
 }
 
-fn denied_reads_text(file_system_policy: &FileSystemSandboxPolicy, cwd: &Path) -> Option<String> {
-    let mut entries = file_system_policy
-        .get_unreadable_roots_with_cwd(cwd)
-        .into_iter()
-        .map(|root| format!("- path `{}`", root.to_string_lossy()))
+fn denied_reads_text(paths: &[String], globs: &[String]) -> Option<String> {
+    let mut entries = paths
+        .iter()
+        .map(|root| format!("- path `{root}`"))
         .collect::<Vec<_>>();
-    entries.extend(
-        file_system_policy
-            .get_unreadable_globs_with_cwd(cwd)
-            .into_iter()
-            .map(|glob| format!("- glob `{glob}`")),
-    );
+    entries.extend(globs.iter().map(|glob| format!("- glob `{glob}`")));
     if entries.is_empty() {
         return None;
     }
@@ -365,22 +322,14 @@ fn denied_reads_text(file_system_policy: &FileSystemSandboxPolicy, cwd: &Path) -
     ))
 }
 
-fn approved_command_prefixes_text(exec_policy: &Policy) -> Option<String> {
-    format_allow_prefixes(exec_policy.get_allowed_prefixes())
+fn approved_command_prefixes_text(approved_command_prefixes: &[Vec<String>]) -> Option<String> {
+    format_allow_prefixes(approved_command_prefixes.to_vec())
         .filter(|prefixes| !prefixes.is_empty())
-}
-
-fn granular_prompt_intro_text() -> &'static str {
-    "# Approval Requests\n\nApproval policy is `granular`. Categories set to `false` are automatically rejected instead of prompting the user."
-}
-
-fn request_permissions_tool_prompt_section() -> &'static str {
-    "# request_permissions Tool\n\nThe built-in `request_permissions` tool is available in this session. Invoke it when you need to request additional `network` or `file_system` permissions before later shell-like commands need them. Request only the specific permissions required for the task."
 }
 
 fn granular_instructions(
     granular_config: GranularApprovalConfig,
-    exec_policy: &Policy,
+    approved_command_prefixes: &[Vec<String>],
     exec_permission_approvals_enabled: bool,
     request_permissions_tool_enabled: bool,
 ) -> String {
@@ -418,33 +367,31 @@ fn granular_instructions(
         .map(|&(_, category)| format!("- {category}"))
         .collect::<Vec<_>>();
 
-    let mut sections = vec![granular_prompt_intro_text().to_string()];
+    let mut sections = vec![GRANULAR_INTRO.to_string()];
 
     if !prompted_categories.is_empty() {
         sections.push(format!(
-            "These approval categories may still prompt the user when needed:\n{}",
+            "{GRANULAR_PROMPTED_CATEGORIES}\n{}",
             prompted_categories.join("\n")
         ));
     }
     if !rejected_categories.is_empty() {
         sections.push(format!(
-            "These approval categories are automatically rejected instead of prompting the user:\n{}",
+            "{GRANULAR_REJECTED_CATEGORIES}\n{}",
             rejected_categories.join("\n")
         ));
     }
 
     if shell_permission_requests_available {
-        sections.push(APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION.to_string());
+        sections.push(REQUEST_PERMISSION_RULE.to_string());
     }
 
     if request_permissions_tool_prompts_allowed {
-        sections.push(request_permissions_tool_prompt_section().to_string());
+        sections.push(REQUEST_PERMISSIONS_TOOL.to_string());
     }
 
-    if let Some(prefixes) = approved_command_prefixes_text(exec_policy) {
-        sections.push(format!(
-            "## Approved command prefixes\nThe following prefix rules have already been approved: {prefixes}"
-        ));
+    if let Some(prefixes) = approved_command_prefixes_text(approved_command_prefixes) {
+        sections.push(format!("{APPROVED_PREFIXES}{prefixes}"));
     }
 
     sections.join("\n\n")
@@ -452,4 +399,4 @@ fn granular_instructions(
 
 #[cfg(test)]
 #[path = "permissions_instructions_tests.rs"]
-mod permissions_instructions_tests;
+mod tests;
