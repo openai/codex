@@ -1,3 +1,8 @@
+//! Loads administrator configuration only from forced macOS preferences.
+//!
+//! Ordinary user defaults must never become trusted managed configuration layers.
+//! Forced values must be strings containing base64-encoded TOML.
+
 use crate::RequirementsLayerEntry;
 use crate::config_requirements::RequirementSource;
 use crate::config_toml::ConfigToml;
@@ -8,6 +13,8 @@ use crate::strict_config::config_error_from_ignored_toml_value_fields_for_source
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use core_foundation::base::Boolean;
+use core_foundation::base::CFType;
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use core_foundation::string::CFStringRef;
@@ -20,6 +27,12 @@ use toml::Value as TomlValue;
 const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
 const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
 const MANAGED_PREFERENCES_REQUIREMENTS_KEY: &str = "requirements_toml_base64";
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFPreferencesCopyAppValue(key: CFStringRef, application_id: CFStringRef) -> *mut c_void;
+    fn CFPreferencesAppValueIsForced(key: CFStringRef, application_id: CFStringRef) -> Boolean;
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct ManagedAdminConfigLayer {
@@ -121,27 +134,73 @@ fn load_managed_admin_requirements() -> io::Result<Option<String>> {
 }
 
 fn load_managed_preference(key_name: &str) -> io::Result<Option<String>> {
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFPreferencesCopyAppValue(key: CFStringRef, application_id: CFStringRef) -> *mut c_void;
+    let key = CFString::new(key_name);
+    let application = CFString::new(MANAGED_PREFERENCES_APPLICATION_ID);
+    load_managed_preference_with(
+        key_name,
+        || preference_is_forced(&key, &application),
+        || copy_preference_value(&key, &application),
+    )
+}
+
+fn preference_is_forced(key: &CFString, application: &CFString) -> bool {
+    unsafe {
+        CFPreferencesAppValueIsForced(key.as_concrete_TypeRef(), application.as_concrete_TypeRef())
+            != 0
+    }
+}
+
+fn copy_preference_value(key: &CFString, application: &CFString) -> Option<CFType> {
+    let value_ref = unsafe {
+        CFPreferencesCopyAppValue(key.as_concrete_TypeRef(), application.as_concrete_TypeRef())
+    };
+    if value_ref.is_null() {
+        return None;
     }
 
-    let value_ref = unsafe {
-        CFPreferencesCopyAppValue(
-            CFString::new(key_name).as_concrete_TypeRef(),
-            CFString::new(MANAGED_PREFERENCES_APPLICATION_ID).as_concrete_TypeRef(),
-        )
-    };
+    // CopyAppValue returns an owned property-list value, not necessarily a string.
+    Some(unsafe { CFType::wrap_under_create_rule(value_ref) })
+}
 
-    if value_ref.is_null() {
+fn load_managed_preference_with(
+    key_name: &str,
+    mut is_forced: impl FnMut() -> bool,
+    copy_value: impl FnOnce() -> Option<CFType>,
+) -> io::Result<Option<String>> {
+    // CopyAppValue also searches user-writable domains. Only forced values may
+    // supply administrator configuration or override lower requirements layers.
+    if !is_forced() {
         tracing::debug!(
-            "Managed preferences for {MANAGED_PREFERENCES_APPLICATION_ID} key {key_name} not found",
+            "No forced managed preference for {MANAGED_PREFERENCES_APPLICATION_ID} key {key_name}"
         );
         return Ok(None);
     }
 
-    let value = unsafe { CFString::wrap_under_create_rule(value_ref as _) }.to_string();
-    Ok(Some(value))
+    let Some(value) = copy_value() else {
+        tracing::debug!(
+            "Managed preferences for {MANAGED_PREFERENCES_APPLICATION_ID} key {key_name} not found"
+        );
+        return Ok(None);
+    };
+
+    // Reject a user-default fallback if the preference stopped being forced
+    // during the read. These separate calls do not form an atomic snapshot.
+    if !is_forced() {
+        tracing::debug!(
+            "Managed preference {MANAGED_PREFERENCES_APPLICATION_ID}:{key_name} is no longer forced after reading"
+        );
+        return Ok(None);
+    }
+
+    let value = value.downcast::<CFString>().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "Managed preference {MANAGED_PREFERENCES_APPLICATION_ID}:{key_name} must be a string"
+            ),
+        )
+    })?;
+    Ok(Some(value.to_string()))
 }
 
 fn parse_managed_config_base64(
@@ -228,3 +287,7 @@ fn decode_managed_preferences_base64(encoded: &str) -> io::Result<String> {
         io::Error::new(io::ErrorKind::InvalidData, err)
     })
 }
+
+#[cfg(test)]
+#[path = "macos_tests.rs"]
+mod tests;
