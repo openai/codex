@@ -1213,6 +1213,12 @@ pub(crate) enum AppEvent {
         selection: PermissionProfileSelection,
     },
 
+    /// Refresh server-owned Windows state after selecting a thread or project.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    RefreshWindowsSandbox {
+        thread_id: ThreadId,
+    },
+
     /// Prompt to enable the Windows sandbox feature before using Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {

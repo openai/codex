@@ -1,3 +1,5 @@
+use super::session_lifecycle_requests::recorded_params;
+use super::session_lifecycle_requests::start_recording_remote_app_server;
 use super::*;
 use crate::ThreadParamsMode;
 use crate::app_event_sender::AppEventSender;
@@ -18,6 +20,7 @@ use tokio::sync::mpsc::unbounded_channel;
 #[tokio::test]
 async fn windows_sandbox_setup_uses_local_app_server_connection() {
     let mut app = make_test_app().await;
+    app.chat_widget.windows_sandbox_local_server = true;
     assert!(app.windows_sandbox_setup_is_local());
 
     let endpoint = crate::RemoteAppServerEndpoint::WebSocket {
@@ -34,33 +37,48 @@ async fn windows_sandbox_setup_uses_local_app_server_connection() {
 }
 
 #[tokio::test]
-async fn windows_sandbox_setup_skips_remote_default_executor() -> Result<()> {
+async fn windows_sandbox_setup_uses_observed_thread_host() {
     let mut app = make_test_app().await;
-    app.environment_manager = Arc::new(
-        EnvironmentManager::create_for_tests(
-            Some("ws://127.0.0.1:8765".to_string()),
-            Some(codex_exec_server::ExecServerRuntimePaths::new(
-                std::env::current_exe()?,
-                /*codex_linux_sandbox_exe*/ None,
-            )?),
-        )
-        .await,
-    );
+    app.chat_widget.windows_sandbox_local_server = true;
+    app.chat_widget.windows_sandbox_elevated_setup_complete = true;
+    for (ids, expected) in [
+        (None, WindowsSandboxHost::Unknown),
+        (Some(vec![]), WindowsSandboxHost::Unknown),
+        (
+            Some(vec![codex_exec_server::LOCAL_ENVIRONMENT_ID]),
+            WindowsSandboxHost::Local,
+        ),
+        (Some(vec!["remote"]), WindowsSandboxHost::Remote),
+        (
+            Some(vec!["remote", codex_exec_server::LOCAL_ENVIRONMENT_ID]),
+            WindowsSandboxHost::Mixed,
+        ),
+    ] {
+        let environments = ids.map(|ids| {
+            ids.into_iter()
+                .map(|id| codex_app_server_protocol::ThreadEnvironment {
+                    environment_id: id.to_string(),
+                    cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(std::env::temp_dir())
+                        .unwrap()
+                        .into(),
+                    runtime_workspace_roots: Vec::new(),
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+        session.windows_sandbox_host =
+            crate::windows_sandbox::host_from_environments(environments.as_deref());
+        app.chat_widget.handle_thread_session(session);
+        assert!(app.chat_widget.windows_sandbox_elevated_setup_complete);
+        assert_eq!(app.windows_sandbox_host(), expected);
+        assert_eq!(
+            app.windows_sandbox_setup_is_local(),
+            expected == WindowsSandboxHost::Local
+        );
+    }
+    app.chat_widget.windows_sandbox_host = WindowsSandboxHost::Local;
+    app.chat_widget.windows_sandbox_local_server = false;
     assert!(!app.windows_sandbox_setup_is_local());
-
-    app.environment_manager = Arc::new(
-        EnvironmentManager::create_for_tests_with_local(
-            Some("ws://127.0.0.1:8765".to_string()),
-            codex_exec_server::ExecServerRuntimePaths::new(
-                std::env::current_exe()?,
-                /*codex_linux_sandbox_exe*/ None,
-            )?,
-        )
-        .await,
-    );
-    assert_eq!(app.windows_sandbox_host(), WindowsSandboxHost::Mixed);
-    assert!(!app.windows_sandbox_setup_is_local());
-    Ok(())
 }
 
 #[tokio::test]
@@ -119,6 +137,7 @@ async fn windows_sandbox_setup_completion_requires_matching_pending_mode() -> Re
     use codex_app_server_protocol::WindowsSandboxSetupMode;
 
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    app.chat_widget.windows_sandbox_local_server = true;
     while events.try_recv().is_ok() {}
     let app_server =
         crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
@@ -1634,35 +1653,55 @@ async fn external_writer_startup_keeps_initial_prompt_as_draft() -> Result<()> {
     Ok(())
 }
 
-#[test]
-fn windows_sandbox_host_from_observed_environments() {
-    for (ids, expected) in [
-        (None, WindowsSandboxHost::Unknown),
-        (Some(vec![]), WindowsSandboxHost::Unknown),
-        (
-            Some(vec![codex_exec_server::LOCAL_ENVIRONMENT_ID]),
-            WindowsSandboxHost::Local,
-        ),
-        (Some(vec!["remote"]), WindowsSandboxHost::Remote),
-        (
-            Some(vec!["remote", codex_exec_server::LOCAL_ENVIRONMENT_ID]),
-            WindowsSandboxHost::Mixed,
-        ),
-    ] {
-        let environments = ids.map(|ids| {
-            ids.into_iter()
-                .map(|id| codex_app_server_protocol::ThreadEnvironment {
-                    environment_id: id.to_string(),
-                    cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(std::env::temp_dir())
-                        .unwrap()
-                        .into(),
-                    runtime_workspace_roots: Vec::new(),
-                })
-                .collect::<Vec<_>>()
-        });
-        assert_eq!(
-            crate::windows_sandbox::host_from_environments(environments.as_deref()),
-            expected
-        );
-    }
+#[tokio::test]
+async fn windows_sandbox_config_refresh_uses_connected_server() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let (server, requests, proxy) = start_recording_remote_app_server(&app.config).await?;
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        "[windows]\nsandbox = \"unelevated\"\n",
+    )?;
+    app.chat_widget.windows_sandbox_config.mode =
+        Some(codex_app_server_protocol::WindowsSandboxSetupMode::Elevated);
+    assert!(app.refresh_windows_sandbox_config(&server).await);
+    let loaded_config = crate::windows_sandbox::WindowsSandboxConfig {
+        mode: Some(codex_app_server_protocol::WindowsSandboxSetupMode::Unelevated),
+        requirements: Some(None),
+    };
+    assert_eq!(app.chat_widget.windows_sandbox_config, loaded_config);
+    assert_eq!(
+        recorded_params(&requests, "config/read")[0]["cwd"],
+        app.config.cwd.display().to_string()
+    );
+    assert_eq!(
+        recorded_params(&requests, "configRequirements/read").len(),
+        1
+    );
+    proxy.abort();
+    let _ = proxy.await;
+    set_test_initial_prompt(&mut app, "keep this draft".to_string());
+    app.chat_widget.windows_sandbox_elevated_setup_complete = true;
+    while events.try_recv().is_ok() {}
+    assert!(!app.refresh_windows_sandbox_config(&server).await);
+    let cell = match events.try_recv()? {
+        AppEvent::InsertHistoryCell(cell) => cell,
+        other => panic!("expected configuration error message, got {other:?}"),
+    };
+    insta::assert_snapshot!(lines_to_single_string(&cell.display_lines(/*width*/ 160)), @"■ Could not read Windows sandbox configuration and requirements from the app server.");
+    assert!(app.chat_widget.windows_sandbox_elevated_setup_complete);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "keep this draft"
+    );
+    assert!(app.chat_widget.initial_user_message.is_none());
+    let mut recovered = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.chat_widget.windows_sandbox_local_server = true;
+    app.chat_widget.windows_sandbox_host = WindowsSandboxHost::Local;
+    Box::pin(app.handle_event(&mut tui, &mut recovered, AppEvent::OpenPermissionsPopup)).await?;
+    assert_eq!(app.chat_widget.windows_sandbox_config, loaded_config);
+    assert!(app.chat_widget.has_active_view());
+    recovered.shutdown().await?;
+    server.shutdown().await?;
+    Ok(())
 }

@@ -1249,30 +1249,20 @@ impl App {
     pub(super) async fn verify_windows_sandbox_mode_after_setup(
         &mut self,
         app_server: &mut AppServerSession,
-        requested_mode: codex_config::types::WindowsSandboxModeToml,
+        requested_mode: codex_app_server_protocol::WindowsSandboxSetupMode,
     ) -> bool {
-        let cwd = self.chat_widget.config_ref().cwd.display().to_string();
-        let mode = crate::config_update::read_effective_config(app_server.request_handle(), cwd)
-            .await
-            .ok()
-            .and_then(|config| windows_sandbox_mode_from_effective_config(&config));
-        let Some(mode) = mode else {
-            self.chat_widget.add_error_message(
-                "Windows sandbox setup completed, but Codex could not verify the effective sandbox mode."
-                    .to_string(),
-            );
+        if !self.refresh_windows_sandbox_config(app_server).await {
             return false;
-        };
-        self.config.permissions.windows_sandbox_mode = Some(mode);
-        if mode == requested_mode {
+        }
+        if self.chat_widget.windows_sandbox_config.mode == Some(requested_mode)
+            && self
+                .chat_widget
+                .windows_sandbox_config
+                .allows(requested_mode)
+        {
             return true;
         }
-        self.chat_widget.set_windows_sandbox_mode(Some(mode));
-        self.propagate_windows_sandbox_turn_context();
-        self.chat_widget.add_error_message(
-            "Windows sandbox setup completed, but its mode was overridden by the effective configuration."
-                .to_string(),
-        );
+        self.chat_widget.add_error_message("Windows sandbox setup completed, but its mode was overridden by the effective configuration.".to_string());
         false
     }
 
@@ -1352,23 +1342,6 @@ fn memories_from_effective_config(effective_config: &ConfigReadResponse) -> Opti
 }
 
 fn features_toml_from_json(value: &serde_json::Value) -> Option<FeaturesToml> {
-    serde_json::from_value(value.clone()).ok()
-}
-
-#[cfg(target_os = "windows")]
-fn windows_sandbox_mode_from_effective_config(
-    effective_config: &ConfigReadResponse,
-) -> Option<codex_config::types::WindowsSandboxModeToml> {
-    let root_windows = effective_config
-        .config
-        .additional
-        .get("windows")
-        .and_then(windows_toml_from_json);
-    root_windows.and_then(|windows| windows.sandbox)
-}
-
-#[cfg(target_os = "windows")]
-fn windows_toml_from_json(value: &serde_json::Value) -> Option<WindowsToml> {
     serde_json::from_value(value.clone()).ok()
 }
 

@@ -292,7 +292,10 @@ impl App {
                 self.environment_manager.as_ref(),
             ),
         );
-        self.chat_widget.windows_sandbox_host = self.windows_sandbox_host();
+        self.chat_widget.windows_sandbox_local_server =
+            !self.app_server_target.uses_remote_workspace()
+                && app_server.app_server_platform_os() == Some("windows");
+        self.chat_widget.windows_sandbox_host = WindowsSandboxHost::Unknown;
         self.chat_widget.cyber_policy_notice = Default::default();
         self.chat_widget.requires_openai_auth = bootstrap.requires_openai_auth;
         self.chat_widget.remote_connection =

@@ -498,7 +498,8 @@ impl App {
         chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         chat_widget.snapshot_local_images = self.app_server_target.uses_remote_workspace();
         chat_widget.set_local_worktree_operations(self.chat_widget.local_worktree_operations);
-        chat_widget.windows_sandbox_host = self.chat_widget.windows_sandbox_host;
+        chat_widget.windows_sandbox_local_server = self.chat_widget.windows_sandbox_local_server;
+        chat_widget.windows_sandbox_host = WindowsSandboxHost::Unknown;
         #[cfg(any(target_os = "windows", test))]
         {
             chat_widget.windows_sandbox_elevated_setup_complete =

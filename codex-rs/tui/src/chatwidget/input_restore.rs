@@ -119,7 +119,9 @@ impl ChatWidget {
         }
         #[cfg(any(target_os = "windows", test))]
         if self.windows_sandbox_host == crate::app::WindowsSandboxHost::Local
-            && self.elevated_windows_sandbox_setup_required()
+            && (self.windows_sandbox_local_server
+                && self.windows_sandbox_config.requirements.is_none()
+                || self.elevated_windows_sandbox_setup_required())
         {
             return;
         }
@@ -138,14 +140,23 @@ impl ChatWidget {
             return;
         }
         #[cfg(any(target_os = "windows", test))]
+        if self.windows_sandbox_local_server
+            && self.windows_sandbox_host != crate::app::WindowsSandboxHost::Remote
+            && self.windows_sandbox_config.requirements.is_none()
+        {
+            return;
+        }
+        #[cfg(any(target_os = "windows", test))]
         if self.windows_sandbox_host == crate::app::WindowsSandboxHost::Local
             && self.elevated_windows_sandbox_setup_required()
         {
             return;
         }
         #[cfg(any(target_os = "windows", test))]
-        if self.windows_sandbox_host == crate::app::WindowsSandboxHost::Mixed
-            && self.elevated_windows_sandbox_setup_required()
+        if matches!(
+            self.windows_sandbox_host,
+            crate::app::WindowsSandboxHost::Mixed | crate::app::WindowsSandboxHost::Unknown
+        ) && self.elevated_windows_sandbox_setup_required()
         {
             if let Some(user_message) = self.initial_user_message.take() {
                 self.restore_user_message_to_composer(user_message);

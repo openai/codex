@@ -7,7 +7,7 @@ use super::*;
 #[cfg(all(test, not(target_os = "windows")))]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
-use codex_config::types::WindowsSandboxModeToml;
+use codex_app_server_protocol::WindowsSandboxSetupMode as WindowsSandboxModeToml;
 #[cfg(any(target_os = "windows", test))]
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -22,34 +22,14 @@ pub(crate) enum WindowsSandboxHost {
 #[derive(Default)]
 pub(super) struct WindowsSandboxState {
     pub(super) setup_started_at: Option<Instant>,
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(super) prompt_after_trust: bool,
     #[cfg(any(target_os = "windows", test))]
     pub(super) pending_setup: Option<(
         WindowsSandboxEnableMode,
         ApprovalPreset,
         Option<PermissionProfileSelection>,
     )>,
-}
-
-pub(super) fn windows_sandbox_host(
-    target: &AppServerTarget,
-    environment_manager: &EnvironmentManager,
-) -> WindowsSandboxHost {
-    if target.uses_remote_workspace() {
-        WindowsSandboxHost::Remote
-    } else if environment_manager
-        .default_environment_ids()
-        .into_iter()
-        .filter_map(|id| environment_manager.get_environment(&id))
-        .any(|environment| environment.is_remote())
-    {
-        if environment_manager.try_local_environment().is_some() {
-            WindowsSandboxHost::Mixed
-        } else {
-            WindowsSandboxHost::Remote
-        }
-    } else {
-        WindowsSandboxHost::Local
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -76,12 +56,17 @@ pub(super) async fn windows_sandbox_ready(app_server: &mut AppServerSession) -> 
 
 impl App {
     pub(super) fn windows_sandbox_host(&self) -> WindowsSandboxHost {
-        windows_sandbox_host(&self.app_server_target, self.environment_manager.as_ref())
+        if self.app_server_target.uses_remote_workspace() {
+            WindowsSandboxHost::Remote
+        } else {
+            self.chat_widget.windows_sandbox_host
+        }
     }
 
     /// A local app server owns setup for both embedded and daemon connections.
     pub(super) fn windows_sandbox_setup_is_local(&self) -> bool {
-        self.windows_sandbox_host() == WindowsSandboxHost::Local
+        self.chat_widget.windows_sandbox_local_server
+            && self.windows_sandbox_host() == WindowsSandboxHost::Local
     }
 
     pub(super) fn windows_sandbox_blocks_thread_switch(&self) -> bool {
@@ -91,12 +76,77 @@ impl App {
                 && (self.windows_sandbox.pending_setup.is_some()
                     || self.windows_sandbox.setup_started_at.is_some()
                     || self.chat_widget.initial_user_message.is_some()
-                        && self.chat_widget.required_elevated_windows_sandbox()
+                        && self.chat_widget.windows_sandbox_config.requires_elevated()
                         && !self.chat_widget.windows_sandbox_elevated_setup_complete)
         }
         #[cfg(not(any(target_os = "windows", test)))]
         {
             false
+        }
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub(super) async fn refresh_windows_sandbox_for_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        if self.chat_widget.thread_id() == Some(thread_id)
+            && !self.app_server_target.uses_remote_workspace()
+            && self.refresh_windows_sandbox_config(app_server).await
+        {
+            #[cfg(target_os = "windows")]
+            if self.windows_sandbox_setup_is_local()
+                && self.chat_widget.windows_sandbox_config.requires_elevated()
+                && !self.chat_widget.windows_sandbox_elevated_setup_complete
+            {
+                self.chat_widget.windows_sandbox_elevated_setup_complete =
+                    windows_sandbox_ready(app_server).await;
+            }
+            let show_nux = std::mem::take(&mut self.windows_sandbox.prompt_after_trust)
+                && self.chat_widget.windows_sandbox_config.mode.is_none()
+                || self.chat_widget.windows_sandbox_config.requires_elevated();
+            if self.windows_sandbox_setup_is_local() {
+                self.chat_widget.maybe_prompt_windows_sandbox_enable(
+                    show_nux && !self.chat_widget.windows_sandbox_elevated_setup_complete,
+                );
+            } else if self.windows_sandbox_host() == WindowsSandboxHost::Mixed && show_nux {
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::StartupWarningsCell::new(vec![
+                        "Windows sandbox setup is unavailable when local and remote executors are configured together."
+                            .to_string(),
+                    ]),
+                )));
+            }
+            self.chat_widget.submit_initial_user_message_if_pending();
+        }
+    }
+
+    #[cfg(any(target_os = "windows", test))]
+    pub(super) async fn refresh_windows_sandbox_config(
+        &mut self,
+        app_server: &AppServerSession,
+    ) -> bool {
+        match crate::windows_sandbox::WindowsSandboxConfig::read(
+            app_server.request_handle(),
+            self.chat_widget.config_ref().cwd.display().to_string(),
+        )
+        .await
+        {
+            Ok(state) => {
+                self.chat_widget.windows_sandbox_config = state;
+                self.chat_widget
+                    .set_windows_sandbox_mode(self.chat_widget.windows_sandbox_config.mode);
+                true
+            }
+            Err(_) => {
+                self.chat_widget.windows_sandbox_config = Default::default();
+                self.chat_widget
+                    .retain_input_after_failed_permission_selection();
+                self.chat_widget.set_windows_sandbox_mode(/*mode*/ None);
+                self.chat_widget.add_error_message("Could not read Windows sandbox configuration and requirements from the app server.".to_string());
+                false
+            }
         }
     }
 
@@ -127,7 +177,12 @@ impl App {
             }
             return;
         }
-        if !self.chat_widget.windows_sandbox_mode_allowed(config_mode) {
+        if !self.refresh_windows_sandbox_config(app_server).await {
+            return;
+        }
+        if !self.chat_widget.windows_sandbox_config.allows(config_mode) {
+            self.chat_widget
+                .retain_input_after_failed_permission_selection();
             self.chat_widget.add_info_message(
                 "That Windows sandbox option is disallowed by requirements.".to_string(),
                 /*hint*/ None,
@@ -147,7 +202,7 @@ impl App {
                     request_id,
                     params: codex_app_server_protocol::WindowsSandboxSetupStartParams {
                         mode: setup_mode,
-                        cwd: Some(self.config.cwd.clone()),
+                        cwd: Some(self.chat_widget.config_ref().cwd.clone()),
                     },
                 }),
         )

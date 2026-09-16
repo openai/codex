@@ -6,6 +6,7 @@
 //! slash-command recall follows the same submitted-input rule as ordinary text.
 
 use super::*;
+use crate::app::WindowsSandboxHost;
 use crate::app_event::ManagedWorktreeMode;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
@@ -346,7 +347,11 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
             SlashCommand::Permissions => {
-                if self.remote_connection.is_some() {
+                if self.remote_connection.is_some()
+                    || self.windows_sandbox_local_server
+                        && self.windows_sandbox_host != WindowsSandboxHost::Remote
+                        && self.windows_sandbox_config.requirements.is_none()
+                {
                     self.app_event_tx.send(AppEvent::OpenPermissionsPopup);
                 } else {
                     self.open_permissions_popup();
@@ -362,11 +367,7 @@ impl ChatWidget {
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
-                    let windows_sandbox_level =
-                        crate::windows_sandbox::level_from_config(&self.config);
-                    let windows_degraded_sandbox_enabled =
-                        matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
-                    if !windows_degraded_sandbox_enabled {
+                    if !self.builtin_command_flags().allow_elevate_sandbox {
                         // This command should not be visible/recognized outside degraded mode,
                         // but guard anyway in case something dispatches it directly.
                         return;
@@ -1132,8 +1133,13 @@ impl ChatWidget {
     pub(super) fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         #[cfg(target_os = "windows")]
         let allow_elevate_sandbox = {
-            let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
+            let windows_sandbox_level = self.windows_sandbox_config.level();
             matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
+                && self.windows_sandbox_local_server
+                && self.windows_sandbox_host == crate::app::WindowsSandboxHost::Local
+                && self
+                    .windows_sandbox_config
+                    .allows(WindowsSandboxSetupMode::Elevated)
         };
         #[cfg(not(target_os = "windows"))]
         let allow_elevate_sandbox = false;

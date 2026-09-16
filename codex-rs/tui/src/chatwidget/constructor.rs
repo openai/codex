@@ -137,7 +137,9 @@ impl ChatWidget {
             snapshot_local_images: false,
             pending_image_submission: None,
             local_worktree_operations: true,
-            windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
+            windows_sandbox_local_server: false,
+            windows_sandbox_config: Default::default(),
+            windows_sandbox_host: crate::app::WindowsSandboxHost::Unknown,
             #[cfg(any(target_os = "windows", test))]
             windows_sandbox_elevated_setup_complete: false,
             token_info: None,
@@ -303,13 +305,6 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_hint_binding);
-        #[cfg(target_os = "windows")]
-        widget
-            .bottom_pane
-            .set_windows_degraded_sandbox_active(matches!(
-                crate::windows_sandbox::level_from_config(&widget.config),
-                WindowsSandboxLevel::RestrictedToken
-            ));
         widget.update_collaboration_mode_indicator();
 
         widget

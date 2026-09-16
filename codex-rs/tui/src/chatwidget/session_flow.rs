@@ -9,6 +9,12 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        self.windows_sandbox_host =
+            if !self.windows_sandbox_local_server && self.remote_connection.is_some() {
+                crate::app::WindowsSandboxHost::Remote
+            } else {
+                session.windows_sandbox_host
+            };
         self.invalidate_permission_discovery();
         self.permission_profiles_menu_opened = false;
         self.transcript.reset_copy_history();
@@ -24,6 +30,16 @@ impl ChatWidget {
         let connector_scope_changed = previous_thread_id != Some(session.thread_id)
             || self.config.cwd.as_path() != session.cwd.as_path();
         self.thread_id = Some(session.thread_id);
+        #[cfg(target_os = "windows")]
+        if self.windows_sandbox_local_server
+            && matches!(self.codex_op_target, CodexOpTarget::AppEvent)
+        {
+            self.windows_sandbox_config = Default::default();
+            self.set_windows_sandbox_mode(/*mode*/ None);
+            self.app_event_tx.send(AppEvent::RefreshWindowsSandbox {
+                thread_id: session.thread_id,
+            });
+        }
         self.realtime_conversation_available_for_thread =
             self.config.features.enabled(Feature::RealtimeConversation)
                 && codex_realtime_webrtc::RealtimeWebrtcSession::is_supported();

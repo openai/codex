@@ -19,7 +19,7 @@ use crate::pager_overlay::TranscriptHistoryState;
 use crate::session_resume::cwds_differ;
 use codex_app_server_protocol::ThreadGoalStatus;
 #[cfg(target_os = "windows")]
-use codex_config::types::WindowsSandboxModeToml;
+use codex_app_server_protocol::WindowsSandboxSetupMode as WindowsSandboxModeToml;
 
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -1962,6 +1962,12 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
+            AppEvent::RefreshWindowsSandbox { thread_id } => {
+                #[cfg(any(target_os = "windows", test))]
+                self.refresh_windows_sandbox_for_thread(app_server, thread_id).await;
+                #[cfg(not(any(target_os = "windows", test)))]
+                let _ = thread_id;
+            }
             AppEvent::OpenWindowsSandboxEnablePrompt {
                 preset,
                 profile_selection,
@@ -2041,18 +2047,6 @@ impl App {
                         WindowsSandboxEnableMode::Legacy => WindowsSandboxModeToml::Unelevated,
                     };
                     let elevated_enabled = selected_mode == WindowsSandboxModeToml::Elevated;
-                    if !self.chat_widget.windows_sandbox_mode_allowed(selected_mode) {
-                        tracing::warn!(
-                            ?selected_mode,
-                            "refusing to enable Windows sandbox mode disallowed by requirements"
-                        );
-                        self.chat_widget.add_info_message(
-                            "That Windows sandbox option is disallowed by requirements."
-                                .to_string(),
-                            /*hint*/ None,
-                        );
-                        return Ok(AppRunControl::Continue);
-                    }
                     if self
                         .verify_windows_sandbox_mode_after_setup(app_server, selected_mode)
                         .await
@@ -2068,9 +2062,7 @@ impl App {
                                 self.config
                                     .set_windows_elevated_sandbox_enabled(/*value*/ false);
                             }
-                            self.chat_widget.set_windows_sandbox_mode(
-                                self.config.permissions.windows_sandbox_mode,
-                            );
+                            self.chat_widget.set_windows_sandbox_mode(Some(selected_mode));
                             let windows_sandbox_level =
                                 crate::windows_sandbox::level_from_config(&self.config);
                             if let Some(selection) = profile_selection {
@@ -2704,6 +2696,14 @@ impl App {
             }
             AppEvent::OpenPermissionsPopup | AppEvent::OpenApprovalsPopup => {
                 if self.reject_pending_permission_change() {
+                    return Ok(AppRunControl::Continue);
+                }
+                #[cfg(any(target_os = "windows", test))]
+                if self.chat_widget.windows_sandbox_local_server
+                    && self.windows_sandbox_host() != WindowsSandboxHost::Remote
+                    && self.chat_widget.windows_sandbox_config.requirements.is_none()
+                    && !self.refresh_windows_sandbox_config(app_server).await
+                {
                     return Ok(AppRunControl::Continue);
                 }
                 if app_server.uses_remote_workspace() {

@@ -819,6 +819,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
         let (mut app, mut events, _) = make_test_app_with_channels().await;
         app.config.codex_home = home.clone().abs();
         app.config.cwd = selected.cwd.clone().abs();
+        app.chat_widget.windows_sandbox_local_server = cfg!(target_os = "windows");
         app.harness_overrides.cwd = Some(selected.cwd.clone());
         app.cli_kv_overrides
             .push(("features.worktrees".into(), TomlValue::Boolean(true)));
@@ -857,7 +858,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
         // Exercise the menu's ordered events, not the separate profile-selection API.
         app.chat_widget
             .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-        app.chat_widget.open_permissions_popup();
+        Box::pin(app.handle_event(&mut tui, &mut server, AppEvent::OpenPermissionsPopup)).await?;
         app.chat_widget.handle_key_event(KeyCode::Up.into());
         app.chat_widget.handle_key_event(KeyCode::Enter.into());
         while let Ok(event) = events.try_recv() {

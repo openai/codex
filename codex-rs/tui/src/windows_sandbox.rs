@@ -13,7 +13,6 @@ use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use uuid::Uuid;
 
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WindowsSandboxConfig {
     pub(crate) mode: Option<WindowsSandboxSetupMode>,
@@ -21,7 +20,7 @@ pub(crate) struct WindowsSandboxConfig {
     pub(crate) requirements: Option<Option<Vec<WindowsSandboxSetupMode>>>,
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 impl WindowsSandboxConfig {
     pub(crate) fn from_responses(
         config: &ConfigReadResponse,

@@ -41,15 +41,20 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
         #[cfg(target_os = "windows")]
-        let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
+        let windows_sandbox_level = self.windows_sandbox_config.level();
         #[cfg(target_os = "windows")]
         let windows_degraded_sandbox_enabled =
-            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
+            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken)
+                && self.windows_sandbox_local_server
+                && self.windows_sandbox_host == crate::app::WindowsSandboxHost::Local;
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
-        let show_elevate_sandbox_hint =
-            windows_degraded_sandbox_enabled && presets.iter().any(|preset| preset.id == "auto");
+        let show_elevate_sandbox_hint = windows_degraded_sandbox_enabled
+            && self
+                .windows_sandbox_config
+                .allows(WindowsSandboxSetupMode::Elevated)
+            && presets.iter().any(|preset| preset.id == "auto");
 
         let guardian_disabled_reason = |enabled: bool| {
             let mut next_features = self.config.features.get().clone();
@@ -324,7 +329,11 @@ impl ChatWidget {
         let requires_confirmation =
             approvals_reviewer == ApprovalsReviewer::User && preset.id == "full-access";
         #[cfg(target_os = "windows")]
-        if preset.id == "auto" && self.windows_sandbox_host == crate::app::WindowsSandboxHost::Mixed
+        if preset.id == "auto"
+            && matches!(
+                self.windows_sandbox_host,
+                crate::app::WindowsSandboxHost::Mixed | crate::app::WindowsSandboxHost::Unknown
+            )
         {
             let preset = preset.clone();
             return vec![Box::new(move |tx| {
@@ -352,9 +361,7 @@ impl ChatWidget {
                     // cannot be set up from this TUI's Windows account.
                     return apply_actions();
                 }
-                if crate::windows_sandbox::level_from_config(&self.config)
-                    == WindowsSandboxLevel::Disabled
-                {
+                if self.windows_sandbox_config.level() == WindowsSandboxLevel::Disabled {
                     let preset = preset.clone();
                     return vec![Box::new(move |tx| {
                         tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {
