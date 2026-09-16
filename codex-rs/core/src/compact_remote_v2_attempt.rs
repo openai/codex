@@ -73,7 +73,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         .unzip();
     sess.services
         .executed_tool_calls
-        .strip_disabled_direct_metadata(&mut input);
+        .attach_to_compaction_prompt(&mut input);
     let tool_router = &step_context.tool_router;
     input.push(ResponseItem::CompactionTrigger {});
     let prompt = Prompt {

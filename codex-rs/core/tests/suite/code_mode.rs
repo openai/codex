@@ -1315,6 +1315,10 @@ await new Promise(() => {});
                     .len(),
                 1
             );
+            assert_eq!(
+                compact.single_request().custom_tool_call_output("call-1")["internal_chat_message_metadata_passthrough"],
+                *metadata,
+            );
 
             let wait = responses::mount_function_call_agent_response(
                 &server,
@@ -1343,6 +1347,83 @@ await new Promise(() => {});
         }
     }
 
+    Ok(())
+}
+
+#[test_case(true; "enabled")]
+#[test_case(false; "disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_compaction_request_preserves_tool_inventory(
+    metadata_enabled: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            config.features.enable(Feature::CodeMode).unwrap();
+            config.features.enable(Feature::CodeModeHost).unwrap();
+            config.code_mode.disable_in_process_fallback = true;
+            config
+                .features
+                .set_enabled(Feature::ExecutedToolCallMetadata, metadata_enabled)
+                .unwrap();
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_custom_tool_call(
+                "call-exec",
+                "exec",
+                r#"await tools.test_sync_tool({}); text("done");"#,
+            ),
+            ev_completed("resp-exec"),
+        ]),
+    )
+    .await;
+    let follow_up = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-done", "done"),
+            ev_completed("resp-done"),
+        ]),
+    )
+    .await;
+    test.submit_turn("Run a nested tool").await?;
+    let original = follow_up
+        .single_request()
+        .custom_tool_call_output("call-exec");
+    assert_eq!(
+        original["internal_chat_message_metadata_passthrough"]["tool_calls_complete"],
+        if metadata_enabled {
+            Value::Bool(true)
+        } else {
+            Value::Null
+        },
+    );
+    if metadata_enabled {
+        assert_eq!(
+            original["internal_chat_message_metadata_passthrough"]["executed_tool_calls"],
+            serde_json::json!([{ "name": "test_sync_tool", "arguments": {} }]),
+        );
+    }
+
+    let summary = serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {"type": "compaction", "encrypted_content": "compacted history"},
+    });
+    let compact =
+        responses::mount_sse_once(&server, sse(vec![summary, ev_completed("resp-compact")])).await;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = compact.single_request();
+    assert_eq!(request.inputs_of_type("compaction_trigger").len(), 1);
+    assert_eq!(request.custom_tool_call_output("call-exec"), original);
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 

@@ -3,12 +3,26 @@
 
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MetadataBudgetScope {
+    AllCalls,
+    CodeModeOnly,
+}
+
 impl ExecutedToolCalls {
-    /// Compaction preserves captured records without applying the sampling request budget.
-    pub(crate) fn strip_disabled_direct_metadata(&self, items: &mut [ResponseItem]) {
-        if self.lock_state().is_none() {
+    /// Attaches Code Mode observations while preserving Direct records captured in history.
+    pub(crate) fn attach_to_compaction_prompt(&self, items: &mut [ResponseItem]) {
+        let mut state = self.lock_state();
+        let Some(state) = state.as_mut() else {
             clear_direct_call_metadata(items);
-        }
+            return;
+        };
+        Self::attach_pending_to_prompt_with_state(
+            state,
+            items,
+            &mut HashMap::new(),
+            MetadataBudgetScope::CodeModeOnly,
+        );
     }
 
     /// Attaches trusted completeness; request budgeting only revokes damaged inventories.
@@ -19,9 +33,14 @@ impl ExecutedToolCalls {
     ) {
         let attached = {
             let mut state = self.lock_state();
-            state
-                .as_mut()
-                .map(|state| Self::attach_pending_to_prompt_with_state(state, items, retry_cache))
+            state.as_mut().map(|state| {
+                Self::attach_pending_to_prompt_with_state(
+                    state,
+                    items,
+                    retry_cache,
+                    MetadataBudgetScope::AllCalls,
+                )
+            })
         };
         let Some(attached) = attached else {
             // Direct records now live in history; disabling capture also stops replaying them.
@@ -37,6 +56,7 @@ impl ExecutedToolCalls {
         state: &mut ExecutedToolCallRecorderState,
         items: &mut [ResponseItem],
         retry_cache: &mut ExecutedToolCallCache,
+        budget_scope: MetadataBudgetScope,
     ) -> bool {
         // Failed wrappers have no callback; only their bounded bitmap observation survives.
         state.pending_wrapper_origins.clear();
@@ -178,7 +198,9 @@ impl ExecutedToolCalls {
             }
             attached = true;
         }
-        if !pending_outputs.is_empty() {
+        // Compaction may retry with a shortened history without installing that history.
+        // Keep absent observations until a normal sampling request confirms the live window.
+        if budget_scope == MetadataBudgetScope::AllCalls && !pending_outputs.is_empty() {
             state
                 .retained_calls
                 .retain(|key, _| !pending_outputs.contains(key));
@@ -259,11 +281,37 @@ impl ExecutedToolCalls {
             }
         }
 
-        let metadata_bytes = items.iter().fold(0_usize, |bytes, item| {
-            bytes.saturating_add(executed_tool_call_metadata_bytes(item))
-        });
+        let metadata_bytes = items
+            .iter()
+            .filter(|item| {
+                budget_scope == MetadataBudgetScope::AllCalls || !has_direct_call_metadata(item)
+            })
+            .fold(0_usize, |bytes, item| {
+                bytes.saturating_add(executed_tool_call_metadata_bytes(item))
+            });
         if metadata_bytes > MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT {
-            bound_executed_tool_calls_for_prompt_prioritizing_recent(items);
+            match budget_scope {
+                MetadataBudgetScope::AllCalls => {
+                    bound_executed_tool_calls_for_prompt_prioritizing_recent(items);
+                }
+                MetadataBudgetScope::CodeModeOnly => {
+                    // Validate bindings against the complete history above, but do not make
+                    // captured Direct records compete with Code Mode's bounded recorder.
+                    let (indices, mut bounded): (Vec<_>, Vec<_>) = items
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, item)| {
+                            !has_direct_call_metadata(item)
+                                && item.executed_tool_call_metadata().is_some()
+                        })
+                        .map(|(index, item)| (index, item.clone()))
+                        .unzip();
+                    bound_executed_tool_calls_for_prompt_prioritizing_recent(&mut bounded);
+                    for (index, item) in indices.into_iter().zip(bounded) {
+                        items[index] = item;
+                    }
+                }
+            }
             let retained_before_bounding = std::mem::take(&mut state.retained_calls);
             let mut bounded_outputs = HashSet::new();
             for item in items.iter_mut() {
@@ -314,6 +362,13 @@ impl ExecutedToolCalls {
                     retained.call_index_by_id = call_index_by_id;
                     retained.result_metadata_updated = previous.result_metadata_updated;
                 }
+            }
+            if budget_scope == MetadataBudgetScope::CodeModeOnly {
+                state.retained_calls.extend(
+                    retained_before_bounding
+                        .into_iter()
+                        .filter(|(key, _)| pending_outputs.contains(key)),
+                );
             }
         }
 
