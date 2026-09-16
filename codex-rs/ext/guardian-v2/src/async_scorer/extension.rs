@@ -62,14 +62,12 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 }
             };
             let mut policy = guardian_config.policy_for_model(model.as_deref());
-            if model.as_ref().is_some_and(|model| {
+            if let Some(model) = model.as_ref() {
                 input
                     .config
                     .config_layer_stack
                     .requirements()
-                    .auto_review_required_for_model(&model.slug)
-            }) {
-                policy.enforce_required_model();
+                    .constrain_guardian_policy(&mut policy, &model.slug);
             }
             let scoring_enabled = policy.scoring_enabled();
             let sampler_config = super::startup::sampler_config(

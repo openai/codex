@@ -28,7 +28,7 @@ use super::action::GuardianAction;
 use super::authorization::ScoreAuthorization;
 use super::classification::Classification;
 use super::config::GuardianV2Config;
-use super::coverage::UnscoredAction;
+use super::coverage::scores_tool;
 use super::extension::GuardianV2Extension;
 use super::metrics::record_classification;
 use super::parent_compaction::ParentCompactionError;
@@ -36,6 +36,7 @@ use super::parent_compaction::select_parent_compaction;
 use super::sampler::LunaSampler;
 use super::score::GuardianV2ScoreProgress;
 use super::score::record_fail_closed_score;
+use codex_protocol::openai_models::GuardianUnscoredAction as UnscoredAction;
 
 impl GuardianV2Extension {
     pub(super) async fn score_tool(&self, input: ToolStartInput<'_>) {
@@ -75,7 +76,7 @@ impl GuardianV2Extension {
         {
             return;
         }
-        if !policy.scores_tool(input.tool_name, input.payload, scope) {
+        if !scores_tool(&policy, input.tool_name, input.payload, scope) {
             match policy.unscored_action {
                 UnscoredAction::Ignore => {}
                 UnscoredAction::AgeScore => {
@@ -183,7 +184,7 @@ impl GuardianV2Extension {
             return;
         }
         // A required model keeps synchronous review outside its CUA allowance.
-        if !(scope == Some(GuardianScope::ComputerUse) && policy.initial_cua_call)
+        if !(scope == Some(GuardianScope::ComputerUse) && policy.allows_initial_cua_call())
             && parent_model.as_ref().is_some_and(|model| {
                 config
                     .config_layer_stack

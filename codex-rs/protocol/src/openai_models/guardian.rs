@@ -12,15 +12,27 @@ use crate::mcp::is_node_repl_backed_server;
 use crate::mcp::is_node_repl_backed_tool;
 
 /// How Guardian handles an action when the user selects automatic approval.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianReviewMode {
+    #[default]
     Disabled,
     Synchronous,
     /// Use a current low-risk score; otherwise run synchronous review.
     Adaptive,
     #[serde(other)]
     Unknown,
+}
+
+/// How actions outside adaptive coverage affect cached classification evidence.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardianUnscoredAction {
+    Ignore,
+    AgeScore,
+    #[default]
+    #[serde(other)]
+    InvalidateScore,
 }
 
 /// A complete model policy. Omitted scopes are disabled; unknown fields are ignored.
@@ -39,6 +51,17 @@ pub struct GuardianModelPolicy {
     pub network: Option<GuardianReviewMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permissions: Option<GuardianReviewMode>,
+    /// Coverage for tools without an approval category.
+    #[serde(default)]
+    pub other_tools: GuardianReviewMode,
+    #[serde(default)]
+    pub unscored_action: GuardianUnscoredAction,
+    /// Omission retains the existing allowance for adaptive computer use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_cua_call: Option<bool>,
+    /// Whether adaptive shell coverage includes ordinary sandboxed commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandboxed_exec_commands: Option<bool>,
 }
 
 impl GuardianModelPolicy {
@@ -52,6 +75,39 @@ impl GuardianModelPolicy {
             GuardianScope::Permissions => self.permissions,
         }
         .unwrap_or(GuardianReviewMode::Disabled)
+    }
+
+    pub fn scoring_enabled(&self) -> bool {
+        [
+            self.computer_use,
+            self.shell,
+            self.file_changes,
+            self.mcp,
+            self.network,
+            self.permissions,
+        ]
+        .contains(&Some(GuardianReviewMode::Adaptive))
+    }
+
+    pub fn disable_scoring(&mut self) {
+        for mode in [
+            &mut self.computer_use,
+            &mut self.shell,
+            &mut self.file_changes,
+            &mut self.mcp,
+            &mut self.network,
+            &mut self.permissions,
+        ] {
+            if *mode == Some(GuardianReviewMode::Adaptive) {
+                *mode = Some(GuardianReviewMode::Synchronous);
+            }
+        }
+        self.other_tools = GuardianReviewMode::Synchronous;
+    }
+
+    pub fn allows_initial_cua_call(&self) -> bool {
+        self.initial_cua_call
+            .unwrap_or(self.computer_use == Some(GuardianReviewMode::Adaptive))
     }
 }
 

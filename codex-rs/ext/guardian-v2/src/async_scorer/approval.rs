@@ -3,7 +3,6 @@
 
 use super::authorization::ScoreAuthorization;
 use super::config::GuardianV2Config;
-use super::coverage::GuardianPolicy;
 use super::metrics::TOOL_CALL_LAG_METRIC;
 use super::metrics::record_fast_decision;
 use super::parent_compaction::select_parent_compaction;
@@ -18,6 +17,7 @@ use codex_extension_api::ApprovalReviewContributor;
 use codex_extension_api::ExtensionFuture;
 use codex_protocol::approvals::GuardianReviewReason;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::openai_models::GuardianModelPolicy;
 use codex_protocol::openai_models::GuardianReviewMode;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::protocol::AskForApproval;
@@ -77,18 +77,22 @@ impl GuardianApprovalReviewer {
             .map_or_else(|| GuardianV2Config::resolve(&config), Ok)
             .ok();
         let mut policy = guardian_config.as_ref().map_or_else(
-            || GuardianPolicy::from_legacy(/*scope*/ None).for_model(model.as_deref()),
+            || {
+                codex_config::GuardianPolicyLoader::new(
+                    Some(&codex_features::FeatureToml::Enabled(true)),
+                    &codex_config::ConfigRequirements::default(),
+                )
+                .resolve(model.as_deref())
+            },
             |config| config.policy_for_model(model.as_deref()),
         );
-        if model.as_ref().is_some_and(|model| {
+        if let Some(model) = model.as_ref() {
             config
                 .config_layer_stack
                 .requirements()
-                .auto_review_required_for_model(&model.slug)
-        }) {
-            policy.enforce_required_model();
+                .constrain_guardian_policy(&mut policy, &model.slug);
         }
-        let mode = policy.mode(input.category);
+        let mode = policy.review_mode(input.category);
         if mode != GuardianReviewMode::Adaptive {
             record_fast_decision(input.metrics.as_deref(), "deferred", "out_of_scope");
         }
@@ -127,7 +131,7 @@ async fn cached_evidence(
     thread: &CodexThread,
     input: &ApprovalDecisionInput<'_>,
     config: &GuardianV2Config,
-    policy: &GuardianPolicy,
+    policy: &GuardianModelPolicy,
 ) -> Result<(), GuardianReviewReason> {
     let store = input.thread_store;
     let metrics = input.metrics.as_deref();
@@ -180,7 +184,7 @@ async fn cached_evidence(
     }
     let action = input.action;
     if input.category == GuardianScope::ComputerUse
-        && policy.initial_cua_call
+        && policy.allows_initial_cua_call()
         && action.get("tool_name").and_then(serde_json::Value::as_str) == Some("js")
         && action
             .get("connector_id")

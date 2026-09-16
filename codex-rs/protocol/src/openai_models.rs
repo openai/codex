@@ -39,6 +39,7 @@ mod guardian;
 pub use guardian::GuardianModelPolicy;
 pub use guardian::GuardianReviewMode;
 pub use guardian::GuardianScope;
+pub use guardian::GuardianUnscoredAction;
 
 #[path = "openai_models/guardian_v2.rs"]
 mod guardian_v2;

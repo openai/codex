@@ -1,5 +1,4 @@
 use codex_features::GuardianV2ConfigToml;
-use codex_features::GuardianV2ReviewScopeConfigToml;
 use codex_features::GuardianV2TranscriptConfigToml;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
@@ -9,49 +8,7 @@ use pretty_assertions::assert_eq;
 use super::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use super::DEFAULT_CLASSIFIER_INSTRUCTIONS;
 use super::GuardianV2Config;
-use crate::async_scorer::coverage::GuardianPolicy;
 use crate::async_scorer::transcript::truncate_entry;
-
-#[test]
-fn review_scope_is_computer_use_only_by_default() {
-    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml::default()).unwrap();
-
-    assert_eq!(config.policy, GuardianPolicy::from_legacy(/*scope*/ None));
-}
-
-#[test]
-fn sandboxed_exec_commands_can_be_included() {
-    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
-        review_scope: Some(GuardianV2ReviewScopeConfigToml {
-            computer_use_only: Some(false),
-            sandboxed_exec_commands: Some(true),
-        }),
-        ..Default::default()
-    })
-    .unwrap();
-
-    assert_eq!(
-        config.policy,
-        GuardianPolicy::from_legacy(Some(&GuardianV2ReviewScopeConfigToml {
-            computer_use_only: Some(false),
-            sandboxed_exec_commands: Some(true),
-        }))
-    );
-}
-
-#[test]
-fn computer_use_only_takes_precedence_over_sandboxed_exec_commands() {
-    let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
-        review_scope: Some(GuardianV2ReviewScopeConfigToml {
-            computer_use_only: Some(true),
-            sandboxed_exec_commands: Some(true),
-        }),
-        ..Default::default()
-    })
-    .unwrap();
-
-    assert_eq!(config.policy, GuardianPolicy::from_legacy(/*scope*/ None));
-}
 
 #[test]
 fn template_policy_is_substituted_before_the_single_truncation() {

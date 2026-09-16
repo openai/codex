@@ -3595,6 +3595,7 @@ dependencies = [
  "anyhow",
  "codex-analytics",
  "codex-api",
+ "codex-config",
  "codex-core",
  "codex-extension-api",
  "codex-features",
