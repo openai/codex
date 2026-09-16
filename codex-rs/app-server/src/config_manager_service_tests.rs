@@ -2674,3 +2674,81 @@ async fn allowed_login_methods_follow_current_forced_workspaces() -> Result<()> 
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn permission_config_reload_merges_session_layers() -> Result<()> {
+    use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerSource;
+    use codex_config::ConfigLayerStack;
+    let tmp = tempdir()?;
+    let wrapper_dir = tmp.path().join("tmp/arg0/session");
+    std::fs::create_dir_all(&wrapper_dir)?;
+    let wrapper = wrapper_dir.join("codex-execve-wrapper");
+    std::fs::write(&wrapper, "")?;
+    let service = ConfigManager::new(
+        tmp.path().to_path_buf(),
+        Vec::new(),
+        LoaderOverrides::without_managed_config_for_tests(),
+        /*strict_config*/ false,
+        CloudConfigBundleLoader::default(),
+        codex_arg0::Arg0DispatchPaths {
+            main_execve_wrapper_exe: Some(wrapper),
+            ..Default::default()
+        },
+        std::sync::Arc::new(codex_config::NoopThreadConfigLoader),
+    );
+
+    let mut config = service
+        .load_with_overrides(
+            /*request_overrides*/ None,
+            codex_core::config::ConfigOverrides {
+                cwd: Some(tmp.path().to_path_buf()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let mut layers = config
+        .config_layer_stack
+        .all_layers_low_to_high()
+        .cloned()
+        .collect::<Vec<_>>();
+    for contents in [
+        "[permissions.first.filesystem]\n",
+        "[permissions.second]\nextends = ':workspace'\n",
+    ] {
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::SessionFlags,
+            toml::from_str(contents)?,
+        ));
+    }
+    layers.push(ConfigLayerEntry::new_disabled(
+        ConfigLayerSource::SessionFlags,
+        toml::from_str("[permissions.disabled]\nextends = ':read-only'\n")?,
+        "disabled for test",
+    ));
+    config.config_layer_stack =
+        ConfigLayerStack::new(layers, Default::default(), Default::default())?;
+    let loaded = service
+        .load_permission_config_for_thread(&config, config.cwd.clone(), "first".to_string())
+        .await?;
+    assert_eq!(
+        loaded
+            .custom_permission_profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    let policy = loaded.permissions.file_system_sandbox_policy();
+    assert_eq!(
+        (
+            policy.can_read_local_path_with_cwd(&wrapper_dir, loaded.cwd.as_path()),
+            policy.can_read_local_path_with_cwd(
+                &tmp.path().join("tmp/arg0/other"),
+                loaded.cwd.as_path()
+            ),
+        ),
+        (true, false),
+    );
+    Ok(())
+}

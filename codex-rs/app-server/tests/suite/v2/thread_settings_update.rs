@@ -702,3 +702,70 @@ fn create_config_toml(codex_home: &std::path::Path, server_uri: &str) -> std::io
         .with_provider_config("supports_websockets = false")
         .write(codex_home)
 }
+
+#[tokio::test]
+async fn thread_settings_update_preserves_session_profiles() -> Result<()> {
+    for (profile_on_disk, top_level_selection) in [(false, false), (true, false), (true, true)] {
+        let home = TempDir::new()?;
+        let profile = json!({"extends": ":read-only"});
+        std::fs::write(
+            home.path().join("config.toml"),
+            if profile_on_disk {
+                "default_permissions = ':read-only'\n[permissions.audit]\nextends = ':read-only'\n"
+            } else {
+                ""
+            },
+        )?;
+        write_models_cache(home.path()).await?;
+        let mut server = TestAppServer::builder()
+            .with_codex_home(home.path())
+            .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+            .await?;
+        let mut config = std::collections::HashMap::from([
+            ("default_permissions".to_string(), json!("audit")),
+            ("features.guardian_approval".to_string(), json!(true)),
+        ]);
+        if !profile_on_disk {
+            config.insert("permissions.audit".to_string(), profile);
+        }
+        if top_level_selection {
+            config.remove("default_permissions");
+        }
+        let id = server
+            .send_thread_start_request_with_auto_env(ThreadStartParams {
+                model: Some("mock-model".to_string()),
+                config: Some(config),
+                permissions: top_level_selection.then(|| "audit".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        let started: ThreadStartResponse =
+            timeout(DEFAULT_TIMEOUT, server.read_response(id)).await??;
+        let thread_id = started.thread.id;
+        for profile_id in [":workspace", "audit"] {
+            let id = server
+                .send_thread_settings_update_request(ThreadSettingsUpdateParams {
+                    thread_id: thread_id.clone(),
+                    permissions: Some(profile_id.to_string()),
+                    ..Default::default()
+                })
+                .await?;
+            let _: ThreadSettingsUpdateResponse =
+                timeout(DEFAULT_TIMEOUT, server.read_response(id)).await??;
+            let applied: ThreadSettingsUpdatedNotification = timeout(
+                DEFAULT_TIMEOUT,
+                server.read_notification("thread/settings/updated"),
+            )
+            .await??;
+            assert_eq!(
+                applied
+                    .thread_settings
+                    .active_permission_profile
+                    .unwrap()
+                    .id,
+                profile_id
+            );
+        }
+    }
+    Ok(())
+}

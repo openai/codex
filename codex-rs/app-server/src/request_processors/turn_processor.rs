@@ -84,7 +84,6 @@ pub(crate) struct TurnRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     analytics_events_client: AnalyticsEventsClient,
-    arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     config_manager: ConfigManager,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
@@ -147,7 +146,6 @@ impl TurnRequestProcessor {
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
         analytics_events_client: AnalyticsEventsClient,
-        arg0_paths: Arg0DispatchPaths,
         config: Arc<Config>,
         config_manager: ConfigManager,
         pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
@@ -163,7 +161,6 @@ impl TurnRequestProcessor {
             thread_manager,
             outgoing,
             analytics_events_client,
-            arg0_paths,
             config,
             config_manager,
             pending_thread_unloads,
@@ -843,24 +840,16 @@ impl TurnRequestProcessor {
                         "{method} permission selection missing thread snapshot"
                     )));
                 };
-                let overrides = ConfigOverrides {
-                    cwd: environments
-                        .as_ref()
-                        .map(|environments| environments.legacy_fallback_cwd.to_path_buf()),
-                    default_permissions: Some(permissions),
-                    codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
-                    main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
-                    ..Default::default()
-                };
+                let thread_config = thread.config().await;
+                let cwd = environments.as_ref().map_or_else(
+                    || snapshot.cwd().clone(),
+                    |environments| environments.legacy_fallback_cwd.clone(),
+                );
                 let config = self
                     .config_manager
-                    .load_for_cwd(
-                        /*request_overrides*/ None,
-                        overrides,
-                        Some(snapshot.cwd().to_path_buf()),
-                    )
+                    .load_permission_config_for_thread(&thread_config, cwd, permissions)
                     .await
-                    .map_err(|err| config_load_error(&err))?;
+                    .map_err(|error| config_load_error(&error))?;
                 // Startup config is allowed to fall back when requirements
                 // disallow a configured profile. An explicit settings update
                 // is different: reject it before accepting the request.

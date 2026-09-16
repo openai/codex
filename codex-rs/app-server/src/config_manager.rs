@@ -281,6 +281,45 @@ impl ConfigManager {
         .await
     }
 
+    /// Reload sources using the task's session flags before materializing config.
+    pub(crate) async fn load_permission_config_for_thread(
+        &self,
+        thread_config: &Config,
+        cwd: AbsolutePathBuf,
+        permission_profile: String,
+    ) -> std::io::Result<Config> {
+        let mut session_flags = TomlValue::Table(Default::default());
+        for layer in thread_config.config_layer_stack.layers_low_to_high() {
+            if matches!(layer.name, codex_config::ConfigLayerSource::SessionFlags) {
+                codex_config::merge_toml_values(&mut session_flags, &layer.config);
+            }
+        }
+        let overrides = session_flags
+            .as_table()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "session flags must be a table",
+                )
+            })?
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        self.load_with_cli_overrides(
+            &overrides,
+            /*request_overrides*/ None,
+            ConfigOverrides {
+                cwd: Some(cwd.to_path_buf()),
+                default_permissions: Some(permission_profile),
+                codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
+                main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
+                ..Default::default()
+            },
+            Some(cwd.to_path_buf()),
+        )
+        .await
+    }
+
     #[instrument(level = "trace", skip_all)]
     pub(crate) async fn load_with_cli_overrides(
         &self,
