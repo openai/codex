@@ -22,23 +22,6 @@ impl FailureMetric {
             Self::Scan => ("codex.rollout_compression.scan", "outcome"),
             Self::TempCleanup => (metrics::TEMP_CLEANUP_COUNTER, "outcome"),
         };
-        let error_kind = match error.kind() {
-            io::ErrorKind::NotFound => "not_found",
-            io::ErrorKind::PermissionDenied => "permission_denied",
-            io::ErrorKind::AlreadyExists => "already_exists",
-            io::ErrorKind::InvalidInput => "invalid_input",
-            io::ErrorKind::InvalidData => "invalid_data",
-            io::ErrorKind::TimedOut => "timed_out",
-            io::ErrorKind::WriteZero => "write_zero",
-            io::ErrorKind::Interrupted => "interrupted",
-            io::ErrorKind::Unsupported => "unsupported",
-            io::ErrorKind::UnexpectedEof => "unexpected_eof",
-            io::ErrorKind::StorageFull => "storage_full",
-            io::ErrorKind::ReadOnlyFilesystem => "read_only_filesystem",
-            io::ErrorKind::NotADirectory => "not_a_directory",
-            io::ErrorKind::IsADirectory => "is_a_directory",
-            _ => "other",
-        };
         let Some(metrics) = codex_otel::global() else {
             return;
         };
@@ -48,8 +31,28 @@ impl FailureMetric {
             &[
                 (outcome_key, "failed"),
                 ("stage", stage),
-                ("error_kind", error_kind),
+                ("error_kind", error_kind(error)),
             ],
         );
+    }
+}
+
+pub(super) fn error_kind(error: &io::Error) -> &'static str {
+    match error.kind() {
+        io::ErrorKind::NotFound => "not_found",
+        io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::AlreadyExists => "already_exists",
+        io::ErrorKind::InvalidInput => "invalid_input",
+        io::ErrorKind::InvalidData => "invalid_data",
+        io::ErrorKind::TimedOut => "timed_out",
+        io::ErrorKind::WriteZero => "write_zero",
+        io::ErrorKind::Interrupted => "interrupted",
+        io::ErrorKind::Unsupported => "unsupported",
+        io::ErrorKind::UnexpectedEof => "unexpected_eof",
+        io::ErrorKind::StorageFull => "storage_full",
+        io::ErrorKind::ReadOnlyFilesystem => "read_only_filesystem",
+        io::ErrorKind::NotADirectory => "not_a_directory",
+        io::ErrorKind::IsADirectory => "is_a_directory",
+        _ => "other",
     }
 }

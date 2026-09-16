@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -16,8 +17,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 
 mod error_metrics;
+mod read_metrics;
 
 use error_metrics::FailureMetric;
+use read_metrics::ReadMetrics;
 
 const COMPRESSED_SUFFIX: &str = ".zst";
 const MAX_NOT_FOUND_RETRIES: usize = 3;
@@ -47,16 +50,29 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
 /// If the requested path disappears during a representation transition, this briefly retries
 /// resolution so callers do not need to know which representation is on disk.
 pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
-    for _ in 0..MAX_NOT_FOUND_RETRIES {
-        match reader::open_once(path).await {
-            Ok(reader) => return Ok(reader),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                tokio::time::sleep(OPEN_ROLLOUT_LINE_READER_RETRY_DELAY).await;
+    let started_at = Instant::now();
+    let mut metrics = ReadMetrics::default();
+    let result = async {
+        for _ in 0..MAX_NOT_FOUND_RETRIES {
+            match reader::open_once(path, &mut metrics).await {
+                Ok(reader) => return Ok(reader),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    tokio::time::sleep(OPEN_ROLLOUT_LINE_READER_RETRY_DELAY).await;
+                }
+                Err(err) => return Err(err),
             }
-            Err(err) => return Err(err),
+        }
+        reader::open_once(path, &mut metrics).await
+    }
+    .await;
+    metrics.duration = started_at.elapsed();
+    match result {
+        Ok(inner) => Ok(RolloutLineReader { inner, metrics }),
+        Err(err) => {
+            metrics.failed("open", &err);
+            Err(err)
         }
     }
-    reader::open_once(path).await
 }
 
 /// Returns the compressed `.jsonl.zst` path for a rollout path.
@@ -93,13 +109,14 @@ pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result
         return Ok(plain_path);
     }
 
+    let started_at = Instant::now();
     let temp_path = temp_path_for(plain_path.as_path(), "decompress");
-    if let Some(parent) = plain_path.parent() {
-        std::fs::create_dir_all(parent)
-            .inspect_err(|err| FailureMetric::Materialize.record("prepare_directory", err))?;
-    }
-    let mut stage = "read_metadata";
+    let mut stage = "prepare_directory";
     let result: io::Result<()> = (|| {
+        if let Some(parent) = plain_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        stage = "read_metadata";
         let metadata = std::fs::metadata(compressed_path.as_path())?;
         let permissions = metadata.permissions();
         stage = "create_temp";
@@ -138,9 +155,11 @@ pub(crate) fn materialize_rollout_for_append_blocking(path: &Path) -> io::Result
     if let Err(err) = &result {
         let _ = std::fs::remove_file(temp_path.as_path());
         FailureMetric::Materialize.record(stage, err);
+        metrics::materialize_duration("failed", started_at.elapsed());
     }
     result?;
     metrics::materialize("decompressed");
+    metrics::materialize_duration("decompressed", started_at.elapsed());
     Ok(plain_path)
 }
 
@@ -217,6 +236,7 @@ impl RolloutFile {
 /// Line-oriented rollout reader returned by [`open_rollout_line_reader`].
 pub struct RolloutLineReader {
     inner: RolloutLineReaderInner,
+    metrics: ReadMetrics,
 }
 
 enum RolloutLineReaderInner {
@@ -227,20 +247,31 @@ enum RolloutLineReaderInner {
 impl RolloutLineReader {
     /// Reads the next JSONL record from the rollout.
     pub async fn next_line(&mut self) -> io::Result<Option<String>> {
-        match &mut self.inner {
-            RolloutLineReaderInner::Plain(lines) => lines.next_line().await,
-            RolloutLineReaderInner::Blocking(slot) => {
-                let Some(mut reader) = slot.take() else {
-                    return Err(io::Error::other("compressed rollout reader is busy"));
-                };
-                let (line, reader) =
-                    tokio::task::spawn_blocking(move || (reader.next().transpose(), reader))
-                        .await
-                        .map_err(io::Error::other)?;
-                *slot = Some(reader);
-                line
+        let started_at = Instant::now();
+        self.metrics.reached_eof = false;
+        let result = async {
+            match &mut self.inner {
+                RolloutLineReaderInner::Plain(lines) => lines.next_line().await,
+                RolloutLineReaderInner::Blocking(slot) => {
+                    let Some(mut reader) = slot.take() else {
+                        return Err(io::Error::other("compressed rollout reader is busy"));
+                    };
+                    let (line, reader) =
+                        tokio::task::spawn_blocking(move || (reader.next().transpose(), reader))
+                            .await
+                            .map_err(io::Error::other)?;
+                    *slot = Some(reader);
+                    line
+                }
             }
         }
+        .await;
+        self.metrics.duration = self.metrics.duration.saturating_add(started_at.elapsed());
+        match &result {
+            Ok(line) => self.metrics.reached_eof = line.is_none(),
+            Err(err) => self.metrics.failed("read", err),
+        }
+        result
     }
 }
 
@@ -1039,6 +1070,14 @@ mod metrics {
         counter(MATERIALIZE_COUNTER, &[("outcome", outcome)]);
     }
 
+    pub(super) fn materialize_duration(outcome: &'static str, duration: Duration) {
+        duration_histogram(
+            "codex.rollout_compression.materialize.duration_ms",
+            duration,
+            &[("outcome", outcome)],
+        );
+    }
+
     pub(super) fn run(status: &'static str) {
         counter(RUN_COUNTER, &[("status", status)]);
     }
@@ -1169,16 +1208,20 @@ mod reader {
     use std::io::Read;
     use std::path::Path;
 
-    use super::RolloutLineReader;
+    use super::ReadMetrics;
     use super::RolloutLineReaderInner;
     use super::path;
     use tokio::io::AsyncBufReadExt;
 
-    pub(super) async fn open_once(path: &Path) -> io::Result<RolloutLineReader> {
+    pub(super) async fn open_once(
+        path: &Path,
+        metrics: &mut ReadMetrics,
+    ) -> io::Result<RolloutLineReaderInner> {
         let path = path::existing_rollout_path(path)
             .await
             .unwrap_or_else(|| path.to_path_buf());
         if path::is_compressed_rollout_path(path.as_path()) {
+            metrics.format = "zstd";
             let reader = tokio::task::spawn_blocking(move || {
                 let input = File::open(path.as_path())?;
                 let decoder = zstd::stream::read::Decoder::new(input)?;
@@ -1188,14 +1231,13 @@ mod reader {
             })
             .await
             .map_err(io::Error::other)??;
-            return Ok(RolloutLineReader {
-                inner: RolloutLineReaderInner::Blocking(Some(reader)),
-            });
+            return Ok(RolloutLineReaderInner::Blocking(Some(reader)));
         }
+        metrics.format = "plain";
         let file = tokio::fs::File::open(path).await?;
-        Ok(RolloutLineReader {
-            inner: RolloutLineReaderInner::Plain(tokio::io::BufReader::new(file).lines()),
-        })
+        Ok(RolloutLineReaderInner::Plain(
+            tokio::io::BufReader::new(file).lines(),
+        ))
     }
 }
 
