@@ -40,6 +40,9 @@ mod model_defaults;
 mod pagination_completion_tests;
 #[path = "tests/patch_approval_tests.rs"]
 mod patch_approval_tests;
+#[path = "tests/permission_selection_tests.rs"]
+mod permission_selection_tests;
+
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod plugin_catalog;

@@ -311,6 +311,14 @@ impl ChatWidget {
         profile_selection: Option<PermissionProfileSelection>,
         return_to_permissions: bool,
     ) -> Vec<SelectionAction> {
+        let profile_selection = profile_selection.or_else(|| {
+            self.thread_id.map(|_| PermissionProfileSelection {
+                profile_id: preset.active_permission_profile.id.clone(),
+                approval_policy: Some(AskForApproval::from(preset.approval)),
+                approvals_reviewer: Some(approvals_reviewer),
+                display_label: label.clone(),
+            })
+        });
         let apply_actions = || {
             profile_selection.clone().map_or_else(
                 || {

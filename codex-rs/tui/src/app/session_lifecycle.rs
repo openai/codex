@@ -542,6 +542,9 @@ impl App {
         if self.active_thread_id == Some(thread_id) && !self.thread_unavailable(thread_id) {
             return Ok(());
         }
+        if self.reject_pending_permission_root_switch() {
+            return Ok(());
+        }
         if self.windows_sandbox_blocks_thread_switch() {
             self.chat_widget.add_info_message(
                 "Finish Windows sandbox setup before switching threads.".to_string(),
@@ -920,6 +923,12 @@ impl App {
         initial_user_message: Option<crate::chatwidget::UserMessage>,
         new_thread_name: Option<String>,
     ) {
+        if self.reject_pending_permission_root_switch() {
+            if let Some(message) = initial_user_message {
+                self.chat_widget.restore_user_message_to_composer(message);
+            }
+            return;
+        }
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history. If an initial message is provided, `enqueue_primary_thread_session` suppresses it
         // until the new session is configured and any replayed turns have been rendered.
@@ -1218,6 +1227,9 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
+        if self.reject_pending_permission_root_switch() {
+            return Ok(AppRunControl::Continue);
+        }
         let (mut resume_config, local_settings) = match self
             .resume_config_for_target(tui, app_server, &target_session)
             .await

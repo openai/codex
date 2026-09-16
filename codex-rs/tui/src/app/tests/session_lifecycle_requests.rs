@@ -265,7 +265,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
     let state_db =
         crate::init_state_db_for_app_server_target(config, &crate::AppServerTarget::Embedded)
             .await?;
-    let embedded = crate::start_embedded_app_server(
+    let mut embedded = crate::start_embedded_app_server(
         codex_arg0::Arg0DispatchPaths::default(),
         config.clone(),
         Vec::new(),
@@ -289,7 +289,29 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
         let mut inventories = usize::from(failed_thread_name == Some("background"));
         let mut reject_detach = false;
         let mut reject_thread_list = history_capabilities == HistoryCapabilities::ThreadListFails;
-        while let Some(frame) = websocket.next().await {
+        loop {
+            let frame = tokio::select! {
+                frame = websocket.next() => frame,
+                event = embedded.next_event() => {
+                    let Some(event) = event else { break };
+                    if let codex_app_server_client::InProcessServerEvent::ServerNotification(notification) = event
+                        && matches!(*notification, ServerNotification::ThreadSettingsUpdated(_))
+                    {
+                        websocket.send(Message::Text(serde_json::to_string(&notification)?.into())).await?;
+                    }
+                    continue;
+                }
+            };
+            let Some(frame) = frame else { break };
+            // The client can close with an unread settings notification during shutdown.
+            match &frame {
+                Err(tokio_tungstenite::tungstenite::Error::Protocol(
+                    tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                )) => break,
+                Err(tokio_tungstenite::tungstenite::Error::Io(error))
+                    if matches!(error.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset) => break,
+                _ => {}
+            }
             let Message::Text(text) = frame? else {
                 continue;
             };

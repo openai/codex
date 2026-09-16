@@ -88,7 +88,7 @@ async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
             .await;
             insta::assert_snapshot!(
                 next_history_message(&mut events),
-                @"■ Named profiles require a newer app server."
+                @"■ Permission selection requires a newer app server."
             );
         }
         app_server.shutdown().await?;

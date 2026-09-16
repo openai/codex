@@ -1282,6 +1282,34 @@ impl App {
             notification = None;
         }
         if permission_change_confirmed {
+            if self.chat_widget.thread_id() == Some(thread_id)
+                && let Some(profile) = self
+                    .chat_widget
+                    .config_ref()
+                    .permissions
+                    .active_permission_profile()
+                && profile.id.starts_with(':')
+            {
+                let config = self.chat_widget.config_ref();
+                let network = config
+                    .network_proxy_spec_for_active_permission_profile(
+                        &profile,
+                        config.permissions.permission_profile(),
+                    )
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(%err, "failed to refresh local permission network settings");
+                        None
+                    });
+                self.chat_widget.set_permission_network(network);
+                self.config.permissions = self.chat_widget.config_ref().permissions.clone();
+                self.config.approvals_reviewer = self.chat_widget.config_ref().approvals_reviewer;
+                self.runtime_approval_policy_override =
+                    Some(RuntimeApprovalPolicyOverride::Explicit(
+                        self.config.permissions.approval_policy.value().into(),
+                    ));
+                self.runtime_permission_profile_override =
+                    Some(RuntimePermissionProfileOverride::from_config(&self.config));
+            }
             self.app_event_tx.send(AppEvent::SettingsSelectionSettled);
         }
 

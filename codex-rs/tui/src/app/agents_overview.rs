@@ -335,6 +335,9 @@ impl App {
             self.chat_widget.pre_draw_tick();
             return Ok(AppRunControl::Continue);
         }
+        if self.reject_pending_permission_root_switch() {
+            return Ok(AppRunControl::Continue);
+        }
         loading::draw(tui)?;
         if self.primary_thread_id != Some(root_thread_id) {
             let previous_displayed_thread_id = self.current_displayed_thread_id();

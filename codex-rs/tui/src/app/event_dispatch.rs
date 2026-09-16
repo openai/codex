@@ -326,6 +326,9 @@ impl App {
                 self.chat_widget.copy_selection(text, label, format);
             }
             AppEvent::ClearUi { name } => {
+                if self.reject_pending_permission_root_switch() {
+                    return Ok(AppRunControl::Continue);
+                }
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
@@ -342,6 +345,10 @@ impl App {
                 self.apply_raw_output_mode(tui, enabled, /*notify*/ false);
             }
             AppEvent::ClearUiAndSubmitUserMessage { text } => {
+                if self.reject_pending_permission_root_switch() {
+                    self.chat_widget.restore_user_message_to_composer(text.into());
+                    return Ok(AppRunControl::Continue);
+                }
                 self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
@@ -2093,9 +2100,7 @@ impl App {
                             self.chat_widget.windows_sandbox_elevated_setup_complete =
                                 elevated_enabled;
                             if let Some(selection) = profile_selection {
-                                if self.apply_permission_profile_selection(selection).await {
-                                    self.chat_widget.submit_initial_user_message_if_pending();
-                                }
+                                self.select_permission_profile(app_server, selection).await;
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
