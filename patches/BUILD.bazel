@@ -21,6 +21,7 @@ exports_files([
     "tikv-jemalloc-sys_make_env.patch",
     "tikv-jemalloc-sys_dependency_flags.patch",
     "v8_bazel_rules.patch",
+    "v8_array_sort_elements_kind.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",
     "webrtc-sys_hermetic_darwin_sysroot.patch",

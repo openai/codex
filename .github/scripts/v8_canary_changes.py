@@ -49,6 +49,7 @@ WINDOWS_SOURCE_BUILD_PATHS = {
     ".github/scripts/v8_canary_changes.py",
     ".github/workflows/rusty-v8-release.yml",
     ".github/workflows/v8-canary.yml",
+    "patches/v8_array_sort_elements_kind.patch",
 }
 
 

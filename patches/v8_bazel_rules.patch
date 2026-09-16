@@ -3,20 +3,21 @@
 # Scope: Bazel BUILD/defs/BUILD.icu integration only, including dependency
 # wiring, generated sources, and visibility; no standalone V8 source patching.
 
-diff --git a/orig/v8-15.0.245.2/bazel/defs.bzl b/mod/v8-15.0.245.2/bazel/defs.bzl
+diff --git a/orig/v8-15.2.124.1/bazel/defs.bzl b/mod/v8-15.2.124.1/bazel/defs.bzl
 index bbe1495..6673518 100644
---- a/orig/v8-15.0.245.2/bazel/defs.bzl
-+++ b/mod/v8-15.0.245.2/bazel/defs.bzl
-@@ -33,9 +33,21 @@ _create_option_int = rule(
+--- a/orig/v8-15.2.124.1/bazel/defs.bzl
++++ b/mod/v8-15.2.124.1/bazel/defs.bzl
+@@ -42,9 +42,22 @@ _create_option_int = rule(
  )
  
  def v8_flag(name, default = False):
--    _create_option_flag(name = name, build_setting_default = default)
+-    _create_option_flag(name = name, build_setting_default = default, scope = "universal")
 -    native.config_setting(name = "is_" + name, flag_values = {name: "True"})
 -    native.config_setting(name = "is_not_" + name, flag_values = {name: "False"})
 +    _create_option_flag(
 +        name = name,
 +        build_setting_default = default,
++        scope = "universal",
 +        visibility = ["//visibility:public"],
 +    )
 +    native.config_setting(
@@ -31,7 +32,7 @@ index bbe1495..6673518 100644
 +    )
  
  def v8_string(name, default = ""):
-     _create_option_string(name = name, build_setting_default = default)
+     _create_option_string(name = name, build_setting_default = default, scope = "universal")
 @@ -97,7 +109,13 @@ v8_config = rule(
  
  def _default_args():
@@ -154,10 +155,10 @@ index bbe1495..6673518 100644
          suffix = suffix,
          target_os = select({
              "@v8//bazel/config:is_macos": "mac",
-diff --git a/orig/v8-15.0.245.2/BUILD.bazel b/mod/v8-15.0.245.2/BUILD.bazel
+diff --git a/orig/v8-15.2.124.1/BUILD.bazel b/mod/v8-15.2.124.1/BUILD.bazel
 index b432f86..28c567b 100644
---- a/orig/v8-15.0.245.2/BUILD.bazel
-+++ b/mod/v8-15.0.245.2/BUILD.bazel
+--- a/orig/v8-15.2.124.1/BUILD.bazel
++++ b/mod/v8-15.2.124.1/BUILD.bazel
 @@ -148,6 +148,10 @@ v8_flag(name = "v8_enable_trace_maps")
  
  v8_flag(name = "v8_enable_v8_checks")
@@ -398,10 +399,10 @@ index b432f86..28c567b 100644
      }),
      noicu_deps = [":v8_libshared_noicu"],
      noicu_srcs = [
-diff --git a/orig/v8-15.0.245.2/bazel/BUILD.icu b/mod/v8-15.0.245.2/bazel/BUILD.icu
+diff --git a/orig/v8-15.2.124.1/bazel/BUILD.icu b/mod/v8-15.2.124.1/bazel/BUILD.icu
 index 5fda2f4..8c3c372 100644
---- a/orig/v8-15.0.245.2/bazel/BUILD.icu
-+++ b/mod/v8-15.0.245.2/bazel/BUILD.icu
+--- a/orig/v8-15.2.124.1/bazel/BUILD.icu
++++ b/mod/v8-15.2.124.1/bazel/BUILD.icu
 @@ -1,3 +1,24 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +

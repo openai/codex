@@ -318,6 +318,17 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Download Chromium Windows build tools
+        shell: bash
+        working-directory: upstream-rusty-v8
+        run: |
+          set -euo pipefail
+          # Upstream skips this submodule because its standalone mirror is unreliable.
+          revision="$(git rev-parse HEAD:tools/win)"
+          mkdir -p tools/win
+          curl -fsSL "https://chromium.googlesource.com/chromium/src/tools/win/+archive/${revision}.tar.gz" |
+            tar -xz -C tools/win
+
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
@@ -350,9 +361,14 @@ jobs:
           path: |
             upstream-rusty-v8/target/sccache
             upstream-rusty-v8/target/${{ matrix.target }}/release/gn_out
-          key: rusty-v8-source-${{ matrix.target }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt') }}
+          key: rusty-v8-source-${{ matrix.target }}-sandbox-${{ hashFiles('upstream-rusty-v8/Cargo.lock', 'upstream-rusty-v8/build.rs', 'upstream-rusty-v8/git_submodule_status.txt', 'patches/v8_array_sort_elements_kind.patch') }}
           restore-keys: |
             rusty-v8-source-${{ matrix.target }}-sandbox-
+
+      - name: Apply V8 Array.sort backport
+        shell: bash
+        working-directory: upstream-rusty-v8/v8
+        run: git apply -p3 "${GITHUB_WORKSPACE}/patches/v8_array_sort_elements_kind.patch"
 
       - name: Install sccache
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
