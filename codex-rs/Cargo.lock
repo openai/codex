@@ -4784,6 +4784,7 @@ dependencies = [
  "codex-install-context",
  "codex-login",
  "codex-mcp",
+ "codex-mermaid",
  "codex-message-history",
  "codex-model-provider",
  "codex-model-provider-info",

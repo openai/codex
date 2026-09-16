@@ -27,6 +27,8 @@ pub(crate) struct StreamingMarkdownRender {
     pub(crate) has_reference_link_definition: bool,
     /// Whether the first block is raw HTML, which joins a retained prefix without a separator.
     pub(crate) first_top_level_block_is_html: bool,
+    /// Mermaid in the final top-level block stays mutable, including within a list or quote.
+    pub(crate) mermaid_start: Option<usize>,
 }
 
 /// Render `input` while tracking the final mutable top-level block.
@@ -52,6 +54,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         block_count: 0,
         last_start: 0,
         first_is_html: false,
+        mermaid_start: None,
     };
     let mut writer = Writer::new(input, parser, width, cwd, is_hidden_link_destination);
     writer.run();
@@ -69,6 +72,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
             }),
         has_reference_link_definition,
         first_top_level_block_is_html: writer.iter.first_is_html,
+        mermaid_start: writer.iter.mermaid_start,
     }
 }
 
@@ -79,6 +83,7 @@ struct TopLevelBlockTracker<I> {
     block_count: usize,
     last_start: usize,
     first_is_html: bool,
+    mermaid_start: Option<usize>,
 }
 
 impl<'a, I> Iterator for TopLevelBlockTracker<I>
@@ -90,12 +95,18 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         let (event, range) = self.iter.next()?;
         if self.depth == 0 && matches!(&event, Event::Start(_) | Event::Rule | Event::Html(_)) {
+            self.mermaid_start = None;
             self.block_count += 1;
             self.last_start = range.start;
             if self.block_count == 1 {
                 self.first_is_html =
                     matches!(&event, Event::Start(Tag::HtmlBlock) | Event::Html(_));
             }
+        }
+        if let Event::Start(Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(info))) = &event
+            && info.split([',', ' ', '\t']).next() == Some("mermaid")
+        {
+            self.mermaid_start.get_or_insert(self.last_start);
         }
         match event {
             Event::Start(_) => self.depth += 1,

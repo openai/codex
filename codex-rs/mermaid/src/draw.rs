@@ -168,8 +168,8 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
                 canvas.set(x, y, Cell::edge(ch));
             }
         }
-        canvas.set(box_cross - 1, source, Cell::edge('├'));
-        canvas.set(box_cross - 1, target, Cell::edge('├'));
+        canvas.set(box_cross - 1, source, Cell::node('├'));
+        canvas.set(box_cross - 1, target, Cell::node('├'));
         canvas.set(box_cross, source, Cell::edge(edge.source_tip));
         canvas.set(box_cross, target, Cell::edge(edge.target_tip));
         canvas.set(

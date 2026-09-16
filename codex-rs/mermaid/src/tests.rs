@@ -190,4 +190,22 @@ fn semantic_spans_distinguish_labels_from_matching_endpoint_glyphs() {
             .role,
         Role::Node
     );
+    for direction in ["TD", "BT", "LR", "RL"] {
+        let lines = super::render_spans(
+            &format!("flowchart {direction}; A --> B"),
+            /*max_width*/ 100,
+        )
+        .unwrap();
+        let ports = lines
+            .iter()
+            .flatten()
+            .flat_map(|span| {
+                span.text
+                    .chars()
+                    .filter(|ch| matches!(ch, '├' | '┬'))
+                    .map(|_| span.role)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ports, vec![Role::Node, Role::Node]);
+    }
 }

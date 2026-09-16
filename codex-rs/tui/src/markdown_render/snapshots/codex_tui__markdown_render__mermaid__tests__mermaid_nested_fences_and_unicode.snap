@@ -1,0 +1,26 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+assertion_line: 38
+expression: "markdown_text(source, 60)"
+---
+> ┌─────────┐
+> │ 请求    │
+> │         ├─────┐
+> └─────────┘     │
+>                 │
+>                 │
+> ┌─────────┐     │
+> │ Réponse │     │
+> │         ├◄────┘
+> └─────────┘
+
+- Diagram:
+
+  ┌───┐  ┌───┐
+  │ A │  │ B │
+  └┬──┘  └┬──┘
+   │      ▲
+   │      │
+   │      │
+   │      │
+   └──────┘

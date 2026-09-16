@@ -321,7 +321,10 @@ pub(crate) fn foreground_style_for_scopes(scope_names: &[&str]) -> Option<Style>
     foreground_style_for_scopes_with_theme(&theme, scope_names)
 }
 
-fn foreground_style_for_scopes_with_theme(theme: &Theme, scope_names: &[&str]) -> Option<Style> {
+pub(crate) fn foreground_style_for_scopes_with_theme(
+    theme: &Theme,
+    scope_names: &[&str],
+) -> Option<Style> {
     let highlighter = Highlighter::new(theme);
     scope_names.iter().find_map(|scope_name| {
         let scope = Scope::new(scope_name).ok()?;

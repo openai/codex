@@ -19,6 +19,10 @@
 //! agent and proposed-plan streams. Lines in `Outside` and `Markdown` fence
 //! contexts are scanned; lines inside non-markdown fences are skipped.
 //!
+//! Mermaid stays mutable while its containing top-level block is last. The closing fence replaces
+//! source with a diagram, and resizing can replace a diagram that no longer fits with its source.
+//! Once another block starts, the diagram enters scrollback so later prose does not grow the tail.
+//!
 //! ## Resize handling
 //!
 //! On terminal width change, `StreamCore::set_width` re-renders at the new
@@ -286,6 +290,7 @@ impl StreamCore {
         }
         let had_pending_queue = self.state.queued_len() > 0;
         let had_live_tail = self.has_tail();
+        let previous_width = self.width;
         self.width = width;
         self.state.collector.set_width(width);
         let source = self.state.collector.committed_source();
@@ -294,15 +299,8 @@ impl StreamCore {
             return;
         }
 
-        self.render.recompute(
-            source,
-            self.width,
-            self.cwd.as_path(),
-            self.render_mode,
-            self.inline_visualization_context.as_ref(),
-        );
+        self.recompute_render(previous_width, self.render_mode);
         self.refresh_preview();
-        self.emitted_stable_len = self.emitted_stable_len.min(self.render.lines.len());
         if had_pending_queue
             && self.emitted_stable_len == self.render.lines.len()
             && self.emitted_stable_len > 0
@@ -317,6 +315,7 @@ impl StreamCore {
             // Avoid replaying already-emitted content after resize when no
             // stable lines were waiting in the queue and there was no mutable
             // tail to preserve.
+            self.emitted_stable_len = self.render.lines.len();
             self.enqueued_stable_len = self.render.lines.len();
             return;
         }
@@ -341,6 +340,7 @@ impl StreamCore {
 
         let had_pending_queue = self.state.queued_len() > 0;
         let had_live_tail = self.has_tail();
+        let previous_render_mode = self.render_mode;
         self.render_mode = render_mode;
         let source = self.state.collector.committed_source();
         if source.is_empty() {
@@ -348,15 +348,8 @@ impl StreamCore {
             return;
         }
 
-        self.render.recompute(
-            source,
-            self.width,
-            self.cwd.as_path(),
-            self.render_mode,
-            self.inline_visualization_context.as_ref(),
-        );
+        self.recompute_render(self.width, previous_render_mode);
         self.refresh_preview();
-        self.emitted_stable_len = self.emitted_stable_len.min(self.render.lines.len());
         if had_pending_queue
             && self.emitted_stable_len == self.render.lines.len()
             && self.emitted_stable_len > 0
@@ -365,10 +358,71 @@ impl StreamCore {
         }
         self.state.clear_queue();
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_live_tail {
+            self.emitted_stable_len = self.render.lines.len();
             self.enqueued_stable_len = self.render.lines.len();
             return;
         }
         self.rebuild_stable_queue_from_render();
+    }
+
+    /// Preserve an emitted source prefix when resizing changes earlier diagrams' heights.
+    fn recompute_render(
+        &mut self,
+        previous_width: Option<usize>,
+        previous_render_mode: HistoryRenderMode,
+    ) {
+        let previous_tail_start = self.active_tail_source_start(previous_render_mode);
+        let source = self.state.collector.committed_source();
+        self.render.recompute(
+            source,
+            self.width,
+            self.cwd.as_path(),
+            self.render_mode,
+            self.inline_visualization_context.as_ref(),
+        );
+        if let Some(start) = previous_tail_start.or(self.active_tail_source_start(self.render_mode))
+        {
+            let prefix_len = |width, mode| {
+                render_source(
+                    &source[..start],
+                    width,
+                    self.cwd.as_path(),
+                    mode,
+                    self.inline_visualization_context.as_ref(),
+                )
+                .len()
+            };
+            let previous_prefix_len = prefix_len(previous_width, previous_render_mode);
+            let prefix_len = prefix_len(self.width, self.render_mode);
+            if self.emitted_stable_len >= previous_prefix_len {
+                self.emitted_stable_len =
+                    prefix_len.saturating_add(self.emitted_stable_len - previous_prefix_len);
+            } else {
+                self.emitted_stable_len = self.emitted_stable_len.min(prefix_len);
+            }
+        }
+        self.emitted_stable_len = self.emitted_stable_len.min(self.render.lines.len());
+    }
+
+    fn active_tail_source_start(&self, render_mode: HistoryRenderMode) -> Option<usize> {
+        if render_mode == HistoryRenderMode::Raw {
+            return None;
+        }
+        let table_start = match self.holdback_scanner.state() {
+            TableHoldbackState::Confirmed { table_start }
+            | TableHoldbackState::PendingHeader {
+                header_start: table_start,
+            } => Some(table_start),
+            TableHoldbackState::None => None,
+        };
+        [
+            table_start,
+            self.render.mermaid_start,
+            self.render.pending_math_start,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Compute how many rendered lines should be in the stable region.
@@ -438,24 +492,16 @@ impl StreamCore {
         }
         let scan_start = Instant::now();
         let holdback_state = self.holdback_scanner.state();
-        let tail_budget = match holdback_state {
-            TableHoldbackState::Confirmed { table_start: start }
-            | TableHoldbackState::PendingHeader {
-                header_start: start,
-            } => self.tail_budget_from_source_start(start),
-            TableHoldbackState::None => 0,
-        };
+        let tail_budget = self
+            .active_tail_source_start(self.render_mode)
+            .map_or(0, |start| self.tail_budget_from_source_start(start));
         tracing::trace!(
             state = ?holdback_state,
             tail_budget,
             elapsed_us = scan_start.elapsed().as_micros(),
             "table holdback decision",
         );
-        let math_budget = self
-            .render
-            .pending_math_start
-            .map_or(0, |start| self.tail_budget_from_source_start(start));
-        tail_budget.max(math_budget)
+        tail_budget
     }
 
     /// Convert a raw-source boundary into the number of rendered tail lines.

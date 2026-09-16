@@ -143,6 +143,11 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
             .last_top_level_block_start
             .and_then(|boundary| markdown_source.strip_suffix(&normalized[boundary..]))
             .map(str::len);
+        rendered.mermaid_start = rendered.mermaid_start.map(|boundary| {
+            markdown_source
+                .strip_suffix(&normalized[boundary..])
+                .map_or(0, str::len)
+        });
     }
     rendered
 }

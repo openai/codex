@@ -1,0 +1,34 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+assertion_line: 88
+expression: "cases.join(\"\\n\\n\")"
+---
+dark
+Style::new().fg(Color::Rgb(102, 217, 239)) "┌──────┐" | Style::new().fg(Color::Rgb(98, 114, 164)) "  " | Style::new().fg(Color::Rgb(102, 217, 239)) "┌───────┐"
+Style::new().fg(Color::Rgb(102, 217, 239)) "│" | Style::new().fg(Color::Rgb(98, 114, 164)) " " | Style::new() "请求" | Style::new().fg(Color::Rgb(98, 114, 164)) " " | Style::new().fg(Color::Rgb(102, 217, 239)) "│" | Style::new().fg(Color::Rgb(98, 114, 164)) "  " | Style::new().fg(Color::Rgb(102, 217, 239)) "│" | Style::new().fg(Color::Rgb(98, 114, 164)) " " | Style::new() "Reply" | Style::new().fg(Color::Rgb(98, 114, 164)) " " | Style::new().fg(Color::Rgb(102, 217, 239)) "│"
+Style::new().fg(Color::Rgb(102, 217, 239)) "└┬─────┘" | Style::new().fg(Color::Rgb(98, 114, 164)) "  " | Style::new().fg(Color::Rgb(102, 217, 239)) "└┬──────┘"
+Style::new().fg(Color::Rgb(98, 114, 164)) " │         ▲"
+Style::new().fg(Color::Rgb(98, 114, 164)) " │         │"
+Style::new().fg(Color::Rgb(98, 114, 164)) " │         │"
+Style::new().fg(Color::Rgb(98, 114, 164)) " │         │"
+Style::new().fg(Color::Rgb(98, 114, 164)) " └─────────┘"
+
+light
+Style::new().fg(Color::Rgb(181, 137, 0)) "┌──────┐" | Style::new().fg(Color::Rgb(147, 161, 161)) "  " | Style::new().fg(Color::Rgb(181, 137, 0)) "┌───────┐"
+Style::new().fg(Color::Rgb(181, 137, 0)) "│" | Style::new().fg(Color::Rgb(147, 161, 161)) " " | Style::new() "请求" | Style::new().fg(Color::Rgb(147, 161, 161)) " " | Style::new().fg(Color::Rgb(181, 137, 0)) "│" | Style::new().fg(Color::Rgb(147, 161, 161)) "  " | Style::new().fg(Color::Rgb(181, 137, 0)) "│" | Style::new().fg(Color::Rgb(147, 161, 161)) " " | Style::new() "Reply" | Style::new().fg(Color::Rgb(147, 161, 161)) " " | Style::new().fg(Color::Rgb(181, 137, 0)) "│"
+Style::new().fg(Color::Rgb(181, 137, 0)) "└┬─────┘" | Style::new().fg(Color::Rgb(147, 161, 161)) "  " | Style::new().fg(Color::Rgb(181, 137, 0)) "└┬──────┘"
+Style::new().fg(Color::Rgb(147, 161, 161)) " │         ▲"
+Style::new().fg(Color::Rgb(147, 161, 161)) " │         │"
+Style::new().fg(Color::Rgb(147, 161, 161)) " │         │"
+Style::new().fg(Color::Rgb(147, 161, 161)) " │         │"
+Style::new().fg(Color::Rgb(147, 161, 161)) " └─────────┘"
+
+fallback
+Style::new().cyan() "┌──────┐" | Style::new().dim() "  " | Style::new().cyan() "┌───────┐"
+Style::new().cyan() "│" | Style::new().dim() " " | Style::new() "请求" | Style::new().dim() " " | Style::new().cyan() "│" | Style::new().dim() "  " | Style::new().cyan() "│" | Style::new().dim() " " | Style::new() "Reply" | Style::new().dim() " " | Style::new().cyan() "│"
+Style::new().cyan() "└┬─────┘" | Style::new().dim() "  " | Style::new().cyan() "└┬──────┘"
+Style::new().dim() " │         ▲"
+Style::new().dim() " │         │"
+Style::new().dim() " │         │"
+Style::new().dim() " │         │"
+Style::new().dim() " └─────────┘"

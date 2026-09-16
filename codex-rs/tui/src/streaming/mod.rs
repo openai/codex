@@ -24,6 +24,10 @@ mod prose_preview;
 mod render;
 mod table_holdback;
 
+#[cfg(test)]
+#[path = "mermaid_tests.rs"]
+mod mermaid_tests;
+
 struct QueuedLine {
     line: HyperlinkLine,
     enqueued_at: Instant,

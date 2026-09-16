@@ -1,0 +1,77 @@
+---
+source: tui/src/streaming/mermaid_tests.rs
+assertion_line: 78
+expression: "stages.join(\"\\n\\n---\\n\\n\")"
+---
+Before.
+
+
+---
+
+Before.
+
+flowchart LR
+A[Request] --> B[Reply]
+
+---
+
+Before.
+
+┌─────────┐  ┌───────┐
+│ Request │  │ Reply │
+└┬────────┘  └┬──────┘
+ │            ▲
+ │            │
+ │            │
+ │            │
+ └────────────┘
+
+---
+
+Before.
+
+┌─────────┐  ┌───────┐
+│ Request │  │ Reply │
+└┬────────┘  └┬──────┘
+ │            ▲
+ │            │
+ │            │
+ │            │
+ └────────────┘
+
+After.
+
+---
+
+Before.
+
+flowchart LR
+A[Request] --> B[Reply]
+
+After.
+
+---
+
+Before.
+
+```mermaid
+flowchart LR
+A[Request] --> B[Reply]
+```
+
+After.
+
+---
+
+Before.
+
+┌─────────┐  ┌───────┐
+│ Request │  │ Reply │
+└┬────────┘  └┬──────┘
+ │            ▲
+ │            │
+ │            │
+ │            │
+ └────────────┘
+
+After.
