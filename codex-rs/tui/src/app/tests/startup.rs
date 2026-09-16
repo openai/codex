@@ -1633,3 +1633,36 @@ async fn external_writer_startup_keeps_initial_prompt_as_draft() -> Result<()> {
     }));
     Ok(())
 }
+
+#[test]
+fn windows_sandbox_host_from_observed_environments() {
+    for (ids, expected) in [
+        (None, WindowsSandboxHost::Unknown),
+        (Some(vec![]), WindowsSandboxHost::Unknown),
+        (
+            Some(vec![codex_exec_server::LOCAL_ENVIRONMENT_ID]),
+            WindowsSandboxHost::Local,
+        ),
+        (Some(vec!["remote"]), WindowsSandboxHost::Remote),
+        (
+            Some(vec!["remote", codex_exec_server::LOCAL_ENVIRONMENT_ID]),
+            WindowsSandboxHost::Mixed,
+        ),
+    ] {
+        let environments = ids.map(|ids| {
+            ids.into_iter()
+                .map(|id| codex_app_server_protocol::ThreadEnvironment {
+                    environment_id: id.to_string(),
+                    cwd: codex_utils_absolute_path::AbsolutePathBuf::try_from(std::env::temp_dir())
+                        .unwrap()
+                        .into(),
+                    runtime_workspace_roots: Vec::new(),
+                })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            crate::windows_sandbox::host_from_environments(environments.as_deref()),
+            expected
+        );
+    }
+}

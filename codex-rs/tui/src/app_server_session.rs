@@ -2301,6 +2301,7 @@ async fn thread_session_state_from_thread_start_response(
     );
     thread_session_state_from_thread_response(
         &response.thread.id,
+        crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -2344,6 +2345,7 @@ async fn thread_session_state_from_thread_resume_response(
     };
     let mut session = thread_session_state_from_thread_response(
         &response.thread.id,
+        crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -2380,6 +2382,7 @@ async fn thread_session_state_from_thread_fork_response(
     );
     thread_session_state_from_thread_response(
         &response.thread.id,
+        crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
         response.thread.forked_from_id.clone(),
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -2431,6 +2434,7 @@ fn display_permission_profile_from_thread_response(
 )]
 async fn thread_session_state_from_thread_response(
     thread_id: &str,
+    windows_sandbox_host: crate::app::WindowsSandboxHost,
     forked_from_id: Option<String>,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
@@ -2461,6 +2465,7 @@ async fn thread_session_state_from_thread_response(
     );
     let (log_id, entry_count) = codex_message_history::history_metadata(&history_config).await;
     Ok(ThreadSessionState {
+        windows_sandbox_host,
         thread_id,
         forked_from_id,
         fork_parent_title: None,
@@ -4152,6 +4157,7 @@ mod tests {
 
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
+            crate::app::WindowsSandboxHost::Local,
             /*forked_from_id*/ None,
             Some("restore".to_string()),
             /*rollout_path*/ None,
@@ -4188,6 +4194,7 @@ mod tests {
 
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
+            crate::app::WindowsSandboxHost::Local,
             Some(forked_from_id.to_string()),
             Some("restore".to_string()),
             /*rollout_path*/ None,

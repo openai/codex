@@ -16,6 +16,7 @@ pub(crate) enum WindowsSandboxHost {
     Local,
     Mixed,
     Remote,
+    Unknown,
 }
 
 #[derive(Default)]

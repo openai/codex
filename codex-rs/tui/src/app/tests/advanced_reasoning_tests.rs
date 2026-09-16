@@ -21,6 +21,7 @@ async fn fork_current_session_preserves_conversation_ultra() -> Result<()> {
         .expect("create source rollout"),
     )?;
     app.chat_widget.handle_thread_session(ThreadSessionState {
+        windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         model: "gpt-5.4".to_string(),
         reasoning_effort: Some(ReasoningEffortConfig::Ultra),
         ..test_thread_session(source_thread_id, test_path_buf("/tmp/project"))
@@ -53,11 +54,13 @@ async fn switching_from_ultra_thread_restores_configured_plan_effort() {
     app.chat_widget
         .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let ultra_session = ThreadSessionState {
+        windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         model: "gpt-5.4".to_string(),
         reasoning_effort: Some(ReasoningEffortConfig::Ultra),
         ..test_thread_session(ThreadId::new(), test_path_buf("/tmp/ultra"))
     };
     let normal_session = ThreadSessionState {
+        windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         model: "gpt-5.4".to_string(),
         reasoning_effort: Some(ReasoningEffortConfig::Medium),
         ..test_thread_session(ThreadId::new(), test_path_buf("/tmp/normal"))
