@@ -59,8 +59,11 @@ impl<T: HttpTransport> ModelsClient<T> {
         let ModelsResponse { models } =
             serde_json::from_slice::<ModelsResponse>(&body).map_err(|e| {
                 ApiError::Stream(format!(
-                    "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&body)
+                    "failed to decode models response: {:?} at line {} column {} (body: {} bytes)",
+                    e.classify(),
+                    e.line(),
+                    e.column(),
+                    body.len()
                 ))
             })?;
 

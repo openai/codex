@@ -15,6 +15,8 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use http::HeaderMap;
 use http::Method;
+use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::sync::Arc;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -43,6 +45,55 @@ fn provider(base_url: &str) -> Provider {
             retry_transport: true,
         },
         stream_idle_timeout: std::time::Duration::from_secs(1),
+    }
+}
+
+#[tokio::test]
+async fn invalid_models_response_reports_bounded_decode_metadata() {
+    let server = MockServer::start().await;
+    for (body, category, column_offset) in [
+        (
+            json!({ "data": [{ "id": "private-model" }] }).to_string(),
+            "Data",
+            0,
+        ),
+        (
+            json!({ "models": "private-value".repeat(4096) }).to_string(),
+            "Data",
+            1,
+        ),
+        (r#"{"models":]}"#.to_string(), "Syntax", 1),
+        (r#"{"models":["#.to_string(), "Eof", 0),
+    ] {
+        let response = Mock::given(method("GET"))
+            .and(path("/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(&body))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        let transport = ReqwestTransport::from_http_client(
+            HttpClientBuilder::new()
+                .build_direct()
+                .expect("test HTTP client should build"),
+        );
+        let provider = provider(&server.uri());
+        let request_url = ModelsClient::<ReqwestTransport>::request_url(&provider, "0.1.0");
+        let client = ModelsClient::new(transport, provider, Arc::new(DummyAuth));
+
+        let error = client
+            .list_models(request_url, HeaderMap::new())
+            .await
+            .expect_err("invalid catalog should fail to decode");
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "stream error: failed to decode models response: {category} at line 1 column {} (body: {} bytes)",
+                body.len() - column_offset,
+                body.len()
+            )
+        );
+        drop(response);
     }
 }
 

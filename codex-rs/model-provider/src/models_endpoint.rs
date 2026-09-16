@@ -122,7 +122,7 @@ impl OpenAiModelsEndpoint {
                 .map_err(map_api_error)
         })
         .await
-        .map_err(|_| CodexErr::Timeout)??;
+        .map_err(|_| CodexErr::RequestTimeout)??;
         Ok(ModelsEndpointResponse {
             models,
             etag,
@@ -300,6 +300,10 @@ impl RequestTelemetry for ModelsRequestTelemetry {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "models_endpoint_timeout_tests.rs"]
+mod timeout_tests;
 
 #[cfg(test)]
 mod tests {
