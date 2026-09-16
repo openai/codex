@@ -1,3 +1,4 @@
+use codex_history::CompactionCheckpoint;
 use codex_history::RetainedContext;
 
 use codex_protocol::models::ResponseItem;
@@ -29,10 +30,12 @@ pub trait ConversationHistorySnapshot: Send + Sync {
         self.retained_context().is_some()
     }
 
-    /// Producer compatibility recorded on the latest opaque checkpoint. Missing provenance
-    /// must not be inferred from the currently selected model, including after resume.
-    fn latest_compaction_model_hash(&self) -> Option<&str> {
-        None
+    /// Latest opaque checkpoint, including unusable items, with its recorded producer.
+    /// Hosts without provenance leave the producer unknown rather than using the live model.
+    fn latest_compaction(&self) -> Option<CompactionCheckpoint<'_>> {
+        self.items()
+            .filter_map(|item| CompactionCheckpoint::from_item(item, /*model_hash*/ None))
+            .last()
     }
 
     /// Original review evidence retained across parent compaction, in conversation order.

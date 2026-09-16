@@ -3,6 +3,8 @@
 use super::super::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use super::*;
 use anyhow::Result;
+use codex_history::CompactionCheckpoint;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use pretty_assertions::assert_eq;
@@ -21,14 +23,14 @@ fn encrypted_parent_compaction_preserves_the_latest_valid_item() {
     };
 
     assert_eq!(
-        encrypted_parent_compaction(
+        encrypted_checkpoint(
             [&older, &latest].into_iter(),
             DEFAULT_PARENT_COMPACTION_TOKENS,
         ),
         Ok(Some(latest.clone()))
     );
     assert_eq!(
-        encrypted_parent_compaction(
+        encrypted_checkpoint(
             [&latest, &older].into_iter(),
             DEFAULT_PARENT_COMPACTION_TOKENS,
         ),
@@ -73,7 +75,7 @@ fn encrypted_parent_compaction_rejects_invalid_latest_item() {
 
     for latest in &invalid {
         assert_eq!(
-            encrypted_parent_compaction(
+            encrypted_checkpoint(
                 [&older, latest].into_iter(),
                 DEFAULT_PARENT_COMPACTION_TOKENS,
             ),
@@ -115,7 +117,7 @@ fn encrypted_parent_compaction_rejects_oversized_latest_item() -> Result<()> {
         *encrypted_content = "a".repeat(max_compaction_bytes - envelope_bytes);
         assert_eq!(serde_json::to_vec(&*item)?.len(), max_compaction_bytes);
         assert_eq!(
-            encrypted_parent_compaction(std::iter::once(&*item), DEFAULT_PARENT_COMPACTION_TOKENS,),
+            encrypted_checkpoint(std::iter::once(&*item), DEFAULT_PARENT_COMPACTION_TOKENS,),
             Ok(Some(item.clone()))
         );
 
@@ -135,7 +137,7 @@ fn encrypted_parent_compaction_rejects_oversized_latest_item() -> Result<()> {
             max_compaction_bytes + 1
         );
         assert_eq!(
-            encrypted_parent_compaction(
+            encrypted_checkpoint(
                 [&*item, &oversized].into_iter(),
                 DEFAULT_PARENT_COMPACTION_TOKENS,
             ),
@@ -156,7 +158,7 @@ fn encrypted_parent_compaction_rejects_oversized_latest_item() -> Result<()> {
     };
     assert!(serde_json::to_vec(&oversized_metadata)?.len() > max_compaction_bytes);
     assert_eq!(
-        encrypted_parent_compaction(
+        encrypted_checkpoint(
             [&bounded[0], &oversized_metadata].into_iter(),
             DEFAULT_PARENT_COMPACTION_TOKENS,
         ),
@@ -165,4 +167,18 @@ fn encrypted_parent_compaction_rejects_oversized_latest_item() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn encrypted_checkpoint<'a>(
+    items: impl Iterator<Item = &'a ResponseItem>,
+    max_parent_compaction_tokens: usize,
+) -> Result<Option<ResponseItem>, ParentCompactionError> {
+    let items = items
+        .cloned()
+        .map(ResponseItemEnvelope::from)
+        .collect::<Vec<_>>();
+    encrypted_parent_compaction(
+        CompactionCheckpoint::latest(&items),
+        max_parent_compaction_tokens,
+    )
 }

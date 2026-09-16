@@ -125,18 +125,8 @@ pub(crate) enum HistoryReplacement {
 }
 
 impl ConversationHistorySnapshot for SharedConversationHistory {
-    fn latest_compaction_model_hash(&self) -> Option<&str> {
-        self.items
-            .iter()
-            .rev()
-            .find(|envelope| {
-                matches!(
-                    envelope.item,
-                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
-                )
-            })
-            .and_then(|envelope| envelope.metadata.as_ref())
-            .and_then(|metadata| metadata.compaction_model_hash.as_deref())
+    fn latest_compaction(&self) -> Option<codex_history::CompactionCheckpoint<'_>> {
+        codex_history::CompactionCheckpoint::latest(&self.items)
     }
 
     fn retained_context(&self) -> Option<&RetainedContext> {

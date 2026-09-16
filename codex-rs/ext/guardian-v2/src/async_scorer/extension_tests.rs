@@ -443,8 +443,15 @@ impl ConversationHistorySnapshot for TestRetainedHistory {
         self.retained_context.as_ref()
     }
 
-    fn latest_compaction_model_hash(&self) -> Option<&str> {
-        self.compaction_model_hash.as_deref()
+    fn latest_compaction(&self) -> Option<codex_history::CompactionCheckpoint<'_>> {
+        self.items()
+            .filter_map(|item| {
+                codex_history::CompactionCheckpoint::from_item(
+                    item,
+                    self.compaction_model_hash.as_deref(),
+                )
+            })
+            .last()
     }
     fn history_version(&self) -> u64 {
         self.current.history_version()

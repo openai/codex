@@ -218,7 +218,9 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
     assert_eq!(
         (
             GuardianContextMode::from_history(after.as_ref()),
-            after.latest_compaction_model_hash()
+            after
+                .latest_compaction()
+                .and_then(|checkpoint| checkpoint.model_hash)
         ),
         (GuardianContextMode::Legacy, Some("previous-model")),
     );
@@ -295,7 +297,9 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
     assert_eq!(
         (
             GuardianContextMode::from_history(history.as_ref()),
-            history.latest_compaction_model_hash(),
+            history
+                .latest_compaction()
+                .and_then(|checkpoint| checkpoint.model_hash),
             answers,
         ),
         (

@@ -205,11 +205,14 @@ fn conversation_history_snapshot_binds_review_mode_and_hash_to_the_latest_item(
     assert_eq!(
         history
             .conversation_history_snapshot()
-            .latest_compaction_model_hash(),
+            .latest_compaction()
+            .and_then(|checkpoint| checkpoint.model_hash),
         latest_hash
     );
     assert_eq!(
-        snapshot.latest_compaction_model_hash(),
+        snapshot
+            .latest_compaction()
+            .and_then(|checkpoint| checkpoint.model_hash),
         Some("producer-hash")
     );
     assert_eq!(
@@ -230,7 +233,8 @@ fn conversation_history_snapshot_binds_review_mode_and_hash_to_the_latest_item(
     assert_eq!(
         history
             .conversation_history_snapshot()
-            .latest_compaction_model_hash(),
+            .latest_compaction()
+            .and_then(|checkpoint| checkpoint.model_hash),
         Some("producer-hash")
     );
 }
@@ -274,7 +278,12 @@ fn checkpoint_retained_evidence_survives_legacy_review(saved_context: serde_json
             expected_mode
         );
         assert_eq!(snapshot.retained_context(), Some(&retained));
-        assert_eq!(snapshot.latest_compaction_model_hash(), None);
+        assert_eq!(
+            snapshot
+                .latest_compaction()
+                .and_then(|checkpoint| checkpoint.model_hash),
+            None
+        );
     }
 }
 

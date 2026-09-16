@@ -1,5 +1,8 @@
 //! Model-history and persisted-rollout domain types.
 
+mod compaction_checkpoint;
+pub use compaction_checkpoint::CompactionCheckpoint;
+
 use std::borrow::Borrow;
 use std::ops::Deref;
 use std::ops::DerefMut;
