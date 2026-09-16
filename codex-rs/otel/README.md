@@ -144,6 +144,26 @@ metrics.counter("codex.turns", 1, &[("model", "gpt-5.1")])?;
 metrics.shutdown()?; // flushes in-memory exporter
 ```
 
+## WebSocket continuation
+
+`codex.websocket.continuation` counts `response.create` send attempts, including
+failed sends. It carries existing session tags plus `mode` (`incremental`/`full`),
+`phase` (`warmup`/`generation`), and `reason`:
+
+| Reason | Meaning |
+| --- | --- |
+| `incremental` | Send the previous response ID and new input. |
+| `no_previous_request` | First request from a fresh client. |
+| `restored_history` | First request after loading resumed or forked history. |
+| `connection_closed` | Full input after observing the previous socket closed. |
+| `other` | Full input for another reason, such as changed input/settings or unavailable response state. |
+
+Per-socket backend metrics label a resend after reconnect as `initial`; this client
+metric retains the first reset reason through reconnect failures and turn boundaries.
+Include warmups (`generate=false`), which can send full input before an incremental
+generation. Closes may be intentional; restored history includes manual resumes/forks.
+This measures client send attempts, not disconnect rates or engine cache reuse.
+
 ## Trace context
 
 Trace propagation helpers remain separate from the session event emitter:

@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/tests/approvals_reviewer_error_tests.rs
-assertion_line: 34
+assertion_line: 36
 expression: rendered
 ---
-■ Failed to save approvals reviewer: config/batchWrite failed in TUI: config/batchWrite failed: failed to load configuration: <CODEX_HOME>/config.toml:1:24: unclosed array, expected `]` (code -32603)
+■ Failed to save approvals reviewer: config/batchWrite failed in TUI: config/batchWrite failed: failed to load configuration: <CODEX_HOME>/config.toml:1:23: unclosed array, expected `]` (code -32603)

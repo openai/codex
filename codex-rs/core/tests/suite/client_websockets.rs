@@ -697,6 +697,14 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
         Some("sequential_cutoff")
     );
 
+    assert_continuation_metrics(
+        &harness.session_telemetry,
+        &[
+            (["full", "no_previous_request", "warmup"], 1),
+            (["incremental", "incremental", "generation"], 1),
+        ],
+    );
+
     server.shutdown().await;
 }
 
@@ -999,6 +1007,14 @@ async fn responses_websocket_reconnects_after_account_switch() {
                 ],
             ],
             "new_turn_on_switch={new_turn_on_switch}",
+        );
+        assert_continuation_metrics(
+            &harness.session_telemetry,
+            &[
+                (["full", "other", "generation"], 1),
+                (["full", "no_previous_request", "generation"], 1),
+                (["incremental", "incremental", "generation"], 3),
+            ],
         );
         server.shutdown().await;
     }
@@ -2063,6 +2079,13 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
         serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental items")
     );
 
+    assert_continuation_metrics(
+        &harness.session_telemetry,
+        &[
+            (["full", "no_previous_request", "generation"], 1),
+            (["incremental", "incremental", "generation"], 1),
+        ],
+    );
     server.shutdown().await;
 }
 
@@ -2329,6 +2352,13 @@ async fn responses_websocket_creates_on_non_prefix() {
         serde_json::to_value(&prompt_two.input).unwrap()
     );
 
+    assert_continuation_metrics(
+        &harness.session_telemetry,
+        &[
+            (["full", "other", "generation"], 1),
+            (["full", "no_previous_request", "generation"], 1),
+        ],
+    );
     server.shutdown().await;
 }
 
@@ -2365,6 +2395,13 @@ async fn responses_websocket_creates_when_non_input_request_fields_change() {
         serde_json::to_value(&prompt_two.input).expect("serialize full input")
     );
 
+    assert_continuation_metrics(
+        &harness.session_telemetry,
+        &[
+            (["full", "no_previous_request", "generation"], 1),
+            (["full", "other", "generation"], 1),
+        ],
+    );
     server.shutdown().await;
 }
 
@@ -2534,6 +2571,15 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     assert_eq!(
         third["input"],
         serde_json::to_value(&prompt_three.input).unwrap()
+    );
+
+    assert_continuation_metrics(
+        &harness.session_telemetry,
+        &[
+            (["full", "connection_closed", "generation"], 1),
+            (["full", "no_previous_request", "generation"], 1),
+            (["incremental", "incremental", "generation"], 1),
+        ],
     );
 
     server.shutdown().await;
@@ -2851,6 +2897,91 @@ async fn websocket_harness_with_provider_options_and_auth(
         summary,
         session_telemetry,
     }
+}
+
+#[test_case::test_case(false; "resume")]
+#[test_case::test_case(true; "fork")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_restored_history_metric(fork: bool) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let exporter = InMemoryMetricExporter::default();
+    let config =
+        MetricsConfig::in_memory("test", "codex-core", "test", exporter).with_runtime_reader();
+    let metrics = MetricsClient::new(config)?;
+    let warmup = vec![ev_response_created("warmup"), ev_completed("warmup")];
+    let turn = vec![ev_response_created("turn"), ev_completed("turn")];
+    let server = start_websocket_server(vec![vec![warmup, turn]; 2]).await;
+    let mut initial = test_codex().build_with_websocket_server(&server).await?;
+    initial.submit_text_turn("original history marker").await?;
+    let rollout_path = initial.codex.rollout_path().expect("persisted history");
+    initial.codex.shutdown_and_wait().await?;
+
+    let manager = &initial.thread_manager;
+    let mut options = codex_core::StartThreadOptions::new(initial.config.clone());
+    options.thread_extension_init.insert(metrics);
+    let restored = if fork {
+        manager
+            .fork_thread(codex_core::ForkSnapshot::Interrupted, options, rollout_path)
+            .await?
+    } else {
+        options.initial_history =
+            codex_rollout::RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        manager.start_thread(options).await?
+    };
+    initial.codex = restored.thread;
+    initial.submit_text_turn("continue").await?;
+    assert_continuation_metrics(
+        &initial.codex.session_telemetry(),
+        &[
+            (["full", "restored_history", "warmup"], 1),
+            (["incremental", "incremental", "generation"], 1),
+        ],
+    );
+    assert!(server.connections()[1].iter().any(|request| {
+        request.body_json()["input"]
+            .to_string()
+            .contains("original history marker")
+    }));
+    initial.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
+fn assert_continuation_metrics(telemetry: &SessionTelemetry, expected: &[([&str; 3], u64)]) {
+    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+    use opentelemetry_sdk::metrics::data::MetricData;
+
+    let snapshot = telemetry.snapshot_metrics().expect("metrics snapshot");
+    let metric = snapshot
+        .scope_metrics()
+        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+        .find(|metric| metric.name() == codex_otel::WEBSOCKET_CONTINUATION_COUNT_METRIC)
+        .expect("continuation counter");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
+        panic!("expected counter");
+    };
+    let mut expected: Vec<_> = expected
+        .iter()
+        .map(|(tags, count)| (tags.map(str::to_owned), *count))
+        .collect();
+    let mut actual: Vec<_> = sum
+        .data_points()
+        .map(|point| {
+            let tags = ["mode", "reason", "phase"].map(|key| {
+                point
+                    .attributes()
+                    .find(|attr| attr.key.as_str() == key)
+                    .unwrap()
+                    .value
+                    .to_string()
+            });
+            (tags, point.value())
+        })
+        .collect();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual, expected);
 }
 
 async fn stream_until_complete(

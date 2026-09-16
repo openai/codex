@@ -645,13 +645,16 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
             })
             .unwrap();
         session.websocket_session.last_response_rx = Some(receiver);
-        let (incremental, from_warmup) = session.prepare_websocket_request(&current);
+        let continuation = session.prepare_websocket_request(&current);
         assert_eq!(
-            incremental,
-            expect_incremental.then_some(("previous-response".to_string(), vec![follow_up])),
+            continuation.map(|continuation| (
+                continuation.response_id,
+                continuation.items,
+                continuation.from_untraced_warmup,
+            )),
+            expect_incremental.then_some(("previous-response".to_string(), vec![follow_up], false)),
             "{scenario}",
         );
-        assert!(!from_warmup);
     }
     Ok(())
 }
@@ -807,6 +810,43 @@ fn test_session_telemetry() -> SessionTelemetry {
         "test-terminal".to_string(),
         SessionSource::Cli,
     )
+}
+
+#[test]
+fn websocket_continuation_reset_reason_survives_failed_reconnect_and_turn_boundary() {
+    for (reason, later_reason) in [
+        ("connection_closed", "other"),
+        ("other", "connection_closed"),
+    ] {
+        let client = test_model_client(SessionSource::Cli);
+        let request = client
+            .build_responses_request(
+                &Prompt::default(),
+                &test_model_info(),
+                /*effort*/ None,
+                codex_protocol::config_types::ReasoningSummary::None,
+                /*service_tier*/ None,
+                &test_responses_metadata_for_client(
+                    &client,
+                    /*turn_id*/ None,
+                    format!("{}:0", client.state.thread_id),
+                    /*parent_thread_id*/ None,
+                    TestCodexResponsesRequestKind::Turn,
+                ),
+            )
+            .expect("build continuation request");
+        let mut session = client.new_session();
+        session.websocket_session.last_request = Some(request);
+        session.websocket_session.reset(Some(reason));
+        session.websocket_session.reset(/*reason*/ None);
+        session.websocket_session.reset(Some(later_reason));
+        drop(session);
+        let session = client.new_session();
+        assert_eq!(
+            session.websocket_session.continuation_reset_reason,
+            Some(reason)
+        );
+    }
 }
 
 fn spawned_session_source() -> SessionSource {

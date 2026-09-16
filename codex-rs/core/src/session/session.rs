@@ -1244,6 +1244,9 @@ impl Session {
             )
             .with_auth_env(auth_env_telemetry.to_otel_metadata())
             .with_tool_result_log_config(config.otel.tool_result);
+            if let Some(metrics) = thread_extension_data.get::<codex_otel::MetricsClient>() {
+                session_telemetry = session_telemetry.with_metrics(metrics.as_ref().clone());
+            }
             if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
                 session_telemetry = session_telemetry.with_metrics_service_name(service_name);
             }
@@ -1683,6 +1686,10 @@ impl Session {
                     config.http_client_factory(),
                     config.workspace_routing_context(),
                 )
+                .with_restored_history(matches!(
+                    &initial_history,
+                    InitialHistory::Resumed(_) | InitialHistory::Forked(_)
+                ))
                 .with_session_context(
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
