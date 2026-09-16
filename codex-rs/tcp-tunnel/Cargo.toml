@@ -1,0 +1,30 @@
+[package]
+name = "codex-tcp-tunnel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+h3 = { git = "https://github.com/hyperium/h3", rev = "e07e69412876f7e26f026bd75a48b2704d8c8283" }
+h3-quinn = { git = "https://github.com/hyperium/h3", rev = "e07e69412876f7e26f026bd75a48b2704d8c8283" }
+http = { workspace = true }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rand = { workspace = true }
+rustls = { workspace = true, features = ["ring", "std"] }
+rustls-native-certs = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+url = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+rcgen = { workspace = true }
+
+[lints]
+workspace = true

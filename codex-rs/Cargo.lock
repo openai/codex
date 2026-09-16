@@ -2628,6 +2628,7 @@ dependencies = [
  "codex-skills-extension",
  "codex-state",
  "codex-stdio-to-uds",
+ "codex-tcp-tunnel",
  "codex-terminal-detection",
  "codex-thread-store",
  "codex-tui",
@@ -4632,6 +4633,27 @@ dependencies = [
  "pretty_assertions",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-tcp-tunnel"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "h3",
+ "h3-quinn",
+ "http 1.4.0",
+ "pretty_assertions",
+ "quinn",
+ "rand 0.9.3",
+ "rcgen",
+ "rustls",
+ "rustls-native-certs",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -8469,6 +8491,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "h3"
+version = "0.0.8"
+source = "git+https://github.com/hyperium/h3?rev=e07e69412876f7e26f026bd75a48b2704d8c8283#e07e69412876f7e26f026bd75a48b2704d8c8283"
+dependencies = [
+ "bytes",
+ "fastrand",
+ "futures-util",
+ "http 1.4.0",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "h3-quinn"
+version = "0.0.10"
+source = "git+https://github.com/hyperium/h3?rev=e07e69412876f7e26f026bd75a48b2704d8c8283#e07e69412876f7e26f026bd75a48b2704d8c8283"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "quinn",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12045,6 +12093,7 @@ checksum = "b9e20a958963c291dc322d98411f541009df2ced7b5a4f2bd52337638cfccf20"
 dependencies = [
  "bytes",
  "cfg_aliases 0.2.1",
+ "futures-io",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp 0.5.14",

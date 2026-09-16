@@ -61,6 +61,7 @@ codex-models-manager = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
+codex-tcp-tunnel = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
