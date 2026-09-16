@@ -3,6 +3,7 @@
 use super::ConfigManager;
 use super::load_setup_config;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -32,7 +33,10 @@ async fn explicit_cwd_remains_the_setup_workspace() -> anyhow::Result<()> {
 
     assert_eq!(
         (command_cwd, config.effective_workspace_roots()),
-        (project.path().to_path_buf(), vec![expected]),
+        (
+            project.path().to_path_buf(),
+            vec![PathUri::from_abs_path(&expected)],
+        ),
     );
     Ok(())
 }

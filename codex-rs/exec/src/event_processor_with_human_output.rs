@@ -446,11 +446,7 @@ fn config_summary_entries(
             summarize_permission_profile(
                 &permission_profile,
                 &PathUri::from_abs_path(&config.cwd),
-                &config
-                    .effective_workspace_roots()
-                    .iter()
-                    .map(PathUri::from_abs_path)
-                    .collect::<Vec<_>>(),
+                &config.effective_workspace_roots(),
             ),
         ),
     ];

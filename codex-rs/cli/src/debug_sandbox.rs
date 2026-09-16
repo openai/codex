@@ -254,9 +254,6 @@ async fn run_command_under_sandbox(
     // remaining cwd-dependent policy resolution. `:workspace_roots` entries in
     // the effective profile have already been materialized from config roots.
     let sandbox_policy_cwd = cwd.clone();
-    #[cfg(target_os = "windows")]
-    let workspace_roots = config.effective_workspace_roots();
-
     let env = create_env(
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
@@ -323,6 +320,12 @@ async fn run_command_under_sandbox(
         {
             if config.permissions.windows_sandbox_type != codex_sandboxing::SandboxType::WindowsMxc
             {
+                let workspace_roots = config
+                    .effective_workspace_roots()
+                    .iter()
+                    .map(codex_utils_path_uri::PathUri::to_abs_path)
+                    .collect::<std::io::Result<Vec<_>>>()
+                    .context("invalid Windows sandbox workspace roots")?;
                 run_command_under_windows_session(
                     &config,
                     &permission_profile,

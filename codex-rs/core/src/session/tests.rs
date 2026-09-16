@@ -5606,7 +5606,7 @@ async fn permission_profile_updates_apply_to_next_turn_environment() {
         let updates = SessionSettingsUpdate {
             permission_profile: Some(PermissionProfile::read_only()),
             active_permission_profile: Some(active_profile.clone()),
-            profile_workspace_roots: Some(vec![profile_root.clone()]),
+            profile_workspace_roots: Some(vec![profile_root.clone().into()]),
             ..Default::default()
         };
 
@@ -5636,7 +5636,7 @@ async fn permission_profile_updates_apply_to_next_turn_environment() {
             PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 active_profile,
-                vec![profile_root],
+                vec![profile_root.into()],
             );
 
         assert_eq!(next_environment.config(), &expected_environment_config);

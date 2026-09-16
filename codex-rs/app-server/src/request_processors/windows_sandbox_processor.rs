@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(target_os = "windows")]
 use anyhow::Context as _;
+use codex_utils_path_uri::PathUri;
 
 #[derive(Clone)]
 pub(crate) struct WindowsSandboxRequestProcessor {
@@ -113,6 +114,19 @@ impl WindowsSandboxRequestProcessor {
             params.mode,
         )?;
 
+        // Provisioning installs native Windows filesystem permissions. Validate
+        // this boundary before acknowledging that setup has started.
+        let workspace_roots = config
+            .effective_workspace_roots()
+            .iter()
+            .map(PathUri::to_abs_path)
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|err| {
+                invalid_request(format!(
+                    "workspace roots are not native to this host: {err}"
+                ))
+            })?;
+
         self.outgoing
             .send_response(
                 request_id.clone(),
@@ -127,7 +141,7 @@ impl WindowsSandboxRequestProcessor {
             let setup_request = WindowsSandboxSetupRequest {
                 mode: setup_mode,
                 permission_profile: config.permissions.effective_permission_profile(),
-                workspace_roots: config.effective_workspace_roots(),
+                workspace_roots,
                 command_cwd,
                 env_map: std::env::vars().collect(),
                 codex_home: config.codex_home.to_path_buf(),

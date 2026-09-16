@@ -114,6 +114,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::PermissionProfileSnapshot;
+use codex_protocol::models::ProfileWorkspaceRoot;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelsResponse;
@@ -442,7 +443,7 @@ impl Permissions {
         &self.workspace_roots
     }
 
-    pub fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+    pub fn profile_workspace_roots(&self) -> &[ProfileWorkspaceRoot] {
         self.permission_profile_state.profile_workspace_roots()
     }
 
@@ -1604,10 +1605,22 @@ impl Config {
         Ok(())
     }
 
-    pub fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
-        let mut workspace_roots = self.workspace_roots.clone();
-        workspace_roots.extend(self.permissions.profile_workspace_roots().iter().cloned());
-        dedupe_absolute_paths(&mut workspace_roots);
+    /// Combine runtime and profile roots without interpreting them on the current host.
+    pub fn effective_workspace_roots(&self) -> Vec<PathUri> {
+        let mut workspace_roots = self
+            .workspace_roots
+            .iter()
+            .map(PathUri::from_abs_path)
+            .collect::<Vec<_>>();
+        workspace_roots.extend(
+            self.permissions
+                .profile_workspace_roots()
+                .iter()
+                .map(|root| root.as_uri().clone()),
+        );
+        // Preserve spelling changes even when Windows path comparison folds case.
+        let mut seen = HashSet::new();
+        workspace_roots.retain(|root| seen.insert(root.to_string()));
         workspace_roots
     }
 
@@ -3540,10 +3553,6 @@ impl Config {
                 &mut startup_warnings,
             )?;
             let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-            let configured_workspace_roots = configured_workspace_roots
-                .iter()
-                .map(PathUri::to_abs_path)
-                .collect::<std::io::Result<Vec<_>>>()?;
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
                 && cfg.sandbox_workspace_write.is_some()

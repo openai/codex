@@ -3,7 +3,8 @@ use codex_config::ConstraintResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_protocol::models::ProfileWorkspaceRoot;
+use codex_utils_path_uri::PathUri;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PermissionProfileState {
@@ -22,7 +23,7 @@ impl PermissionProfileState {
     pub(crate) fn from_constrained_active_profile(
         constrained_permission_profile: Constrained<PermissionProfile>,
         active_permission_profile: Option<ActivePermissionProfile>,
-        profile_workspace_roots: Vec<AbsolutePathBuf>,
+        profile_workspace_roots: Vec<PathUri>,
     ) -> ConstraintResult<Self> {
         let permission_profile = constrained_permission_profile.get().clone();
         let snapshot = match active_permission_profile {
@@ -30,7 +31,10 @@ impl PermissionProfileState {
                 PermissionProfileSnapshot::active_with_profile_workspace_roots(
                     permission_profile,
                     active_permission_profile,
-                    profile_workspace_roots,
+                    profile_workspace_roots
+                        .into_iter()
+                        .map(ProfileWorkspaceRoot::from)
+                        .collect(),
                 )
             }
             None => PermissionProfileSnapshot::legacy(permission_profile),
@@ -60,7 +64,7 @@ impl PermissionProfileState {
         self.permission_profile.get().active_permission_profile()
     }
 
-    pub(crate) fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+    pub(crate) fn profile_workspace_roots(&self) -> &[ProfileWorkspaceRoot] {
         self.permission_profile.get().profile_workspace_roots()
     }
 

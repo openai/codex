@@ -506,7 +506,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
     let owner_permission_profile = PermissionProfileSnapshot::active_with_profile_workspace_roots(
         PermissionProfile::read_only(),
         owner_active_profile.clone(),
-        vec![owner_profile_workspace_root.clone()],
+        vec![owner_profile_workspace_root.clone().into()],
     );
 
     let (shell, command) = match test_target_os() {
@@ -635,7 +635,7 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
     );
     assert_eq!(
         snapshot.profile_workspace_roots,
-        vec![owner_profile_workspace_root.clone()]
+        vec![owner_profile_workspace_root.clone().into()]
     );
     assert_eq!(
         persisted_settings,
@@ -702,6 +702,104 @@ async fn environment_permissions_follow_configuration_ownership() -> Result<()> 
         )
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn executor_profile_roots_survive_settings_restore_and_turn_recording() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let runtime_roots = test.codex.config_snapshot().await.workspace_roots;
+    // Include a foreign convention on every host, plus case-distinct Windows roots.
+    let roots = [
+        "file:///workspace/profile",
+        "file:///C:/Work/Profile",
+        "file:///C:/work/profile",
+        "file://server/share/profile",
+    ]
+    .map(|root| PathUri::parse(root).unwrap());
+    let profile = PermissionProfile::workspace_write_with_path_uris(
+        &roots,
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let expected_profile = profile.clone().materialize_project_roots_with_path_uris(
+        &test.executor_environment().selection().workspace_roots,
+    );
+    let profile_roots = roots.into_iter().map(Into::into).collect::<Vec<_>>();
+    let active_profile = ActivePermissionProfile::new("executor");
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            permission_profile: Some(profile.clone()),
+            active_permission_profile: Some(active_profile.clone()),
+            profile_workspace_roots: Some(profile_roots.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let saved = test.codex.restorable_thread_settings().await;
+    assert_eq!(saved.profile_workspace_roots, Some(profile_roots.clone()));
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            permission_profile: Some(profile),
+            profile_workspace_roots: Some(Vec::new()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert!(
+        test.codex
+            .config_snapshot()
+            .await
+            .profile_workspace_roots
+            .is_empty()
+    );
+    test.codex.restore_thread_settings(saved).await?;
+    let snapshot = test.codex.config_snapshot().await;
+    assert_eq!(
+        (snapshot.profile_workspace_roots, snapshot.workspace_roots),
+        (profile_roots, runtime_roots)
+    );
+
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    test.submit_text_turn("record the executor profile").await?;
+    response_mock.single_request();
+    test.codex.flush_rollout().await?;
+    let context = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .find_map(|item| match item {
+            RolloutItem::TurnContext(context) => Some(context),
+            _ => None,
+        })
+        .context("recorded turn context")?;
+    // The rollout retains compiled permissions, not the unprojectable root list.
+    assert_eq!(
+        (
+            context.permission_profile,
+            context.active_permission_profile,
+            context.workspace_roots
+        ),
+        (Some(expected_profile), Some(active_profile), None)
+    );
     Ok(())
 }
 
@@ -2322,7 +2420,7 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
             permission_profile: PermissionProfileSnapshot::active_with_profile_workspace_roots(
                 PermissionProfile::read_only(),
                 owner_active_profile.clone(),
-                vec![owner_profile_workspace_root.clone()],
+                vec![owner_profile_workspace_root.clone().into()],
             ),
             shell_environment_policy: Default::default(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
@@ -2386,7 +2484,7 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
         (
             PermissionProfile::read_only(),
             Some(owner_active_profile),
-            vec![owner_profile_workspace_root],
+            vec![owner_profile_workspace_root.into()],
         )
     );
     assert!(

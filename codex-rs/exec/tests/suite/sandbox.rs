@@ -4,6 +4,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
+use codex_utils_path_uri::PathUri;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
@@ -50,7 +51,7 @@ pub(super) async fn spawn_command_under_sandbox(
         },
         permission_profile,
         sandbox_cwd,
-        std::slice::from_ref(sandbox_cwd),
+        &[PathUri::from_abs_path(sandbox_cwd)],
         &codex_linux_sandbox_exe,
         /*codex_self_exe*/ &None,
         /*use_legacy_landlock*/ false,

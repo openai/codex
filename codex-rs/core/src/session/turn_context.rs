@@ -480,22 +480,22 @@ impl TurnContext {
     }
 
     /// Combines the selected environment's workspace roots with its permission profile roots.
-    pub(crate) fn effective_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+    pub(crate) fn effective_workspace_roots(&self) -> Vec<PathUri> {
         let Some(environment) = self.environments.primary() else {
             return self.config.effective_workspace_roots();
         };
 
-        let mut workspace_roots = environment
-            .workspace_roots()
-            .iter()
-            .filter_map(|root| root.to_abs_path().ok())
-            .collect::<Vec<_>>();
+        let mut workspace_roots = environment.workspace_roots().to_vec();
         for root in environment
             .config()
             .permission_profile
             .profile_workspace_roots()
         {
-            if !workspace_roots.contains(root) {
+            let root = root.as_uri();
+            if !workspace_roots
+                .iter()
+                .any(|existing| existing.to_string() == root.to_string())
+            {
                 workspace_roots.push(root.clone());
             }
         }
@@ -652,7 +652,31 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
-        let workspace_roots = self.effective_workspace_roots();
+        // The legacy rollout field still stores host-native paths. Keep its
+        // runtime-root filtering and omit it for unrepresentable profile roots;
+        // the authoritative permission profile retains its concrete entries.
+        let profile_roots = self.environments.primary().map_or_else(
+            || self.config.permissions.profile_workspace_roots(),
+            |environment| {
+                environment
+                    .config()
+                    .permission_profile
+                    .profile_workspace_roots()
+            },
+        );
+        let workspace_roots = if profile_roots
+            .iter()
+            .all(|root| root.as_uri().to_abs_path().is_ok())
+        {
+            let roots = self
+                .effective_workspace_roots()
+                .iter()
+                .filter_map(|root| root.to_abs_path().ok())
+                .collect::<Vec<_>>();
+            (!roots.is_empty()).then_some(roots)
+        } else {
+            None
+        };
         #[allow(deprecated)]
         let cwd = self.cwd.clone();
         TurnContextItem {
@@ -660,7 +684,7 @@ impl TurnContext {
             root_turn_id: self.turn_metadata_state.root_turn_id(),
             disabled_plugin_ids: Some(self.disabled_plugin_ids.clone()),
             cwd,
-            workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
+            workspace_roots,
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy(),

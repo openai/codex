@@ -1203,11 +1203,7 @@ fn permissions_display(config: &Config) -> String {
     let summary = summarize_permission_profile(
         &permission_profile,
         &PathUri::from_abs_path(&config.cwd),
-        &config
-            .effective_workspace_roots()
-            .iter()
-            .map(PathUri::from_abs_path)
-            .collect::<Vec<_>>(),
+        &config.effective_workspace_roots(),
     );
     if let Some(details) = summary.strip_prefix("read-only")
         && !details.contains("(network access enabled)")

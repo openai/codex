@@ -47,6 +47,7 @@ use crate::models::ImageDetail;
 use crate::models::InternalChatMessageMetadataPassthrough;
 use crate::models::MessagePhase;
 use crate::models::PermissionProfile;
+use crate::models::ProfileWorkspaceRoot;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::SandboxEnforcement;
@@ -528,7 +529,7 @@ pub struct ThreadSettingsOverrides {
 
     /// Updated profile-defined workspace roots for status summaries and
     /// per-turn config reconstruction.
-    pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+    pub profile_workspace_roots: Option<Vec<ProfileWorkspaceRoot>>,
 
     /// Updated command approval policy.
     pub approval_policy: Option<AskForApproval>,

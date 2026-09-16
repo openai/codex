@@ -1,7 +1,43 @@
+//! Trusted permission state keeps local and remote profile roots as executor path URIs.
+
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 use crate::models::ActivePermissionProfile;
 use crate::models::PermissionProfile;
+
+/// A profile-declared root, separate from turn-scoped runtime workspace roots.
+///
+/// Local and remote roots share the same URI representation. Snapshot equality
+/// compares the stored URI spelling without folding Windows case, so a spelling
+/// change still propagates through settings.
+#[derive(Debug, Clone, Eq)]
+pub struct ProfileWorkspaceRoot(PathUri);
+
+impl PartialEq for ProfileWorkspaceRoot {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_string() == other.0.to_string()
+    }
+}
+
+impl ProfileWorkspaceRoot {
+    /// Borrow the resolved URI without projecting it onto the current host.
+    pub fn as_uri(&self) -> &PathUri {
+        &self.0
+    }
+}
+
+impl From<AbsolutePathBuf> for ProfileWorkspaceRoot {
+    fn from(path: AbsolutePathBuf) -> Self {
+        Self(PathUri::from_abs_path(&path))
+    }
+}
+
+impl From<PathUri> for ProfileWorkspaceRoot {
+    fn from(path: PathUri) -> Self {
+        Self(path)
+    }
+}
 
 /// Trusted snapshot of a resolved permission profile.
 ///
@@ -13,7 +49,7 @@ use crate::models::PermissionProfile;
 pub struct PermissionProfileSnapshot {
     permission_profile: PermissionProfile,
     active_permission_profile: Option<ActivePermissionProfile>,
-    profile_workspace_roots: Vec<AbsolutePathBuf>,
+    profile_workspace_roots: Vec<ProfileWorkspaceRoot>,
 }
 
 impl PermissionProfileSnapshot {
@@ -44,10 +80,12 @@ impl PermissionProfileSnapshot {
     /// Create a snapshot for an active profile and its declared roots.
     ///
     /// Profile roots remain distinct from turn-scoped runtime workspace roots.
+    /// The supplied profile must already contain their compiled permissions;
+    /// storing roots here does not itself grant access or materialize rules.
     pub fn active_with_profile_workspace_roots(
         permission_profile: PermissionProfile,
         active_permission_profile: ActivePermissionProfile,
-        profile_workspace_roots: Vec<AbsolutePathBuf>,
+        profile_workspace_roots: Vec<ProfileWorkspaceRoot>,
     ) -> Self {
         Self {
             permission_profile,
@@ -80,7 +118,11 @@ impl PermissionProfileSnapshot {
     }
 
     /// Borrow profile-declared workspace roots captured in this snapshot.
-    pub fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+    pub fn profile_workspace_roots(&self) -> &[ProfileWorkspaceRoot] {
         &self.profile_workspace_roots
     }
 }
+
+#[cfg(test)]
+#[path = "permission_profile_snapshot_tests.rs"]
+mod tests;

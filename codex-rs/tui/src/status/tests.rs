@@ -52,6 +52,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
@@ -244,6 +245,10 @@ fn reset_at_from(captured_at: &chrono::DateTime<chrono::Local>, seconds: i64) ->
 }
 
 fn permissions_text_for(config: &Config) -> Option<String> {
+    permissions_text_for_width(config, /*width*/ 80)
+}
+
+fn permissions_text_for_width(config: &Config, width: u16) -> Option<String> {
     let usage = TokenUsage::default();
     let captured_at = chrono::Local
         .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
@@ -265,7 +270,7 @@ fn permissions_text_for(config: &Config) -> Option<String> {
         /*collaboration_mode*/ None,
         /*reasoning_effort_override*/ None,
     );
-    render_lines(&composite.display_lines(/*width*/ 80))
+    render_lines(&composite.display_lines(width))
         .iter()
         .find(|line| line.contains("Permissions:"))
         .and_then(|line| {
@@ -626,7 +631,7 @@ async fn status_permissions_workspace_roots_include_profile_defined_directories(
                     /*exclude_slash_tmp*/ false,
                 ),
                 ActivePermissionProfile::new(":workspace"),
-                vec![profile_root.clone()],
+                vec![profile_root.clone().into()],
             ),
         )
         .expect("set permission profile");
@@ -2223,5 +2228,38 @@ async fn status_context_window_uses_last_usage() {
     assert!(
         !context_line.contains("102K"),
         "context line should not use total aggregated tokens, got: {context_line}"
+    );
+}
+
+#[tokio::test]
+async fn status_permissions_include_executor_profile_root() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    set_workspace_cwd(&mut config, test_path_buf("/workspace/repo").abs());
+    config
+        .permissions
+        .approval_policy
+        .set(AskForApproval::OnRequest.to_core())
+        .expect("set approval policy");
+    let root = PathUri::parse("file://server/share/foreign").expect("executor URI");
+    config
+        .permissions
+        .set_permission_profile_from_session_snapshot(
+            PermissionProfileSnapshot::active_with_profile_workspace_roots(
+                PermissionProfile::workspace_write_with_path_uris(
+                    std::slice::from_ref(&root),
+                    NetworkSandboxPolicy::Restricted,
+                    /*exclude_tmpdir_env_var*/ true,
+                    /*exclude_slash_tmp*/ true,
+                ),
+                ActivePermissionProfile::new("executor"),
+                vec![root.into()],
+            ),
+        )
+        .expect("set permission snapshot");
+
+    assert_snapshot!(
+        permissions_text_for_width(&config, /*width*/ 160).expect("permissions line"),
+        @r"Profile executor (workspace [\\server\share\foreign], Ask for approval)"
     );
 }

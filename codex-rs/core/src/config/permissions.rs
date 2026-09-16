@@ -372,7 +372,7 @@ pub struct CompiledPermissionProfile {
 
 /// Resolves a selected profile and its roots using only supplied execution-host facts.
 /// Configured roots are materialized before return; symbolic roots remain available
-/// for runtime workspace selection. Local callers only convert the returned URI types.
+/// for runtime workspace selection. Callers retain URI roots until a native executor boundary.
 pub fn compile_permission_profile(
     permissions: Option<&PermissionsToml>,
     profile_name: &str,
