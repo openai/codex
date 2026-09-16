@@ -9,6 +9,7 @@ pub(super) enum FailureMetric {
     File,
     Materialize,
     Run,
+    Scan,
     TempCleanup,
 }
 
@@ -18,6 +19,7 @@ impl FailureMetric {
             Self::File => (metrics::FILE_COUNTER, "outcome"),
             Self::Materialize => (metrics::MATERIALIZE_COUNTER, "outcome"),
             Self::Run => (metrics::RUN_COUNTER, "status"),
+            Self::Scan => ("codex.rollout_compression.scan", "outcome"),
             Self::TempCleanup => (metrics::TEMP_CLEANUP_COUNTER, "outcome"),
         };
         let error_kind = match error.kind() {
