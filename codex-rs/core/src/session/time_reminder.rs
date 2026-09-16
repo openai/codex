@@ -108,7 +108,11 @@ impl Session {
             .current_time(self.thread_id)
             .await
         {
-            Ok(time) => return Ok(Some(time)),
+            Ok(time) => {
+                let mut state = self.state.lock().await;
+                state.current_time_reminder.last_clock_failure = None;
+                return Ok(Some(time));
+            }
             Err(error) => error,
         };
         if !turn_context
