@@ -2341,6 +2341,7 @@ async fn persist_codex_app_tool_approval_writes_tool_override() {
                 "calendar".to_string(),
                 AppConfig {
                     enabled: true,
+                    omit_tools_from: None,
                     approvals_reviewer: None,
                     destructive_enabled: None,
                     open_world_enabled: None,

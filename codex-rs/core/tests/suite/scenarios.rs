@@ -783,3 +783,24 @@ async fn guardian_checkpoint_migration_request_history() -> Result<()> {
     insta::assert_snapshot!("guardian_checkpoint_migration", snapshot);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_tool_exposure_request_history() -> Result<()> {
+    let requests = super::app_tool_exposure::connector_exposure_requests(
+        super::app_tool_exposure::ExposureCase::non_deferred(
+            codex_protocol::openai_models::ToolMode::CodeModeOnly,
+        ),
+    )
+    .await?;
+    insta::assert_snapshot!(
+        "app_tool_exposure_CodeModeOnly",
+        context_snapshot::format_request_history_snapshot(
+            "A non-deferred connector is called through code mode while another connector stays deferred.",
+            &requests,
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
+        )
+    );
+    Ok(())
+}

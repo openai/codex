@@ -42,6 +42,7 @@ use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::set_project_trust_level;
+use codex_protocol::config_types::ToolExposureSurface;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchLocation;
@@ -1021,6 +1022,7 @@ default_tools_approval_mode = "writes"
 
 [apps.app1]
 enabled = false
+omit_tools_from = ["deferred"]
 approvals_reviewer = "user"
 destructive_enabled = false
 default_tools_approval_mode = "prompt"
@@ -1034,6 +1036,9 @@ default_tools_approval_mode = "writes"
 
 [apps.app_without_links]
 enabled = true
+
+[apps.app_with_empty_links]
+omit_tools_from = []
 
 [apps.app_with_empty_links.links]
 "#,
@@ -1084,6 +1089,7 @@ enabled = true
                     "app1".to_string(),
                     AppConfig {
                         enabled: false,
+                        omit_tools_from: Some(vec![ToolExposureSurface::Deferred]),
                         approvals_reviewer: Some(ApprovalsReviewer::User),
                         destructive_enabled: Some(false),
                         open_world_enabled: None,
@@ -1114,6 +1120,7 @@ enabled = true
                     "app_without_links".to_string(),
                     AppConfig {
                         enabled: true,
+                        omit_tools_from: None,
                         approvals_reviewer: None,
                         destructive_enabled: None,
                         open_world_enabled: None,
@@ -1127,6 +1134,7 @@ enabled = true
                     "app_with_empty_links".to_string(),
                     AppConfig {
                         enabled: true,
+                        omit_tools_from: Some(vec![]),
                         approvals_reviewer: None,
                         destructive_enabled: None,
                         open_world_enabled: None,

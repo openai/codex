@@ -61,10 +61,12 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
+use codex_connectors::apps_config_from_layer_stack;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_features::SleepToolMode;
 use codex_login::AuthManager;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
@@ -195,6 +197,7 @@ fn apply_mcp_tool_exposure_policy(
     registry: &mut ToolRegistry,
 ) {
     let mut omitted_exposures_by_tool = HashMap::new();
+    let apps_config = apps_config_from_layer_stack(&turn_context.config.config_layer_stack);
     for tool in mcp.tools() {
         let tool_name = tool.canonical_tool_name();
         if !registered_mcp_tools.contains(&tool_name) {
@@ -206,12 +209,19 @@ fn apply_mcp_tool_exposure_policy(
         omitted_exposures_by_tool
             .entry(tool_name)
             .or_insert_with(|| {
+                let connector_omissions = (tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
+                    .then_some(tool.connector_id.as_deref())
+                    .flatten()
+                    .and_then(|id| apps_config.as_ref()?.apps.get(id))
+                    .and_then(|app| app.omit_tools_from.as_deref())
+                    .unwrap_or_default();
                 server
                     .config()
                     .omit_tools_from
                     .as_deref()
                     .unwrap_or_default()
                     .iter()
+                    .chain(connector_omissions)
                     .copied()
                     .collect::<ToolExposures>()
             });

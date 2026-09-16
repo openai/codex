@@ -915,6 +915,7 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
             value: serde_json::json!({
                 "app1": {
                     "enabled": false,
+                    "omit_tools_from": ["deferred"],
                 },
             }),
             merge_strategy: MergeStrategy::Replace,
@@ -950,6 +951,9 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
+                    omit_tools_from: Some(vec![
+                        codex_protocol::config_types::ToolExposureSurface::Deferred
+                    ]),
                     approvals_reviewer: None,
                     destructive_enabled: None,
                     open_world_enabled: None,

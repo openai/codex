@@ -6179,6 +6179,12 @@ class Tool(BaseModel):
     title: str | None = None
 
 
+class ToolExposureSurface(Enum):
+    code_mode = "code_mode"
+    deferred = "deferred"
+    direct = "direct"
+
+
 class TurnDiffUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6586,6 +6592,10 @@ class AppConfig(BaseModel):
     enabled: bool | None = True
     links: Annotated[
         AppLinksConfig | None, Field(description="Per-account approval settings keyed by link ID.")
+    ] = None
+    omit_tools_from: Annotated[
+        list[ToolExposureSurface] | None,
+        Field(description="Additional model-facing surfaces omitted for this connector's tools."),
     ] = None
     open_world_enabled: bool | None = None
     tools: AppToolsConfig | None = None

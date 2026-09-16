@@ -155,6 +155,13 @@
           ],
           "description": "Per-account approval settings keyed by link ID."
         },
+        "omit_tools_from": {
+          "description": "Model-facing surfaces from which this connector's tools must be omitted, in addition to any server-level omissions. `None` leaves lower-priority configuration unchanged; an empty list clears connector-level omissions.",
+          "items": {
+            "$ref": "#/definitions/ToolExposureSurface"
+          },
+          "type": "array"
+        },
         "open_world_enabled": {
           "description": "Whether tools with `open_world_hint = true` are allowed for this app.",
           "type": "boolean"
