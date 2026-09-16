@@ -11,6 +11,8 @@ use codex_api::TransportError;
 use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::WorkspaceRoutingRequest;
+use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
@@ -24,6 +26,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderValue;
 
+use crate::ResolvedResponsesProvider;
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
 use crate::auth::ProviderAuthScope;
 use crate::auth::ResolvedProviderAuth;
@@ -31,6 +34,7 @@ use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
+use crate::workspace_routing::WorkspaceRoutingContext;
 
 pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
     if let Some(requirement) = read_default_client_residency_requirement() {
@@ -231,6 +235,48 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
                 .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
             enforce_managed_residency(&mut provider);
             Ok(provider)
+        })
+    }
+
+    /// Resolves routing for Responses HTTP, compaction, and WebSocket handshakes.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "serialize discovery and the session's first successful routing transition"
+    )]
+    fn responses_api_provider<'a>(
+        &'a self,
+        routing_context: &'a WorkspaceRoutingContext,
+    ) -> ModelProviderFuture<'a, codex_protocol::error::Result<ResolvedResponsesProvider>> {
+        Box::pin(async move {
+            let mut provider = self.api_provider().await?;
+            let mut redirect_policy = ClientRedirectPolicy::Default;
+            if provider_uses_first_party_auth_path(self.info())
+                && self.info().supports_codex_backend_routes()
+                && let Some(auth) = self.auth().await.filter(CodexAuth::is_chatgpt_auth)
+                && let Some(auth_manager) = self.auth_manager()
+            {
+                let mut previously_routed = routing_context.previously_routed.lock().await;
+                if let Some(routing) = auth_manager
+                    .workspace_routing(
+                        &auth,
+                        WorkspaceRoutingRequest {
+                            provider_base_url: provider.base_url.clone(),
+                            chatgpt_base_url: routing_context.chatgpt_base_url.clone(),
+                            previously_routed: *previously_routed,
+                            session: routing_context.session.clone(),
+                        },
+                    )
+                    .await?
+                {
+                    crate::workspace_routing::apply_workspace_routing(&mut provider, routing)?;
+                    redirect_policy = ClientRedirectPolicy::Reject;
+                    *previously_routed = true;
+                }
+            }
+            Ok(ResolvedResponsesProvider {
+                provider,
+                redirect_policy,
+            })
         })
     }
 

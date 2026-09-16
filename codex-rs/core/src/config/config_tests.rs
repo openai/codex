@@ -5307,7 +5307,7 @@ fn filter_plugin_mcp_servers_by_matchers_enforces_name_and_invocation() {
 }
 
 #[tokio::test]
-async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::Result<()> {
+async fn rebuild_with_session_layers_refreshes_requirements() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home.path());
     let project_dot_codex =
@@ -5476,9 +5476,12 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         thread_layer_stack,
     )
     .await?;
-    let config = thread_config
-        .rebuild_preserving_session_layers(&refreshed_config)
-        .await?;
+    let config = Config::rebuild_with_session_layers(
+        &thread_config.config_layer_stack,
+        thread_config.cwd.to_path_buf(),
+        &refreshed_config,
+    )
+    .await?;
 
     assert_eq!(
         config.mcp_servers.get(),
@@ -5516,8 +5519,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
 }
 
 #[tokio::test]
-async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
--> anyhow::Result<()> {
+async fn rebuild_with_session_layers_refreshes_plugin_derived_mcp_config() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let plugin_root = codex_home
         .path()
@@ -5599,9 +5601,12 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         thread_layer_stack,
     )
     .await?;
-    let config = thread_config
-        .rebuild_preserving_session_layers(&refreshed_config)
-        .await?;
+    let config = Config::rebuild_with_session_layers(
+        &thread_config.config_layer_stack,
+        thread_config.cwd.to_path_buf(),
+        &refreshed_config,
+    )
+    .await?;
     let plugins_manager =
         plugins_manager_for_config(&config, auth_manager_from_optional_auth(/*auth*/ None));
     let mcp_config = config.to_mcp_config(&plugins_manager).await;

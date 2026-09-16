@@ -279,7 +279,10 @@ impl McpRequestProcessor {
                 let thread_config = thread.config().await;
                 let config = self
                     .config_manager
-                    .load_latest_config_for_thread(thread_config.as_ref())
+                    .load_latest_config_with_session_layers(
+                        &thread_config.config_layer_stack,
+                        &thread_config.cwd,
+                    )
                     .await
                     .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
                 (config, Some(thread))

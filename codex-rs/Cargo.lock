@@ -4036,6 +4036,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "url",
  "wiremock",
 ]
 

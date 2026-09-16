@@ -743,6 +743,9 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        codex_model_provider::WorkspaceRoutingContext::new(
+            "https://chatgpt.com/backend-api".into(),
+        ),
     )
     .new_session()
 }
@@ -6119,6 +6122,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
                 .enabled(Feature::ConcurrentReasoningSummaries),
             /*attestation_provider*/ None,
             config.http_client_factory(),
+            config.workspace_routing_context(),
         ),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
@@ -8304,6 +8308,7 @@ where
                 .enabled(Feature::ConcurrentReasoningSummaries),
             /*attestation_provider*/ None,
             config.http_client_factory(),
+            config.workspace_routing_context(),
         ),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(

@@ -136,6 +136,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         config.http_client_factory(),
+        config.workspace_routing_context(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
     let mut client_session = client.new_session();
@@ -273,6 +274,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         config.http_client_factory(),
+        config.workspace_routing_context(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
     let mut client_session = client.new_session();
@@ -395,6 +397,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*attestation_provider*/ None,
         config.http_client_factory(),
+        config.workspace_routing_context(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
     let mut client_session = client.new_session();

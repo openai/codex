@@ -1673,6 +1673,7 @@ impl Session {
                         .enabled(Feature::ConcurrentReasoningSummaries),
                     attestation_provider,
                     config.http_client_factory(),
+                    config.workspace_routing_context(),
                 )
                 .with_session_context(
                     crate::guardian::prompt_cache_key_override_for_review_session(

@@ -304,6 +304,7 @@ impl MemoryStartupContext {
             /*concurrent_reasoning_summaries_enabled*/ false,
             /*attestation_provider*/ None,
             config.http_client_factory(),
+            config.workspace_routing_context(),
         );
 
         let mut client_session = model_client.new_session();

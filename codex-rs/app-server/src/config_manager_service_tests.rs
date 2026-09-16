@@ -1344,7 +1344,9 @@ async fn managed_auth_policy_survives_unusable_requirements_file_changes() -> Re
     )?;
     for refreshed in [
         service.load_latest_config(/*fallback_cwd*/ None).await?,
-        service.load_latest_config_for_thread(&startup).await?,
+        service
+            .load_latest_config_with_session_layers(&startup.config_layer_stack, &startup.cwd)
+            .await?,
     ] {
         assert_eq!(refreshed.forced_login_method, None);
         assert_eq!(refreshed.forced_chatgpt_workspace_id, None);

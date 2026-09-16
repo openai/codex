@@ -2836,6 +2836,7 @@ async fn websocket_harness_with_provider_options_and_auth(
             .enabled(Feature::ConcurrentReasoningSummaries),
         /*attestation_provider*/ None,
         http_client_factory,
+        config.workspace_routing_context(),
     );
 
     WebsocketTestHarness {

@@ -163,16 +163,18 @@ impl ConfigManager {
         manager.load_latest_config(/*fallback_cwd*/ None).await
     }
 
-    pub(crate) async fn load_latest_config_for_thread(
+    pub(crate) async fn load_latest_config_with_session_layers(
         &self,
-        thread_config: &Config,
+        session_layers: &ConfigLayerStack,
+        cwd: &Path,
     ) -> std::io::Result<Config> {
-        let refreshed_config = self
-            .load_latest_config(Some(thread_config.cwd.to_path_buf()))
-            .await?;
-        let mut config = thread_config
-            .rebuild_preserving_session_layers(&refreshed_config)
-            .await?;
+        let refreshed_config = self.load_latest_config(Some(cwd.to_path_buf())).await?;
+        let mut config = Config::rebuild_with_session_layers(
+            session_layers,
+            cwd.to_path_buf(),
+            &refreshed_config,
+        )
+        .await?;
         self.apply_runtime_feature_enablement(&mut config);
         self.apply_arg0_paths(&mut config);
         Ok(config)
