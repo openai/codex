@@ -210,6 +210,9 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 CodexErr::ConnectionFailed(ConnectionFailedError { source })
             }
             TransportError::Network(msg) | TransportError::Build(msg) => CodexErr::Stream(msg),
+            error @ TransportError::ResponseTooLarge { .. } => {
+                CodexErr::InvalidRequest(error.to_string())
+            }
         },
         ApiError::RateLimit(msg) => CodexErr::Stream(msg),
     }

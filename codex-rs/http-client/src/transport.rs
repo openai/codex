@@ -1,3 +1,8 @@
+//! Shared HTTP transport with optional limits on complete response bodies.
+//!
+//! Each request's limit applies to observed body bytes, including unsuccessful responses;
+//! declared content lengths are only an additional early-rejection check.
+
 use crate::client::HttpClient;
 use crate::client::RequestBuilder;
 use crate::error::TransportError;
@@ -5,6 +10,7 @@ use crate::request::Request;
 use crate::request::RequestBody;
 use crate::request::Response;
 use bytes::Bytes;
+use bytes::BytesMut;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use http::HeaderMap;
@@ -59,6 +65,7 @@ impl ReqwestTransport {
             body: _,
             compression: _,
             timeout,
+            response_body_limit_bytes: _,
         } = req;
 
         let mut builder = self.client.request(
@@ -115,13 +122,23 @@ impl HttpTransport for ReqwestTransport {
         self.trace_request(&req);
 
         let url = req.url.clone();
+        let response_body_limit_bytes = req.response_body_limit_bytes;
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
         let headers = resp.headers().clone();
-        let bytes = resp.bytes().await.map_err(Self::map_error)?;
+        let bytes = match response_body_limit_bytes {
+            Some(max_bytes) => bounded_response_bytes(resp, max_bytes).await,
+            None => resp.bytes().await.map_err(Self::map_error),
+        };
         if !status.is_success() {
-            let body = String::from_utf8(bytes.to_vec()).ok();
+            let body = match bytes {
+                Ok(bytes) => String::from_utf8(bytes.to_vec()).ok(),
+                Err(error @ TransportError::ResponseTooLarge { .. }) => return Err(error),
+                // Keep bounded diagnostic-body failures from hiding HTTP auth/retry status.
+                Err(_) if response_body_limit_bytes.is_some() => None,
+                Err(error) => return Err(error),
+            };
             return Err(TransportError::Http {
                 status,
                 url: Some(url),
@@ -132,7 +149,7 @@ impl HttpTransport for ReqwestTransport {
         Ok(Response {
             status,
             headers,
-            body: bytes,
+            body: bytes?,
         })
     }
 
@@ -140,12 +157,27 @@ impl HttpTransport for ReqwestTransport {
         self.trace_request(&req);
 
         let url = req.url.clone();
+        let response_body_limit_bytes = req.response_body_limit_bytes;
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
         let headers = resp.headers().clone();
         if !status.is_success() {
-            let body = resp.text().await.ok();
+            let body = match response_body_limit_bytes {
+                Some(max_bytes) => match bounded_response_bytes(resp, max_bytes).await {
+                    Ok(bytes) => {
+                        // Reuse the unbounded path's charset, BOM and replacement decoding,
+                        // but only after the body has passed the byte limit.
+                        let mut buffered = http::Response::new(bytes);
+                        *buffered.headers_mut() = headers.clone();
+                        reqwest::Response::from(buffered).text().await.ok()
+                    }
+                    Err(error @ TransportError::ResponseTooLarge { .. }) => return Err(error),
+                    // A failed diagnostic body must not hide HTTP auth or retry semantics.
+                    Err(_) => None,
+                },
+                None => resp.text().await.ok(),
+            };
             return Err(TransportError::Http {
                 status,
                 url: Some(url),
@@ -153,17 +185,68 @@ impl HttpTransport for ReqwestTransport {
                 body,
             });
         }
-        let stream = resp
-            .bytes_stream()
-            .map(|result| result.map_err(Self::map_error));
+        let bytes = match response_body_limit_bytes {
+            Some(max_bytes) => bounded_response_stream(resp, max_bytes)?,
+            None => Box::pin(
+                resp.bytes_stream()
+                    .map(|result| result.map_err(Self::map_error)),
+            ),
+        };
         Ok(StreamResponse {
             status,
             headers,
-            bytes: Box::pin(stream),
+            bytes,
         })
     }
+}
+
+fn bounded_response_stream(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<ByteStream, TransportError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(TransportError::ResponseTooLarge { max_bytes });
+    }
+
+    let stream = futures::stream::try_unfold(
+        (response, max_bytes),
+        move |(mut response, remaining)| async move {
+            match response
+                .chunk()
+                .await
+                .map_err(|error| ReqwestTransport::map_error(error.without_url()))?
+            {
+                Some(chunk) if chunk.len() <= remaining => {
+                    let remaining = remaining - chunk.len();
+                    Ok(Some((chunk, (response, remaining))))
+                }
+                Some(_) => Err(TransportError::ResponseTooLarge { max_bytes }),
+                None => Ok(None),
+            }
+        },
+    );
+    Ok(Box::pin(stream))
+}
+
+async fn bounded_response_bytes(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Bytes, TransportError> {
+    let mut stream = bounded_response_stream(response, max_bytes)?;
+    let mut body = BytesMut::new();
+    while let Some(chunk) = stream.next().await {
+        body.extend_from_slice(&chunk?);
+    }
+    Ok(body.freeze())
 }
 
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transport_limit_tests.rs"]
+mod limit_tests;

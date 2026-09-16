@@ -24,6 +24,8 @@ pub enum TransportError {
     Network(String),
     #[error("request build error: {0}")]
     Build(String),
+    #[error("response body exceeds the {max_bytes} byte limit")]
+    ResponseTooLarge { max_bytes: usize },
 }
 
 #[derive(Debug, Error)]

@@ -2,6 +2,7 @@ use crate::auth::SharedAuthProvider;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
+use bytes::Bytes;
 use codex_client::HttpTransport;
 use codex_client::RequestTelemetry;
 use codex_protocol::openai_models::ModelInfo;
@@ -48,6 +49,34 @@ impl<T: HttpTransport> ModelsClient<T> {
         request_url: String,
         extra_headers: HeaderMap,
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
+        let (body, header_etag) = self
+            .list_models_raw(
+                request_url,
+                extra_headers,
+                /*response_body_limit_bytes*/ None,
+            )
+            .await?;
+        let ModelsResponse { models } =
+            serde_json::from_slice::<ModelsResponse>(&body).map_err(|e| {
+                ApiError::Stream(format!(
+                    "failed to decode models response: {e}; body: {}",
+                    String::from_utf8_lossy(&body)
+                ))
+            })?;
+
+        Ok((models, header_etag))
+    }
+
+    /// Fetches a catalog using the provider's auth and retry policy without decoding it.
+    ///
+    /// Callers accepting provider-controlled catalogs must set a response-body limit
+    /// and validate the native response without including raw values in diagnostics.
+    pub async fn list_models_raw(
+        &self,
+        request_url: String,
+        extra_headers: HeaderMap,
+        response_body_limit_bytes: Option<usize>,
+    ) -> Result<(Bytes, Option<String>), ApiError> {
         let resp = self
             .session
             .execute_with(
@@ -57,6 +86,7 @@ impl<T: HttpTransport> ModelsClient<T> {
                 /*body*/ None,
                 move |req| {
                     req.url.clone_from(&request_url);
+                    req.response_body_limit_bytes = response_body_limit_bytes;
                 },
             )
             .await?;
@@ -67,22 +97,16 @@ impl<T: HttpTransport> ModelsClient<T> {
             .and_then(|value| value.to_str().ok())
             .map(ToString::to_string);
 
-        let ModelsResponse { models } = serde_json::from_slice::<ModelsResponse>(&resp.body)
-            .map_err(|e| {
-                ApiError::Stream(format!(
-                    "failed to decode models response: {e}; body: {}",
-                    String::from_utf8_lossy(&resp.body)
-                ))
-            })?;
-
-        Ok((models, header_etag))
+        Ok((resp.body, header_etag))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::AuthError;
     use crate::auth::AuthProvider;
+    use crate::auth::AuthProviderFuture;
     use crate::provider::RetryConfig;
     use codex_client::Request;
     use codex_client::Response;
@@ -140,6 +164,29 @@ mod tests {
         fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
     }
 
+    #[derive(Default)]
+    struct RetryAuth {
+        request_limits: Mutex<Vec<Option<usize>>>,
+    }
+
+    impl AuthProvider for RetryAuth {
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            headers.insert(http::header::AUTHORIZATION, "Bearer test".parse().unwrap());
+        }
+
+        fn apply_auth(&self, mut request: Request) -> AuthProviderFuture<'_> {
+            Box::pin(async move {
+                let mut limits = self.request_limits.lock().unwrap();
+                limits.push(request.response_body_limit_bytes);
+                if limits.len() == 1 {
+                    return Err(AuthError::Transient("retry authentication".to_string()));
+                }
+                self.add_auth_headers(&mut request.headers);
+                Ok(request)
+            })
+        }
+    }
+
     fn provider(base_url: &str) -> Provider {
         Provider {
             name: "test".to_string(),
@@ -155,6 +202,52 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(1),
         }
+    }
+
+    #[tokio::test]
+    async fn response_body_limit_survives_auth_retry_without_limiting_other_models_requests() {
+        let transport = CapturingTransport::default();
+        let auth = Arc::new(RetryAuth::default());
+        let mut provider = provider("https://example.com/api/codex");
+        provider.retry.max_attempts = 2;
+        let request_url = ModelsClient::<CapturingTransport>::request_url(&provider, "0.99.0");
+        let client = ModelsClient::new(transport.clone(), provider, auth.clone());
+
+        client
+            .list_models_raw(
+                request_url.clone(),
+                HeaderMap::new(),
+                /*response_body_limit_bytes*/ Some(64),
+            )
+            .await
+            .expect("limited request should succeed after auth retry");
+        {
+            let request = transport.last_request.lock().unwrap();
+            let request = request.as_ref().unwrap();
+            assert_eq!(request.response_body_limit_bytes, Some(64));
+            assert_eq!(request.url, request_url);
+            assert_eq!(request.headers[http::header::AUTHORIZATION], "Bearer test");
+        }
+
+        let (models, _) = client
+            .list_models(request_url, HeaderMap::new())
+            .await
+            .expect("ordinary request on the same client should remain unbounded");
+        assert!(models.is_empty());
+        assert_eq!(
+            transport
+                .last_request
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .response_body_limit_bytes,
+            None
+        );
+        assert_eq!(
+            *auth.request_limits.lock().unwrap(),
+            vec![Some(64), Some(64), None]
+        );
     }
 
     #[tokio::test]

@@ -82,7 +82,9 @@ impl SamplingExecution {
             | LunaSamplerError::IncompatibleCompaction
             | LunaSamplerError::InputTooLarge
             | LunaSamplerError::Api(
-                ApiError::Transport(TransportError::Build(_))
+                ApiError::Transport(
+                    TransportError::Build(_) | TransportError::ResponseTooLarge { .. },
+                )
                 | ApiError::ContextWindowExceeded
                 | ApiError::QuotaExceeded
                 | ApiError::UsageNotIncluded

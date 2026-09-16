@@ -31,7 +31,9 @@ impl RetryOn {
             TransportError::Timeout
             | TransportError::Connection(_)
             | TransportError::Network(_) => self.retry_transport,
-            _ => false,
+            TransportError::Build(_)
+            | TransportError::RetryLimit
+            | TransportError::ResponseTooLarge { .. } => false,
         }
     }
 }
