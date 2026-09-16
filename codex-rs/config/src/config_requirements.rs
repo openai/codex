@@ -1,6 +1,7 @@
 use crate::ApplicationRequirementsToml;
 use codex_features::FeatureToml;
 use codex_model_provider_info::ModelProviderInfo;
+pub use codex_model_provider_info::ResidencyRequirement;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::SandboxMode;
@@ -1461,12 +1462,6 @@ impl From<SandboxMode> for SandboxModeRequirement {
             SandboxMode::DangerFullAccess => SandboxModeRequirement::DangerFullAccess,
         }
     }
-}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ResidencyRequirement {
-    Us,
 }
 
 impl ConfigRequirementsToml {

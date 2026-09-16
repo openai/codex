@@ -13,9 +13,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
-use codex_login::default_client::RESIDENCY_HEADER_NAME;
-use codex_login::default_client::ResidencyRequirement;
-use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
@@ -24,7 +21,6 @@ use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::account::ProviderAccount;
 use codex_protocol::error::CodexErr;
 use codex_protocol::openai_models::ModelsResponse;
-use http::HeaderValue;
 
 use crate::ResolvedResponsesProvider;
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
@@ -35,15 +31,6 @@ use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::workspace_routing::WorkspaceRoutingContext;
-
-pub(crate) fn enforce_managed_residency(provider: &mut Provider) {
-    if let Some(requirement) = read_default_client_residency_requirement() {
-        let value = match requirement {
-            ResidencyRequirement::Us => HeaderValue::from_static("us"),
-        };
-        provider.headers.insert(RESIDENCY_HEADER_NAME, value);
-    }
-}
 
 /// Remote context-compaction protocols supported by a model provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,11 +217,8 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn api_provider(&self) -> ModelProviderFuture<'_, codex_protocol::error::Result<Provider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            let mut provider = self
-                .info()
-                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-            enforce_managed_residency(&mut provider);
-            Ok(provider)
+            self.info()
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))
         })
     }
 

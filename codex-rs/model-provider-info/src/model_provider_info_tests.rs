@@ -6,6 +6,54 @@ use std::num::NonZeroU64;
 use tempfile::tempdir;
 
 #[test]
+fn test_api_provider_applies_current_managed_residency() {
+    let info = ModelProviderInfo {
+        http_headers: Some(maplit::hashmap! {
+            "X-OpenAI-Internal-Codex-Residency".to_string() => "eu".into(),
+            "x-provider-header".to_string() => "preserved".into(),
+        }),
+        ..ModelProviderInfo::create_openai_provider(/*base_url*/ None)
+    };
+    let original_info = info.clone();
+    let previous_requirement = read_managed_residency_requirement();
+    set_managed_residency_requirement(Some(ResidencyRequirement::Us));
+    let managed = info.to_api_provider(/*auth_mode*/ None);
+    set_managed_residency_requirement(/*enforce_residency*/ None);
+    let unmanaged = info.to_api_provider(/*auth_mode*/ None);
+    set_managed_residency_requirement(previous_requirement);
+
+    assert_eq!(
+        managed.expect("managed provider should resolve").headers,
+        HeaderMap::from_iter([
+            (
+                HeaderName::from_static(RESIDENCY_HEADER_NAME),
+                HeaderValue::from_static("us")
+            ),
+            (
+                HeaderName::from_static("x-provider-header"),
+                HeaderValue::from_static("preserved")
+            ),
+        ])
+    );
+    assert_eq!(
+        unmanaged
+            .expect("unmanaged provider should resolve")
+            .headers,
+        HeaderMap::from_iter([
+            (
+                HeaderName::from_static(RESIDENCY_HEADER_NAME),
+                HeaderValue::from_static("eu")
+            ),
+            (
+                HeaderName::from_static("x-provider-header"),
+                HeaderValue::from_static("preserved")
+            ),
+        ])
+    );
+    assert_eq!(info, original_info);
+}
+
+#[test]
 fn test_deserialize_ollama_model_provider_toml() {
     let azure_provider_toml = r#"
 name = "Ollama"

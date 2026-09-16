@@ -4,6 +4,9 @@
 //!   1. Built-in defaults compiled into the binary so Codex works out-of-the-box.
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
+//!
+//! API provider construction applies the process-wide managed residency policy also
+//! used by default HTTP headers.
 
 use codex_api::Provider as ApiProvider;
 use codex_api::RetryConfig as ApiRetryConfig;
@@ -24,7 +27,34 @@ use std::fmt;
 use std::num::NonZeroU64;
 use std::path::Component;
 use std::path::Path;
+use std::sync::PoisonError;
+use std::sync::RwLock;
 use std::time::Duration;
+
+pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ResidencyRequirement {
+    Us,
+}
+
+static REQUIREMENTS_RESIDENCY: RwLock<Option<ResidencyRequirement>> = RwLock::new(None);
+
+/// Sets the process-wide residency requirement loaded from managed configuration.
+pub fn set_managed_residency_requirement(enforce_residency: Option<ResidencyRequirement>) {
+    // Recover the stored policy if the lock is poisoned rather than silently disabling it.
+    *REQUIREMENTS_RESIDENCY
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = enforce_residency;
+}
+
+/// Returns the current process-wide managed residency requirement.
+pub fn read_managed_residency_requirement() -> Option<ResidencyRequirement> {
+    *REQUIREMENTS_RESIDENCY
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+}
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
@@ -367,6 +397,7 @@ other non-default provider fields are not supported"
         Ok(headers)
     }
 
+    /// Builds an API provider with managed residency taking precedence over configured headers.
     pub fn to_api_provider(&self, auth_mode: Option<AuthMode>) -> CodexResult<ApiProvider> {
         let default_base_url = if matches!(
             auth_mode,
@@ -387,7 +418,13 @@ other non-default provider fields are not supported"
             .clone()
             .unwrap_or_else(|| default_base_url.to_string());
 
-        let headers = self.build_header_map()?;
+        let mut headers = self.build_header_map()?;
+        if let Some(requirement) = read_managed_residency_requirement() {
+            let value = match requirement {
+                ResidencyRequirement::Us => HeaderValue::from_static("us"),
+            };
+            headers.insert(RESIDENCY_HEADER_NAME, value);
+        }
         let retry = ApiRetryConfig {
             max_attempts: self.request_max_retries(),
             base_delay: Duration::from_millis(200),

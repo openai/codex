@@ -39,9 +39,10 @@ use crate::outbound_proxy::AuthRouteConfig;
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
-pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
-
-pub use codex_config::ResidencyRequirement;
+pub use codex_model_provider_info::RESIDENCY_HEADER_NAME;
+pub use codex_model_provider_info::ResidencyRequirement;
+pub use codex_model_provider_info::read_managed_residency_requirement as read_default_client_residency_requirement;
+pub use codex_model_provider_info::set_managed_residency_requirement as set_default_client_residency_requirement;
 
 #[derive(Debug, Clone)]
 pub struct Originator {
@@ -49,8 +50,6 @@ pub struct Originator {
     pub header_value: HeaderValue,
 }
 static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
-static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> =
-    LazyLock::new(|| RwLock::new(None));
 static ROUTE_AWARE_CLIENT_BUILD_PERMIT: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(1);
 
@@ -94,19 +93,6 @@ pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
     }
     *guard = Some(originator);
     Ok(())
-}
-
-pub fn set_default_client_residency_requirement(enforce_residency: Option<ResidencyRequirement>) {
-    let Ok(mut guard) = REQUIREMENTS_RESIDENCY.write() else {
-        tracing::warn!("Failed to acquire requirements residency lock");
-        return;
-    };
-    *guard = enforce_residency;
-}
-
-/// Returns the current process-wide residency requirement.
-pub fn read_default_client_residency_requirement() -> Option<ResidencyRequirement> {
-    REQUIREMENTS_RESIDENCY.read().ok().and_then(|guard| *guard)
 }
 
 pub fn originator() -> Originator {
@@ -352,10 +338,7 @@ pub fn default_headers() -> HeaderMap {
     if let Ok(user_agent) = HeaderValue::from_str(&get_codex_user_agent()) {
         headers.insert(USER_AGENT, user_agent);
     }
-    if let Ok(guard) = REQUIREMENTS_RESIDENCY.read()
-        && let Some(requirement) = guard.as_ref()
-        && !headers.contains_key(RESIDENCY_HEADER_NAME)
-    {
+    if let Some(requirement) = read_default_client_residency_requirement() {
         let value = match requirement {
             ResidencyRequirement::Us => HeaderValue::from_static("us"),
         };
