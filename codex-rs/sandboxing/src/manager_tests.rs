@@ -520,7 +520,7 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
     let state = build_config_state(
         NetworkProxyConfig {
             enabled: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             ..Default::default()
         },
         NetworkProxyConstraints::default(),

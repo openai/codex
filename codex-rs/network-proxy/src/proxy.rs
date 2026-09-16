@@ -228,7 +228,7 @@ impl NetworkProxyBuilder {
         #[cfg(target_os = "windows")]
         let (current_cfg, runtime_settings, mut windows_ingress) = {
             let current_cfg = config::NetworkProxyConfig {
-                dangerously_allow_all_unix_sockets: false,
+                dangerously_allow_all_unix_sockets: Some(false),
                 unix_sockets: None,
                 ..current_cfg
             };
@@ -461,7 +461,7 @@ impl NetworkProxyRuntimeSettings {
                 config.allow_unix_sockets().into()
             },
             dangerously_allow_all_unix_sockets: !cfg!(target_os = "windows")
-                && config.dangerously_allow_all_unix_sockets,
+                && config.dangerously_allow_all_unix_sockets.unwrap_or(false),
             mitm_ca_trust_bundle,
         })
     }
@@ -940,6 +940,20 @@ impl NetworkProxy {
         };
         broker_only_config.set_credential_broker_enabled(/*enabled*/ true);
         broker_only_config.set_allowed_domains(vec!["*".to_string()]);
+        // Omission and explicit false have the same effective broker-only permissions.
+        if !config.dangerously_allow_all_unix_sockets.unwrap_or(false) {
+            broker_only_config.dangerously_allow_all_unix_sockets =
+                config.dangerously_allow_all_unix_sockets;
+        }
+        if config
+            .unix_sockets
+            .as_ref()
+            .is_some_and(|sockets| sockets.entries.is_empty())
+        {
+            broker_only_config
+                .unix_sockets
+                .clone_from(&config.unix_sockets);
+        }
         let broker_only = brokerage_created_default_allowlist && config == broker_only_config;
 
         let environment_policy = self
@@ -962,6 +976,7 @@ impl NetworkProxy {
             "environment network policy requires an enabled executor proxy"
         );
         let proxy = crate::RemoteNetworkProxyConfig::from_effective_config(&config)?;
+        tracing::debug!(network_config = ?proxy, "resolved remote execution network configuration");
         let (environment_id, execution_id) = self
             .execution_scope
             .as_ref()
@@ -1774,7 +1789,7 @@ mod tests {
             proxy_url: "http://0.0.0.0:3128".to_string(),
             socks_url: "http://0.0.0.0:8081".to_string(),
             dangerously_allow_non_loopback_proxy: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             unix_sockets: Some(unix_sockets.clone()),
             ..NetworkProxyConfig::default()
         };
@@ -2153,7 +2168,7 @@ mod tests {
             .await?;
 
         for allow_all in [false, true] {
-            config.dangerously_allow_all_unix_sockets = allow_all;
+            config.dangerously_allow_all_unix_sockets = Some(allow_all);
             let replacement = crate::state::build_config_state(config.clone(), Default::default())?;
             proxy.replace_config_state(replacement).await?;
             let prepared = proxy
@@ -2310,8 +2325,10 @@ mod tests {
         let _permit = WINDOWS_INGRESS_TEST_LOCK.acquire().await.unwrap();
         let mut config = NetworkProxyConfig {
             dangerously_allow_plaintext_credential_injection: true,
+            dangerously_allow_all_unix_sockets: Some(false),
             ..NetworkProxyConfig::default()
         };
+        config.set_allow_unix_sockets(Vec::new());
         config.set_credential_broker_enabled(/*enabled*/ true);
         config.configure_credential_broker_environment(&HashMap::from([(
             "GH_HOST".to_string(),

@@ -9,13 +9,43 @@ use crate::NetworkProxyConfig;
 use crate::NetworkProxyState;
 
 #[test]
+fn optional_socket_policy_preserves_input_and_resolves_at_remote_boundary() {
+    for allow_all in [None, Some(false), Some(true)] {
+        let mut config = NetworkProxyConfig {
+            dangerously_allow_all_unix_sockets: allow_all,
+            ..NetworkProxyConfig::default()
+        };
+        config.set_allow_unix_sockets(Vec::new());
+        let serialized = serde_json::to_value(&config).expect("serialize config");
+        assert_eq!(
+            serialized.get("dangerously_allow_all_unix_sockets"),
+            allow_all.map(serde_json::Value::Bool).as_ref()
+        );
+        assert_eq!(serialized["unix_sockets"], serde_json::json!({}));
+        assert_eq!(
+            serde_json::from_value::<NetworkProxyConfig>(serialized).expect("deserialize config"),
+            config
+        );
+
+        let remote = RemoteNetworkProxyConfig::from_effective_config(&config)
+            .expect("supported remote config");
+        assert_eq!(
+            remote.dangerously_allow_all_unix_sockets,
+            allow_all.unwrap_or(false)
+        );
+        config.dangerously_allow_all_unix_sockets = Some(allow_all.unwrap_or(false));
+        assert_eq!(remote.into_network_proxy_config(), config);
+    }
+}
+
+#[test]
 fn round_trip_preserves_supported_effective_settings() {
     let mut config = NetworkProxyConfig {
         enabled: true,
         enable_socks5: false,
         enable_socks5_udp: false,
         allow_upstream_proxy: false,
-        dangerously_allow_all_unix_sockets: true,
+        dangerously_allow_all_unix_sockets: Some(true),
         mode: NetworkMode::Limited,
         allow_local_binding: true,
         ..NetworkProxyConfig::default()

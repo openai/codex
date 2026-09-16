@@ -266,7 +266,7 @@ impl NetworkProxySpec {
                 NetworkProxyConfig {
                     enabled: true,
                     // Without a controller, the owner supplies the entire permission ceiling.
-                    dangerously_allow_all_unix_sockets: true,
+                    dangerously_allow_all_unix_sockets: Some(true),
                     allow_local_binding: true,
                     ..NetworkProxyConfig::default()
                 },
@@ -308,6 +308,13 @@ impl NetworkProxySpec {
                 format!("environment network policy violates managed requirements: {error}"),
             )
         })?;
+        tracing::debug!(
+            controller_policy = ?controller.map(Self::environment_policy),
+            controller_allow_all_unix_sockets = ?controller.and_then(|spec| spec.config.dangerously_allow_all_unix_sockets),
+            attachment_policy = ?policy,
+            effective_policy = ?spec.environment_policy(),
+            "resolved environment network policy"
+        );
         Ok(spec)
     }
 
@@ -394,7 +401,7 @@ impl NetworkProxySpec {
         if let Some(dangerously_allow_all_unix_sockets) =
             requirements.dangerously_allow_all_unix_sockets
         {
-            config.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
+            config.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
             constraints.dangerously_allow_all_unix_sockets =
                 Some(dangerously_allow_all_unix_sockets);
         }

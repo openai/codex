@@ -209,7 +209,7 @@ pub fn validate_policy_against_constraints(
         .dangerously_allow_all_unix_sockets
         .unwrap_or(constraints.allow_unix_sockets.is_none());
     validate(
-        config.dangerously_allow_all_unix_sockets,
+        config.dangerously_allow_all_unix_sockets.unwrap_or(false),
         move |candidate| {
             if *candidate && !allow_all_unix_sockets {
                 Err(invalid_value(

@@ -87,7 +87,9 @@ impl RemoteNetworkProxyConfig {
             enable_socks5: config.enable_socks5,
             enable_socks5_udp: config.enable_socks5_udp,
             allow_upstream_proxy: config.allow_upstream_proxy,
-            dangerously_allow_all_unix_sockets: config.dangerously_allow_all_unix_sockets,
+            dangerously_allow_all_unix_sockets: config
+                .dangerously_allow_all_unix_sockets
+                .unwrap_or(false),
             mode: config.mode,
             domains: config.domains.clone(),
             unix_sockets: config.unix_sockets.clone(),
@@ -101,7 +103,7 @@ impl RemoteNetworkProxyConfig {
             enable_socks5: self.enable_socks5,
             enable_socks5_udp: self.enable_socks5_udp,
             allow_upstream_proxy: self.allow_upstream_proxy,
-            dangerously_allow_all_unix_sockets: self.dangerously_allow_all_unix_sockets,
+            dangerously_allow_all_unix_sockets: Some(self.dangerously_allow_all_unix_sockets),
             mode: self.mode,
             domains: self.domains,
             unix_sockets: self.unix_sockets,

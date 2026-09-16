@@ -786,7 +786,11 @@ impl NetworkProxyState {
         }
 
         let guard = self.state.read().await;
-        if guard.config.dangerously_allow_all_unix_sockets {
+        if guard
+            .config
+            .dangerously_allow_all_unix_sockets
+            .unwrap_or(false)
+        {
             return Ok(true);
         }
 
@@ -2038,7 +2042,7 @@ mod tests {
 
         let config = NetworkProxyConfig {
             enabled: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             ..NetworkProxyConfig::default()
         };
 
@@ -2055,7 +2059,7 @@ mod tests {
 
         let config = NetworkProxyConfig {
             enabled: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             ..NetworkProxyConfig::default()
         };
 
@@ -2071,7 +2075,7 @@ mod tests {
 
         let config = NetworkProxyConfig {
             enabled: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             ..NetworkProxyConfig::default()
         };
 
@@ -2084,7 +2088,7 @@ mod tests {
 
         let config = NetworkProxyConfig {
             enabled: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             ..NetworkProxyConfig::default()
         };
 
@@ -2244,7 +2248,7 @@ mod tests {
     async fn unix_socket_allow_all_flag_bypasses_allowlist() {
         let state = network_proxy_state_for_policy({
             let mut network = network_settings(&["example.com"], &[]);
-            network.dangerously_allow_all_unix_sockets = true;
+            network.dangerously_allow_all_unix_sockets = Some(true);
             network
         });
 
@@ -2262,7 +2266,7 @@ mod tests {
                 &[],
                 std::slice::from_ref(&socket_path),
             );
-            network.dangerously_allow_all_unix_sockets = true;
+            network.dangerously_allow_all_unix_sockets = Some(true);
             network
         });
 

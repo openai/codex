@@ -2383,6 +2383,17 @@ async fn deferred_executor_spawn_agent_inherits_ready_step_environments(
         ],
     )
     .await;
+    // If the child finishes after the parent's last request, its completion
+    // notification triggers one more parent request. Allow either ordering.
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-child-completion"),
+            ev_assistant_message("msg-child-completion", "done"),
+            ev_completed("resp-child-completion"),
+        ]),
+    )
+    .await;
     let mut builder = test_codex()
         .with_exec_server_url(format!("ws://{}", listener.local_addr()?))
         .with_config(move |config| {

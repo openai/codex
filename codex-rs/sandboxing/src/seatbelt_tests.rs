@@ -813,7 +813,7 @@ async fn prepared_managed_network_context_takes_precedence_over_live_proxy_socke
     let network_config = NetworkProxyConfig {
         enabled: true,
         mode: NetworkMode::Full,
-        dangerously_allow_all_unix_sockets: true,
+        dangerously_allow_all_unix_sockets: Some(true),
         ..Default::default()
     };
     let state = build_config_state(network_config, NetworkProxyConstraints::default())?;

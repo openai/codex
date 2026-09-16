@@ -493,7 +493,7 @@ impl NetworkToml {
             config.dangerously_allow_non_loopback_proxy = dangerously_allow_non_loopback_proxy;
         }
         if let Some(dangerously_allow_all_unix_sockets) = self.dangerously_allow_all_unix_sockets {
-            config.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
+            config.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
         }
         if let Some(mode) = self.mode {
             config.mode = mode;
@@ -512,8 +512,7 @@ impl NetworkToml {
                 };
                 proxy_unix_sockets.entries.insert(path.clone(), permission);
             }
-            config.unix_sockets =
-                (!proxy_unix_sockets.entries.is_empty()).then_some(proxy_unix_sockets);
+            config.unix_sockets = Some(proxy_unix_sockets);
         }
         if let Some(allow_local_binding) = self.allow_local_binding {
             config.allow_local_binding = allow_local_binding;

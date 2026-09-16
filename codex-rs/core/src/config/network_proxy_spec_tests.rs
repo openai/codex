@@ -24,6 +24,134 @@ fn domain_permissions(
     }
 }
 
+#[tokio::test]
+async fn attachment_socket_grants_respect_configured_restrictions_at_remote_launch()
+-> anyhow::Result<()> {
+    let profile = PermissionProfile::workspace_write();
+    let owner = EnvironmentNetworkPolicy::from_config(
+        &NetworkProxyConfig {
+            dangerously_allow_all_unix_sockets: Some(true),
+            ..Default::default()
+        },
+        /*managed_allowed_domains_only*/ false,
+    );
+    for (name, toml, required, expected) in [
+        ("omitted", "", None, true),
+        (
+            "explicit_deny",
+            "dangerously_allow_all_unix_sockets = false",
+            None,
+            false,
+        ),
+        (
+            "explicit_allow",
+            "dangerously_allow_all_unix_sockets = true",
+            None,
+            true,
+        ),
+        (
+            "finite",
+            "unix_sockets = { '/tmp/allowed.sock' = 'allow', '/tmp/denied.sock' = 'deny' }",
+            None,
+            false,
+        ),
+        ("empty", "unix_sockets = {}", None, false),
+        (
+            "managed_deny",
+            "dangerously_allow_all_unix_sockets = true",
+            Some(false),
+            false,
+        ),
+    ] {
+        let configured: codex_config::permissions_toml::NetworkToml = toml::from_str(toml)?;
+        let controller = NetworkProxySpec::from_config_and_constraints(
+            configured.to_network_proxy_config(),
+            Some(NetworkConstraints {
+                enabled: Some(true),
+                dangerously_allow_all_unix_sockets: required,
+                ..Default::default()
+            }),
+            &profile,
+        )?;
+        let composed = NetworkProxySpec::for_environment(
+            Some(&controller),
+            &owner,
+            &profile,
+            &Policy::empty(),
+        )?;
+        assert_eq!(
+            composed.config.dangerously_allow_all_unix_sockets,
+            Some(expected),
+            "{name}"
+        );
+        let state = Arc::new(controller.build_state_with_audit_metadata(Default::default())?);
+        let proxy = NetworkProxy::builder()
+            .state(Arc::clone(&state))
+            .managed_by_codex(false)
+            .build()
+            .await?;
+        let scoped = proxy.for_execution(
+            "socket-test",
+            name,
+            format!("socket-{name}"),
+            Some(composed.environment_policy()),
+            /*fallback_policy_decider*/ None,
+        )?;
+        let launch = scoped.remote_launch_config().await?;
+        assert_eq!(
+            launch.proxy.dangerously_allow_all_unix_sockets, expected,
+            "{name}"
+        );
+        assert_eq!(
+            launch.proxy.unix_sockets, composed.config.unix_sockets,
+            "{name}"
+        );
+        if name == "finite" {
+            assert_eq!(launch.proxy.unix_sockets, controller.config.unix_sockets);
+        }
+        if name == "omitted" {
+            // Inheritance must not grant sockets to ordinary controller-only commands.
+            assert!(
+                !proxy
+                    .remote_launch_config()
+                    .await?
+                    .proxy
+                    .dangerously_allow_all_unix_sockets
+            );
+            state.add_allowed_domain("granted.example").await?;
+            assert!(
+                scoped
+                    .remote_launch_config()
+                    .await?
+                    .proxy
+                    .dangerously_allow_all_unix_sockets
+            );
+
+            // A live handle must also honor a subsequently installed explicit restriction.
+            let restricted = NetworkProxySpec::from_config_and_constraints(
+                NetworkProxyConfig {
+                    enabled: true,
+                    dangerously_allow_all_unix_sockets: Some(false),
+                    ..Default::default()
+                },
+                /*requirements*/ None,
+                &profile,
+            )?;
+            proxy
+                .replace_config_state(restricted.build_config_state_for_spec()?)
+                .await?;
+            assert!(
+                !scoped
+                    .remote_launch_config()
+                    .await?
+                    .proxy
+                    .dangerously_allow_all_unix_sockets
+            );
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn build_state_with_audit_metadata_threads_metadata_to_state() {
     let spec = NetworkProxySpec {
@@ -119,7 +247,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
         "/private/tmp/controller.sock".to_string(),
         "/tmp/allowed.sock".to_string(),
     ]);
-    owner.dangerously_allow_all_unix_sockets = true;
+    owner.dangerously_allow_all_unix_sockets = Some(true);
     owner.allow_local_binding = true;
     let owner_policy =
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
@@ -162,7 +290,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     );
     owner.unix_sockets.clone_from(&spec.config.unix_sockets);
     owner.allow_upstream_proxy = false;
-    owner.dangerously_allow_all_unix_sockets = false;
+    owner.dangerously_allow_all_unix_sockets = Some(false);
     owner.allow_local_binding = false;
     assert_eq!(
         restricted.environment_policy(),

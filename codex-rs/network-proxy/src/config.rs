@@ -126,8 +126,9 @@ pub struct NetworkProxyConfig {
     pub allow_upstream_proxy: bool,
     #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
-    #[serde(default)]
-    pub dangerously_allow_all_unix_sockets: bool,
+    /// When no socket map is set, omission defers to attachment policy; execution defaults to false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[serde(default)]
     pub mode: NetworkMode,
     #[serde(default)]
@@ -166,7 +167,7 @@ impl Default for NetworkProxyConfig {
             enable_socks5_udp: true,
             allow_upstream_proxy: true,
             dangerously_allow_non_loopback_proxy: false,
-            dangerously_allow_all_unix_sockets: false,
+            dangerously_allow_all_unix_sockets: None,
             mode: NetworkMode::default(),
             domains: None,
             unix_sockets: None,
@@ -345,7 +346,7 @@ impl NetworkProxyConfig {
         for entry in entries {
             unix_sockets.entries.insert(entry, permission);
         }
-        self.unix_sockets = (!unix_sockets.entries.is_empty()).then_some(unix_sockets);
+        self.unix_sockets = Some(unix_sockets);
     }
 }
 
@@ -428,7 +429,9 @@ pub(crate) fn clamp_bind_addrs(
         "SOCKS5 proxy",
         "dangerously_allow_non_loopback_proxy",
     );
-    if cfg.allow_unix_sockets().is_empty() && !cfg.dangerously_allow_all_unix_sockets {
+    if cfg.allow_unix_sockets().is_empty()
+        && !cfg.dangerously_allow_all_unix_sockets.unwrap_or(false)
+    {
         return (http_addr, socks_addr);
     }
 
@@ -694,7 +697,7 @@ mod tests {
                 enable_socks5_udp: true,
                 allow_upstream_proxy: true,
                 dangerously_allow_non_loopback_proxy: false,
-                dangerously_allow_all_unix_sockets: false,
+                dangerously_allow_all_unix_sockets: None,
                 mode: NetworkMode::Full,
                 domains: None,
                 unix_sockets: None,
@@ -888,7 +891,6 @@ mod tests {
                 "enable_socks5_udp": true,
                 "allow_upstream_proxy": true,
                 "dangerously_allow_non_loopback_proxy": false,
-                "dangerously_allow_all_unix_sockets": false,
                 "mode": "full",
                 "domains": {
                     "example.com": "deny",
@@ -1070,7 +1072,7 @@ mod tests {
     fn clamp_bind_addrs_forces_loopback_when_all_unix_sockets_enabled() {
         let cfg = NetworkProxyConfig {
             dangerously_allow_non_loopback_proxy: true,
-            dangerously_allow_all_unix_sockets: true,
+            dangerously_allow_all_unix_sockets: Some(true),
             ..Default::default()
         };
         let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();

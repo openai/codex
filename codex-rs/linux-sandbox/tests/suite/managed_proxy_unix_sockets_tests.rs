@@ -134,7 +134,7 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
         let mut config = NetworkProxyConfig {
             enabled: true,
             proxy_url: "http://127.0.0.1:9".to_string(),
-            dangerously_allow_all_unix_sockets,
+            dangerously_allow_all_unix_sockets: Some(dangerously_allow_all_unix_sockets),
             ..Default::default()
         };
         if allow_path {
