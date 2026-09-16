@@ -613,7 +613,7 @@ async fn executor_discovery_routes_produce_equivalent_catalog_metadata() {
         .snapshot(&executor_roots, &Default::default())
         .await;
     let bundled = provider
-        .list(query(Some(discovery)))
+        .list(query(Some(discovery.clone())))
         .await
         .expect("list bundled executor skills");
 
@@ -661,12 +661,52 @@ async fn executor_discovery_routes_produce_equivalent_catalog_metadata() {
         .find(|entry| entry.name == "catalog:repaired")
         .expect("repaired skill");
     assert_eq!(repaired.description, "Build for AWS: ECS");
+    assert!(repaired.prompt_visible);
     let invalid_metadata = direct
         .entries
         .iter()
         .find(|entry| entry.name == "catalog:invalid-metadata")
         .expect("invalid metadata skill");
     assert_eq!(invalid_metadata.dependencies, None);
+
+    assert!(direct.entries.iter().all(|entry| entry.enabled));
+    // Match the discovery path, including aliases such as macOS's /var -> /private/var.
+    let disabled_path = PathUri::from_host_native_path(&repaired_skill).expect("skill URI");
+    for environment_id in ["local", "other-executor"] {
+        let configured = provider.clone().with_disabled_skill_paths(HashMap::from([(
+            environment_id.to_string(),
+            std::collections::HashSet::from([disabled_path.clone()]),
+        )]));
+        let mut expected = direct.clone();
+        if environment_id == "local" {
+            expected
+                .entries
+                .iter_mut()
+                .find(|entry| entry.name == "catalog:repaired")
+                .expect("repaired skill")
+                .enabled = false;
+        }
+        for discovery in [None, Some(discovery.clone())] {
+            let actual = configured
+                .list(query(discovery))
+                .await
+                .expect("list configured executor skills");
+            assert_eq!(comparable_entries(&actual), comparable_entries(&expected));
+            assert_eq!(actual.warnings, expected.warnings);
+            let visible_names = actual
+                .entries
+                .iter()
+                .filter(|entry| entry.enabled && entry.prompt_visible)
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>();
+            let expected_visible_names = if environment_id == "local" {
+                vec!["catalog:invalid-metadata"]
+            } else {
+                vec!["catalog:invalid-metadata", "catalog:repaired"]
+            };
+            assert_eq!(visible_names, expected_visible_names);
+        }
+    }
 
     std::fs::remove_dir_all(test_root).expect("remove skill directory");
 }
