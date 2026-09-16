@@ -1022,6 +1022,7 @@ pub async fn run_main_with_transport_options(
             let mut snapshot_finished = !managed_daemon;
             let mut clients_disconnected = false;
             let mut shutdown_state = ShutdownState::default();
+            let mut shutdown_signal_future = Box::pin(shutdown_signal());
             let exit_reason = loop {
                 // Sample submissions first: one can publish a running turn before
                 // releasing its permit, and shutdown must observe that new turn.
@@ -1057,7 +1058,8 @@ pub async fn run_main_with_transport_options(
                     _ = &mut snapshot, if shutdown_state.requested() && active_admissions == 0 && !snapshot_finished => {
                         snapshot_finished = true;
                     }
-                    shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
+                    shutdown_signal_result = &mut shutdown_signal_future, if graceful_signal_restart_enabled && !shutdown_state.forced() => {
+                        shutdown_signal_future.set(shutdown_signal());
                         let signal = match shutdown_signal_result {
                             Ok(signal) => signal,
                             Err(err) => {
