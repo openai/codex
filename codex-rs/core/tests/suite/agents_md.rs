@@ -375,6 +375,58 @@ async fn configured_fallback_is_used_when_agents_candidate_is_directory() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_fallback_paths_do_not_prevent_loading_valid_filenames() -> Result<()> {
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.project_doc_fallback_filenames =
+                [".", "..", "nested/WORKFLOW.md", "WORKFLOW.md"]
+                    .map(str::to_owned)
+                    .to_vec();
+        })
+        .with_workspace_setup(|cwd, fs| async move {
+            let nested = executor_path_uri(cwd.join("nested"))?;
+            fs.create_directory(
+                &nested,
+                CreateDirectoryOptions {
+                    recursive: false,
+                    follow_symlinks: true,
+                },
+                /*sandbox*/ None,
+            )
+            .await?;
+            for (path, contents) in [
+                (nested.join("WORKFLOW.md")?, b"nested instructions".to_vec()),
+                (
+                    executor_path_uri(cwd.join("WORKFLOW.md"))?,
+                    b"local instructions".to_vec(),
+                ),
+            ] {
+                fs.write_file(&path, contents, Default::default(), /*sandbox*/ None)
+                    .await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("hello").await?;
+
+    assert_single_instruction_fragment(
+        &response_mock.single_request(),
+        &expected_instruction_fragment(
+            &test.executor_environment().selection().cwd,
+            "local instructions",
+        ),
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
     let instructions = agents_instructions(
         test_codex()

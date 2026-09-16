@@ -2,6 +2,8 @@
 //!
 //! Project-level documentation is primarily stored in files named `AGENTS.md`.
 //! Additional fallback filenames can be configured via `project_doc_fallback_filenames`.
+//! Fallback entries containing path syntax for the executor's OS are ignored
+//! before any filesystem probes use them.
 //! We include the concatenation of all files found along the path from the
 //! project root to the current working directory as follows:
 //!
@@ -30,6 +32,7 @@ use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use std::io;
@@ -236,7 +239,7 @@ async fn agents_md_paths(
         vec![dir]
     };
 
-    let candidate_filenames = candidate_filenames(config);
+    let candidate_filenames = candidate_filenames(config, cwd);
     let candidate_filenames = &candidate_filenames;
     let mut results = futures::stream::iter(search_dirs)
         .map(|directory| async move {
@@ -266,13 +269,23 @@ async fn agents_md_paths(
     Ok(found)
 }
 
-fn candidate_filenames(config: &Config) -> Vec<&str> {
+fn candidate_filenames<'a>(config: &'a Config, cwd: &PathUri) -> Vec<&'a str> {
     let mut names: Vec<&str> = Vec::with_capacity(2 + config.project_doc_fallback_filenames.len());
     names.push(LOCAL_AGENTS_MD_FILENAME);
     names.push(DEFAULT_AGENTS_MD_FILENAME);
     for candidate in &config.project_doc_fallback_filenames {
         let candidate = candidate.as_str();
         if candidate.is_empty() {
+            continue;
+        }
+        // Use the executor's path convention, not the host's: resolving a Windows
+        // network path can send ambient credentials even during metadata probes.
+        if matches!(candidate, "." | "..")
+            || candidate.contains(['/', '\0'])
+            || cwd.infer_path_convention() == Some(PathConvention::Windows)
+                && candidate.contains(['\\', ':'])
+        {
+            tracing::warn!("ignoring project_doc_fallback_filenames entry that is not a filename");
             continue;
         }
         if !names.contains(&candidate) {
