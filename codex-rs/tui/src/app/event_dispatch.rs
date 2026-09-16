@@ -1975,7 +1975,7 @@ impl App {
                 );
             }
             AppEvent::ApplyPermissionShortcut { thread_id, selection } => {
-                self.apply_permission_shortcut(app_server, tui, thread_id, selection).await;
+                self.apply_permission_shortcut(app_server, thread_id, selection).await;
             }
             AppEvent::OpenFeedbackNote {
                 category,

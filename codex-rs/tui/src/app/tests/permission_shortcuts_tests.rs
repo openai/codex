@@ -15,7 +15,6 @@ fn read_only_selection() -> PermissionProfileSelection {
 async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
     for experimental_api in [false, true] {
         let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
-        let mut tui = crate::tui::test_support::make_test_tui()?;
         let thread_id = ThreadId::new();
         app.active_thread_id = Some(thread_id);
         app.chat_widget
@@ -48,49 +47,26 @@ async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
         );
         while events.try_recv().is_ok() {}
         let transcript_len = app.transcript_cells.len();
-        app.apply_permission_shortcut(
-            &mut app_server,
-            &mut tui,
-            ThreadId::new(),
-            read_only_selection(),
-        )
-        .await;
+        app.apply_permission_shortcut(&mut app_server, ThreadId::new(), read_only_selection())
+            .await;
         assert_eq!(app.transcript_cells.len(), transcript_len);
         assert!(events.try_recv().is_err());
-        app.apply_permission_shortcut(&mut app_server, &mut tui, thread_id, read_only_selection())
+        app.apply_permission_shortcut(&mut app_server, thread_id, read_only_selection())
             .await;
         assert_eq!(
             RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref()),
             original
         );
         assert_eq!(app.config.approvals_reviewer, original_reviewer);
-        let cell = app.transcript_cells.last().expect("rejection notice");
         insta::assert_snapshot!(
             if experimental_api {
                 "permission_shortcut_server_error"
             } else {
                 "permission_shortcut_unsupported"
             },
-            lines_to_single_string(&cell.display_lines(/*width*/ 120))
-                .replace(&thread_id.to_string(), "<THREAD_ID>")
+            next_history_message(&mut events).replace(&thread_id.to_string(), "<THREAD_ID>")
         );
         assert!(events.try_recv().is_err());
-        if !experimental_api {
-            app.select_permission_profile(
-                &mut app_server,
-                PermissionProfileSelection {
-                    profile_id: "server-only".into(),
-                    approval_policy: None,
-                    approvals_reviewer: None,
-                    display_label: "server-only".into(),
-                },
-            )
-            .await;
-            insta::assert_snapshot!(
-                next_history_message(&mut events),
-                @"■ Permission selection requires a newer app server."
-            );
-        }
         app_server.shutdown().await?;
     }
     Ok(())
@@ -99,7 +75,6 @@ async fn permission_shortcut_rejections_leave_state_unchanged() -> Result<()> {
 #[tokio::test]
 async fn permission_shortcut_confirms_without_persisting() -> Result<()> {
     let (mut app, mut events, _op_rx) = make_test_app_with_channels().await;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config
@@ -121,18 +96,28 @@ async fn permission_shortcut_confirms_without_persisting() -> Result<()> {
     let contents = std::fs::read_to_string(&config_path)?;
     while events.try_recv().is_ok() {}
 
-    app.apply_permission_shortcut(&mut app_server, &mut tui, thread_id, read_only_selection())
+    let before = RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref());
+    app.apply_permission_shortcut(&mut app_server, thread_id, read_only_selection())
         .await;
 
-    let cell = app.transcript_cells.last().expect("confirmed notice");
+    assert_eq!(
+        RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref()),
+        before
+    );
+    assert!(app.pending_server_profiles.contains_key(&thread_id));
     insta::assert_snapshot!(
-        lines_to_single_string(&cell.display_lines(/*width*/ 80)),
-        @"• Permissions updated to Read Only"
+        next_history_message(&mut events),
+        @"• Permission selection requested: Read Only"
     );
 
-    let settings = next_thread_settings_updated(&mut app_server, thread_id)
-        .await
-        .thread_settings;
+    let notification = next_thread_settings_updated(&mut app_server, thread_id).await;
+    let settings = notification.thread_settings.clone();
+    app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ThreadSettingsUpdated(notification),
+    )
+    .await?;
+    assert!(!app.pending_server_profiles.contains_key(&thread_id));
     let profile = app
         .chat_widget
         .config_ref()
@@ -145,10 +130,6 @@ async fn permission_shortcut_confirms_without_persisting() -> Result<()> {
     assert_eq!(profile, Some(ActivePermissionProfile::new(":read-only")));
     assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
     assert_eq!(std::fs::read_to_string(config_path)?, contents);
-    assert!(
-        events.try_recv().is_err(),
-        "must not queue another update or config write"
-    );
     app_server.shutdown().await?;
     Ok(())
 }

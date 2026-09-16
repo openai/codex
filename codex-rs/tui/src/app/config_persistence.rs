@@ -335,7 +335,7 @@ impl App {
                 self.chat_widget
                     .retain_input_after_failed_permission_selection();
                 self.chat_widget
-                    .add_error_message(format!("Failed to select permissions: {error}"));
+                    .add_error_message(format!("Failed to select permissions: {error:#}"));
             }
         }
     }
