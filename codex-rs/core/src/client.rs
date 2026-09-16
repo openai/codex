@@ -314,7 +314,7 @@ struct WebsocketSession {
 }
 
 // This is intentionally not a `PartialEq` implementation: request equality includes `input` and
-// `client_metadata`, while websocket reuse compares the input separately and ignores metadata.
+// `client_metadata`, while websocket reuse compares input and late tool-result metadata separately.
 // Access programs are authorized per response, including continuations, without replaying input.
 // Keep the destructuring exhaustive so new request fields require an explicit reuse decision.
 fn responses_request_properties_match(
@@ -380,6 +380,11 @@ fn response_items_equal_ignoring_internal_metadata(
 ) -> bool {
     if previous == current {
         return true;
+    }
+
+    // Late results update an already-sent output. A delta cannot carry that update.
+    if !previous.has_same_tool_result_metadata(current) {
+        return false;
     }
 
     let mut previous = previous.clone();

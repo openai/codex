@@ -27,6 +27,67 @@ fn first_executed_tool_call(item: &mut ResponseItem) -> Option<&mut ExecutedTool
 }
 
 #[test]
+fn result_metadata_comparison_tracks_raw_values_and_call_bindings() {
+    let empty = output("output");
+    let mut without_metadata = empty.clone();
+    without_metadata.append_executed_tool_calls(vec![ExecutedToolCall::new(
+        "apps_tool".to_string(),
+        serde_json::json!({ "query": "same" }),
+    )]);
+    assert!(empty.has_same_tool_result_metadata(&without_metadata));
+
+    let mut with_metadata = without_metadata.clone();
+    first_executed_tool_call(&mut with_metadata)
+        .unwrap()
+        .set_tool_result_metadata(ToolResultMetadata::new(
+            &serde_json::json!({ "id": "first" }),
+        ));
+    assert!(!without_metadata.has_same_tool_result_metadata(&with_metadata));
+    assert!(!with_metadata.has_same_tool_result_metadata(&without_metadata));
+    assert!(with_metadata.has_same_tool_result_metadata(&with_metadata.clone()));
+
+    let mut changed = with_metadata.clone();
+    first_executed_tool_call(&mut changed)
+        .unwrap()
+        .set_tool_result_metadata(ToolResultMetadata::new(
+            &serde_json::json!({ "id": "second" }),
+        ));
+    assert!(!with_metadata.has_same_tool_result_metadata(&changed));
+    changed.clear_tool_result_metadata();
+    assert!(without_metadata.has_same_tool_result_metadata(&changed));
+
+    let mut ordinary_metadata = with_metadata.clone();
+    ordinary_metadata.set_turn_id_if_missing("other-turn");
+    ordinary_metadata.set_tool_call_cell_id("other-cell");
+    ordinary_metadata.mark_tool_calls_complete();
+    first_executed_tool_call(&mut ordinary_metadata)
+        .unwrap()
+        .set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
+            r#type: "resource".to_string(),
+            id: "source".to_string(),
+        }]));
+    assert!(with_metadata.has_same_tool_result_metadata(&ordinary_metadata));
+
+    let mut different_call = with_metadata.clone();
+    first_executed_tool_call(&mut different_call).unwrap().name = "other_tool".to_string();
+    assert!(!with_metadata.has_same_tool_result_metadata(&different_call));
+    first_executed_tool_call(&mut different_call).unwrap().name = "apps_tool".to_string();
+    different_call
+        .internal_chat_message_metadata_passthrough_mut()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .executed_tool_calls
+        .as_mut()
+        .unwrap()
+        .insert(
+            0,
+            ExecutedToolCall::new("other_tool".to_string(), serde_json::json!({})),
+        );
+    assert!(!with_metadata.has_same_tool_result_metadata(&different_call));
+}
+
+#[test]
 fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
     let metadata_bytes = |items: &[ResponseItem]| -> Result<usize> {
         items.iter().try_fold(0_usize, |bytes, item| {

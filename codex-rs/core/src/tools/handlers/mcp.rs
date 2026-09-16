@@ -185,8 +185,14 @@ impl McpHandler {
             )
             .await;
         // Use the executed call's binding; a later catalog refresh must not change eligibility.
-        // Only the new metadata is internal; tool execution and call accounting are not.
-        let result_metadata_capture_allowed = false;
+        let result_metadata_capture_allowed = invocation
+            .session
+            .services
+            .analytics_events_client
+            .is_enabled()
+            && prepared_mcp_call
+                .as_ref()
+                .is_some_and(codex_mcp::PreparedMcpCall::is_host_owned_apps);
         let mcp_tool = prepared_mcp_call.as_ref().map(|call| {
             McpToolContext::from_prepared_call(
                 call,

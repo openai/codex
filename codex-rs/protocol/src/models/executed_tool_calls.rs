@@ -485,6 +485,31 @@ impl ResponseItem {
         self.internal_chat_message_metadata_passthrough()
     }
 
+    /// Compares raw result metadata and its call bindings, ignoring other internal metadata.
+    pub fn has_same_tool_result_metadata(&self, other: &Self) -> bool {
+        fn result_metadata(
+            item: &ResponseItem,
+        ) -> impl Iterator<Item = (usize, &str, &ExecutedToolCallArguments, &ToolResultMetadata)>
+        {
+            item.executed_tool_call_metadata()
+                .and_then(|metadata| metadata.executed_tool_calls.as_ref())
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter(|(_, call)| call.tool_result_metadata.is_some())
+                .map(|(index, call)| {
+                    (
+                        index,
+                        call.name.as_str(),
+                        call.arguments(),
+                        &call.tool_result_metadata,
+                    )
+                })
+        }
+
+        result_metadata(self).eq(result_metadata(other))
+    }
+
     /// Omits raw tool results without changing existing call, source or completion metadata.
     pub fn clear_tool_result_metadata(&mut self) {
         if let Some(metadata) = self

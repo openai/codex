@@ -358,8 +358,13 @@ async fn turn_start_omits_notification_media_without_changing_model_input() -> R
     Ok(())
 }
 
+#[test_case(None; "analytics_unset")]
+#[test_case(Some(true); "analytics_enabled")]
+#[test_case(Some(false); "analytics_disabled")]
 #[tokio::test]
-async fn tool_call_metadata_stays_out_of_raw_response_item_notifications() -> Result<()> {
+async fn tool_call_metadata_stays_out_of_raw_response_item_notifications(
+    analytics_enabled: Option<bool>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let arguments = json!({"query": "redaction"});
@@ -392,7 +397,8 @@ async fn tool_call_metadata_stays_out_of_raw_response_item_notifications() -> Re
             "params": {"name": "calendar_list_events", "arguments": arguments},
         })))
         .respond_with(move |request: &Request| {
-            let request: Value = serde_json::from_slice(&request.body).unwrap();
+            let request: Value =
+                serde_json::from_slice(&request.body).expect("valid MCP tool call JSON");
             ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc": "2.0",
                 "id": request["id"],
@@ -404,7 +410,7 @@ async fn tool_call_metadata_stays_out_of_raw_response_item_notifications() -> Re
         .mount(&server)
         .await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
+    let mut config = MockResponsesConfig::new(&server.uri())
         .with_provider_name("OpenAI")
         .with_provider_config("supports_websockets = false")
         .with_root_config(&format!(
@@ -412,8 +418,11 @@ async fn tool_call_metadata_stays_out_of_raw_response_item_notifications() -> Re
             apps.chatgpt_base_url
         ))
         .enable_feature(Feature::Apps)
-        .enable_feature(Feature::ExecutedToolCallMetadata)
-        .write(codex_home.path())?;
+        .enable_feature(Feature::ExecutedToolCallMetadata);
+    if let Some(enabled) = analytics_enabled {
+        config = config.with_extra_config(&format!("[analytics]\nenabled = {enabled}"));
+    }
+    config.write(codex_home.path())?;
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("chatgpt-test-token")
@@ -530,11 +539,10 @@ async fn tool_call_metadata_stays_out_of_raw_response_item_notifications() -> Re
         .context("persisted MCP output")?;
     assert_eq!(captured["output"], raw_output["output"]);
     // The custom inference endpoint omits raw metadata, so verify capture in the rollout.
-    let expected_metadata: Option<&Value> = None;
     assert_eq!(
         captured["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
             .get("tool_result_metadata"),
-        expected_metadata,
+        (analytics_enabled != Some(false)).then_some(&result_metadata),
     );
     Ok(())
 }

@@ -541,6 +541,121 @@ fn responses_request_limits_raw_tool_metadata_to_resolved_first_party_https_endp
     Ok(())
 }
 
+#[test]
+fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()> {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
+    let mut api_provider = provider.to_api_provider(/*auth_mode*/ None)?;
+    let mut client = test_model_client(SessionSource::Cli);
+    Arc::get_mut(&mut client.state)
+        .expect("test client should have unique session state")
+        .provider = create_model_provider(provider, /*auth_manager*/ None);
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        /*turn_id*/ None,
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    for (scenario, base_url, previous_metadata, current_metadata, expect_incremental) in [
+        (
+            "late_result",
+            "https://api.openai.com/v1",
+            None,
+            Some("first"),
+            false,
+        ),
+        (
+            "unchanged_result",
+            "https://api.openai.com/v1",
+            Some("first"),
+            Some("first"),
+            true,
+        ),
+        (
+            "changed_result",
+            "https://api.openai.com/v1",
+            Some("first"),
+            Some("second"),
+            false,
+        ),
+        (
+            "ordinary_metadata_only",
+            "https://api.openai.com/v1",
+            None,
+            None,
+            true,
+        ),
+        (
+            "filtered_result",
+            "https://proxy.example.com/v1",
+            None,
+            Some("first"),
+            true,
+        ),
+    ] {
+        let [mut previous_output, mut current_output] =
+            [previous_metadata, current_metadata].map(|metadata| {
+                let mut call =
+                    ExecutedToolCall::new("apps_tool".to_string(), json!({ "query": "same" }));
+                if let Some(id) = metadata {
+                    call.set_tool_result_metadata(ToolResultMetadata::new(&json!({ "id": id })));
+                }
+                let mut output = ResponseItem::from(ResponseInputItem::CustomToolCallOutput {
+                    call_id: "exec-call".to_string(),
+                    name: None,
+                    output: FunctionCallOutputPayload::from_text(
+                        "Script running with cell ID cell".to_string(),
+                    ),
+                });
+                output.append_executed_tool_calls(vec![call]);
+                output.set_tool_call_cell_id("exec-call");
+                output
+            });
+        previous_output.set_turn_id_if_missing("previous-turn");
+        current_output.set_turn_id_if_missing("current-turn");
+        let mut previous = client.build_responses_request(
+            &Prompt {
+                input: vec![previous_output],
+                ..Default::default()
+            },
+            &test_model_info(),
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &responses_metadata,
+        )?;
+        let follow_up = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: "wait-call".to_string(),
+            output: FunctionCallOutputPayload::from_text("done".to_string()),
+        });
+        let mut current = previous.clone();
+        current.input = vec![current_output, follow_up.clone()];
+        api_provider.base_url = base_url.to_string();
+        ModelClient::filter_tool_result_metadata(&mut previous.input, &api_provider);
+        ModelClient::filter_tool_result_metadata(&mut current.input, &api_provider);
+
+        let mut session = client.new_session();
+        session.websocket_session.last_request = Some(previous);
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        sender
+            .send(super::LastResponse {
+                response_id: "previous-response".to_string(),
+                items_added: Vec::new(),
+            })
+            .unwrap();
+        session.websocket_session.last_response_rx = Some(receiver);
+        let (incremental, from_warmup) = session.prepare_websocket_request(&current);
+        assert_eq!(
+            incremental,
+            expect_incremental.then_some(("previous-response".to_string(), vec![follow_up])),
+            "{scenario}",
+        );
+        assert!(!from_warmup);
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn responses_http_omits_raw_tool_metadata_for_openai_named_custom_endpoint()
 -> anyhow::Result<()> {
