@@ -4126,6 +4126,7 @@ dependencies = [
  "opentelemetry",
  "pretty_assertions",
  "rama-core",
+ "rama-dns",
  "rama-http",
  "rama-http-backend",
  "rama-net",

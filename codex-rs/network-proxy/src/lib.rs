@@ -25,6 +25,8 @@ mod responses;
 mod runtime;
 mod socks5;
 mod state;
+#[cfg(target_os = "macos")]
+mod system_dns;
 mod upstream;
 #[cfg(target_os = "windows")]
 mod windows_proxy_ingress;

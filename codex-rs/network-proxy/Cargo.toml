@@ -53,6 +53,7 @@ tempfile = { workspace = true }
 rama-unix = { version = "=0.3.0-alpha.4" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+rama-dns = { version = "=0.3.0-alpha.4" }
 security-framework = "3"
 
 [target.'cfg(windows)'.dependencies]

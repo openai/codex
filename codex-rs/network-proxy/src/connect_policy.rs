@@ -1,6 +1,8 @@
 use crate::policy::is_non_public_ip;
 use crate::runtime::HostBlockDecision;
 use crate::state::NetworkProxyState;
+#[cfg(target_os = "macos")]
+use crate::system_dns::SystemDnsResolver;
 use rama_core::Service;
 use rama_core::error::BoxError;
 use rama_core::error::ErrorExt as _;
@@ -38,8 +40,12 @@ where
     type Error = BoxError;
 
     async fn serve(&self, input: Input) -> Result<Self::Output, Self::Error> {
+        let connector = TcpConnector::new();
+        #[cfg(target_os = "macos")]
+        let connector = connector.with_dns(SystemDnsResolver);
+
         if input.extensions().get::<ProxyAddress>().is_some() {
-            return TcpConnector::new().serve(input).await;
+            return connector.serve(input).await;
         }
 
         let target = input
@@ -48,7 +54,7 @@ where
             .host_with_port()
             .ok_or_else(|| OpaqueError::from_display("network target is missing a port"))?;
 
-        TcpConnector::new()
+        connector
             .with_connector(TargetCheckedStreamConnector {
                 state: self.state.clone(),
                 target,
