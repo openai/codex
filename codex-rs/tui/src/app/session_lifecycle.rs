@@ -1246,13 +1246,17 @@ impl App {
                 self.resume_model_settings(),
             )
             .await;
+        let mut history_notice = None;
         let (resumed, read_only) = match resumed {
             Ok(resumed) => (resumed, false),
             Err(err) if crate::app_server_session::is_active_writer_error(&err) => match app_server
                 .read_thread_for_viewing(&resume_config, &local_settings, target_session.thread_id)
                 .await
             {
-                Ok(thread) => (thread, true),
+                Ok((thread, notice)) => {
+                    history_notice = notice;
+                    (thread, true)
+                }
                 Err(read_err) => {
                     self.add_session_picker_error(format!(
                         "Failed to view thread open elsewhere: {read_err}"
@@ -1310,6 +1314,10 @@ impl App {
                     self.ensure_thread_channel(resumed_thread_id)
                         .mark_external_writer();
                     self.chat_widget.show_external_writer_thread();
+                    if let Some(notice) = history_notice {
+                        self.chat_widget
+                            .add_info_message(notice.to_string(), /*hint*/ None);
+                    }
                 }
                 if self.app_server_target.uses_remote_workspace() {
                     let config = self.chat_widget.config_ref();

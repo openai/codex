@@ -491,6 +491,7 @@ impl App {
                     crate::app_server_session::ResumeModelSettings::PreserveExistingThread
                 }
             };
+            let mut history_notice = None;
             let (resumed, read_only) = if let Some((_, started)) = started {
                 (started, false)
             } else if !unloaded
@@ -519,11 +520,16 @@ impl App {
                             )
                             .await
                         {
-                            Ok(thread) => (thread, true),
-                            Err(error) => {
-                                self.add_agents_overview_error(format!(
-                                    "Failed to view task open elsewhere: {error}"
-                                ));
+                            Ok((thread, notice)) => {
+                                history_notice = notice;
+                                (thread, true)
+                            }
+                            Err(_) => {
+                                tracing::warn!("Failed to load read-only conversation history");
+                                self.add_agents_overview_error(
+                                    "Couldn't load this conversation. Please try again."
+                                        .to_string(),
+                                );
                                 return Ok(AppRunControl::Continue);
                             }
                         }
@@ -606,6 +612,10 @@ impl App {
                 self.ensure_thread_channel(root_thread_id)
                     .mark_external_writer();
                 self.chat_widget.show_external_writer_thread();
+                if let Some(notice) = history_notice {
+                    self.chat_widget
+                        .add_info_message(notice.to_string(), /*hint*/ None);
+                }
             }
             let mut destination_config = self.chat_widget.config_ref().clone();
             if self.app_server_target.uses_remote_workspace() {

@@ -378,6 +378,7 @@ impl App {
         let mut start_in_agents_overview =
             matches!(&session_selection, SessionSelection::AgentsOverview);
         let mut read_only_thread = false;
+        let mut history_notice = None;
         let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh
             | SessionSelection::Exit
@@ -493,7 +494,10 @@ impl App {
                             )
                             .await
                         {
-                            Ok(result) => result,
+                            Ok(result) => result.map(|(thread, notice)| {
+                                history_notice = notice;
+                                thread
+                            }),
                             Err(err) => return shutdown_on_startup_error(app_server, err).await,
                         }
                     }
@@ -851,6 +855,10 @@ See the Codex keymap documentation for supported actions and examples."
             if read_only_thread {
                 app.ensure_thread_channel(thread_id).mark_external_writer();
                 app.chat_widget.show_external_writer_thread();
+                if let Some(notice) = history_notice {
+                    app.chat_widget
+                        .add_info_message(notice.to_string(), /*hint*/ None);
+                }
             }
             if !read_only_thread
                 && should_prompt_for_paused_goal_after_startup_resume

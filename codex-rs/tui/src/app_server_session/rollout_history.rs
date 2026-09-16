@@ -1,4 +1,4 @@
-//! Resume history policy for local rollouts that may migrate between formats.
+//! Resume and read-only history loading across rollout formats.
 
 use super::AppServerSession;
 use super::AppServerStartedThread;
@@ -14,11 +14,18 @@ use crate::legacy_core::config::Config;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadResumeResponse;
+use codex_app_server_protocol::ThreadTurnsListParams;
+use codex_app_server_protocol::ThreadTurnsListResponse;
+use codex_app_server_protocol::TurnItemsView;
 use codex_protocol::ThreadId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
+
+// Bound recovery to recent messages when item paging is unavailable.
+const READ_ONLY_HISTORY_TURN_LIMIT: u32 = 100;
 
 impl AppServerSession {
     /// Read a conflicting thread without taking its writer lease. This is a snapshot, not an
@@ -28,17 +35,46 @@ impl AppServerSession {
         config: &Config,
         local_settings: &crate::local_settings::LocalSettings,
         thread_id: ThreadId,
-    ) -> Result<AppServerStartedThread> {
+    ) -> Result<(AppServerStartedThread, Option<&'static str>)> {
         let mut thread = self.thread_read(thread_id, /*include_turns*/ false).await?;
-        self.hydrate_initial_thread_history(
-            &mut thread,
-            /*turn_cursor*/ None,
-            /*item_cursor*/ None,
-            Some(config),
-            Some(local_settings),
-            HistoryHydrationScope::Initial,
-        )
-        .await?;
+        let mut history_notice = None;
+        if let Err(error) = self
+            .hydrate_initial_thread_history(
+                &mut thread,
+                /*turn_cursor*/ None,
+                /*item_cursor*/ None,
+                Some(config),
+                Some(local_settings),
+                HistoryHydrationScope::Initial,
+            )
+            .await
+        {
+            if thread.history_mode == ThreadHistoryMode::Legacy {
+                return Err(error);
+            }
+            // Summary pages retain user messages and final replies without scanning
+            // every tool item when the item-paging endpoint is unavailable.
+            tracing::warn!("Failed to page read-only thread history; trying summary pages");
+            let request_id = self.next_request_id();
+            let page: ThreadTurnsListResponse = self
+                .client
+                .request_typed(ClientRequest::ThreadTurnsList {
+                    request_id,
+                    params: ThreadTurnsListParams {
+                        thread_id: thread_id.to_string(),
+                        cursor: None,
+                        limit: Some(READ_ONLY_HISTORY_TURN_LIMIT),
+                        sort_direction: Some(SortDirection::Desc),
+                        items_view: Some(TurnItemsView::Summary),
+                    },
+                })
+                .await?;
+            thread.turns = page.data.into_iter().rev().collect();
+            self.history_pagination.remove(&thread_id);
+            history_notice = Some(
+                "Showing up to 100 recent prompts and final replies. Intermediate messages and tool activity are unavailable.",
+            );
+        }
         let session = thread_session_state_from_thread_response(
             &thread.id,
             crate::windows_sandbox::host_from_environments(thread.environments.as_deref()),
@@ -61,12 +97,15 @@ impl AppServerSession {
         )
         .await
         .map_err(color_eyre::eyre::Report::msg)?;
-        Ok(AppServerStartedThread {
-            session,
-            turns: thread.turns,
-            blocks_direct_input: false,
-            task_tools_available: false,
-        })
+        Ok((
+            AppServerStartedThread {
+                session,
+                turns: thread.turns,
+                blocks_direct_input: false,
+                task_tools_available: false,
+            },
+            history_notice,
+        ))
     }
 
     pub(crate) fn with_local_codex_home(mut self, codex_home: &AbsolutePathBuf) -> Self {

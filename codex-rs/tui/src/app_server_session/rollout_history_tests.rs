@@ -214,7 +214,7 @@ async fn viewing_thread_reads_history_without_resuming_it() -> Result<()> {
     )?;
     let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
     let next_request_id = app_server.next_request_id;
-    let viewed = app_server
+    let (viewed, notice) = app_server
         .read_thread_for_viewing(
             &config,
             &crate::local_settings::LocalSettings::from(&config),
@@ -222,6 +222,7 @@ async fn viewing_thread_reads_history_without_resuming_it() -> Result<()> {
         )
         .await?;
 
+    assert_eq!(notice, None);
     assert_eq!(viewed.session.thread_id, thread_id);
     assert!(!viewed.turns.is_empty());
     assert!(!viewed.blocks_direct_input);

@@ -151,6 +151,8 @@ pub(super) enum HistoryCapabilities {
     LegacyDynamicToolsAndHistory,
     ForkHydrationFails,
     ReadAfterResumeFails,
+    ItemsListFails,
+    ItemsAndSummaryTurnsFail,
     ThreadListFails,
     ThreadStartFails,
     ConfigReadUnsupported(i64),
@@ -360,13 +362,21 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                             id: request_id,
                             result: serde_json::json!({}),
                         })
-                    } else if history_capabilities == HistoryCapabilities::ReadAfterResumeFails
-                        && request.method == "thread/read"
-                        && request_sink
-                            .lock()
-                            .expect("request recorder lock")
-                            .iter()
-                            .any(|recorded| recorded.method == "thread/resume")
+                    } else if (matches!(
+                        history_capabilities,
+                        HistoryCapabilities::ItemsListFails
+                            | HistoryCapabilities::ItemsAndSummaryTurnsFail
+                    ) && (request.method == "thread/items/list"
+                        || (history_capabilities == HistoryCapabilities::ItemsAndSummaryTurnsFail
+                            && request.method == "thread/turns/list"
+                            && params.is_some_and(|params| params["itemsView"] == "summary"))))
+                        || (history_capabilities == HistoryCapabilities::ReadAfterResumeFails
+                            && request.method == "thread/read"
+                            && request_sink
+                                .lock()
+                                .expect("request recorder lock")
+                                .iter()
+                                .any(|recorded| recorded.method == "thread/resume"))
                     {
                         JSONRPCMessage::Error(JSONRPCError {
                             id: request_id,
@@ -4480,9 +4490,12 @@ async fn external_writer_escape_preserves_snapshot_and_explicit_quits() -> Resul
 
 #[tokio::test]
 async fn command_center_read_only_open_requests_and_failure_preservation() -> Result<()> {
-    for history_capabilities in [
-        HistoryCapabilities::Current,
-        HistoryCapabilities::ReadAfterResumeFails,
+    for (history_capabilities, saved_turn_count) in [
+        (HistoryCapabilities::Current, 0usize),
+        (HistoryCapabilities::ReadAfterResumeFails, 0),
+        (HistoryCapabilities::ItemsListFails, 6),
+        (HistoryCapabilities::ItemsListFails, 101),
+        (HistoryCapabilities::ItemsAndSummaryTurnsFail, 6),
     ] {
         let (mut app, _codex_home) = Box::pin(make_history_test_app()).await?;
         std::fs::write(
@@ -4497,8 +4510,72 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
             )
             .map_err(std::io::Error::other)?;
         }
-        let thread_id =
-            create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "Locked task")?;
+        let history_mode = if matches!(
+            history_capabilities,
+            HistoryCapabilities::ItemsListFails | HistoryCapabilities::ItemsAndSummaryTurnsFail
+        ) {
+            ThreadHistoryMode::Paginated
+        } else {
+            ThreadHistoryMode::Legacy
+        };
+        let thread_id = create_history_rollout(&app.config, history_mode, "Locked task")?;
+        if history_mode == ThreadHistoryMode::Paginated {
+            let path = rollout_path(
+                app.config.codex_home.as_path(),
+                "2026-01-02T00-00-00",
+                &thread_id.to_string(),
+            );
+            let mut contents = std::fs::read_to_string(&path)?;
+            for index in 0..saved_turn_count {
+                let first_ordinal = contents.lines().count();
+                let events = [
+                    EventMsg::TurnStarted(TurnStartedEvent {
+                        turn_id: format!("saved-turn-{index}"),
+                        root_turn_id: None,
+                        trace_id: None,
+                        started_at: None,
+                        model_context_window: None,
+                        collaboration_mode_kind: Default::default(),
+                    }),
+                    EventMsg::ItemCompleted(ItemCompletedEvent {
+                        thread_id,
+                        turn_id: format!("saved-turn-{index}"),
+                        item: TurnItem::UserMessage(UserMessageItem::new(&[CoreUserInput::Text {
+                            text: "Locked task".to_string(),
+                            text_elements: Vec::new(),
+                        }])),
+                        started_at_ms: None,
+                        completed_at_ms: 0,
+                    }),
+                    EventMsg::ItemCompleted(ItemCompletedEvent {
+                        thread_id,
+                        turn_id: format!("saved-turn-{index}"),
+                        item: TurnItem::AgentMessage(AgentMessageItem {
+                            id: format!("saved-answer-{index}"),
+                            content: vec![AgentMessageContent::Text {
+                                text: "Saved final answer".to_string(),
+                            }],
+                            phase: Some(codex_protocol::models::MessagePhase::FinalAnswer),
+                            memory_citation: None,
+                            delivery: None,
+                            questions: None,
+                        }),
+                        started_at_ms: None,
+                        completed_at_ms: 0,
+                    }),
+                ];
+                for (offset, event) in events.into_iter().enumerate() {
+                    let record = serde_json::json!({
+                        "timestamp": "2026-01-02T00:00:00Z",
+                        "ordinal": first_ordinal + offset,
+                        "type": "event_msg",
+                        "payload": event,
+                    });
+                    contents.push_str(&format!("{record}\n"));
+                }
+            }
+            std::fs::write(path, contents)?;
+        }
         let mut owner = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
         Box::pin(owner.resume_thread(
             &app.local_settings,
@@ -4532,16 +4609,28 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
         let before = render_bottom_popup(&app.chat_widget, /*width*/ 96);
         requests.lock().unwrap().clear();
         let mut tui = crate::tui::test_support::make_test_tui()?;
+        let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+        app.app_event_tx = AppEventSender::new(tx);
 
         Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, thread_id)).await?;
         assert_eq!(recorded_params(&requests, "thread/resume").len(), 1);
         assert!(recorded_params(&requests, "turn/start").is_empty());
-        if history_capabilities == HistoryCapabilities::ReadAfterResumeFails {
+        if matches!(
+            history_capabilities,
+            HistoryCapabilities::ReadAfterResumeFails
+                | HistoryCapabilities::ItemsAndSummaryTurnsFail
+        ) {
             let error = render_bottom_popup(&app.chat_widget, /*width*/ 96);
-            assert!(
-                error.contains("Failed to view task open elsewhere"),
-                "{error}"
-            );
+            insta::allow_duplicates! {
+                insta::assert_snapshot!(error, @"
+                  Unable to complete action
+                  Couldn't load this conversation. Please try again.
+
+                › 1. Return to command center
+
+                  Press enter to confirm or esc to go back
+                ");
+            }
             assert_eq!(app.current_displayed_thread_id(), Some(current_id));
             assert!(recorded_params(&requests, "thread/unsubscribe").is_empty());
             app.chat_widget.handle_key_event(KeyCode::Esc.into());
@@ -4553,6 +4642,48 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
                 app.thread_event_channels[&thread_id].attachment(),
                 ThreadEventAttachment::ExternalWriter
             );
+            let turns = app.thread_event_channels[&thread_id]
+                .store
+                .lock()
+                .await
+                .snapshot()
+                .turns;
+            assert!(serde_json::to_string(&turns)?.contains("Locked task"));
+            if history_capabilities == HistoryCapabilities::ItemsListFails {
+                let notice = std::iter::from_fn(|| events.try_recv().ok())
+                    .filter_map(|event| match event {
+                        AppEvent::InsertHistoryCell(cell) => {
+                            Some(lines_to_single_string(&cell.display_lines(/*width*/ 200)))
+                        }
+                        _ => None,
+                    })
+                    .find(|message| message.contains("Showing up to 100 recent prompts"))
+                    .expect("summary history notice");
+                insta::allow_duplicates! {
+                    insta::assert_snapshot!(notice, @"• Showing up to 100 recent prompts and final replies. Intermediate messages and tool activity are unavailable.");
+                }
+                assert!(serde_json::to_string(&turns)?.contains("Saved final answer"));
+                assert!(!recorded_params(&requests, "thread/items/list").is_empty());
+                assert_eq!(
+                    turns.iter().map(|turn| turn.id.clone()).collect::<Vec<_>>(),
+                    (saved_turn_count.saturating_sub(100)..saved_turn_count)
+                        .map(|index| format!("saved-turn-{index}"))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    recorded_params(&requests, "thread/turns/list")
+                        .into_iter()
+                        .filter(|params| params["itemsView"] == "summary")
+                        .count(),
+                    1
+                );
+                assert!(
+                    recorded_params(&requests, "thread/read")
+                        .iter()
+                        .all(|params| !params["includeTurns"].as_bool().unwrap_or(false))
+                );
+                assert!(!server.has_older_history(thread_id));
+            }
         }
         owner.shutdown().await?;
         server.shutdown().await?;
