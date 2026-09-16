@@ -82,6 +82,7 @@ members = [
     "codex-mcp",
     "memories/read",
     "memories/write",
+    "mermaid",
     "model-provider-info",
     "mxc-sandbox",
     "models-manager",

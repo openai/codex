@@ -1,0 +1,45 @@
+---
+source: mermaid/src/families_tests.rs
+assertion_line: 107
+expression: output
+---
+┌─────────────────────────────────┐
+│ CUSTOMER                        │
+│ ────────                        │
+│ int id PK                       │
+│ string email UK                 │
+│ string name                     │
+│                                 ├──(1) places───────┐
+└─────────────────────────────────┘                   │
+                                                      │
+                                                      │
+┌─────────────────────────────────┐                   │
+│ ORDER                           │                   │
+│ ─────                           │                   │
+│ int id PK                       │                   │
+│ int customer_id FK              │                   │
+│ string status                   │                   │
+│                                 ├──(0..many)────────┘
+│                                 ├──(1) contains───────┐
+└─────────────────────────────────┘                     │
+                                                        │
+                                                        │
+┌─────────────────────────────────┐                     │
+│ LINE_ITEM                       │                     │
+│ ─────────                       │                     │
+│ int order_id PK, FK — order key │                     │
+│ int product_id PK, FK           │                     │
+│ int quantity                    │                     │
+│                                 ├──(1..many)──────────┘
+│                                 ├─┄(0..many)┄┄┄┄┄┄┄┄┄┄┄┄┐
+└─────────────────────────────────┘                       ┆
+                                                          ┆
+                                                          ┆
+┌─────────────────────────────────┐                       ┆
+│ PRODUCT                         │                       ┆
+│ ───────                         │                       ┆
+│ int id PK                       │                       ┆
+│ string name                     │                       ┆
+│ decimal price                   │                       ┆
+│                                 ├─┄(1) appears_in┄┄┄┄┄┄┄┘
+└─────────────────────────────────┘
