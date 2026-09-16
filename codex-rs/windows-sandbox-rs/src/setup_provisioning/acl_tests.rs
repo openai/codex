@@ -8,6 +8,7 @@ use super::Payload;
 use super::SETUP_VERSION;
 use super::SetupMode;
 use super::SetupRuntime;
+use super::WRITE_DAC;
 use super::convert_string_sid_to_sid;
 use super::lock_sandbox_bin_dir;
 use super::lock_sandbox_dir;
@@ -94,6 +95,26 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
             refresh_only: false,
         };
         lock_sandbox_bin_dir(&payload, &sandbox_group_sid).expect("lock sandbox bin");
+        let real_sid = resolve_sid(&payload.real_user).expect("resolve real owner SID");
+        let real_psid = sid_bytes_to_psid(&real_sid).expect("convert real owner SID");
+        assert!(
+            path_mask_allows(
+                &sandbox_bin,
+                &[real_psid],
+                WRITE_DAC,
+                /*require_all_bits*/ true
+            )
+            .expect("owner ACE permits refreshing the bin DACL")
+        );
+        assert!(
+            !path_mask_allows(
+                &sandbox_bin,
+                &[sandbox_group_psid],
+                WRITE_DAC,
+                /*require_all_bits*/ true,
+            )
+            .expect("sandbox cannot change the bin DACL")
+        );
         let new_runner = sandbox_bin.join("new-runner.exe");
         fs::write(&new_runner, b"new").expect("create new runner");
 
@@ -119,6 +140,7 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
         }
 
         unsafe {
+            LocalFree(real_psid as HLOCAL);
             LocalFree(workspace_psid as HLOCAL);
             LocalFree(sandbox_group_psid as HLOCAL);
         }
