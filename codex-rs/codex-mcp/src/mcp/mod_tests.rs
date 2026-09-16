@@ -86,6 +86,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
         chatgpt_base_url: "https://chatgpt.com".to_string(),
         apps_mcp_product_sku: None,
+        requires_read_only_mcp_tools: false,
         codex_home,
         mcp_enterprise_managed_auth: None,
         xaa_enabled: false,

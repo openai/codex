@@ -1758,6 +1758,7 @@ impl Config {
         McpConfig {
             chatgpt_base_url: self.chatgpt_base_url.clone(),
             apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
+            requires_read_only_mcp_tools: false,
             codex_home: self.codex_home.to_path_buf(),
             mcp_enterprise_managed_auth: self.mcp_enterprise_managed_auth.clone(),
             xaa_enabled: self.features.enabled(Feature::UseXaa)

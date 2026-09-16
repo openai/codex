@@ -114,6 +114,82 @@ fn legacy_initialize_response(request: &Value) -> ResponseTemplate {
 }
 
 #[tokio::test]
+async fn read_only_tool_requests_preserve_host_policy_and_caller_metadata() -> anyhow::Result<()> {
+    for mode in [McpProtocolMode::Legacy, McpProtocolMode::V20260728] {
+        for read_only in [false, true] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/mcp"))
+                .respond_with(|request: &Request| {
+                    let body: Value = request.body_json().expect("JSON-RPC request");
+                    let result = match body["method"].as_str() {
+                        Some("server/discover") => return modern_discover_response(&body),
+                        Some("initialize") => return legacy_initialize_response(&body),
+                        Some("notifications/initialized") => return ResponseTemplate::new(202),
+                        Some("tools/list") => json!({"resultType": "complete", "tools": []}),
+                        Some("tools/call") => json!({"resultType": "complete", "content": []}),
+                        other => panic!("unexpected request: {other:?}"),
+                    };
+                    ResponseTemplate::new(200).set_body_json(json!({
+                        "jsonrpc": "2.0", "id": body["id"], "result": result,
+                    }))
+                })
+                .mount(&server)
+                .await;
+            let client = create_client(&server, mode)
+                .await?
+                .with_read_only_tools(read_only);
+            initialize_client(&client).await?;
+            client.list_tools(/*params*/ None, /*timeout*/ None).await?;
+            let caller_meta = json!({"openai/readOnly": false, "callId": "preserved"});
+            let mut page = rmcp::model::PaginatedRequestParams::default()
+                .with_cursor(Some("next".to_string()));
+            page.meta = Some(serde_json::from_value(caller_meta.clone())?);
+            client
+                .list_tools_with_connector_ids(Some(page), /*timeout*/ None)
+                .await?;
+            client
+                .call_tool(
+                    "write".to_string(),
+                    Some(json!({"message": "hello"})),
+                    Some(caller_meta),
+                    /*timeout*/ None,
+                )
+                .await?;
+
+            let requests = server
+                .received_requests()
+                .await
+                .expect("recorded requests")
+                .into_iter()
+                .map(|request| request.body_json::<Value>().expect("JSON-RPC request"))
+                .filter(|body| matches!(body["method"].as_str(), Some("tools/list" | "tools/call")))
+                .map(|body| {
+                    let params = &body["params"];
+                    json!({
+                        "method": body["method"],
+                        "readOnly": params["_meta"]["openai/readOnly"],
+                        "callId": params["_meta"]["callId"],
+                        "cursor": params["cursor"],
+                        "arguments": params["arguments"],
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                requests,
+                vec![
+                    json!({"method": "tools/list", "readOnly": read_only.then_some(true), "callId": null, "cursor": null, "arguments": null}),
+                    json!({"method": "tools/list", "readOnly": read_only, "callId": "preserved", "cursor": "next", "arguments": null}),
+                    json!({"method": "tools/call", "readOnly": read_only, "callId": "preserved", "cursor": null, "arguments": {"message": "hello"}}),
+                ]
+            );
+            client.shutdown().await;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn modern_mode_uses_sdk_discovery_and_self_contained_request_metadata() -> anyhow::Result<()>
 {
     let server = MockServer::start().await;

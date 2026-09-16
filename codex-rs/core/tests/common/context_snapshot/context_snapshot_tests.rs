@@ -59,6 +59,7 @@ fn lite_tool_catalog_and_code_calls_are_visible() {
             json!({ "type": "custom_tool_call_output", "output": {
                 "content": "plan updated", "success": true
             } }),
+            json!({ "type": "function_call_output", "output": "Wall time: 0.0025 seconds\nOutput: Report ready." }),
         ],
         &ContextSnapshotOptions::default(),
     );
@@ -72,6 +73,7 @@ fn lite_tool_catalog_and_code_calls_are_visible() {
     ));
     assert!(rendered.contains("     | ready"));
     assert!(rendered.contains("03:custom_tool_call_output:success=true:plan updated"));
+    assert!(rendered.contains("04:function_call_output:Wall time: <DURATION> seconds"));
 }
 
 #[test]

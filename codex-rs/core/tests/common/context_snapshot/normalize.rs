@@ -109,15 +109,17 @@ impl Normalizer {
     }
 
     fn normalize_values(&mut self, text: &str) -> String {
-        // Code Mode reports elapsed wall time in an otherwise stable tool output header.
-        let text = if text.starts_with("Script completed\nWall time ") {
+        // Tool calls report elapsed wall time in an otherwise stable output header.
+        let text = if text.starts_with("Script completed\nWall time ")
+            || text.starts_with("Wall time: ")
+        {
             static WALL_TIME: OnceLock<Regex> = OnceLock::new();
             WALL_TIME
                 .get_or_init(|| {
-                    Regex::new(r"(?m)^Wall time [0-9]+(?:\.[0-9]+)? seconds$")
-                        .expect("code mode wall time regex")
+                    Regex::new(r"(?m)^(Wall time:?) [0-9]+(?:\.[0-9]+)? seconds$")
+                        .expect("tool wall time regex")
                 })
-                .replace(text, "Wall time <DURATION> seconds")
+                .replace(text, "${1} <DURATION> seconds")
                 .into_owned()
         } else {
             text.to_string()

@@ -126,6 +126,8 @@ pub struct McpConfig {
     pub chatgpt_base_url: String,
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
+    /// Requests server-side read-only filtering and invocation checks for MCP tools.
+    pub requires_read_only_mcp_tools: bool,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
     pub codex_home: PathBuf,
     /// Trusted enterprise IdP inherited after normal catalog and policy resolution.

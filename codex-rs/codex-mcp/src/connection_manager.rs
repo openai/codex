@@ -289,6 +289,7 @@ impl McpConnectionSet {
             .into_iter()
             .filter(|(_, server)| server.enabled())
         {
+            let server = server.with_read_only_mcp_tools(config.requires_read_only_mcp_tools);
             let registration = config.mcp_server_catalog.server(&server_name);
             let client_mcp_extensions = crate::client_capabilities::server_mcp_extensions(
                 &client_mcp_extensions,
@@ -349,7 +350,9 @@ impl McpConnectionSet {
                 } => bearer_token_env_var.is_some(),
                 McpServerTransportConfig::Stdio { .. } => false,
             };
+            // Filtered catalogs must not read or populate an unrestricted shared cache.
             let shares_codex_apps_tools_cache = is_host_owned_codex_apps
+                && !server.requires_read_only_mcp_tools()
                 && should_share_codex_apps_tools_cache(&server_name, uses_env_bearer_token);
             let codex_apps_tools_cache_context = shares_codex_apps_tools_cache.then(|| {
                 // Only equivalent discovery inputs may share executable Apps tools.
@@ -551,7 +554,9 @@ impl McpConnectionSet {
                 }
             }
             let cancel_token = startup_cancellation_token.child_token();
-            let tool_catalog_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+            let tool_catalog_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME
+                || server.requires_read_only_mcp_tools()
+            {
                 None
             } else if let Ok(environment) = resolved_environment.as_ref() {
                 tool_catalog_cache.context(

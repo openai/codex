@@ -107,6 +107,8 @@ use self::streamable_http_retry::HandshakeError;
 use self::streamable_http_retry::STREAMABLE_HTTP_RETRY_DELAYS_MS;
 use self::streamable_http_retry::sleep_with_retry_deadline;
 
+const READ_ONLY_TOOLS_META_KEY: &str = "openai/readOnly";
+
 enum PendingTransport {
     InProcess {
         transport: tokio::io::DuplexStream,
@@ -396,12 +398,26 @@ pub struct RmcpClient {
     stdio_process: Option<StdioServerProcessHandle>,
     transport_recipe: TransportRecipe,
     protocol_mode: McpProtocolMode,
+    requires_read_only_tools: bool,
     initialize_context: Mutex<Option<InitializeContext>>,
     session_recovery_lock: Semaphore,
     elicitation_pause_state: ElicitationPauseState,
 }
 
 impl RmcpClient {
+    /// Requests server-side read-only filtering and invocation checks for every tool request.
+    pub fn with_read_only_tools(mut self, requires_read_only_tools: bool) -> Self {
+        self.requires_read_only_tools = requires_read_only_tools;
+        self
+    }
+
+    fn apply_read_only_tools_meta(&self, meta: &mut Option<RequestMetaObject>) {
+        if self.requires_read_only_tools {
+            meta.get_or_insert_default()
+                .insert(READ_ONLY_TOOLS_META_KEY.to_string(), Value::Bool(true));
+        }
+    }
+
     /// Returns the protocol compatibility policy captured when this client was created.
     pub fn protocol_mode(&self) -> McpProtocolMode {
         self.protocol_mode
@@ -422,6 +438,7 @@ impl RmcpClient {
             stdio_process: None,
             transport_recipe,
             protocol_mode: McpProtocolMode::Legacy,
+            requires_read_only_tools: false,
             initialize_context: Mutex::new(None),
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
@@ -496,6 +513,7 @@ impl RmcpClient {
             transport_recipe,
             protocol_mode,
             initialize_context: Mutex::new(None),
+            requires_read_only_tools: false,
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
         })
@@ -598,6 +616,7 @@ impl RmcpClient {
             transport_recipe,
             protocol_mode,
             initialize_context: Mutex::new(None),
+            requires_read_only_tools: false,
             session_recovery_lock: Semaphore::new(/*permits*/ 1),
             elicitation_pause_state: ElicitationPauseState::new(),
         })
@@ -666,10 +685,13 @@ impl RmcpClient {
 
     pub async fn list_tools(
         &self,
-        params: Option<PaginatedRequestParams>,
+        mut params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
         self.refresh_oauth_if_needed().await?;
+        if self.requires_read_only_tools {
+            self.apply_read_only_tools_meta(&mut params.get_or_insert_default().meta);
+        }
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -686,13 +708,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
-        self.refresh_oauth_if_needed().await?;
-        let result = self
-            .run_service_operation("tools/list", timeout, move |service| {
-                let params = params.clone();
-                async move { service.list_tools(params).await }.boxed()
-            })
-            .await?;
+        let result = self.list_tools(params, timeout).await?;
         let tools = result
             .tools
             .into_iter()
@@ -711,7 +727,6 @@ impl RmcpClient {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        self.persist_oauth_tokens().await;
         Ok(ListToolsWithConnectorIdResult {
             next_cursor: result.next_cursor,
             tools,
@@ -823,7 +838,7 @@ impl RmcpClient {
             }
             None => None,
         };
-        let meta = match meta {
+        let mut meta = match meta {
             Some(Value::Object(map)) => Some(RequestMetaObject::from(map)),
             Some(other) => {
                 return Err(anyhow!(
@@ -832,6 +847,7 @@ impl RmcpClient {
             }
             None => None,
         };
+        self.apply_read_only_tools_meta(&mut meta);
         let mut rmcp_params = CallToolRequestParams::new(name);
         rmcp_params.arguments = arguments;
         let requested_modern = self.protocol_mode == McpProtocolMode::V20260728;

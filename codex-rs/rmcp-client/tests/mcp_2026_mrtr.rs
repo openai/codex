@@ -378,6 +378,10 @@ async fn modern_tool_mrtr_uses_recovered_protocol_after_legacy_session_expiry() 
                         body.pointer("/params/_meta/requestContext"),
                         Some(&json!("caller-context"))
                     );
+                    assert_eq!(
+                        body.pointer("/params/_meta/openai~1readOnly"),
+                        Some(&json!(true))
+                    );
                     let attempt = {
                         let mut calls = recorded_calls.lock().expect("requests lock");
                         calls.push(body.clone());
@@ -449,12 +453,14 @@ async fn modern_tool_mrtr_uses_recovered_protocol_after_legacy_session_expiry() 
         .await;
 
     let elicitation_modes = Arc::new(Mutex::new(Vec::new()));
-    let client = create_client(&server, Arc::clone(&elicitation_modes)).await?;
+    let client = create_client(&server, Arc::clone(&elicitation_modes))
+        .await?
+        .with_read_only_tools(/*requires_read_only_tools*/ true);
     let result = client
         .call_tool(
             "confirm".into(),
             Some(json!({})),
-            Some(json!({"requestContext": "caller-context"})),
+            Some(json!({"requestContext": "caller-context", "openai/readOnly": false})),
             Some(Duration::from_secs(5)),
         )
         .await?;

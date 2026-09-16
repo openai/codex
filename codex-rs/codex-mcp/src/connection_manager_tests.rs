@@ -1996,6 +1996,74 @@ fn codex_apps_env_bearer_token_bypasses_shared_tools_cache() {
 }
 
 #[tokio::test]
+async fn read_only_apps_discovery_never_uses_a_shared_writable_catalog() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let cache = ConnectorRuntimeManager::new_without_cache();
+    let cache_key = ConnectorRuntimeContextKey::personal(
+        /*account_id*/ None, /*chatgpt_user_id*/ None,
+    );
+    let cache_context = cache.context(codex_home.path().to_path_buf(), cache_key.clone());
+    store_current_tools(
+        &cache_context,
+        vec![create_test_tool(CODEX_APPS_MCP_SERVER_NAME, "write")],
+    );
+    let server_config: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "http://127.0.0.1:1/mcp",
+        "http_headers": {"authorization": "Bearer fixture"},
+    }))?;
+    for read_only in [false, true] {
+        let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
+        config.requires_read_only_mcp_tools = read_only;
+        let mut catalog = crate::ResolvedMcpCatalog::builder();
+        catalog.register(crate::McpServerRegistration::from_hosted_apps(
+            "fixture",
+            /*contribution_order*/ 0,
+            server_config.clone(),
+        ));
+        config.mcp_server_catalog = catalog.build();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let manager = McpConnectionSet::new(
+            /*previous*/ None,
+            McpPublicationGate::already_published(),
+            McpRuntimeInput {
+                startup_policy: McpStartupPolicy::Eager,
+                config: Arc::new(config),
+                plugins_available: false,
+                ready_selected_capability_roots: Vec::new(),
+                mcp_servers: HashMap::from([(
+                    CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    EffectiveMcpServer::configured(server_config.clone()),
+                )]),
+                submit_id: "test".to_string(),
+                tx_event: None,
+                startup_cancellation_token: cancellation,
+                runtime_context: reusable_server_runtime_context(),
+                codex_apps_tools_cache: cache.clone(),
+                tool_catalog_cache: McpToolCatalogCache::default(),
+                codex_apps_tools_cache_key: cache_key.clone(),
+                client_mcp_extensions: ClientMcpExtensions::default(),
+                auth: None,
+                auth_manager: None,
+                elicitation_reviewer: None,
+                elicitation_lifecycle: None,
+            },
+            ElicitationRequestRouter::default(),
+        )
+        .await;
+        let tools = manager.list_all_tools().await;
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.callable_name.as_str())
+                .collect::<Vec<_>>(),
+            if read_only { vec![] } else { vec!["write"] },
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn hosted_apps_protocol_mode_is_independent_of_generic_mode() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let server_config: McpServerConfig =
@@ -5114,6 +5182,35 @@ async fn reconcile_reusable_server_with_mcp_config(
         ElicitationRequestRouter::default(),
     )
     .await
+}
+
+#[tokio::test]
+async fn read_only_policy_does_not_reuse_a_writable_connection() {
+    let codex_home = tempdir().expect("tempdir");
+    let runtime_context = reusable_server_runtime_context();
+    let config = reusable_server_config("http://127.0.0.1:1");
+    let previous = manager_with_reusable_ready_server(
+        &config,
+        &runtime_context,
+        vec![create_test_tool("docs", "write")],
+    )
+    .await;
+    for read_only in [false, true] {
+        let mut mcp_config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
+        mcp_config.requires_read_only_mcp_tools = read_only;
+        let reconciled = reconcile_reusable_server_with_mcp_config(
+            &previous,
+            "docs",
+            config.clone(),
+            runtime_context.clone(),
+            mcp_config,
+        )
+        .await;
+        assert_eq!(
+            previous.shares_test_connection_with(&reconciled, "docs"),
+            !read_only
+        );
+    }
 }
 
 #[tokio::test]

@@ -1,0 +1,47 @@
+---
+source: core/tests/suite/scenarios_read_only_mcp.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A read-only thread receives only read tools from the MCP server and executes a read.\",\n&mock.requests(),\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: A read-only thread receives only read tools from the MCP server and executes a read.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  instructions: <MODEL_INSTRUCTIONS>
+  model: "gpt-5.5"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (11; hash=b74b49b673a090be):
+    - function/exec_command: Runs a command in a PTY, returning output or a session ID for ongoing interaction.; args=[cmd, justification, login, max_output_tokens, prefix_rule, sandbox_permissions, shell, tty, workdir, yield_time_ms]; hash=c04108e51a8548c5
+    - function/write_stdin: Writes characters to an existing unified exec session and returns recent output.; args=[chars, max_output_tokens, session_id, yield_time_ms]; hash=7fb62d8a3e2df4e2
+    - function/list_mcp_resources: Lists resources provided by MCP servers. Resources allow servers to share data that provides cont...; args=[cursor, server]; hash=6792edaff13561bd
+    - function/list_mcp_resource_templates: Lists resource templates provided by MCP servers. Parameterized resource templates allow servers ...; args=[cursor, server]; hash=60f17c90ef7a4ebb
+    - function/read_mcp_resource: Read a specific resource from an MCP server given the server name and resource URI.; args=[server, uri]; hash=24246896b39008ae
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - custom/apply_patch: The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the pat...; hash=dea9f12b0111a4ba
+    - function/view_image: View a local image file from the filesystem when visual inspection is needed. Use this for images...; args=[detail, path]; hash=3b766d5bdec5d50e
+    - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=f2a2334f757ddd80
+      - function/close_agent
+      - function/resume_agent
+      - function/send_input
+      - function/spawn_agent
+      - function/wait_agent
+    - namespace/mcp__policy: Tools in the mcp__policy namespace.; hash=4868c429e15f1bec
+      - function/read
+    - web_search; hash=e214d4db1bc49e89
+-- request 1 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    Read the report.
+-- request 2 (turn) --
+03:function_call/mcp__policy.read:{}
+04:function_call_output:Wall time: <DURATION> seconds
+    Output: | Report ready.

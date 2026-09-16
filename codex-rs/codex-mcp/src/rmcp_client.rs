@@ -367,7 +367,9 @@ impl ManagedClientStartup {
                 )
                 .await
                 {
-                    Ok(result) => Arc::new(result?),
+                    Ok(result) => Arc::new(
+                        result?.with_read_only_tools(server.requires_read_only_mcp_tools()),
+                    ),
                     Err(_) => {
                         return Err(StartupOutcomeError::from(anyhow!(
                             "MCP client startup timed out after {startup_timeout:?}"

@@ -7608,10 +7608,10 @@ async fn in_app_resume_session_cwd_without_metadata_is_non_fatal() -> Result<()>
 
 #[tokio::test]
 async fn remote_resume_keeps_server_only_cwd_out_of_local_config() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    // Keep the large setup and resume futures off the Windows test stack.
+    let (mut app, _app_event_rx, _op_rx) = Box::pin(make_test_app_with_channels()).await;
     let local_cwd = app.config.cwd.to_path_buf();
-    let local_workspace_roots = app
-        .rebuild_config_for_cwd(local_cwd.clone())
+    let local_workspace_roots = Box::pin(app.rebuild_config_for_cwd(local_cwd.clone()))
         .await?
         .workspace_roots;
     let remote_cwd = if cfg!(windows) {
@@ -7642,14 +7642,13 @@ async fn remote_resume_keeps_server_only_cwd_out_of_local_config() -> Result<()>
     };
     app.harness_overrides.cwd = Some(remote_cwd.clone());
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-    app_server
-        .resume_thread(
-            &crate::local_settings::LocalSettings::from(&app.config),
-            app.config.clone(),
-            ThreadId::from_string(&thread_id)?,
-            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
-        )
-        .await?;
+    Box::pin(app_server.resume_thread(
+        &crate::local_settings::LocalSettings::from(&app.config),
+        app.config.clone(),
+        ThreadId::from_string(&thread_id)?,
+        crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+    ))
+    .await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Restored(
         AskForApproval::Never,
@@ -7662,18 +7661,17 @@ async fn remote_resume_keeps_server_only_cwd_out_of_local_config() -> Result<()>
         RuntimePermissionProfileOverride::from_restored_config(&prior_config),
     );
 
-    let control = app
-        .resume_target_session(
-            &mut tui,
-            &mut app_server,
-            crate::resume_picker::SessionTarget {
-                path: Some(rollout_path),
-                thread_id: ThreadId::from_string(&thread_id)?,
-                cwd: None,
-                history_mode: None,
-            },
-        )
-        .await?;
+    let control = Box::pin(app.resume_target_session(
+        &mut tui,
+        &mut app_server,
+        crate::resume_picker::SessionTarget {
+            path: Some(rollout_path),
+            thread_id: ThreadId::from_string(&thread_id)?,
+            cwd: None,
+            history_mode: None,
+        },
+    ))
+    .await?;
 
     assert!(matches!(control, AppRunControl::Continue));
     assert_eq!(app.harness_overrides.cwd, Some(remote_cwd));
