@@ -140,14 +140,7 @@ async fn cached_evidence(
         return Err(GuardianReviewReason::MissingScore);
     };
     // Elicitations and intercepted execs can expand beyond the original scored action.
-    let mut action = input.action.clone();
-    if action.get("tool").and_then(serde_json::Value::as_str) == Some("mcp_tool_call")
-        && let Some(fields) = action.as_object_mut()
-    {
-        // Match the action renderer: host descriptions are optional, arguments are not.
-        fields.remove("tool_description");
-        fields.remove("connector_description");
-    }
+    let action = codex_guardian_context::action_for_review(input.action.clone());
     let max_action_bytes = TruncationPolicy::Tokens(config.max_action_tokens).byte_budget();
     let action_fits = serde_json::to_string_pretty(&action)
         .is_ok_and(|action| action.len().saturating_add(1) <= max_action_bytes);

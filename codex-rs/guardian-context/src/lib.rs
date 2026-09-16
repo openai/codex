@@ -23,6 +23,7 @@ use transcript::ConversationTranscriptSection;
 pub use action::ActionPresentation;
 pub use action::PlannedAction;
 pub use action::PlannedActionKind;
+pub use action::action_for_review;
 pub use authorization::GuardianRootMessage;
 pub use section::ContextSection;
 

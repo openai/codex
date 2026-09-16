@@ -537,20 +537,8 @@ pub(crate) fn guardian_request_turn_id<'a>(
 pub(crate) fn format_guardian_action_pretty(
     action: &GuardianApprovalRequest,
 ) -> serde_json::Result<String> {
-    let mut value = guardian_action_for_review(action)?;
+    let mut value =
+        codex_guardian_context::action_for_review(guardian_approval_request_to_json(action)?);
     value.sort_all_objects();
     serde_json::to_string_pretty(&value)
-}
-
-fn guardian_action_for_review(action: &GuardianApprovalRequest) -> serde_json::Result<Value> {
-    let mut value = guardian_approval_request_to_json(action)?;
-    if matches!(action, GuardianApprovalRequest::McpToolCall { .. })
-        && let Some(fields) = value.as_object_mut()
-    {
-        // Only host-provided metadata is optional. A nested argument named
-        // "description" is still part of the exact action under review.
-        fields.remove("tool_description");
-        fields.remove("connector_description");
-    }
-    Ok(value)
 }

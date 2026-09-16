@@ -8,6 +8,18 @@ use crate::SectionError;
 use crate::SectionInput;
 use crate::SectionScope;
 
+/// Projects an approval action onto the exact JSON reviewed and measured by Guardian.
+/// Host descriptions are optional; nested tool arguments must remain complete.
+pub fn action_for_review(mut action: serde_json::Value) -> serde_json::Value {
+    if action.get("tool").and_then(serde_json::Value::as_str) == Some("mcp_tool_call")
+        && let Some(fields) = action.as_object_mut()
+    {
+        fields.remove("tool_description");
+        fields.remove("connector_description");
+    }
+    action
+}
+
 /// Host-prepared action evidence. JSON stays complete through request admission.
 #[derive(Clone, PartialEq)]
 pub struct PlannedAction {
@@ -110,6 +122,10 @@ impl PlannedAction {
 }
 
 pub(crate) struct PlannedActionSection;
+
+#[cfg(test)]
+#[path = "action_tests.rs"]
+mod tests;
 
 impl SectionContributor for PlannedActionSection {
     fn scope(&self) -> SectionScope {
