@@ -28,13 +28,29 @@ const OPEN_ROLLOUT_LINE_READER_RETRY_DELAY: Duration = Duration::from_millis(50)
 const TEMP_SUFFIX: &str = ".tmp";
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// The entry point that requested a compression pass, not a Statsig cohort.
+#[derive(Clone, Copy, Debug)]
+pub enum RolloutCompressionTrigger {
+    Startup,
+    Rpc,
+}
+
+impl RolloutCompressionTrigger {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Startup => "startup",
+            Self::Rpc => "rpc",
+        }
+    }
+}
+
 /// Starts a best-effort background job that compresses cold local rollout files.
 ///
 /// The worker is fire-and-forget: failures are logged, startup is not blocked,
 /// and a run marker under `codex_home` prevents overlapping or too-frequent
 /// compression runs from the same local store.
-pub fn spawn_rollout_compression_worker(codex_home: PathBuf) {
-    worker::spawn(codex_home)
+pub fn spawn_rollout_compression_worker(codex_home: PathBuf, trigger: RolloutCompressionTrigger) {
+    worker::spawn(codex_home, trigger)
 }
 
 /// Returns the modified time for the existing plain or compressed rollout file.
@@ -300,6 +316,7 @@ mod worker {
     use crate::ARCHIVED_SESSIONS_SUBDIR;
     use crate::SESSIONS_SUBDIR;
 
+    use super::RolloutCompressionTrigger;
     use super::RolloutFile;
     use super::error_metrics::FailureMetric;
     use super::metrics;
@@ -381,9 +398,9 @@ mod worker {
         }
     }
 
-    pub(super) fn spawn(codex_home: PathBuf) {
+    pub(super) fn spawn(codex_home: PathBuf, trigger: RolloutCompressionTrigger) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            metrics::run("skipped_no_runtime");
+            metrics::run(trigger, "skipped_no_runtime");
             warn!(
                 "failed to start rollout compression worker for {}: no Tokio runtime",
                 codex_home.display()
@@ -391,7 +408,7 @@ mod worker {
             return;
         };
         handle.spawn(async move {
-            if let Err(err) = run(codex_home.clone()).await {
+            if let Err(err) = run(codex_home.clone(), trigger).await {
                 warn!(
                     "rollout compression worker failed for {}: {err}",
                     codex_home.display()
@@ -400,12 +417,15 @@ mod worker {
         });
     }
 
-    pub(super) async fn run(codex_home: PathBuf) -> io::Result<()> {
+    pub(super) async fn run(
+        codex_home: PathBuf,
+        trigger: RolloutCompressionTrigger,
+    ) -> io::Result<()> {
         let Some(_maintenance_guard) =
             crate::try_acquire_rollout_maintenance_lock(codex_home.as_path())
-                .inspect_err(|err| FailureMetric::Run.record("maintenance_lock", err))?
+                .inspect_err(|err| FailureMetric::Run(trigger).record("maintenance_lock", err))?
         else {
-            metrics::run("skipped_maintenance");
+            metrics::run(trigger, "skipped_maintenance");
             debug!(
                 "rollout maintenance is already running for {}",
                 codex_home.display()
@@ -415,7 +435,7 @@ mod worker {
         let marker = match CompressionRunMarker::try_claim(codex_home.as_path()) {
             Ok(Some(marker)) => marker,
             Ok(None) => {
-                metrics::run("skipped_already_running");
+                metrics::run(trigger, "skipped_already_running");
                 debug!(
                     "rollout compression worker recently ran or is already running for {}",
                     codex_home.display()
@@ -423,18 +443,18 @@ mod worker {
                 return Ok(());
             }
             Err(err) => {
-                FailureMetric::Run.record("run_marker", &err);
+                FailureMetric::Run(trigger).record("run_marker", &err);
                 return Err(err);
             }
         };
 
-        metrics::run("started");
+        metrics::run(trigger, "started");
         let started_at = Instant::now();
         let writer_locks = Arc::new(crate::WriterLockCoordinator::new(&codex_home));
         let mut stage = "temp_cleanup";
         let result = async {
             let mut stats = CompressionStats {
-                cleanup_errors: cleanup_stale_temps(codex_home.as_path()).await?,
+                cleanup_errors: cleanup_stale_temps(codex_home.as_path(), trigger).await?,
                 ..Default::default()
             };
             stage = "scan";
@@ -446,8 +466,14 @@ mod worker {
                     stats.time_budget_exhausted = true;
                     break;
                 }
-                compress_rollouts_in_root(root.as_path(), started_at, &mut stats, &writer_locks)
-                    .await?;
+                compress_rollouts_in_root(
+                    root.as_path(),
+                    started_at,
+                    &mut stats,
+                    &writer_locks,
+                    trigger,
+                )
+                .await?;
             }
             Ok::<_, io::Error>(stats)
         }
@@ -455,8 +481,8 @@ mod worker {
         let stats = match result {
             Ok(stats) => stats,
             Err(err) => {
-                FailureMetric::Run.record(stage, &err);
-                metrics::run_duration("failed", started_at.elapsed());
+                FailureMetric::Run(trigger).record(stage, &err);
+                metrics::run_duration(trigger, "failed", started_at.elapsed());
                 return Err(err);
             }
         };
@@ -473,6 +499,7 @@ mod worker {
         };
         let tags = [
             ("status", "completed"),
+            ("trigger", trigger.tag()),
             ("completion_reason", completion),
             (
                 "file_errors",
@@ -516,12 +543,13 @@ mod worker {
         started_at: Instant,
         stats: &mut CompressionStats,
         writer_locks: &Arc<crate::WriterLockCoordinator>,
+        trigger: RolloutCompressionTrigger,
     ) -> io::Result<()> {
         if !tokio::fs::try_exists(root)
             .await
             .inspect_err(|err| {
                 stats.scan_errors = true;
-                FailureMetric::Scan.record("check_root", err);
+                FailureMetric::Scan(trigger).record("check_root", err);
             })
             .unwrap_or(false)
         {
@@ -538,7 +566,7 @@ mod worker {
                 Ok(read_dir) => read_dir,
                 Err(err) => {
                     stats.scan_errors = true;
-                    FailureMetric::Scan.record("read_directory", &err);
+                    FailureMetric::Scan(trigger).record("read_directory", &err);
                     warn!(
                         "failed to read rollout compression directory {}: {err}",
                         dir.display()
@@ -551,7 +579,7 @@ mod worker {
                     Ok(Some(entry)) => entry,
                     Ok(None) => break,
                     Err(err) => {
-                        drain_compression_jobs(&mut jobs, stats).await;
+                        drain_compression_jobs(&mut jobs, stats, trigger).await;
                         return Err(err);
                     }
                 };
@@ -564,7 +592,7 @@ mod worker {
                     Ok(file_type) => file_type,
                     Err(err) => {
                         stats.scan_errors = true;
-                        FailureMetric::Scan.record("read_file_type", &err);
+                        FailureMetric::Scan(trigger).record("read_file_type", &err);
                         warn!(
                             "failed to read rollout compression file type {}: {err}",
                             path.display()
@@ -589,35 +617,39 @@ mod worker {
                 if crate::rollout_id_from_path(path.as_path()).is_none() {
                     stats.scan_errors = true;
                     stats.skipped = stats.skipped.saturating_add(1);
-                    metrics::file("skipped_unreadable_meta");
+                    metrics::file(trigger, "skipped_unreadable_meta");
                     continue;
                 }
                 let thread_id = match crate::read_session_meta_line(path.as_path()).await {
                     Ok(metadata) => metadata.meta.id,
                     Err(err) => {
                         stats.scan_errors = true;
-                        FailureMetric::Scan.record("read_metadata", &err);
+                        FailureMetric::Scan(trigger).record("read_metadata", &err);
                         stats.skipped = stats.skipped.saturating_add(1);
-                        metrics::file("skipped_unreadable_meta");
+                        metrics::file(trigger, "skipped_unreadable_meta");
                         continue;
                     }
                 };
                 stats.scanned = stats.scanned.saturating_add(1);
-                metrics::file("scanned");
+                metrics::file(trigger, "scanned");
                 while jobs.len() >= MAX_CONCURRENT_COMPRESSION_JOBS {
-                    collect_next_compression_job(&mut jobs, stats).await;
+                    collect_next_compression_job(&mut jobs, stats, trigger).await;
                 }
                 let writer_locks = Arc::clone(writer_locks);
                 jobs.spawn_blocking(move || {
                     let started_at = Instant::now();
-                    let result =
-                        compress_rollout_if_cold_blocking(path.as_path(), &writer_locks, thread_id);
+                    let result = compress_rollout_if_cold_blocking(
+                        path.as_path(),
+                        &writer_locks,
+                        thread_id,
+                        trigger,
+                    );
                     let duration = started_at.elapsed();
                     (path, duration, result)
                 });
             }
         }
-        drain_compression_jobs(&mut jobs, stats).await;
+        drain_compression_jobs(&mut jobs, stats, trigger).await;
         Ok(())
     }
 
@@ -672,15 +704,17 @@ mod worker {
     async fn drain_compression_jobs(
         jobs: &mut JoinSet<CompressionJobResult>,
         stats: &mut CompressionStats,
+        trigger: RolloutCompressionTrigger,
     ) {
         while !jobs.is_empty() {
-            collect_next_compression_job(jobs, stats).await;
+            collect_next_compression_job(jobs, stats, trigger).await;
         }
     }
 
     async fn collect_next_compression_job(
         jobs: &mut JoinSet<CompressionJobResult>,
         stats: &mut CompressionStats,
+        trigger: RolloutCompressionTrigger,
     ) {
         let Some(result) = jobs.join_next().await else {
             return;
@@ -699,28 +733,33 @@ mod worker {
                         stats.skipped = stats.skipped.saturating_add(1);
                     }
                 }
-                metrics::file(outcome.tag());
-                metrics::file_duration(outcome.tag(), duration);
+                metrics::file(trigger, outcome.tag());
+                metrics::file_duration(trigger, outcome.tag(), duration);
                 if let Some(source_bytes) = measurement.source_bytes {
-                    metrics::source_bytes(outcome.tag(), source_bytes);
+                    metrics::source_bytes(trigger, outcome.tag(), source_bytes);
                 }
                 if let Some(compressed_bytes) = measurement.compressed_bytes {
-                    metrics::compressed_bytes(outcome.tag(), compressed_bytes);
+                    metrics::compressed_bytes(trigger, outcome.tag(), compressed_bytes);
                     if let Some(source_bytes) = measurement.source_bytes {
-                        metrics::compression_ratio(outcome.tag(), source_bytes, compressed_bytes);
+                        metrics::compression_ratio(
+                            trigger,
+                            outcome.tag(),
+                            source_bytes,
+                            compressed_bytes,
+                        );
                     }
                 }
             }
             Ok((path, duration, Err(err))) => {
                 stats.failed = stats.failed.saturating_add(1);
                 // The failing operation records its stage before returning the error.
-                metrics::file_duration("failed", duration);
+                metrics::file_duration(trigger, "failed", duration);
                 warn!("failed to compress rollout {}: {err}", path.display());
             }
             Err(err) => {
                 stats.failed = stats.failed.saturating_add(1);
                 warn!("rollout compression task failed: {err}");
-                FailureMetric::File.record("task_join", &io::Error::other(err));
+                FailureMetric::File(trigger).record("task_join", &io::Error::other(err));
             }
         }
     }
@@ -729,9 +768,10 @@ mod worker {
         path: &Path,
         writer_locks: &Arc<crate::WriterLockCoordinator>,
         thread_id: codex_protocol::ThreadId,
+        trigger: RolloutCompressionTrigger,
     ) -> io::Result<CompressionMeasurement> {
         let before = match cold_file_state(path)
-            .inspect_err(|err| FailureMetric::File.record("read_metadata", err))?
+            .inspect_err(|err| FailureMetric::File(trigger).record("read_metadata", err))?
         {
             ColdFileState::Cold(state) => state,
             ColdFileState::NotCold(state) => {
@@ -757,22 +797,22 @@ mod worker {
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
         std::fs::create_dir_all(temp_dir)
-            .inspect_err(|err| FailureMetric::File.record("prepare_directory", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("prepare_directory", err))?;
         let mut temp_file = tempfile::Builder::new()
             .prefix("rollout-compress-")
             .suffix(TEMP_SUFFIX)
             .tempfile_in(temp_dir)
-            .inspect_err(|err| FailureMetric::File.record("create_temp", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("create_temp", err))?;
         encode_zstd_to_writer(path, temp_file.as_file_mut())
-            .inspect_err(|err| FailureMetric::File.record("encode_and_write", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("encode_and_write", err))?;
         temp_file
             .as_file_mut()
             .flush()
-            .inspect_err(|err| FailureMetric::File.record("flush", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("flush", err))?;
         verify_zstd(temp_file.path())
-            .inspect_err(|err| FailureMetric::File.record("verify", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("verify", err))?;
         if !same_file_state(path, &before)
-            .inspect_err(|err| FailureMetric::File.record("recheck_source", err))?
+            .inspect_err(|err| FailureMetric::File(trigger).record("recheck_source", err))?
         {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedChanged,
@@ -781,22 +821,22 @@ mod worker {
             ));
         }
         set_file_metadata(temp_file.as_file(), before.modified, &before.permissions)
-            .inspect_err(|err| FailureMetric::File.record("set_metadata", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("set_metadata", err))?;
         temp_file
             .as_file()
             .sync_all()
-            .inspect_err(|err| FailureMetric::File.record("sync", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("sync", err))?;
         let compressed_bytes = temp_file
             .as_file()
             .metadata()
-            .inspect_err(|err| FailureMetric::File.record("read_metadata", err))?
+            .inspect_err(|err| FailureMetric::File(trigger).record("read_metadata", err))?
             .len();
 
         // Encoding and verification do not block writers. Coordination prevents writer
         // acquisition while we recheck, publish, and remove the original file.
         let Some(_publication_guard) = writer_locks
             .try_acquire_for_publication(thread_id)
-            .inspect_err(|err| FailureMetric::File.record("writer_lock", err))?
+            .inspect_err(|err| FailureMetric::File(trigger).record("writer_lock", err))?
         else {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedBusy,
@@ -805,7 +845,7 @@ mod worker {
             ));
         };
         if !same_file_state(path, &before)
-            .inspect_err(|err| FailureMetric::File.record("recheck_source", err))?
+            .inspect_err(|err| FailureMetric::File(trigger).record("recheck_source", err))?
         {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedChanged,
@@ -824,12 +864,12 @@ mod worker {
                 ));
             }
             Err(err) => {
-                FailureMetric::File.record("publish", &err.error);
+                FailureMetric::File(trigger).record("publish", &err.error);
                 return Err(err.error);
             }
         }
         if !same_file_state(path, &before)
-            .inspect_err(|err| FailureMetric::File.record("recheck_source", err))?
+            .inspect_err(|err| FailureMetric::File(trigger).record("recheck_source", err))?
         {
             let _ = std::fs::remove_file(compressed_path.as_path());
             return Ok(CompressionMeasurement::new(
@@ -839,7 +879,7 @@ mod worker {
             ));
         }
         std::fs::remove_file(path)
-            .inspect_err(|err| FailureMetric::File.record("remove_source", err))?;
+            .inspect_err(|err| FailureMetric::File(trigger).record("remove_source", err))?;
         Ok(CompressionMeasurement::new(
             CompressionOutcome::Compressed,
             source_bytes,
@@ -916,24 +956,30 @@ mod worker {
         file.set_permissions(permissions.clone())
     }
 
-    async fn cleanup_stale_temps(codex_home: &Path) -> io::Result<bool> {
+    async fn cleanup_stale_temps(
+        codex_home: &Path,
+        trigger: RolloutCompressionTrigger,
+    ) -> io::Result<bool> {
         let mut errors = false;
         for root in [
             codex_home.join(SESSIONS_SUBDIR),
             codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
         ] {
-            errors |= cleanup_stale_temps_in_root(root.as_path()).await?;
+            errors |= cleanup_stale_temps_in_root(root.as_path(), trigger).await?;
         }
         Ok(errors)
     }
 
-    async fn cleanup_stale_temps_in_root(root: &Path) -> io::Result<bool> {
+    async fn cleanup_stale_temps_in_root(
+        root: &Path,
+        trigger: RolloutCompressionTrigger,
+    ) -> io::Result<bool> {
         let mut errors = false;
         if !tokio::fs::try_exists(root)
             .await
             .inspect_err(|err| {
                 errors = true;
-                FailureMetric::TempCleanup.record("check_root", err);
+                FailureMetric::TempCleanup(trigger).record("check_root", err);
             })
             .unwrap_or(false)
         {
@@ -945,7 +991,7 @@ mod worker {
                 Ok(read_dir) => read_dir,
                 Err(err) => {
                     errors = true;
-                    FailureMetric::TempCleanup.record("read_directory", &err);
+                    FailureMetric::TempCleanup(trigger).record("read_directory", &err);
                     warn!(
                         "failed to read rollout temp cleanup directory {}: {err}",
                         dir.display()
@@ -959,7 +1005,7 @@ mod worker {
                     Ok(file_type) => file_type,
                     Err(err) => {
                         errors = true;
-                        FailureMetric::TempCleanup.record("read_file_type", &err);
+                        FailureMetric::TempCleanup(trigger).record("read_file_type", &err);
                         warn!(
                             "failed to read rollout temp cleanup file type {}: {err}",
                             path.display()
@@ -983,7 +1029,7 @@ mod worker {
                         .and_then(|metadata| metadata.modified())
                         .inspect_err(|err| {
                             errors = true;
-                            FailureMetric::TempCleanup.record("read_metadata", err);
+                            FailureMetric::TempCleanup(trigger).record("read_metadata", err);
                         })
                         .ok()
                         .and_then(|modified| SystemTime::now().duration_since(modified).ok())
@@ -992,11 +1038,11 @@ mod worker {
                         continue;
                     }
                     match tokio::fs::remove_file(path.as_path()).await {
-                        Ok(()) => metrics::temp_cleanup("removed"),
+                        Ok(()) => metrics::temp_cleanup(trigger, "removed"),
                         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
                         Err(err) => {
                             errors = true;
-                            FailureMetric::TempCleanup.record("remove_temp", &err);
+                            FailureMetric::TempCleanup(trigger).record("remove_temp", &err);
                             warn!(
                                 "failed to remove stale rollout temp {}: {err}",
                                 path.display()
@@ -1011,6 +1057,7 @@ mod worker {
 }
 
 mod metrics {
+    use super::RolloutCompressionTrigger;
     use std::time::Duration;
 
     const FILE_COMPRESSED_BYTES_HISTOGRAM: &str = "codex.rollout_compression.file.compressed_bytes";
@@ -1025,31 +1072,51 @@ mod metrics {
     const RATIO_BASIS_POINTS: u128 = 10_000;
     pub(super) const TEMP_CLEANUP_COUNTER: &str = "codex.rollout_compression.temp_cleanup";
 
-    pub(super) fn file(outcome: &'static str) {
-        counter(FILE_COUNTER, &[("outcome", outcome)]);
-    }
-
-    pub(super) fn file_duration(outcome: &'static str, duration: Duration) {
-        duration_histogram(FILE_DURATION_HISTOGRAM, duration, &[("outcome", outcome)]);
-    }
-
-    pub(super) fn source_bytes(outcome: &'static str, bytes: u64) {
-        histogram(
-            FILE_SOURCE_BYTES_HISTOGRAM,
-            saturating_i64(bytes),
-            &[("outcome", outcome)],
+    pub(super) fn file(trigger: RolloutCompressionTrigger, outcome: &'static str) {
+        counter(
+            FILE_COUNTER,
+            &[("outcome", outcome), ("trigger", trigger.tag())],
         );
     }
 
-    pub(super) fn compressed_bytes(outcome: &'static str, bytes: u64) {
+    pub(super) fn file_duration(
+        trigger: RolloutCompressionTrigger,
+        outcome: &'static str,
+        duration: Duration,
+    ) {
+        duration_histogram(
+            FILE_DURATION_HISTOGRAM,
+            duration,
+            &[("outcome", outcome), ("trigger", trigger.tag())],
+        );
+    }
+
+    pub(super) fn source_bytes(
+        trigger: RolloutCompressionTrigger,
+        outcome: &'static str,
+        bytes: u64,
+    ) {
+        histogram(
+            FILE_SOURCE_BYTES_HISTOGRAM,
+            saturating_i64(bytes),
+            &[("outcome", outcome), ("trigger", trigger.tag())],
+        );
+    }
+
+    pub(super) fn compressed_bytes(
+        trigger: RolloutCompressionTrigger,
+        outcome: &'static str,
+        bytes: u64,
+    ) {
         histogram(
             FILE_COMPRESSED_BYTES_HISTOGRAM,
             saturating_i64(bytes),
-            &[("outcome", outcome)],
+            &[("outcome", outcome), ("trigger", trigger.tag())],
         );
     }
 
     pub(super) fn compression_ratio(
+        trigger: RolloutCompressionTrigger,
         outcome: &'static str,
         source_bytes: u64,
         compressed_bytes: u64,
@@ -1062,7 +1129,7 @@ mod metrics {
         histogram(
             FILE_COMPRESSION_RATIO_HISTOGRAM,
             saturating_i64(ratio),
-            &[("outcome", outcome)],
+            &[("outcome", outcome), ("trigger", trigger.tag())],
         );
     }
 
@@ -1078,16 +1145,30 @@ mod metrics {
         );
     }
 
-    pub(super) fn run(status: &'static str) {
-        counter(RUN_COUNTER, &[("status", status)]);
+    pub(super) fn run(trigger: RolloutCompressionTrigger, status: &'static str) {
+        counter(
+            RUN_COUNTER,
+            &[("status", status), ("trigger", trigger.tag())],
+        );
     }
 
-    pub(super) fn run_duration(status: &'static str, duration: Duration) {
-        duration_histogram(RUN_DURATION_HISTOGRAM, duration, &[("status", status)]);
+    pub(super) fn run_duration(
+        trigger: RolloutCompressionTrigger,
+        status: &'static str,
+        duration: Duration,
+    ) {
+        duration_histogram(
+            RUN_DURATION_HISTOGRAM,
+            duration,
+            &[("status", status), ("trigger", trigger.tag())],
+        );
     }
 
-    pub(super) fn temp_cleanup(outcome: &'static str) {
-        counter(TEMP_CLEANUP_COUNTER, &[("outcome", outcome)]);
+    pub(super) fn temp_cleanup(trigger: RolloutCompressionTrigger, outcome: &'static str) {
+        counter(
+            TEMP_CLEANUP_COUNTER,
+            &[("outcome", outcome), ("trigger", trigger.tag())],
+        );
     }
 
     pub(super) fn counter(name: &str, tags: &[(&str, &str)]) {

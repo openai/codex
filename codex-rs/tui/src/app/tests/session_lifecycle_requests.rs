@@ -3674,7 +3674,10 @@ terminal_visualization_instructions = true
         .set_times(std::fs::FileTimes::new().set_modified(
             std::time::SystemTime::now() - std::time::Duration::from_secs(8 * 24 * 60 * 60),
         ))?;
-    codex_rollout::spawn_rollout_compression_worker(home.clone());
+    codex_rollout::spawn_rollout_compression_worker(
+        home.clone(),
+        codex_rollout::RolloutCompressionTrigger::Startup,
+    );
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while saved_path.exists() || !saved_path.with_extension("jsonl.zst").is_file() {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;

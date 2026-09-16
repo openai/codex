@@ -458,11 +458,17 @@ pub fn thread_store_from_config(
                         warn!("failed to migrate legacy rollouts on startup: {err}");
                     }
                     if compression_enabled {
-                        codex_rollout::spawn_rollout_compression_worker(codex_home);
+                        codex_rollout::spawn_rollout_compression_worker(
+                            codex_home,
+                            codex_rollout::RolloutCompressionTrigger::Startup,
+                        );
                     }
                 });
             } else if compression_enabled {
-                codex_rollout::spawn_rollout_compression_worker(config.codex_home.to_path_buf());
+                codex_rollout::spawn_rollout_compression_worker(
+                    config.codex_home.to_path_buf(),
+                    codex_rollout::RolloutCompressionTrigger::Startup,
+                );
             }
             store
         }

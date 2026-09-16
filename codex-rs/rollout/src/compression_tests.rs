@@ -17,6 +17,7 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 
+use super::RolloutCompressionTrigger::Startup;
 use super::*;
 use crate::InitialHistory;
 use crate::RolloutConfig;
@@ -289,7 +290,7 @@ async fn worker_compresses_old_active_and_archived_rollouts() -> anyhow::Result<
     let fresh_temp = active_path.with_file_name("rollout-fresh.jsonl.zst.tmp");
     fs::write(&fresh_temp, "fresh temp")?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     assert!(!active_path.exists());
     assert!(compressed_rollout_path(&active_path).exists());
@@ -319,12 +320,12 @@ async fn worker_waits_for_rollout_maintenance_before_compressing() -> anyhow::Re
     let guard = crate::try_acquire_rollout_maintenance_lock(home.path())?
         .expect("claim rollout maintenance lock");
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
     assert!(path.exists());
     assert!(!compressed_rollout_path(&path).exists());
 
     drop(guard);
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
     assert!(!path.exists());
     assert!(compressed_rollout_path(&path).exists());
     Ok(())
@@ -355,7 +356,7 @@ async fn worker_compresses_archived_fork_chain() -> anyhow::Result<()> {
     let original_source = fs::read(&source_path)?;
     let original_child = fs::read(&child_path)?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     for (path, original) in [
         (&source_path, original_source),
@@ -382,7 +383,7 @@ async fn worker_skips_unreadable_metadata_without_blocking_other_compression() -
     let unreadable_path = rollout_path(home.path(), "2025-01-03T12-00-01", Uuid::from_u128(21));
     fs::write(unreadable_path.as_path(), "{not json}\n")?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     assert!(!source_path.exists());
     assert!(compressed_rollout_path(&source_path).exists());
@@ -456,7 +457,7 @@ async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
     fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o600))?;
     set_old_mtime(&rollout_path)?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     let compressed_path = compressed_rollout_path(&rollout_path);
     assert!(!rollout_path.exists());
@@ -538,7 +539,7 @@ async fn compression_preserves_read_only_rollout_permissions() -> anyhow::Result
     fs::set_permissions(&rollout_path, fs::Permissions::from_mode(0o400))?;
     let source_modified = fs::metadata(&rollout_path)?.modified()?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     let compressed_path = compressed_rollout_path(&rollout_path);
     let compressed_metadata = fs::metadata(&compressed_path)?;
@@ -559,7 +560,7 @@ async fn worker_skips_existing_compressed_archived_rollouts() -> anyhow::Result<
     let compressed_path = compressed_rollout_path(&rollout_path);
     set_old_mtime(&compressed_path)?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     assert!(!rollout_path.exists());
     assert!(compressed_path.exists());
@@ -583,7 +584,7 @@ async fn worker_skips_when_fresh_run_marker_exists() -> anyhow::Result<()> {
     fs::create_dir_all(marker_dir.as_path())?;
     fs::write(marker_dir.join("rollout-compression.lock"), "recent run")?;
 
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
 
     assert!(rollout_path.exists());
     assert!(!compressed_rollout_path(&rollout_path).exists());
@@ -781,7 +782,7 @@ async fn worker_compresses_parallel_cold_candidates_without_skipping_other_publi
         set_old_mtime(&path)?;
         paths.push(path);
     }
-    worker::run(home.path().to_path_buf()).await?;
+    worker::run(home.path().to_path_buf(), Startup).await?;
     let representations = paths
         .iter()
         .map(|path| (path.exists(), compressed_rollout_path(path).exists()))

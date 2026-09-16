@@ -15,7 +15,10 @@ impl ThreadRequestProcessor {
             return Err(unsupported_thread_store_operation("rollout/compress"));
         }
 
-        codex_rollout::spawn_rollout_compression_worker(self.config.codex_home.to_path_buf());
+        codex_rollout::spawn_rollout_compression_worker(
+            self.config.codex_home.to_path_buf(),
+            codex_rollout::RolloutCompressionTrigger::Rpc,
+        );
         Ok(Some(RolloutCompressResponse {}.into()))
     }
 }
