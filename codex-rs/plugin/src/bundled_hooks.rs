@@ -98,7 +98,11 @@ const ALLOWLISTED_BUNDLED_HOOKS: &[BundledHook] = &[
     },
     BundledHook {
         plugin_id: "browser@openai-curated-remote",
-        events: &[HookEventName::Stop, HookEventName::SubagentStop],
+        events: &[
+            HookEventName::Stop,
+            HookEventName::Interrupt,
+            HookEventName::SubagentStop,
+        ],
         target: BundledHookTarget::App {
             server: "codex_apps",
             connector_id: "connector_openai_browser",

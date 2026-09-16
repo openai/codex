@@ -415,6 +415,7 @@ async fn executor_stop_hook_rejects_mismatched_environment() -> Result<()> {
 }
 
 #[test_case("Stop", "", "", 1; "enabled")]
+#[test_case("Interrupt", "", "", 1; "interrupt_enabled")]
 #[test_case("SubagentStop", "", "", 1; "subagent_enabled")]
 #[test_case(
     "Stop",
@@ -431,7 +432,7 @@ async fn executor_stop_hook_rejects_mismatched_environment() -> Result<()> {
     "managed_disabled"
 )]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn executor_browser_and_computer_use_stop_hooks_use_separate_mcp_routes(
+async fn executor_browser_and_computer_use_cleanup_hooks_use_separate_mcp_routes(
     hook_event: &'static str,
     user_config: &'static str,
     requirements: &'static str,
@@ -482,6 +483,12 @@ async fn executor_browser_and_computer_use_stop_hooks_use_separate_mcp_routes(
                         "tool": "browser.turn_ended",
                         "input": {},
                     }] }],
+                    "Interrupt": [{ "hooks": [{
+                        "type": "mcp_tool",
+                        "server": "codex_apps",
+                        "tool": "browser.turn_ended",
+                        "input": {},
+                    }] }],
                     "SubagentStop": [{ "hooks": [{
                         "type": "mcp_tool",
                         "server": "codex_apps",
@@ -503,7 +510,11 @@ async fn executor_browser_and_computer_use_stop_hooks_use_separate_mcp_routes(
                 CloudConfigBundleFixture::loader_with_enterprise_requirement(requirements),
             ),
         &plugins,
-        vec![completed_turn_response("browser-turn")],
+        vec![if hook_event == "Interrupt" {
+            completed_turn_response("browser-turn").set_delay(Duration::from_secs(60))
+        } else {
+            completed_turn_response("browser-turn")
+        }],
     )
     .await?;
     if hook_event == "SubagentStop" {
@@ -540,7 +551,30 @@ async fn executor_browser_and_computer_use_stop_hooks_use_separate_mcp_routes(
             )
             .await?;
     }
-    fixture.test.submit_text_turn("finish browsing").await?;
+    if hook_event == "Interrupt" {
+        fixture
+            .test
+            .codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "interrupt browsing".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while fixture.responses.requests().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("interrupted turn should reach the model request")?;
+        fixture.test.codex.submit(Op::Interrupt).await?;
+        wait_for_event(&fixture.test.codex, |event| {
+            matches!(event, EventMsg::TurnAborted(_))
+        })
+        .await;
+    } else {
+        fixture.test.submit_text_turn("finish browsing").await?;
+    }
     fixture.wait_for_hook_call().await?;
     let node_calls = fixture.calls().await?;
     let expected_node_tools = if hook_event == "SubagentStop" {
