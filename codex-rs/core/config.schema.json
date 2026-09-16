@@ -4354,6 +4354,10 @@
           "default": null,
           "description": "Working directory to use when resuming or forking a session. When unset, prompt if the current and session directories differ."
         },
+        "screen_reader_detection_done": {
+          "description": "Records the one-time screen-reader detection attempt. Either value skips detection.",
+          "type": "boolean"
+        },
         "session_picker_view": {
           "allOf": [
             {

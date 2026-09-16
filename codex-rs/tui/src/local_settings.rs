@@ -24,17 +24,37 @@ pub(crate) struct LocalSettings {
 
 impl From<&Config> for LocalSettings {
     fn from(config: &Config) -> Self {
-        Self::with_system_motion(config, crate::system_motion::mode())
+        Self::with_accessibility_preferences(
+            config,
+            crate::system_motion::mode(),
+            crate::screen_reader::animation_default(),
+        )
     }
 }
 
 impl LocalSettings {
-    fn with_system_motion(config: &Config, system_motion: crate::motion::MotionMode) -> Self {
+    fn with_accessibility_preferences(
+        config: &Config,
+        system_motion: crate::motion::MotionMode,
+        screen_reader_default: crate::motion::MotionMode,
+    ) -> Self {
+        let animations = if screen_reader_default == crate::motion::MotionMode::Reduced {
+            // Consult the current layers so preferences edited after startup still win.
+            config
+                .config_layer_stack
+                .effective_config()
+                .get("tui")
+                .and_then(|tui| tui.get("animations"))
+                .is_some()
+                && config.animations
+        } else {
+            config.animations
+        };
         Self {
             tui: Tui {
                 notification_settings: config.tui_notifications.clone(),
-                animations: config.animations
-                    && system_motion == crate::motion::MotionMode::Animated,
+                animations: animations && system_motion == crate::motion::MotionMode::Animated,
+                screen_reader_detection_done: None,
                 whimsy: config.tui_whimsy,
                 show_tooltips: config.show_tooltips,
                 show_server_version_notice: config.tui_show_server_version_notice,

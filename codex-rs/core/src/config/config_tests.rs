@@ -1250,6 +1250,7 @@ fn config_toml_deserializes_model_availability_nux() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
+            screen_reader_detection_done: None,
             whimsy: true,
             show_tooltips: true,
             show_server_version_notice: true,
@@ -4266,6 +4267,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
         Tui {
             notification_settings: TuiNotificationSettings::default(),
             animations: true,
+            screen_reader_detection_done: None,
             whimsy: true,
             show_tooltips: true,
             show_server_version_notice: true,

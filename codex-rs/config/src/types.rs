@@ -752,6 +752,9 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub animations: bool,
 
+    /// Records the one-time screen-reader detection attempt. Either value skips detection.
+    pub screen_reader_detection_done: Option<bool>,
+
     /// Enable decorative effects such as Astra composer stars. Also requires animations.
     /// Defaults to `true`.
     #[serde(default = "default_true")]

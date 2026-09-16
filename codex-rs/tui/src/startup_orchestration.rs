@@ -258,6 +258,15 @@ pub(super) async fn run_main_inner(
             CloudConfigBundleLoader::default(),
         ))
         .await?;
+    let screen_reader_result = if !loader_overrides.ignore_user_config {
+        startup_draft
+            .run_until(screen_reader::initialize(
+                &bootstrap_config.config_layer_stack,
+            ))
+            .await?
+    } else {
+        Ok(())
+    };
     let cloud_config_bundle = startup_draft
         .run_until(cloud_config_bundle_for_app_server_target(
             &app_server_target,
@@ -625,6 +634,10 @@ pub(super) async fn run_main_inner(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+
+    if let Err(err) = screen_reader_result {
+        tracing::warn!("Could not save screen-reader detection: {err}");
+    }
 
     let app_result = run_ratatui_app(
         cli,
