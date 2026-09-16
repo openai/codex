@@ -3,7 +3,8 @@ use crate::tools::context::ToolPayload;
 use crate::tools::flat_tool_name;
 use crate::tools::handlers::unified_exec::ExecCommandArgs;
 use codex_memories_read::usage::MEMORIES_USAGE_METRIC;
-use codex_memories_read::usage::memories_usage_kinds_from_command;
+use codex_memories_read::usage::memories_usage_from_command;
+use codex_protocol::MemoryVersion;
 
 pub(crate) fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bool) {
     let Some(command) = shell_script_for_invocation(invocation) else {
@@ -12,12 +13,19 @@ pub(crate) fn emit_metric_for_tool_read(invocation: &ToolInvocation, success: bo
 
     let success = if success { "true" } else { "false" };
     let tool_name = flat_tool_name(&invocation.tool_name);
-    for kind in memories_usage_kinds_from_command(&command) {
+    for (kind, version) in memories_usage_from_command(&command) {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
             /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
+                (
+                    "memory_version",
+                    match version {
+                        MemoryVersion::V1 => "v1",
+                        MemoryVersion::V2 => "v2",
+                    },
+                ),
                 ("tool", tool_name.as_ref()),
                 ("success", success),
             ],

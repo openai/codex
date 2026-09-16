@@ -1,3 +1,6 @@
+//! Best-effort classification of shell reads by memory artifact and root version.
+
+use codex_protocol::MemoryVersion;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_shell_command::parse_command::parse_shell_script;
 
@@ -24,7 +27,7 @@ impl MemoriesUsageKind {
     }
 }
 
-pub fn memories_usage_kinds_from_command(command: &str) -> Vec<MemoriesUsageKind> {
+pub fn memories_usage_from_command(command: &str) -> Vec<(MemoriesUsageKind, MemoryVersion)> {
     let commands = parse_shell_script(command);
     if commands
         .iter()
@@ -36,28 +39,35 @@ pub fn memories_usage_kinds_from_command(command: &str) -> Vec<MemoriesUsageKind
     commands
         .into_iter()
         .filter_map(|command| match command {
-            ParsedCommand::Read { path, .. } => get_memory_kind(path.display().to_string()),
-            ParsedCommand::Search { path, .. } => path.and_then(get_memory_kind),
+            ParsedCommand::Read { path, .. } => get_memory_usage(path.display().to_string()),
+            ParsedCommand::Search { path, .. } => path.and_then(get_memory_usage),
             ParsedCommand::ListFiles { .. } | ParsedCommand::Unknown { .. } => None,
         })
         .collect()
 }
 
-fn get_memory_kind(path: String) -> Option<MemoriesUsageKind> {
-    let path = path.replace("memories_v2/", "memories/");
-    if path.contains("memories/MEMORY.md") {
-        Some(MemoriesUsageKind::MemoryMd)
-    } else if path.contains("memories/memory_summary.md") {
-        Some(MemoriesUsageKind::MemorySummary)
-    } else if path.contains("memories/raw_memories.md") {
-        Some(MemoriesUsageKind::RawMemories)
-    } else if path.contains("memories/rollout_summaries/") {
-        Some(MemoriesUsageKind::RolloutSummaries)
-    } else if path.contains("memories/skills/") {
-        Some(MemoriesUsageKind::Skills)
+fn get_memory_usage(path: String) -> Option<(MemoriesUsageKind, MemoryVersion)> {
+    let path = path.replace('\\', "/");
+    let version = if path.contains("memories_v2/") {
+        MemoryVersion::V2
     } else {
-        None
-    }
+        MemoryVersion::V1
+    };
+    let path = path.replace("memories_v2/", "memories/");
+    let kind = if path.contains("memories/MEMORY.md") {
+        MemoriesUsageKind::MemoryMd
+    } else if path.contains("memories/memory_summary.md") {
+        MemoriesUsageKind::MemorySummary
+    } else if path.contains("memories/raw_memories.md") {
+        MemoriesUsageKind::RawMemories
+    } else if path.contains("memories/rollout_summaries/") {
+        MemoriesUsageKind::RolloutSummaries
+    } else if path.contains("memories/skills/") {
+        MemoriesUsageKind::Skills
+    } else {
+        return None;
+    };
+    Some((kind, version))
 }
 
 #[cfg(test)]
