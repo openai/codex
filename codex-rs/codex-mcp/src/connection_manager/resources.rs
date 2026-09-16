@@ -17,9 +17,23 @@ use tracing::warn;
 
 use super::McpConnectionSet;
 use crate::pagination::collect_paginated;
+use crate::resource_client::McpResourceServerCacheKey;
 use crate::rmcp_client::ManagedClient;
 
 impl McpConnectionSet {
+    pub(crate) fn resource_cache_key(
+        &self,
+        server: &str,
+        generation: u64,
+    ) -> Option<McpResourceServerCacheKey> {
+        self.servers
+            .get(server)
+            .map(|view| McpResourceServerCacheKey {
+                connection: Arc::downgrade(&view.connection),
+                generation,
+            })
+    }
+
     /// Returns resources from servers selected by `include_server`.
     pub async fn list_all_resources(
         &self,

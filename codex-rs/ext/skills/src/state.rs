@@ -7,8 +7,9 @@ use std::sync::Weak;
 use codex_exec_server::Environment;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionMetrics;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
-use codex_mcp::McpResourceClientCacheKey;
+use codex_mcp::McpResourceServerCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use tokio::sync::OnceCell;
 
@@ -259,7 +260,8 @@ impl SkillsThreadState {
             .orchestrator_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cache_key = mcp_resources.map(McpResourceClient::cache_key);
+        let cache_key =
+            mcp_resources.and_then(|client| client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME));
         if let Some(cache) = cache
             .as_ref()
             .filter(|cache| cache.mcp_cache_key == cache_key)
@@ -337,7 +339,7 @@ struct CachedExecutorDiscoveryCatalog {
 }
 
 struct OrchestratorGenerationCache {
-    mcp_cache_key: Option<McpResourceClientCacheKey>,
+    mcp_cache_key: Option<McpResourceServerCacheKey>,
     catalog: OnceCell<SkillCatalog>,
     resources: Mutex<OrchestratorResourceCache>,
 }

@@ -7,6 +7,8 @@ use super::*;
 
 impl Session {
     pub(crate) fn request_mcp_runtime_refresh(&self) {
+        // Plugin changes can reuse connections but still change their skill resources.
+        self.services.mcp_runtime.invalidate_resource_caches();
         self.mark_mcp_runtime_dirty();
         self.schedule_mcp_prewarm();
     }

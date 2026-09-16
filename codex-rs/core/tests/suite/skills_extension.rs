@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
@@ -43,6 +44,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -1334,19 +1336,31 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Result<()> {
+async fn production_turn_reuses_orchestrator_skills_until_mcp_invalidation() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     const SKILL_ROOT: &str = "skill://plugin_connector_1p_2330815c823c8191941e5dc465bb899f";
     const SKILL_BODY: &str = "ORCHESTRATOR_SKILL_REMAINS_AVAILABLE_WITHOUT_HOST_DISCOVERY";
+    const UPDATED_SKILL_BODY: &str = "UPDATED_ORCHESTRATOR_SKILL";
 
     let server = responses::start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    let response = mount_sse_once(
+    let (apps_server, startup) = AppsTestServer::mount_with_startup_control(&server).await?;
+    let response = responses::mount_sse_sequence(
         &server,
-        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+        (1..=5)
+            .map(|index| {
+                let id = format!("resp-{index}");
+                sse(vec![ev_response_created(&id), ev_completed(&id)])
+            })
+            .collect(),
     )
     .await;
+    let list_calls = Arc::new(AtomicUsize::new(0));
+    let read_calls = Arc::new(AtomicUsize::new(0));
+    let updated = Arc::new(AtomicBool::new(false));
+    let resource_list_calls = Arc::clone(&list_calls);
+    let resource_read_calls = Arc::clone(&read_calls);
+    let resource_updated = Arc::clone(&updated);
 
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/ps/mcp/?$"))
@@ -1358,20 +1372,27 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
                 )
             })
         })
-        .respond_with(|request: &Request| {
+        .respond_with(move |request: &Request| {
             let body: Value = serde_json::from_slice(&request.body)
                 .expect("MCP resource request should be valid JSON");
             let result = if body["method"] == "resources/read" {
+                resource_read_calls.fetch_add(1, Ordering::SeqCst);
                 let uri = format!("{SKILL_ROOT}/search/SKILL.md");
                 assert_eq!(body["params"]["uri"], uri);
+                let contents = if resource_updated.load(Ordering::SeqCst) {
+                    UPDATED_SKILL_BODY
+                } else {
+                    SKILL_BODY
+                };
                 json!({
                     "contents": [{
                         "uri": uri,
                         "mimeType": "text/markdown",
-                        "text": SKILL_BODY,
+                        "text": contents,
                     }],
                 })
             } else {
+                resource_list_calls.fetch_add(1, Ordering::SeqCst);
                 json!({
                     "resources": [{
                         "name": "search",
@@ -1451,6 +1472,46 @@ async fn production_turn_aliases_discovered_singleton_orchestrator_root() -> Res
         user_text.contains("<skill>\n<name>demo:search</name>") && user_text.contains(SKILL_BODY),
         "orchestrator instruction reads must remain available without host discovery: {user_text}"
     );
+
+    // A normal turn and a policy change must reuse the same Apps skill snapshot.
+    test.submit_text_turn("Use $demo:search again.").await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "Use $demo:search after updating approval policy.",
+        AskForApproval::OnRequest,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+    assert_eq!(
+        startup.initialize_attempts(),
+        1,
+        "Apps connection was reused"
+    );
+    assert_eq!(list_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(read_calls.load(Ordering::SeqCst), 1);
+
+    // Plugin invalidation must refresh both the catalog and contents, even when
+    // the underlying Apps connection is reused.
+    updated.store(true, Ordering::SeqCst);
+    test.thread_manager.invalidate_mcp_runtimes().await;
+    test.submit_text_turn("Use $demo:search after its plugin changed.")
+        .await?;
+    assert_eq!(startup.initialize_attempts(), 1);
+    assert_eq!(list_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(read_calls.load(Ordering::SeqCst), 2);
+    assert!(
+        response.requests()[3]
+            .message_input_texts("user")
+            .join("\n")
+            .contains(UPDATED_SKILL_BODY)
+    );
+
+    // A forced reconnect must also refresh the skills snapshot.
+    test.codex.submit(Op::RefreshMcpServers).await?;
+    test.submit_text_turn("Use $demo:search after reconnecting.")
+        .await?;
+    assert_eq!(startup.initialize_attempts(), 2);
+    assert_eq!(list_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(read_calls.load(Ordering::SeqCst), 3);
 
     Ok(())
 }
