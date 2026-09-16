@@ -26,6 +26,8 @@ use codex_extension_api::Instructions;
 use codex_guardian_reviewer::ConversationCheckpoint;
 use codex_guardian_reviewer::ConversationState;
 use codex_guardian_reviewer::ReviewModel;
+use codex_guardian_reviewer::ReviewSessionResult;
+use codex_guardian_reviewer::SessionDisposition;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
 use codex_protocol::ThreadId;
@@ -315,11 +317,7 @@ async fn run_review_on_session(
     params: &GuardianReviewSessionParams,
     guardian_session_kind: GuardianReviewSessionKind,
     deadline: tokio::time::Instant,
-) -> (
-    GuardianReviewSessionOutcome,
-    bool,
-    GuardianReviewAnalyticsResult,
-) {
+) -> ReviewSessionResult {
     let review_model = &params.review_model;
     let model_info = params
         .parent_session
@@ -367,17 +365,23 @@ async fn run_review_on_session(
     {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
-            return (
-                GuardianReviewSessionOutcome::SessionFailed {
+            return ReviewSessionResult {
+                outcome: GuardianReviewSessionOutcome::SessionFailed {
                     error,
                     error_info: None,
                     retry_at: None,
                 },
-                false,
-                analytics_result,
-            );
+                disposition: SessionDisposition::Discard,
+                analytics: analytics_result,
+            };
         }
-        Err(outcome) => return (outcome, false, analytics_result),
+        Err(outcome) => {
+            return ReviewSessionResult {
+                outcome,
+                disposition: SessionDisposition::Discard,
+                analytics: analytics_result,
+            };
+        }
     }
 
     if params.spawn_config.features.enabled(Feature::TokenBudget)
@@ -399,19 +403,25 @@ async fn run_review_on_session(
         let compact_turn_id = match compact_submission {
             Ok(Ok(turn_id)) => turn_id,
             Ok(Err(error)) => {
-                return (
-                    GuardianReviewSessionOutcome::SessionFailed {
+                return ReviewSessionResult {
+                    outcome: GuardianReviewSessionOutcome::SessionFailed {
                         error: error.into(),
                         error_info: None,
                         retry_at: None,
                     },
-                    false,
-                    analytics_result,
-                );
+                    disposition: SessionDisposition::Discard,
+                    analytics: analytics_result,
+                };
             }
-            Err(outcome) => return (outcome, false, analytics_result),
+            Err(outcome) => {
+                return ReviewSessionResult {
+                    outcome,
+                    disposition: SessionDisposition::Discard,
+                    analytics: analytics_result,
+                };
+            }
         };
-        let (outcome, keep_review_session, _) = wait_for_guardian_review(
+        let result = wait_for_guardian_review(
             review_session,
             &compact_turn_id,
             deadline,
@@ -419,8 +429,15 @@ async fn run_review_on_session(
             &mut analytics_result,
         )
         .await;
-        if !matches!(outcome, GuardianReviewSessionOutcome::Completed(Ok(_))) {
-            return (outcome, keep_review_session, analytics_result);
+        if !matches!(
+            result.outcome,
+            GuardianReviewSessionOutcome::Completed(Ok(_))
+        ) {
+            return ReviewSessionResult {
+                outcome: result.outcome,
+                disposition: result.disposition,
+                analytics: analytics_result,
+            };
         }
 
         if prior_review_count > 0 {
@@ -580,16 +597,22 @@ async fn run_review_on_session(
     .await;
     let prompt_items = match prompt_items {
         Ok(prompt_items) => prompt_items,
-        Err(outcome) => return (outcome, false, analytics_result),
+        Err(outcome) => {
+            return ReviewSessionResult {
+                outcome,
+                disposition: SessionDisposition::Discard,
+                analytics: analytics_result,
+            };
+        }
     };
     let (prompt_items, items) = match prompt_items {
         Ok(prompt_items) => prompt_items,
         Err(err) => {
-            return (
-                GuardianReviewSessionOutcome::PromptBuildFailed(err),
-                false,
-                analytics_result,
-            );
+            return ReviewSessionResult {
+                outcome: GuardianReviewSessionOutcome::PromptBuildFailed(err),
+                disposition: SessionDisposition::Discard,
+                analytics: analytics_result,
+            };
         }
     };
     let transcript_cursor = prompt_items.transcript_cursor;
@@ -662,7 +685,11 @@ async fn run_review_on_session(
                 .services
                 .thread_extension_data
                 .remove::<super::input_budget::PendingReviewContext>();
-            return (outcome, false, analytics_result);
+            return ReviewSessionResult {
+                outcome,
+                disposition: SessionDisposition::Discard,
+                analytics: analytics_result,
+            };
         }
     };
     if let Some(response_sequence) = node_repl_evidence_admission {
@@ -673,7 +700,7 @@ async fn run_review_on_session(
         });
     }
 
-    let outcome = wait_for_guardian_review(
+    let turn_result = wait_for_guardian_review(
         review_session,
         child_turn_id.as_str(),
         deadline,
@@ -686,8 +713,11 @@ async fn run_review_on_session(
         .services
         .thread_extension_data
         .remove::<super::input_budget::PendingReviewContext>();
-    if matches!(outcome.0, GuardianReviewSessionOutcome::Completed(_)) {
-        if outcome.2
+    if matches!(
+        turn_result.outcome,
+        GuardianReviewSessionOutcome::Completed(_)
+    ) {
+        if turn_result.turn_completed
             && let Some(total_token_usage) = review_session.session.total_token_usage().await
         {
             analytics_result.token_usage = Some(token_usage_delta(
@@ -703,7 +733,7 @@ async fn run_review_on_session(
         .services
         .thread_extension_data
         .remove::<super::request_budget::ExhaustedReviewBudget>();
-    let result = match outcome.0 {
+    let result = match turn_result.outcome {
         GuardianReviewSessionOutcome::SessionFailed {
             error_info: Some(CodexErrorInfo::ContextWindowExceeded),
             ..
@@ -716,11 +746,15 @@ async fn run_review_on_session(
         }
         result => result,
     };
-    (
-        result,
-        outcome.1 && budget_exhausted.is_none(),
-        analytics_result,
-    )
+    ReviewSessionResult {
+        outcome: result,
+        disposition: if budget_exhausted.is_some() {
+            SessionDisposition::Discard
+        } else {
+            turn_result.disposition
+        },
+        analytics: analytics_result,
+    }
 }
 
 async fn ensure_guardian_followup_reminder(review_session: &GuardianReviewSession) {

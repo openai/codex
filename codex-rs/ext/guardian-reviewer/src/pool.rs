@@ -54,13 +54,14 @@ pub trait ReviewerRequest: Send + Sync {
         &self,
         session: &Self::Session,
         kind: GuardianReviewSessionKind,
-    ) -> impl Future<
-        Output = (
-            GuardianReviewSessionOutcome,
-            SessionDisposition,
-            GuardianReviewAnalyticsResult,
-        ),
-    > + Send;
+    ) -> impl Future<Output = ReviewSessionResult> + Send;
+}
+
+/// Result of one review, including whether its session can serve the next request.
+pub struct ReviewSessionResult {
+    pub outcome: GuardianReviewSessionOutcome,
+    pub disposition: SessionDisposition,
+    pub analytics: GuardianReviewAnalyticsResult,
 }
 
 /// Whether the host drained the session sufficiently for another review to use it.
@@ -259,7 +260,11 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         };
         // Dropping a review before it drains its turn must not leave a reusable agent.
         let review_lifetime = trunk.cancellation.clone().drop_guard();
-        let (outcome, disposition, analytics) = request.run(&trunk.session, kind).await;
+        let ReviewSessionResult {
+            outcome,
+            disposition,
+            analytics,
+        } = request.run(&trunk.session, kind).await;
         if disposition == SessionDisposition::Reusable
             && matches!(outcome, GuardianReviewSessionOutcome::Completed(_))
         {
@@ -316,7 +321,9 @@ impl<S: ReviewerSession> ReviewerPool<S> {
             }
             Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
         };
-        let (outcome, _, analytics) = request
+        let ReviewSessionResult {
+            outcome, analytics, ..
+        } = request
             .run(&session, GuardianReviewSessionKind::EphemeralForked)
             .await;
         (outcome, analytics)

@@ -842,14 +842,17 @@ async fn run_review_on_reused_session_waits_for_submitted_turn() {
         .await
         .expect("queue submitted turn completion");
 
-    let (outcome, keep_review_session, analytics_result) =
-        review.await.expect("review task should complete");
+    let ReviewSessionResult {
+        outcome,
+        disposition,
+        analytics: analytics_result,
+    } = review.await.expect("review task should complete");
     let GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) = outcome else {
         panic!("expected submitted turn completion");
     };
     assert_eq!(last_agent_message.as_deref(), Some("fresh"));
     assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
-    assert!(keep_review_session);
+    assert_eq!(disposition, SessionDisposition::Reusable);
 }
 
 #[tokio::test]
@@ -916,7 +919,11 @@ async fn wait_for_guardian_review_ignores_prior_turn_completion() {
         .expect("queue current turn completion");
 
     let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
-    let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+    let codex_guardian_reviewer::ReviewTurnResult {
+        outcome,
+        disposition,
+        turn_completed,
+    } = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now() + Duration::from_secs(1),
@@ -930,8 +937,8 @@ async fn wait_for_guardian_review_ignores_prior_turn_completion() {
     };
     assert_eq!(last_agent_message.as_deref(), Some("fresh"));
     assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
-    assert!(keep_review_session);
-    assert!(capture_token_usage);
+    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert!(turn_completed);
 }
 
 #[tokio::test]
@@ -958,7 +965,11 @@ async fn wait_for_guardian_review_ignores_prior_turn_errors() {
         .expect("queue current turn completion");
 
     let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
-    let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+    let codex_guardian_reviewer::ReviewTurnResult {
+        outcome,
+        disposition,
+        turn_completed,
+    } = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now() + Duration::from_secs(1),
@@ -972,8 +983,8 @@ async fn wait_for_guardian_review_ignores_prior_turn_errors() {
     };
     assert_eq!(last_agent_message, None);
     assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
-    assert!(keep_review_session);
-    assert!(capture_token_usage);
+    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert!(turn_completed);
 }
 
 #[tokio::test]
@@ -1000,7 +1011,11 @@ async fn wait_for_guardian_review_preserves_structured_session_error() {
         .expect("queue current turn completion");
 
     let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
-    let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+    let codex_guardian_reviewer::ReviewTurnResult {
+        outcome,
+        disposition,
+        turn_completed,
+    } = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now() + Duration::from_secs(1),
@@ -1017,8 +1032,8 @@ async fn wait_for_guardian_review_preserves_structured_session_error() {
     };
     assert_eq!(error.to_string(), "temporary failure");
     assert_eq!(error_info, Some(CodexErrorInfo::ServerOverloaded));
-    assert!(keep_review_session);
-    assert!(capture_token_usage);
+    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert!(turn_completed);
 }
 
 #[tokio::test]
@@ -1034,7 +1049,11 @@ async fn wait_for_guardian_review_ignores_prior_turn_aborts() {
         .expect("queue current turn completion");
 
     let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
-    let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+    let codex_guardian_reviewer::ReviewTurnResult {
+        outcome,
+        disposition,
+        turn_completed,
+    } = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now() + Duration::from_secs(1),
@@ -1048,8 +1067,8 @@ async fn wait_for_guardian_review_ignores_prior_turn_aborts() {
     };
     assert_eq!(last_agent_message.as_deref(), Some("fresh"));
     assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
-    assert!(keep_review_session);
-    assert!(capture_token_usage);
+    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert!(turn_completed);
 }
 
 #[tokio::test]
@@ -1070,7 +1089,11 @@ async fn wait_for_guardian_review_timeout_drains_expected_turn_after_stale_termi
     });
 
     let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
-    let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+    let codex_guardian_reviewer::ReviewTurnResult {
+        outcome,
+        disposition,
+        turn_completed,
+    } = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now() + Duration::from_millis(10),
@@ -1083,8 +1106,8 @@ async fn wait_for_guardian_review_timeout_drains_expected_turn_after_stale_termi
         .await
         .expect("interrupt response task should complete");
     assert!(matches!(outcome, GuardianReviewSessionOutcome::TimedOut));
-    assert!(keep_review_session);
-    assert!(!capture_token_usage);
+    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert!(!turn_completed);
 }
 
 #[tokio::test]
@@ -1107,7 +1130,11 @@ async fn wait_for_guardian_review_cancel_drains_expected_turn_after_stale_termin
     external_cancel.cancel();
 
     let mut analytics_result = GuardianReviewAnalyticsResult::without_session();
-    let (outcome, keep_review_session, capture_token_usage) = wait_for_guardian_review(
+    let codex_guardian_reviewer::ReviewTurnResult {
+        outcome,
+        disposition,
+        turn_completed,
+    } = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now() + Duration::from_secs(1),
@@ -1120,8 +1147,8 @@ async fn wait_for_guardian_review_cancel_drains_expected_turn_after_stale_termin
         .await
         .expect("interrupt response task should complete");
     assert!(matches!(outcome, GuardianReviewSessionOutcome::Aborted));
-    assert!(keep_review_session);
-    assert!(!capture_token_usage);
+    assert_eq!(disposition, SessionDisposition::Reusable);
+    assert!(!turn_completed);
 }
 
 #[tokio::test]
@@ -1138,7 +1165,7 @@ async fn interrupt_and_drain_turn_ignores_prior_turn_completion() {
 
     let cancellation = CancellationToken::new();
     cancellation.cancel();
-    let (_, reusable, _) = wait_for_guardian_review(
+    let result = wait_for_guardian_review(
         &review_session,
         "current-turn",
         tokio::time::Instant::now(),
@@ -1146,7 +1173,7 @@ async fn interrupt_and_drain_turn_ignores_prior_turn_completion() {
         &mut GuardianReviewAnalyticsResult::without_session(),
     )
     .await;
-    assert!(reusable);
+    assert_eq!(result.disposition, SessionDisposition::Reusable);
 
     assert!(review_session.io.rx_event.try_recv().is_err());
 }

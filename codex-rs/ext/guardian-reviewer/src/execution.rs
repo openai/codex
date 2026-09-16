@@ -15,6 +15,7 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::GuardianReviewSessionOutcome;
+use crate::SessionDisposition;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -54,13 +55,21 @@ pub async fn start_review_turn(
     }
 }
 
+/// A submitted turn's terminal outcome and the state left behind for reuse and accounting.
+pub struct ReviewTurnResult {
+    pub outcome: GuardianReviewSessionOutcome,
+    pub disposition: SessionDisposition,
+    /// A matching TurnComplete event supplied authoritative usage for this turn.
+    pub turn_completed: bool,
+}
+
 pub async fn wait_for_guardian_review(
     runtime: &impl ReviewerRuntime,
     expected_turn_id: &str,
     deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
     analytics_result: &mut GuardianReviewAnalyticsResult,
-) -> (GuardianReviewSessionOutcome, bool, bool) {
+) -> ReviewTurnResult {
     let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
     let mut last_error: Option<ErrorEvent> = None;
@@ -68,13 +77,16 @@ pub async fn wait_for_guardian_review(
     loop {
         tokio::select! {
             _ = &mut timeout => {
-                let keep_review_session = interrupt_and_drain_turn(
-                    runtime,
-                    expected_turn_id,
-                )
-                .await
-                .is_ok();
-                return (GuardianReviewSessionOutcome::TimedOut, keep_review_session, false);
+                let disposition = if interrupt_and_drain_turn(runtime, expected_turn_id).await.is_ok() {
+                    SessionDisposition::Reusable
+                } else {
+                    SessionDisposition::Discard
+                };
+                return ReviewTurnResult {
+                    outcome: GuardianReviewSessionOutcome::TimedOut,
+                    disposition,
+                    turn_completed: false,
+                };
             }
             _ = async {
                 if let Some(cancel_token) = external_cancel {
@@ -83,13 +95,16 @@ pub async fn wait_for_guardian_review(
                     std::future::pending::<()>().await;
                 }
             } => {
-                let keep_review_session = interrupt_and_drain_turn(
-                    runtime,
-                    expected_turn_id,
-                )
-                .await
-                .is_ok();
-                return (GuardianReviewSessionOutcome::Aborted, keep_review_session, false);
+                let disposition = if interrupt_and_drain_turn(runtime, expected_turn_id).await.is_ok() {
+                    SessionDisposition::Reusable
+                } else {
+                    SessionDisposition::Discard
+                };
+                return ReviewTurnResult {
+                    outcome: GuardianReviewSessionOutcome::Aborted,
+                    disposition,
+                    turn_completed: false,
+                };
             }
             event = runtime.next_event() => {
                 match event {
@@ -105,36 +120,40 @@ pub async fn wait_for_guardian_review(
                             if turn_complete.last_agent_message.is_none()
                                 && let Some(error) = last_error
                             {
-                                return (
-                                    GuardianReviewSessionOutcome::SessionFailed {
+                                return ReviewTurnResult {
+                                    outcome: GuardianReviewSessionOutcome::SessionFailed {
                                         error: anyhow!(error.message),
                                         error_info: error.codex_error_info,
                                         retry_at: runtime.retry_at(expected_turn_id),
                                     },
-                                    true,
-                                    true,
-                                );
+                                    disposition: SessionDisposition::Reusable,
+                                    turn_completed: true,
+                                };
                             }
-                            return (
-                                GuardianReviewSessionOutcome::Completed(Ok(turn_complete.last_agent_message)),
-                                true,
-                                true,
-                            );
+                            return ReviewTurnResult {
+                                outcome: GuardianReviewSessionOutcome::Completed(Ok(turn_complete.last_agent_message)),
+                                disposition: SessionDisposition::Reusable,
+                                turn_completed: true,
+                            };
                         }
                         EventMsg::Error(error) => {
                             last_error = Some(error);
                         }
                         EventMsg::TurnAborted(_) => {
-                            return (GuardianReviewSessionOutcome::Aborted, true, false);
+                            return ReviewTurnResult {
+                                outcome: GuardianReviewSessionOutcome::Aborted,
+                                disposition: SessionDisposition::Reusable,
+                                turn_completed: false,
+                            };
                         }
                         _ => {}
                     },
                     Err(err) => {
-                        return (
-                            GuardianReviewSessionOutcome::Completed(Err(err)),
-                            false,
-                            false,
-                        );
+                        return ReviewTurnResult {
+                            outcome: GuardianReviewSessionOutcome::Completed(Err(err)),
+                            disposition: SessionDisposition::Discard,
+                            turn_completed: false,
+                        };
                     }
                 }
             }

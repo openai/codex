@@ -4,7 +4,6 @@
 use super::*;
 use codex_guardian_reviewer::ReviewerPool;
 use codex_guardian_reviewer::ReviewerRequest;
-use codex_guardian_reviewer::SessionDisposition;
 
 pub struct PreparedGuardianContext {
     parent: Arc<Session>,
@@ -182,25 +181,16 @@ impl ReviewerRequest for PreparedReview {
         &self,
         session: &GuardianReviewSession,
         kind: GuardianReviewSessionKind,
-    ) -> (
-        GuardianReviewSessionOutcome,
-        SessionDisposition,
-        GuardianReviewAnalyticsResult,
-    ) {
-        let (outcome, keep_session, analytics) = Box::pin(run_review_on_session(
+    ) -> ReviewSessionResult {
+        let result = Box::pin(run_review_on_session(
             session,
             &self.params,
             kind,
             self.params.deadline,
         ))
         .await;
-        record_failed_review(&session.session, &self.params, &outcome).await;
-        let disposition = if keep_session {
-            SessionDisposition::Reusable
-        } else {
-            SessionDisposition::Discard
-        };
-        (outcome, disposition, analytics)
+        record_failed_review(&session.session, &self.params, &result.outcome).await;
+        result
     }
 }
 
