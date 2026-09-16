@@ -228,7 +228,6 @@ impl App {
                 approvals_reviewer,
                 Some(permission_profile.clone()),
                 active_permission_profile,
-                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
@@ -588,12 +587,6 @@ impl App {
 
         let auto_review_preset = auto_review_mode();
         let mut next_config = self.config.clone();
-        let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
-            matches!(
-                feature,
-                Feature::WindowsSandbox | Feature::WindowsSandboxElevated
-            )
-        });
         let mut approval_policy_override = None;
         let mut approvals_reviewer_override = None;
         let mut permission_profile_override = None;
@@ -733,9 +726,6 @@ impl App {
                     &feature_updates_to_apply,
                 )
                 .await;
-                if windows_sandbox_changed {
-                    self.propagate_windows_sandbox_turn_context();
-                }
             }
             return;
         }
@@ -803,7 +793,6 @@ impl App {
                 approvals_reviewer_override,
                 permission_profile_override,
                 active_permission_profile_override,
-                /*windows_sandbox_level*/ None,
                 /*model*/ None,
                 /*effort*/ None,
                 /*summary*/ None,
@@ -818,10 +807,6 @@ impl App {
                 self.note_active_thread_outbound_op(op).await;
                 self.refresh_pending_thread_approvals().await;
             }
-        }
-
-        if windows_sandbox_changed {
-            self.propagate_windows_sandbox_turn_context();
         }
 
         if let Some(label) = permissions_history_label {
@@ -1205,7 +1190,6 @@ impl App {
             Some(self.config.approvals_reviewer),
             /*permission_profile*/ None,
             Some(auto_review_preset.active_permission_profile),
-            /*windows_sandbox_level*/ None,
             /*model*/ None,
             /*effort*/ None,
             /*summary*/ None,
@@ -1264,28 +1248,6 @@ impl App {
         }
         self.chat_widget.add_error_message("Windows sandbox setup completed, but its mode was overridden by the effective configuration.".to_string());
         false
-    }
-
-    fn propagate_windows_sandbox_turn_context(&self) {
-        #[cfg(target_os = "windows")]
-        {
-            let windows_sandbox_level = crate::windows_sandbox::level_from_config(&self.config);
-            self.app_event_tx
-                .send(AppEvent::CodexOp(AppCommand::override_turn_context(
-                    /*cwd*/ None,
-                    /*approval_policy*/ None,
-                    /*approvals_reviewer*/ None,
-                    /*permission_profile*/ None,
-                    /*active_permission_profile*/ None,
-                    Some(windows_sandbox_level),
-                    /*model*/ None,
-                    /*effort*/ None,
-                    /*summary*/ None,
-                    /*service_tier*/ None,
-                    /*collaboration_mode*/ None,
-                    /*personality*/ None,
-                )));
-        }
     }
 }
 

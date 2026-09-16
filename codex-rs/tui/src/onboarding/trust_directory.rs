@@ -298,7 +298,8 @@ mod tests {
 
     #[test]
     fn renders_snapshot_for_git_repo() {
-        let widget = widget(/*error*/ None);
+        let mut widget = widget(/*error*/ None);
+        widget.show_windows_create_sandbox_hint = true;
 
         let mut terminal =
             Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");

@@ -19,7 +19,7 @@ use crate::pager_overlay::TranscriptHistoryState;
 use crate::session_resume::cwds_differ;
 use codex_app_server_protocol::ThreadGoalStatus;
 #[cfg(target_os = "windows")]
-use codex_app_server_protocol::WindowsSandboxSetupMode as WindowsSandboxModeToml;
+use codex_app_server_protocol::WindowsSandboxSetupMode;
 
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -838,15 +838,13 @@ impl App {
                     approvals_reviewer,
                     permission_profile,
                     active_permission_profile,
-                    windows_sandbox_level,
                     ..
                 } = &op
                     && (cwd.is_some()
                         || approval_policy.is_some()
                         || approvals_reviewer.is_some()
                         || permission_profile.is_some()
-                        || active_permission_profile.is_some()
-                        || windows_sandbox_level.is_some())
+                        || active_permission_profile.is_some())
                     && self.reject_pending_permission_change()
                 {
                     return Ok(AppRunControl::Continue);
@@ -2043,46 +2041,17 @@ impl App {
                         );
                     }
                     let selected_mode = match mode {
-                        WindowsSandboxEnableMode::Elevated => WindowsSandboxModeToml::Elevated,
-                        WindowsSandboxEnableMode::Legacy => WindowsSandboxModeToml::Unelevated,
+                        WindowsSandboxEnableMode::Elevated => WindowsSandboxSetupMode::Elevated,
+                        WindowsSandboxEnableMode::Legacy => WindowsSandboxSetupMode::Unelevated,
                     };
-                    let elevated_enabled = selected_mode == WindowsSandboxModeToml::Elevated;
+                    let elevated_enabled = selected_mode == WindowsSandboxSetupMode::Elevated;
                     if self
                         .verify_windows_sandbox_mode_after_setup(app_server, selected_mode)
                         .await
                     {
                             self.chat_widget.windows_sandbox_elevated_setup_complete =
                                 elevated_enabled;
-                            if elevated_enabled {
-                                self.config.set_windows_sandbox_enabled(/*value*/ false);
-                                self.config
-                                    .set_windows_elevated_sandbox_enabled(/*value*/ true);
-                            } else {
-                                self.config.set_windows_sandbox_enabled(/*value*/ true);
-                                self.config
-                                    .set_windows_elevated_sandbox_enabled(/*value*/ false);
-                            }
-                            self.chat_widget.set_windows_sandbox_mode(Some(selected_mode));
-                            let windows_sandbox_level =
-                                crate::windows_sandbox::level_from_config(&self.config);
                             if let Some(selection) = profile_selection {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    AppCommand::override_turn_context(
-                                        /*cwd*/ None,
-                                        /*approval_policy*/ None,
-                                        /*approvals_reviewer*/ None,
-                                        /*permission_profile*/ None,
-                                        /*active_permission_profile*/ None,
-                                        #[cfg(target_os = "windows")]
-                                        Some(windows_sandbox_level),
-                                        /*model*/ None,
-                                        /*effort*/ None,
-                                        /*summary*/ None,
-                                        /*service_tier*/ None,
-                                        /*collaboration_mode*/ None,
-                                        /*personality*/ None,
-                                    ),
-                                ));
                                 if self.apply_permission_profile_selection(selection).await {
                                     self.chat_widget.submit_initial_user_message_if_pending();
                                 }
@@ -2094,8 +2063,6 @@ impl App {
                                         Some(self.config.approvals_reviewer),
                                         Some(preset.permission_profile.clone()),
                                         Some(preset.active_permission_profile.clone()),
-                                        #[cfg(target_os = "windows")]
-                                        Some(windows_sandbox_level),
                                         /*model*/ None,
                                         /*effort*/ None,
                                         /*summary*/ None,

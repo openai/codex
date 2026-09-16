@@ -16,7 +16,6 @@ use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -138,7 +137,6 @@ pub(crate) enum AppCommand {
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
         active_permission_profile: Option<ActivePermissionProfile>,
-        windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
@@ -255,7 +253,6 @@ impl AppCommand {
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
         active_permission_profile: Option<ActivePermissionProfile>,
-        windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
         summary: Option<ReasoningSummaryConfig>,
@@ -269,7 +266,6 @@ impl AppCommand {
             approvals_reviewer,
             permission_profile,
             active_permission_profile,
-            windows_sandbox_level,
             model,
             effort,
             summary,

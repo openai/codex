@@ -1,6 +1,5 @@
 //! Windows sandbox configuration, managed requirements, and executor selection for the TUI.
 
-use crate::legacy_core::config::Config;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -8,8 +7,6 @@ use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::WindowsSandboxImplementation;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
-use codex_config::types::WindowsSandboxModeToml;
-use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use uuid::Uuid;
 
@@ -128,21 +125,6 @@ impl WindowsSandboxConfig {
             Ok(Self::from_responses(&config, requirements))
         })
         .await?
-    }
-}
-
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) fn level_from_config(config: &Config) -> WindowsSandboxLevel {
-    match config.permissions.windows_sandbox_mode {
-        Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
-        Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-        None if config.features.enabled(Feature::WindowsSandboxElevated) => {
-            WindowsSandboxLevel::Elevated
-        }
-        None if config.features.enabled(Feature::WindowsSandbox) => {
-            WindowsSandboxLevel::RestrictedToken
-        }
-        None => WindowsSandboxLevel::Disabled,
     }
 }
 

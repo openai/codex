@@ -7,7 +7,7 @@ use super::*;
 #[cfg(all(test, not(target_os = "windows")))]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
-use codex_app_server_protocol::WindowsSandboxSetupMode as WindowsSandboxModeToml;
+use codex_app_server_protocol::WindowsSandboxSetupMode;
 #[cfg(any(target_os = "windows", test))]
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -158,15 +158,9 @@ impl App {
         profile_selection: Option<PermissionProfileSelection>,
         mode: WindowsSandboxEnableMode,
     ) {
-        let (setup_mode, config_mode) = match mode {
-            WindowsSandboxEnableMode::Elevated => (
-                codex_app_server_protocol::WindowsSandboxSetupMode::Elevated,
-                WindowsSandboxModeToml::Elevated,
-            ),
-            WindowsSandboxEnableMode::Legacy => (
-                codex_app_server_protocol::WindowsSandboxSetupMode::Unelevated,
-                WindowsSandboxModeToml::Unelevated,
-            ),
+        let setup_mode = match mode {
+            WindowsSandboxEnableMode::Elevated => WindowsSandboxSetupMode::Elevated,
+            WindowsSandboxEnableMode::Legacy => WindowsSandboxSetupMode::Unelevated,
         };
         if self.windows_sandbox.pending_setup.is_some() {
             if self.windows_sandbox.setup_started_at.is_none() {
@@ -180,7 +174,7 @@ impl App {
         if !self.refresh_windows_sandbox_config(app_server).await {
             return;
         }
-        if !self.chat_widget.windows_sandbox_config.allows(config_mode) {
+        if !self.chat_widget.windows_sandbox_config.allows(setup_mode) {
             self.chat_widget
                 .retain_input_after_failed_permission_selection();
             self.chat_widget.add_info_message(
