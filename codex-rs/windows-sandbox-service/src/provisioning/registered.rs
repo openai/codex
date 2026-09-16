@@ -11,6 +11,7 @@ use crate::ipc::ProvisioningRequest;
 use codex_windows_sandbox::string_from_sid_bytes;
 use windows::ApplicationModel::Package;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
+use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
 
 use crate::installation_record::InstallationRecord;
 use crate::installation_record::RuntimeRegistration;
@@ -57,11 +58,11 @@ pub(super) fn run(
             let account = entry.account.username();
             ensure!(
                 codex_windows_sandbox::local_user_flags(account)?
-                    .is_some_and(|flags| flags & UF_ACCOUNTDISABLE == 0)
+                    .is_some_and(|flags| flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) == 0)
                     && string_from_sid_bytes(&codex_windows_sandbox::resolve_sid(account)?)
                         .map_err(anyhow::Error::msg)?
                         == entry.user_sid,
-                "registration refresh cannot replace a sandbox account"
+                "registration refresh cannot repair or replace a sandbox account"
             );
         }
     }
@@ -77,12 +78,13 @@ pub(super) fn run(
         });
         // Persist the authenticated owner before setup can rotate shared credentials.
         crate::installation_record::save_runtime(&installation)?;
+        // Expired passwords require full setup to rotate and persist credentials before logon.
         for account in [
             codex_windows_sandbox::OFFLINE_USERNAME,
             codex_windows_sandbox::ONLINE_USERNAME,
         ] {
             setup_complete &= codex_windows_sandbox::local_user_flags(account)?
-                .is_some_and(|flags| flags & UF_ACCOUNTDISABLE == 0);
+                .is_some_and(|flags| flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) == 0);
         }
         if !setup_complete {
             // Account state can change outside our setup lock; refresh must never repair it.

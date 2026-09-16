@@ -6,6 +6,8 @@
 use super::require_sandbox_account_with_setup;
 use crate::WindowsSandboxProxySettingsMode;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+use crate::setup::OFFLINE_USERNAME;
+use crate::setup::ONLINE_USERNAME;
 use crate::setup::SETUP_VERSION;
 use crate::setup::SandboxSetupRequest;
 use crate::setup::SandboxUserRecord;
@@ -22,6 +24,99 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_NORMAL_ACCOUNT;
+use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
+
+#[test]
+fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> Result<()> {
+    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
+        &PermissionProfile::read_only(),
+    )?;
+    for (expired_username, repair_succeeds) in [
+        (None, true),
+        (Some(OFFLINE_USERNAME), true),
+        (Some(ONLINE_USERNAME), true),
+        (Some(OFFLINE_USERNAME), false),
+        (Some(ONLINE_USERNAME), false),
+    ] {
+        let home = tempfile::tempdir()?;
+        let marker = SetupMarker {
+            version: SETUP_VERSION,
+            offline_username: OFFLINE_USERNAME.into(),
+            online_username: ONLINE_USERNAME.into(),
+            created_at: None,
+            proxy_ports: vec![],
+            allow_local_binding: false,
+        };
+        let mut users = SandboxUsersFile {
+            version: SETUP_VERSION,
+            offline: SandboxUserRecord {
+                username: OFFLINE_USERNAME.into(),
+                password: BASE64.encode(crate::dpapi::protect(b"old-test-password")?),
+            },
+            online: SandboxUserRecord {
+                username: ONLINE_USERNAME.into(),
+                password: BASE64.encode(crate::dpapi::protect(b"old-test-password")?),
+            },
+        };
+        for (path, bytes) in [
+            (setup_marker_path(home.path()), serde_json::to_vec(&marker)?),
+            (sandbox_users_path(home.path()), serde_json::to_vec(&users)?),
+        ] {
+            fs::create_dir_all(path.parent().unwrap())?;
+            fs::write(path, bytes)?;
+        }
+        let setups = Cell::new(/*value*/ 0);
+        let env = HashMap::new();
+        let result = require_sandbox_account_with_setup(
+            &SandboxSetupRequest {
+                permissions: &permissions,
+                command_cwd: home.path(),
+                env_map: &env,
+                codex_home: home.path(),
+                proxy_enforced: false,
+            },
+            WindowsSandboxProxySettingsMode::Preserve,
+            |_, _| {
+                setups.set(setups.get() + 1);
+                users.offline.password =
+                    BASE64.encode(crate::dpapi::protect(b"new-test-password")?);
+                users.online.password = users.offline.password.clone();
+                fs::write(sandbox_users_path(home.path()), serde_json::to_vec(&users)?)?;
+                Ok(())
+            },
+            |username| {
+                Ok(Some(
+                    if expired_username == Some(username) && (setups.get() == 0 || !repair_succeeds)
+                    {
+                        UF_NORMAL_ACCOUNT | UF_PASSWORD_EXPIRED
+                    } else {
+                        UF_NORMAL_ACCOUNT
+                    },
+                ))
+            },
+        );
+        assert_eq!(setups.get(), usize::from(expired_username.is_some()));
+        assert_eq!(
+            result
+                .map(|(creds, _)| (creds.username, creds.password))
+                .map_err(|err| err.to_string()),
+            if !repair_succeeds {
+                Err("Windows sandbox account password is still expired after setup".into())
+            } else {
+                Ok((
+                    OFFLINE_USERNAME.into(),
+                    if expired_username.is_some() {
+                        "new-test-password"
+                    } else {
+                        "old-test-password"
+                    }
+                    .into(),
+                ))
+            }
+        );
+    }
+    Ok(())
+}
 
 #[test]
 fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
