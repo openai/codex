@@ -15,6 +15,9 @@ workspace = true
 [dependencies]
 tokio = { workspace = true, features = ["fs", "net", "rt"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [target.'cfg(windows)'.dependencies]
 async-io = { workspace = true }
 tokio-util = { workspace = true, features = ["compat"] }

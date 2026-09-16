@@ -23,6 +23,7 @@ codex-network-proxy = { workspace = true }
 codex-process-hardening = { workspace = true }
 codex-protocol = { workspace = true }
 codex-sandboxing = { workspace = true }
+codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 globset = { workspace = true }
 landlock = { workspace = true }

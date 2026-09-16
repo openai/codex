@@ -17,6 +17,7 @@ anyhow = { workspace = true }
 codex-mxc-sandbox = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
+codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }

@@ -1,5 +1,12 @@
 //! Cross-platform async Unix domain socket helpers.
 
+#[cfg(unix)]
+mod daemon_directory;
+#[cfg(unix)]
+pub use daemon_directory::prepare_shared_daemon_socket_directory;
+#[cfg(unix)]
+pub use daemon_directory::shared_daemon_socket_directory;
+
 use std::io::Result as IoResult;
 use std::path::Path;
 use std::pin::Pin;

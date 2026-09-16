@@ -57,6 +57,7 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 signal-hook = { workspace = true }
 
 [dev-dependencies]

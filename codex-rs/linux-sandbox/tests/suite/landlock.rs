@@ -562,59 +562,6 @@ async fn wsl_interop_cannot_reenter_distro_as_root_with_network_access() {
 }
 
 #[tokio::test]
-async fn legacy_landlock_rejects_wsl_interop_with_network_access() {
-    let Some(powershell) = wsl_windows_executable(r"WindowsPowerShell\v1.0\powershell.exe").await
-    else {
-        return;
-    };
-    if wsl_baseline_output(
-        &powershell,
-        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
-    )
-    .await
-    .is_none()
-    {
-        eprintln!("skipping legacy WSL interop test: Windows interop is unavailable on the host");
-        return;
-    }
-
-    let safe_profile = PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::read_only(),
-        NetworkSandboxPolicy::Restricted,
-    );
-    let linux_output = run_cmd_result_with_permission_profile(
-        &["/bin/true"],
-        safe_profile,
-        NETWORK_TIMEOUT_MS,
-        /*use_legacy_landlock*/ true,
-    )
-    .await
-    .expect("legacy Landlock should run a Linux command");
-    assert_eq!(linux_output.exit_code, 0);
-
-    let unsafe_profile = PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::read_only(),
-        NetworkSandboxPolicy::Enabled,
-    );
-    let output = expect_denied(
-        run_cmd_result_with_permission_profile(
-            &["/bin/true"],
-            unsafe_profile,
-            NETWORK_TIMEOUT_MS,
-            /*use_legacy_landlock*/ true,
-        )
-        .await,
-        "legacy Landlock must reject restricted filesystem access with full network access on WSL",
-    );
-    assert!(
-        output
-            .stderr
-            .text
-            .contains("legacy Landlock cannot isolate WSL Windows interop")
-    );
-}
-
-#[tokio::test]
 async fn test_root_read() {
     run_cmd(&["ls", "-l", "/bin"], &[], SHORT_TIMEOUT_MS).await;
 }
@@ -767,20 +714,19 @@ async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
 #[tokio::test]
 async fn test_no_new_privs_is_enabled() {
     let output = run_cmd_output(
-        &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],
+        &[
+            "python3",
+            "-c",
+            "import ctypes; print(ctypes.CDLL(None).prctl(39, 0, 0, 0, 0))",
+        ],
         &[],
         // We have seen timeouts when running this test in CI on GitHub,
         // so we are using a generous timeout until we can diagnose further.
         LONG_TIMEOUT_MS,
     )
     .await;
-    let line = output
-        .stdout
-        .text
-        .lines()
-        .find(|line| line.starts_with("NoNewPrivs:"))
-        .unwrap_or("");
-    assert_eq!(line.trim(), "NoNewPrivs:\t1");
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(output.stdout.text, "1\n");
 }
 
 #[tokio::test]
@@ -792,19 +738,16 @@ async fn sandboxed_command_has_no_effective_or_permitted_capabilities() {
 
     let output = run_cmd_output(
         &[
-            "bash",
-            "-lc",
-            "awk '$1 == \"CapPrm:\" || $1 == \"CapEff:\" { print $1, $2 }' /proc/self/status",
+            "python3",
+            "-c",
+            "import ctypes; h=(ctypes.c_uint*2)(0x20080522,0); d=(ctypes.c_uint*6)(); assert ctypes.CDLL(None).capget(h,d)==0; print(d[0],d[1],d[3],d[4])",
         ],
         &[],
         LONG_TIMEOUT_MS,
     )
     .await;
-
-    assert_eq!(
-        output.stdout.text,
-        "CapPrm: 0000000000000000\nCapEff: 0000000000000000\n"
-    );
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(output.stdout.text, "0 0 0 0\n");
 }
 
 #[tokio::test]
@@ -1622,3 +1565,6 @@ async fn sandbox_blocks_dev_tcp_redirection() {
     // all images ship bash, so we guard against 127 as well.
     assert_network_blocked(&["bash", "-c", "echo hi > /dev/tcp/127.0.0.1/80"]).await;
 }
+
+#[path = "daemon_sockets_tests.rs"]
+mod daemon_sockets_tests;

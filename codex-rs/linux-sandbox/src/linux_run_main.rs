@@ -186,14 +186,7 @@ pub fn run_main() -> ! {
         file_system_sandbox_policy,
         network_sandbox_policy,
     } = resolve_permission_profile(permission_profile).unwrap_or_else(|err| panic!("{err}"));
-    ensure_legacy_landlock_mode_supports_policy(
-        use_legacy_landlock,
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
-        allow_network_for_proxy,
-        &sandbox_policy_cwd,
-        Path::new(WSL_INTEROP_DIR),
-    );
+    ensure_legacy_landlock_mode_supports_policy(use_legacy_landlock, &file_system_sandbox_policy);
 
     // Inner stage: apply seccomp/no_new_privs after bubblewrap has already
     // established the filesystem view.
@@ -412,30 +405,9 @@ fn ensure_inner_stage_mode_is_valid(apply_seccomp_then_exec: bool, use_legacy_la
 fn ensure_legacy_landlock_mode_supports_policy(
     use_legacy_landlock: bool,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-    allow_network_for_proxy: bool,
-    sandbox_policy_cwd: &Path,
-    wsl_interop_dir: &Path,
 ) {
-    if use_legacy_landlock
-        && file_system_sandbox_policy
-            .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd)
-    {
-        panic!(
-            "permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock"
-        );
-    }
-    if use_legacy_landlock
-        && network_sandbox_policy.is_enabled()
-        && !allow_network_for_proxy
-        && !file_system_sandbox_policy.has_full_disk_write_access()
-        // Interop can use another binfmt handler or a newly created socket.
-        // An active endpoint probe would race with sandboxed command startup.
-        && wsl_interop_dir.is_dir()
-    {
-        panic!(
-            "legacy Landlock cannot isolate WSL Windows interop with network access enabled; use bubblewrap or restrict network access"
-        );
+    if use_legacy_landlock && !file_system_sandbox_policy.has_full_disk_write_access() {
+        panic!("filesystem-restricted execution requires bubblewrap to isolate app-server sockets");
     }
 }
 

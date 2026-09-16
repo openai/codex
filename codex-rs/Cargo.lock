@@ -2412,6 +2412,7 @@ dependencies = [
  "hmac 0.12.1",
  "httpdate",
  "jsonwebtoken",
+ "libc",
  "owo-colors",
  "pretty_assertions",
  "rand 0.9.3",
@@ -3786,6 +3787,7 @@ dependencies = [
  "codex-process-hardening",
  "codex-protocol",
  "codex-sandboxing",
+ "codex-uds",
  "codex-utils-absolute-path",
  "globset",
  "landlock",
@@ -4466,6 +4468,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
+ "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "codex-utils-path-uri",
@@ -4866,6 +4869,7 @@ name = "codex-uds"
 version = "0.0.0"
 dependencies = [
  "async-io",
+ "libc",
  "pretty_assertions",
  "tempfile",
  "tokio",

@@ -37,12 +37,9 @@ commands that would enter the bubblewrap path.
 - WSL2 uses the normal Linux bubblewrap path.
 - WSL1 is not supported for bubblewrap sandboxing; Codex rejects sandboxed
   shell commands that would require the bubblewrap path before invoking `bwrap`.
-- Legacy Landlock + mount protections remain available as an explicit legacy
-  fallback path.
-- Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)
-  to force the legacy Landlock fallback.
-- The legacy Landlock fallback is used only when the split filesystem policy is
-  sandbox-equivalent to the legacy model after `cwd` resolution.
+- Filesystem-restricted execution requires bubblewrap. The legacy Landlock
+  option is rejected for these policies because it cannot isolate app-server
+  Unix sockets. Disable `features.use_legacy_landlock` when upgrading.
 - Split-only filesystem policies that do not round-trip through the legacy
   `SandboxPolicy` model stay on bubblewrap so nested read-only or denied
   carveouts are preserved.

@@ -246,7 +246,7 @@ async fn assert_seccomp_filtered_namespace_reaper(
         &[
             "bash",
             "-c",
-            "if [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; printf '%s\\n' \"$PPID\"; awk '$1 == \"Seccomp:\" && FNR == NR { print $2 } $1 == \"Seccomp_filters:\" { print $2 }' /proc/1/status /proc/self/status",
+            "if [ ! -r /proc/self/status ] || [ ! -r /proc/1/status ] || [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; printf '%s\\n' \"$PPID\"; awk '$1 == \"Seccomp:\" && FNR == NR { print $2 } $1 == \"Seccomp_filters:\" { print $2 }' /proc/1/status /proc/self/status",
         ],
         permission_profile,
         allow_network_for_proxy,
@@ -286,7 +286,7 @@ async fn namespace_reaper_collects_orphaned_descendants() {
         &[
             "bash",
             "-c",
-            "if [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; orphan=$(bash -c 'sleep 0.05 </dev/null >/dev/null 2>&1 & printf \"%s\\n\" \"$!\"'); for _ in $(seq 1 100); do if [ ! -e \"/proc/$orphan\" ]; then printf 'orphan reaped\\n'; exit 0; fi; sleep 0.01; done; exit 1",
+            "if [ ! -r /proc/self/status ] || [ ! -r /proc/1/status ] || [ \"$(readlink /proc/1/ns/pid 2>/dev/null)\" != \"$(readlink /proc/self/ns/pid 2>/dev/null)\" ]; then printf 'namespace proc unavailable\\n'; exit 0; fi; orphan=$(bash -c 'sleep 0.05 </dev/null >/dev/null 2>&1 & printf \"%s\\n\" \"$!\"'); for _ in $(seq 1 100); do if [ ! -e \"/proc/$orphan\" ]; then printf 'orphan reaped\\n'; exit 0; fi; sleep 0.01; done; exit 1",
         ],
         &PermissionProfile::read_only(),
         /*allow_network_for_proxy*/ false,
@@ -717,18 +717,25 @@ fn handoff_client() {
         return;
     };
     assert!(std::env::var_os(PROXY_ATTRIBUTION_TOKEN_ENV_KEY).is_none());
-    let inherited_sockets = std::fs::read_dir("/proc/self/fd")
-        .expect("enumerate inherited descriptors")
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let target = std::fs::read_link(entry.path()).ok()?;
-            target
-                .to_string_lossy()
-                .starts_with("socket:")
-                .then(|| (entry.file_name(), target))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(inherited_sockets, Vec::new(), "privileged socket leaked");
+    match std::fs::read_dir("/proc/self/fd") {
+        Ok(entries) => {
+            let inherited_sockets = entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let target = std::fs::read_link(entry.path()).ok()?;
+                    target
+                        .to_string_lossy()
+                        .starts_with("socket:")
+                        .then(|| (entry.file_name(), target))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(inherited_sockets, Vec::new(), "privileged socket leaked");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping descriptor enumeration: sandbox proc is unavailable");
+        }
+        Err(error) => panic!("enumerate inherited descriptors: {error}"),
+    }
 
     let shared = std::env::var("CODEX_TEST_HANDOFF_SHARED").expect("shared directory");
     let shared = Path::new(&shared);
