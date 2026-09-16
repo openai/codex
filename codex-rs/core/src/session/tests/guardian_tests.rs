@@ -332,6 +332,7 @@ async fn request_permissions_uses_issuing_step_policy_and_reviewer() {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
             config.approvals_reviewer = ApprovalsReviewer::User;
             config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+            config.model_provider.supports_websockets = false;
             config
                 .features
                 .enable(Feature::GuardianApproval)

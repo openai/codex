@@ -398,7 +398,7 @@ async fn cancelled_guardian_network_review_fails_closed_without_rewriting_turn_s
         AskForApproval::OnRequest,
     )
     .await?;
-    wait_for_response_request(&pending_guardian).await;
+    wait_for_guardian_request(&pending_guardian).await;
     test.codex.submit(Op::Interrupt).await?;
     let mut saw_turn_aborted = false;
     let mut saw_guardian_aborted = false;
@@ -533,7 +533,7 @@ PY"#
         AskForApproval::OnRequest,
     )
     .await?;
-    wait_for_response_request(&pending_guardian).await;
+    wait_for_guardian_request(&pending_guardian).await;
     wait_for_response_request(&parent_poll).await;
     fs::write(test.config.cwd.join("disconnect-now"), "close")?;
     wait_for_completion_without_network_prompt(&test).await;
@@ -643,7 +643,7 @@ async fn timed_out_guardian_network_review_uses_timeout_outcome_without_user_fal
         AskForApproval::OnRequest,
     )
     .await?;
-    wait_for_response_request(&pending_guardian).await;
+    wait_for_guardian_request(&pending_guardian).await;
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(91)).await;
     tokio::time::resume();
@@ -3032,6 +3032,21 @@ async fn wait_for_completion_without_network_prompt(test: &TestCodex) {
         }
         other => panic!("unexpected event: {other:?}"),
     }
+}
+
+async fn wait_for_guardian_request(responses: &ResponseMock) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if responses.requests().iter().any(|request| {
+                request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
+            }) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for Guardian request");
 }
 
 async fn wait_for_response_request(responses: &ResponseMock) {

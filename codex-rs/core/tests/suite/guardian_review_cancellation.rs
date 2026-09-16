@@ -178,7 +178,8 @@ async fn cancelling_tool_aborts_its_guardian_review(cancellation: Cancellation) 
         })
         .await;
         let output = yielded_parent
-            .single_request()
+            .last_request()
+            .context("missing yielded parent request")?
             .custom_tool_call_output("reviewed-tool");
         let output = &output["output"];
         let header = output
