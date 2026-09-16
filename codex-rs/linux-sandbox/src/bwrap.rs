@@ -6,6 +6,10 @@
 //! - sensitive subpaths such as `.git`, `.agents`, and `.codex` remain
 //!   read-only even when their parent root is writable.
 //!
+//! Restricted execution also hides WSLg's duplicate distro root so it cannot
+//! expose filesystem contents outside the policy's path masks. Explicit grants and
+//! command paths using that alias are rejected before constructing mounts.
+//!
 //! The overall Linux sandbox is composed of:
 //! - seccomp + `PR_SET_NO_NEW_PRIVS` applied in-process, and
 //! - bubblewrap used to construct the filesystem view before exec.
@@ -56,6 +60,7 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 
 const MAX_UNREADABLE_GLOB_MATCHES: usize = 8192;
 pub(crate) const WSL_INTEROP_DIR: &str = "/run/WSL";
+pub(crate) const WSLG_DISTRO_ROOT: &str = "/mnt/wslg/distro";
 
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +74,9 @@ pub(crate) struct BwrapOptions {
     pub network_mode: BwrapNetworkMode,
     /// Hide the WSL Windows interop socket from commands with restricted filesystem access.
     pub mask_wsl_interop: bool,
+    /// Whether the host exposes WSLg's duplicate distro root, which must be hidden
+    /// when constructing a restricted filesystem view.
+    pub mask_wslg_distro: bool,
     /// Optional maximum depth for expanding unreadable glob patterns with ripgrep.
     ///
     /// Keep this uncapped by default so existing nested deny-read matches are
@@ -82,6 +90,7 @@ impl Default for BwrapOptions {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
             mask_wsl_interop: false,
+            mask_wslg_distro: false,
             glob_scan_max_depth: None,
         }
     }
@@ -316,18 +325,29 @@ fn create_bwrap_flags(
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> Result<BwrapArgs> {
+    if options.mask_wslg_distro {
+        let granted_paths = file_system_sandbox_policy.entries.iter().flat_map(|entry| {
+            FileSystemSandboxPolicy::restricted(vec![entry.clone()])
+                .get_readable_roots_with_cwd(sandbox_policy_cwd)
+        });
+        let executable = command
+            .first()
+            .filter(|executable| executable.contains('/'))
+            .map(|executable| AbsolutePathBuf::resolve_path_against_base(executable, command_cwd));
+        for path in granted_paths
+            .map(AbsolutePathBuf::into_path_buf)
+            .chain([sandbox_policy_cwd.to_path_buf(), command_cwd.to_path_buf()])
+            .chain(executable.map(AbsolutePathBuf::into_path_buf))
+        {
+            crate::wslg::ensure_supported_path(&path)?;
+        }
+    }
     let BwrapArgs {
         args: filesystem_args,
         preserved_files,
         synthetic_mount_targets,
         protected_create_targets,
-    } = create_filesystem_args(
-        file_system_sandbox_policy,
-        sandbox_policy_cwd,
-        options
-            .glob_scan_max_depth
-            .or(file_system_sandbox_policy.glob_scan_max_depth),
-    )?;
+    } = create_filesystem_args(file_system_sandbox_policy, sandbox_policy_cwd, options)?;
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
@@ -339,12 +359,12 @@ fn create_bwrap_flags(
         // the Linux filesystem policy by launching an unrestricted Windows process.
         args.push("--tmpfs".to_string());
         args.push(WSL_INTEROP_DIR.to_string());
-        if !options.mount_proc {
-            // Without a fresh procfs, the root bind retains the host procfs.
-            // Hide it so /proc/<host-pid>/root cannot alias the interop sockets.
-            args.push("--tmpfs".to_string());
-            args.push("/proc".to_string());
-        }
+    }
+    if (options.mask_wsl_interop || options.mask_wslg_distro) && !options.mount_proc {
+        // Without a fresh procfs, the root bind retains the host procfs.
+        // Hide it so host process roots cannot restore the masked WSL views.
+        args.push("--tmpfs".to_string());
+        args.push("/proc".to_string());
     }
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
@@ -398,7 +418,7 @@ fn create_bwrap_flags(
 fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
-    glob_scan_max_depth: Option<usize>,
+    options: BwrapOptions,
 ) -> Result<BwrapArgs> {
     let unreadable_globs = file_system_sandbox_policy.get_unreadable_globs_with_cwd(cwd);
     // Bubblewrap requires bind mount targets to exist. Skip missing writable
@@ -461,9 +481,15 @@ fn create_filesystem_args(
     // to the existing matches we can see before constructing the mount overlay;
     // core tool helpers still evaluate the original patterns directly at read time.
     unreadable_roots.extend(
-        expand_unreadable_globs_with_ripgrep(&unreadable_globs, cwd, glob_scan_max_depth)?
-            .into_iter()
-            .map(AbsolutePathBuf::into_path_buf),
+        expand_unreadable_globs_with_ripgrep(
+            &unreadable_globs,
+            cwd,
+            options
+                .glob_scan_max_depth
+                .or(file_system_sandbox_policy.glob_scan_max_depth),
+        )?
+        .into_iter()
+        .map(AbsolutePathBuf::into_path_buf),
     );
     unreadable_roots.sort();
     unreadable_roots.dedup();
@@ -671,6 +697,29 @@ fn create_filesystem_args(
     rootless_unreadable_roots.sort_by_key(|path| path_depth(path));
     for unreadable_root in rootless_unreadable_roots {
         append_unreadable_root_args(&mut bwrap_args, &unreadable_root, &allowed_write_paths)?;
+    }
+
+    if options.mask_wslg_distro
+        && !unreadable_roots.iter().any(|denied| {
+            let distro = Path::new(WSLG_DISTRO_ROOT);
+            distro.starts_with(denied)
+                && !allowed_write_paths.iter().any(|root| {
+                    root.starts_with(denied)
+                        && (distro.starts_with(root) || root.starts_with(distro))
+                })
+        })
+    {
+        // Use the expanded masks, including symlink targets from deny globs.
+        // An already hidden ancestor cannot accommodate a new child mount.
+        // Otherwise apply this after every grant to exclude the duplicate view.
+        bwrap_args.args.extend([
+            "--perms".to_string(),
+            "000".to_string(),
+            "--tmpfs".to_string(),
+            WSLG_DISTRO_ROOT.to_string(),
+            "--remount-ro".to_string(),
+            WSLG_DISTRO_ROOT.to_string(),
+        ]);
     }
 
     Ok(bwrap_args)
@@ -1343,6 +1392,10 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "bwrap_wslg_tests.rs"]
+mod wslg_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1354,8 +1407,6 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
-
-    const NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH: Option<usize> = None;
 
     #[test]
     fn default_unreadable_glob_scan_has_no_depth_cap() {
@@ -1583,9 +1634,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window == ["--bind", real_root_str.as_str(), real_root_str.as_str()]
@@ -1627,9 +1677,8 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window
@@ -1667,9 +1716,8 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let err =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect_err("protected symlinked subpath should fail closed");
+        let err = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect_err("protected symlinked subpath should fail closed");
         let message = err.to_string();
 
         assert!(
@@ -1710,9 +1758,8 @@ mod tests {
             },
         ]);
 
-        let err =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect_err("deny-read path crossing writable symlink should fail closed");
+        let err = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect_err("deny-read path crossing writable symlink should fail closed");
         let message = err.to_string();
 
         assert!(
@@ -1743,9 +1790,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, Path::new("/"), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, Path::new("/"), BwrapOptions::default())
+            .expect("filesystem args");
         let registry_path = path_to_string(&registry_root);
         let temp_path = path_to_string(temp_root);
         let registry_bind = args
@@ -1785,9 +1831,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
 
         assert_empty_file_bound_without_perms(&args.args, &blocked);
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".git"));
@@ -1825,9 +1870,8 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let dot_git_str = path_to_string(&dot_git);
 
         assert_empty_file_bound_without_perms(&args.args, &dot_git);
@@ -1873,7 +1917,7 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let args = create_filesystem_args(&policy, &workspace, NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
+        let args = create_filesystem_args(&policy, &workspace, BwrapOptions::default())
             .expect("filesystem args");
         assert_empty_directory_mounted_read_only(&args.args, &dot_git);
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
@@ -1910,9 +1954,8 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let args =
-            create_filesystem_args(&policy, &link_workspace, NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, &link_workspace, BwrapOptions::default())
+            .expect("filesystem args");
         assert_empty_directory_mounted_read_only(&args.args, &dot_git);
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".agents"));
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
@@ -1942,9 +1985,8 @@ mod tests {
             /*exclude_slash_tmp*/ true,
         );
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let existing_root = path_to_string(&existing_root);
         let missing_root = path_to_string(&missing_root);
 
@@ -2001,9 +2043,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let dot_git = path_to_string(&temp_dir.path().join(".git"));
         let dot_agents = path_to_string(&temp_dir.path().join(".agents"));
         let dot_codex = path_to_string(&temp_dir.path().join(".codex"));
@@ -2057,9 +2098,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let dot_vscode = path_to_string(&temp_dir.path().join(".vscode"));
         let dot_secrets = path_to_string(&temp_dir.path().join(".secrets"));
 
@@ -2075,12 +2115,8 @@ mod tests {
             /*exclude_slash_tmp*/ true,
         );
 
-        let args = create_filesystem_args(
-            &sandbox_policy,
-            Path::new("/"),
-            NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH,
-        )
-        .expect("bwrap fs args");
+        let args = create_filesystem_args(&sandbox_policy, Path::new("/"), BwrapOptions::default())
+            .expect("bwrap fs args");
         assert!(args.preserved_files.is_empty());
         assert_eq!(
             synthetic_mount_target_paths(&args),
@@ -2174,9 +2210,8 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
 
         assert_eq!(args.args[0..4], ["--tmpfs", "/", "--dev", "/dev"]);
 
@@ -2202,9 +2237,8 @@ mod tests {
             missing_path_behavior: None,
         }]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
 
         assert!(
             args.args
@@ -2244,9 +2278,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
 
         assert!(args.args.windows(3).any(|window| {
             window
@@ -2322,9 +2355,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let docs_str = path_to_string(docs.as_path());
         let docs_public_str = path_to_string(docs_public.as_path());
         let docs_ro_index = args
@@ -2375,9 +2407,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
         let allowed_str = path_to_string(allowed.as_path());
         let blocked_none_index = args
@@ -2443,9 +2474,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
         let allowed_dir_str = path_to_string(allowed_dir.as_path());
         let allowed_file_str = path_to_string(allowed_file.as_path());
@@ -2521,9 +2551,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let blocked_none_index = args
             .args
             .windows(4)
@@ -2568,9 +2597,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let blocked_str = path_to_string(blocked.as_path());
 
         assert!(
@@ -2612,9 +2640,8 @@ mod tests {
             },
         ]);
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), NO_UNREADABLE_GLOB_SCAN_MAX_DEPTH)
-                .expect("filesystem args");
+        let args = create_filesystem_args(&policy, temp_dir.path(), BwrapOptions::default())
+            .expect("filesystem args");
         let blocked_file_str = path_to_string(blocked_file.as_path());
 
         assert_eq!(args.preserved_files.len(), 1);
@@ -2645,8 +2672,15 @@ mod tests {
         let policy =
             default_policy_with_unreadable_glob(format!("{}/**/*.env", temp_dir.path().display()));
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), Some(2)).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            BwrapOptions {
+                glob_scan_max_depth: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("filesystem args");
 
         assert_file_masked(&args.args, &root_env);
         assert_file_masked(&args.args, &nested_env);
@@ -2677,8 +2711,15 @@ mod tests {
         let policy =
             default_policy_with_unreadable_glob(format!("{}/**/*.env", link_root.display()));
 
-        let args =
-            create_filesystem_args(&policy, temp_dir.path(), Some(2)).expect("filesystem args");
+        let args = create_filesystem_args(
+            &policy,
+            temp_dir.path(),
+            BwrapOptions {
+                glob_scan_max_depth: Some(2),
+                ..Default::default()
+            },
+        )
+        .expect("filesystem args");
 
         assert_file_masked(&args.args, &real_secret);
     }

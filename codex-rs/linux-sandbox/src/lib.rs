@@ -23,6 +23,8 @@ mod linux_run_main;
 mod proxy_lifecycle;
 #[cfg(target_os = "linux")]
 mod proxy_routing;
+#[cfg(target_os = "linux")]
+mod wslg;
 
 /// Exit status returned when bundled bubblewrap fails digest verification.
 #[cfg(target_os = "linux")]

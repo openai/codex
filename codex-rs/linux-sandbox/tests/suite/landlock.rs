@@ -25,6 +25,9 @@ use std::process::Output;
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
+#[path = "wslg_tests.rs"]
+mod wslg_tests;
+
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
 #[cfg(not(target_arch = "aarch64"))]

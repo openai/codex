@@ -23,6 +23,7 @@ use std::time::Duration;
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::WSL_INTEROP_DIR;
+use crate::bwrap::WSLG_DISTRO_ROOT;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_permission_profile_to_current_thread;
 use crate::launcher::exec_bwrap;
@@ -303,6 +304,31 @@ pub fn run_main() -> ! {
         } else {
             (None, Vec::new())
         };
+        let options = BwrapOptions {
+            mount_proc: !no_proc,
+            network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()
+                && Path::new(WSL_INTEROP_DIR).is_dir(),
+            mask_wslg_distro: (!file_system_sandbox_policy.has_full_disk_write_access()
+                || !file_system_sandbox_policy
+                    .get_unreadable_globs_with_cwd(&sandbox_policy_cwd)
+                    .is_empty())
+                && crate::wslg::is_duplicate_root(Path::new(WSLG_DISTRO_ROOT))
+                    .unwrap_or_else(|err| exit_with_bwrap_build_error(err.into())),
+            ..Default::default()
+        };
+        if options.mask_wslg_distro
+            && let Some(executable) = command
+                .first()
+                .filter(|executable| executable.contains('/'))
+        {
+            let executable = command_cwd
+                .as_deref()
+                .unwrap_or(&sandbox_policy_cwd)
+                .join(executable);
+            crate::wslg::ensure_supported_path(&executable)
+                .unwrap_or_else(|err| exit_with_bwrap_build_error(err));
+        }
         let inner = build_inner_seccomp_command(InnerSeccompCommandArgs {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
@@ -315,10 +341,9 @@ pub fn run_main() -> ! {
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
-            bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            options,
             inner,
             proxy_controls,
-            !no_proc,
         );
     }
 
@@ -418,30 +443,21 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_mode: BwrapNetworkMode,
+    mut options: BwrapOptions,
     inner: Vec<String>,
     proxy_controls: Vec<File>,
-    mount_proc: bool,
 ) -> ! {
-    let mut mount_proc = mount_proc;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
-    if mount_proc
-        && !preflight_proc_mount_support(network_mode)
+    if options.mount_proc
+        && !preflight_proc_mount_support(options.network_mode)
             .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
         // child process stderr stream.
-        mount_proc = false;
+        options.mount_proc = false;
     }
 
-    let options = BwrapOptions {
-        mount_proc,
-        network_mode,
-        mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()
-            && Path::new(WSL_INTEROP_DIR).is_dir(),
-        ..Default::default()
-    };
     let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
