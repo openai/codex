@@ -3210,6 +3210,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-oss",
+ "codex-utils-path-uri",
  "codex-utils-sandbox-summary",
  "codex-worktree",
  "core_test_support",
@@ -5094,6 +5095,7 @@ version = "0.0.0"
 dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-path-uri",
  "pretty_assertions",
 ]
 

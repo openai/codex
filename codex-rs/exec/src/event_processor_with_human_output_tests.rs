@@ -15,6 +15,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
+use codex_utils_path_uri::PathUri;
 use codex_utils_sandbox_summary::summarize_permission_profile;
 use owo_colors::Style;
 use pretty_assertions::assert_eq;
@@ -106,7 +107,7 @@ fn reasoning_text_uses_raw_content_when_enabled() {
 
 #[test]
 fn summarizes_disabled_permission_profile_as_danger_full_access() {
-    let cwd = test_path_buf("/tmp").abs();
+    let cwd = PathUri::from_abs_path(&test_path_buf("/tmp").abs());
 
     assert_eq!(
         summarize_permission_profile(
@@ -120,7 +121,7 @@ fn summarizes_disabled_permission_profile_as_danger_full_access() {
 
 #[test]
 fn summarizes_external_permission_profile() {
-    let cwd = test_path_buf("/tmp").abs();
+    let cwd = PathUri::from_abs_path(&test_path_buf("/tmp").abs());
 
     assert_eq!(
         summarize_permission_profile(
@@ -157,14 +158,18 @@ fn summarizes_managed_workspace_write_permission_profile() {
     );
 
     assert_eq!(
-        summarize_permission_profile(&profile, &cwd, &[cwd.clone(), cache_root.clone()]),
+        summarize_permission_profile(
+            &profile,
+            &PathUri::from_abs_path(&cwd),
+            &[cwd.clone().into(), cache_root.clone().into()],
+        ),
         format!("workspace-write [workdir, {}]", cache_root.display())
     );
 }
 
 #[test]
 fn summarizes_managed_read_only_permission_profile() {
-    let cwd = test_path_buf("/tmp/project").abs();
+    let cwd = PathUri::from_abs_path(&test_path_buf("/tmp/project").abs());
     let profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(Vec::new()),
         NetworkSandboxPolicy::Restricted,
