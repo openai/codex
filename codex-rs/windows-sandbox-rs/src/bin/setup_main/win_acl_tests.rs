@@ -7,6 +7,7 @@ use super::GRANT_ACCESS;
 use super::Payload;
 use super::SETUP_VERSION;
 use super::SetupMode;
+use super::WRITE_DAC;
 use super::convert_string_sid_to_sid;
 use super::lock_sandbox_bin_dir;
 use super::lock_sandbox_dir;
@@ -43,7 +44,11 @@ fn provision_only_locks_plain_directory_via_handle() {
 
 #[test]
 fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
-    for setup_mode in [SetupMode::Full, SetupMode::ProvisionOnly] {
+    for setup_mode in [
+        SetupMode::Full,
+        SetupMode::InteractiveProvision,
+        SetupMode::ProvisionOnly,
+    ] {
         let temp = tempfile::tempdir().expect("tempdir");
         let workspace = temp.path().join("workspace");
         let sandbox_bin = workspace.join(".sandbox-bin");
@@ -74,6 +79,8 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
         );
 
         let real_user = std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
+        let real_sid = resolve_sid(&real_user).expect("resolve real user SID");
+        let real_psid = sid_bytes_to_psid(&real_sid).expect("convert real user SID");
         let payload = Payload {
             version: SETUP_VERSION,
             offline_username: String::new(),
@@ -95,15 +102,51 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
         let new_runner = sandbox_bin.join("new-runner.exe");
         fs::write(&new_runner, b"new").expect("create new runner");
 
-        for path in [&sandbox_bin, &existing_runner, &new_runner] {
+        let child_dir = sandbox_bin.join("child");
+        fs::create_dir(&child_dir).expect("create child directory");
+
+        // Repeated refresh must retain the right seeded by privileged setup.
+        lock_sandbox_bin_dir(&payload, &sandbox_group_sid).expect("refresh sandbox bin");
+        lock_sandbox_bin_dir(&payload, &sandbox_group_sid).expect("repeat refresh sandbox bin");
+        assert!(
+            path_mask_allows(
+                &sandbox_bin,
+                &[real_psid],
+                WRITE_DAC,
+                /*require_all_bits*/ true
+            )
+            .expect("check caller can maintain directory permissions")
+        );
+        for path in [&existing_runner, &new_runner, &child_dir] {
+            assert!(
+                !path_mask_allows(
+                    path,
+                    &[real_psid],
+                    WRITE_DAC,
+                    /*require_all_bits*/ false
+                )
+                .expect("check permission maintenance does not inherit to helpers")
+            );
+        }
+
+        for path in [&sandbox_bin, &existing_runner, &new_runner, &child_dir] {
             assert!(
                 !path_mask_allows(
                     path,
                     &[workspace_psid],
-                    FILE_GENERIC_WRITE | DELETE,
+                    FILE_GENERIC_WRITE | DELETE | WRITE_DAC,
                     /*require_all_bits*/ false,
                 )
                 .expect("check protected path write and delete access")
+            );
+            assert!(
+                !path_mask_allows(
+                    path,
+                    &[sandbox_group_psid],
+                    WRITE_DAC,
+                    /*require_all_bits*/ false
+                )
+                .expect("check sandbox cannot maintain permissions")
             );
             assert!(
                 path_mask_allows(
@@ -117,6 +160,7 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
         }
 
         unsafe {
+            LocalFree(real_psid as HLOCAL);
             LocalFree(workspace_psid as HLOCAL);
             LocalFree(sandbox_group_psid as HLOCAL);
         }
