@@ -1619,6 +1619,7 @@ async fn code_mode_mcp_metadata_keeps_originating_window_after_compaction() -> R
                 /*apps_mcp_product_sku*/ None,
                 /*originator*/ None,
             )),
+            protocol_mode: None,
         }),
         gate: Mutex::new(Some((reached_tx, release_rx))),
     });
@@ -2070,6 +2071,7 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
                 /*apps_mcp_product_sku*/ None,
                 /*originator*/ None,
             )),
+            protocol_mode: None,
         }),
         gate: Mutex::new(Some((reached_tx, release_rx))),
     });

@@ -68,6 +68,7 @@ fn user_verification_is_projected_only_to_the_host_owned_plugin_service() {
     use crate::catalog::ResolvedMcpCatalog;
     use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
     use crate::mcp::codex_apps_mcp_server_config;
+    use codex_rmcp_client::McpProtocolMode;
 
     let config = codex_apps_mcp_server_config(
         "https://example.com",
@@ -87,6 +88,27 @@ fn user_verification_is_projected_only_to_the_host_owned_plugin_service() {
                 config.clone(),
             ),
             json!({"form": {}, "userVerification": {}}),
+        ),
+        (
+            CODEX_APPS_MCP_SERVER_NAME,
+            McpServerRegistration::from_hosted_apps(
+                "host",
+                /*contribution_order*/ 0,
+                config.clone(),
+            )
+            .with_protocol_mode(McpProtocolMode::V20260728),
+            json!({"form": {}, "userVerification": {}}),
+        ),
+        (
+            CODEX_APPS_MCP_SERVER_NAME,
+            McpServerRegistration::from_extension(
+                CODEX_APPS_MCP_SERVER_NAME.into(),
+                "ordinary",
+                /*contribution_order*/ 0,
+                config.clone(),
+            )
+            .with_protocol_mode(McpProtocolMode::V20260728),
+            json!({"form": {}}),
         ),
         (
             CODEX_APPS_MCP_SERVER_NAME,

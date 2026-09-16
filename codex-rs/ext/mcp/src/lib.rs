@@ -44,6 +44,7 @@ impl McpServerContributor<Config> for HostedPluginRuntimeExtension {
                     config.apps_mcp_product_sku.as_deref(),
                     context.originator(),
                 )),
+                protocol_mode: None,
             }]
         })
     }

@@ -309,6 +309,7 @@ async fn apps_cache_filled_during_binding_capture_reaches_the_model() -> anyhow:
                         serde_json::from_value(json!({ "url": self.0 }))
                             .expect("child Apps MCP config"),
                     ),
+                    protocol_mode: None,
                 }]
             })
         }

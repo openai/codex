@@ -31,7 +31,13 @@ async fn hosted_plugin_runtime_forwards_thread_originator() -> Result<(), Box<dy
             /*executor_capability_discovery*/ None,
         ))
         .await;
-    let [McpServerContribution::HostedApps { config: server }] = contributions.as_slice() else {
+    let [
+        McpServerContribution::HostedApps {
+            config: server,
+            protocol_mode: None,
+        },
+    ] = contributions.as_slice()
+    else {
         panic!("hosted plugin runtime should contribute one server");
     };
     let McpServerTransportConfig::StreamableHttp { http_headers, .. } = &server.transport else {

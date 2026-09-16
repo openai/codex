@@ -197,14 +197,19 @@ impl McpManager {
                             .with_protocol_mode(protocol_mode),
                         )));
                     }
-                    McpServerContribution::HostedApps { config } => {
-                        overlays.push(OrderedMcpOverlay::Set(Box::new(
-                            McpServerRegistration::from_hosted_apps(
-                                contributor.id(),
-                                contribution_order,
-                                *config,
-                            ),
-                        )));
+                    McpServerContribution::HostedApps {
+                        config,
+                        protocol_mode,
+                    } => {
+                        let mut registration = McpServerRegistration::from_hosted_apps(
+                            contributor.id(),
+                            contribution_order,
+                            *config,
+                        );
+                        if let Some(protocol_mode) = protocol_mode {
+                            registration = registration.with_protocol_mode(protocol_mode);
+                        }
+                        overlays.push(OrderedMcpOverlay::Set(Box::new(registration)));
                     }
                     McpServerContribution::SelectedPlugin { ref plugin_id, .. }
                         if disabled_plugin_ids.contains(plugin_id) => {}

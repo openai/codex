@@ -161,7 +161,10 @@ impl McpServerContributor<Config> for AppsMcpServerContributor {
                     .expect("test Apps MCP server config should be valid"),
             );
             let contribution = if self.id == "hosted_plugin_runtime" {
-                McpServerContribution::HostedApps { config }
+                McpServerContribution::HostedApps {
+                    config,
+                    protocol_mode: None,
+                }
             } else {
                 McpServerContribution::Set {
                     name: CODEX_APPS_MCP_SERVER_NAME.to_string(),

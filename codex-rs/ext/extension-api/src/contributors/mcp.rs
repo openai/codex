@@ -144,7 +144,11 @@ pub enum McpServerContribution {
         protocol_mode: crate::McpProtocolMode,
     },
     /// Registers the controller-owned Apps server under its reserved name.
-    HostedApps { config: Box<McpServerConfig> },
+    HostedApps {
+        config: Box<McpServerConfig>,
+        /// Overrides the HTTP protocol mode, or uses the hosted Apps default when absent.
+        protocol_mode: Option<crate::McpProtocolMode>,
+    },
     /// Registers a server declared by a plugin selected for this thread.
     SelectedPlugin {
         name: String,

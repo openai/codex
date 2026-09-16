@@ -66,6 +66,7 @@ impl McpServerContributor<Config> for HostedVerificationServer {
         Box::pin(async move {
             vec![McpServerContribution::HostedApps {
                 config: Box::new(self.0.clone()),
+                protocol_mode: None,
             }]
         })
     }
