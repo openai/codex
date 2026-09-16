@@ -272,6 +272,8 @@ mod reasoning_status_tests;
 #[path = "tests/replay_render_tests.rs"]
 mod replay_render_tests;
 mod review_mode;
+#[path = "tests/session_model_selection_tests.rs"]
+mod session_model_selection_tests;
 mod side;
 mod slash_commands;
 mod status_and_layout;

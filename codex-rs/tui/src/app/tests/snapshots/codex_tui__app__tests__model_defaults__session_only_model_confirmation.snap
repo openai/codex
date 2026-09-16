@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/model_defaults_tests.rs
+expression: next_history_message(&mut events)
+---
+• Model changed to gpt-5.6-terra high for this session only

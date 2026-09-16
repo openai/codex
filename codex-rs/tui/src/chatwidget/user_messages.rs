@@ -20,6 +20,7 @@ use codex_app_server_protocol::UserInput;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::models::local_image_label_text;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
@@ -146,6 +147,7 @@ pub(crate) struct ThreadInputState {
     pub(super) submit_pending_steers_after_interrupt: bool,
     pub(super) current_collaboration_mode: CollaborationMode,
     pub(super) active_collaboration_mask: Option<CollaborationModeMask>,
+    pub(super) plan_mode_reasoning_effort: Option<ReasoningEffortConfig>,
     pub(super) task_running: bool,
     pub(super) agent_turn_running: bool,
 }

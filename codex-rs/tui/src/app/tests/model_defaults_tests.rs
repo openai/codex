@@ -1,7 +1,87 @@
 use super::*;
+use crate::collaboration_modes;
 use codex_app_server_client::AppServerClient;
 use codex_config::LoaderOverrides;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn session_model_selection_preserves_defaults_and_updates_active_thread() -> Result<()> {
+    for mode in [ModeKind::Default, ModeKind::Plan] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        app.config.model = Some("gpt-5.5".into());
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
+        app.config.plan_mode_reasoning_effort = Some(ReasoningEffortConfig::Low);
+        let config_path = app.config.codex_home.join("config.toml");
+        let original = "# My defaults\nmodel = 'gpt-5.5'\nmodel_reasoning_effort = 'medium'\nplan_mode_reasoning_effort = 'low'\n";
+        std::fs::write(&config_path, original)?;
+        let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let started = server.start_thread(&app.config).await?;
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await?;
+        app.chat_widget
+            .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+        if mode == ModeKind::Plan {
+            let mask = collaboration_modes::plan_mask(app.model_catalog.as_ref()).unwrap();
+            app.chat_widget.set_collaboration_mask(mask);
+        }
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        for effort in [
+            ReasoningEffortConfig::High,
+            ReasoningEffortConfig::Ultra,
+            ReasoningEffortConfig::Max,
+        ] {
+            while events.try_recv().is_ok() {}
+            Box::pin(app.handle_event(
+                &mut tui,
+                &mut server,
+                AppEvent::SelectSessionModel {
+                    model: "gpt-5.6-terra".into(),
+                    effort: Some(effort.clone()),
+                },
+            ))
+            .await?;
+            let settings = next_thread_settings_updated(&mut server, thread_id).await;
+            assert_eq!(
+                (
+                    settings.thread_settings.model.as_str(),
+                    settings.thread_settings.effort.clone()
+                ),
+                ("gpt-5.6-terra", Some(effort.clone()))
+            );
+            if mode == ModeKind::Default && effort == ReasoningEffortConfig::High {
+                insta::assert_snapshot!(
+                    "session_only_model_confirmation",
+                    next_history_message(&mut events)
+                );
+            }
+            app.enqueue_thread_notification(
+                thread_id,
+                ServerNotification::ThreadSettingsUpdated(settings),
+            )
+            .await?;
+            assert_eq!(
+                (
+                    app.chat_widget.current_model(),
+                    app.chat_widget.current_reasoning_effort()
+                ),
+                ("gpt-5.6-terra", Some(effort))
+            );
+            assert_eq!(std::fs::read(&config_path)?, original.as_bytes());
+        }
+        let fresh = server.start_thread(&app.config).await?;
+        assert_eq!(
+            (fresh.session.model.as_str(), fresh.session.reasoning_effort),
+            ("gpt-5.5", Some(ReasoningEffortConfig::Medium))
+        );
+        assert_eq!(
+            app.config.plan_mode_reasoning_effort,
+            Some(ReasoningEffortConfig::Low)
+        );
+        server.shutdown().await?;
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn model_default_saves_report_server_outcomes_and_target_server_profile() -> Result<()> {

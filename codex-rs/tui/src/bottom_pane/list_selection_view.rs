@@ -16,6 +16,7 @@ use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::clipboard_paste::normalize_pasted_search_query;
+use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::ShortcutHint;
 use crate::key_hint::is_plain_text_key_event;
@@ -106,6 +107,18 @@ pub(crate) enum SelectionRowDisplay {
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+
+/// A second way to accept the highlighted row, sharing its dismissal behavior.
+pub(crate) struct SelectionSecondaryAction {
+    pub key: KeyBinding,
+    pub action: SelectionAction,
+    pub footer_hint: Line<'static>,
+}
+
+enum SelectionActionKind {
+    Primary,
+    Secondary,
+}
 pub(crate) type SelectionToggleAction = dyn Fn(bool, &AppEventSender) + Send + Sync;
 
 pub(crate) struct SelectionToggle {
@@ -142,6 +155,7 @@ pub(crate) struct SelectionItem {
     pub is_default: bool,
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
+    pub secondary_action: Option<SelectionSecondaryAction>,
     pub dismiss_on_select: bool,
     /// Require an explicit accept key after a direct shortcut highlights this sensitive item.
     pub require_explicit_confirmation: bool,
@@ -466,6 +480,13 @@ impl ListSelectionView {
     }
 
     fn active_footer_hint(&self) -> Option<&Line<'static>> {
+        if let Some(action) = self
+            .selected_actual_idx()
+            .and_then(|idx| self.active_items().get(idx))
+            .and_then(|item| item.secondary_action.as_ref())
+        {
+            return Some(&action.footer_hint);
+        }
         self.active_tab_id()
             .and_then(|active_tab_id| {
                 self.tab_footer_hints
@@ -784,30 +805,31 @@ impl ListSelectionView {
         }
     }
 
-    fn accept(&mut self) {
-        let selected_actual_idx = self
-            .state
-            .selected_idx
-            .and_then(|idx| self.filtered_indices.get(idx).copied());
-        let selected_is_enabled = selected_actual_idx
-            .and_then(|actual_idx| self.active_items().get(actual_idx))
-            .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled);
-        if selected_is_enabled {
-            self.last_selected_actual_idx = selected_actual_idx;
-            let Some(actual_idx) = selected_actual_idx else {
+    fn accept(&mut self, kind: SelectionActionKind) {
+        let selected_actual_idx = self.selected_actual_idx();
+        if let Some(item) = selected_actual_idx.and_then(|idx| self.active_items().get(idx)) {
+            if item.is_disabled || item.disabled_reason.is_some() {
                 return;
-            };
-            let Some(item) = self.active_items().get(actual_idx) else {
-                return;
-            };
-            for act in &item.actions {
-                act(&self.app_event_tx);
+            }
+            match kind {
+                SelectionActionKind::Primary => {
+                    for act in &item.actions {
+                        act(&self.app_event_tx);
+                    }
+                }
+                SelectionActionKind::Secondary => {
+                    let Some(action) = &item.secondary_action else {
+                        return;
+                    };
+                    (action.action)(&self.app_event_tx);
+                }
             }
             if item.dismiss_on_select {
                 self.completion = Some(ViewCompletion::Accepted);
             } else if item.dismiss_parent_on_child_accept {
                 self.dismiss_after_child_accept = true;
             }
+            self.last_selected_actual_idx = selected_actual_idx;
         } else if selected_actual_idx.is_none() {
             if let Some(cb) = &self.on_cancel {
                 cb(&self.app_event_tx);
@@ -828,7 +850,7 @@ impl ListSelectionView {
                 self.fire_selection_changed();
             }
         } else {
-            self.accept();
+            self.accept(SelectionActionKind::Primary);
         }
     }
 
@@ -1043,7 +1065,18 @@ impl BottomPaneView for ListSelectionView {
             _ if self.allow_cancel && self.keymap.cancel.is_pressed(key_event) => {
                 self.on_ctrl_c();
             }
-            _ if self.keymap.accept.is_pressed(key_event) => self.accept(),
+            _ if self.keymap.accept.is_pressed(key_event) => {
+                self.accept(SelectionActionKind::Primary)
+            }
+            _ if allow_plain_char_navigation
+                && self
+                    .selected_actual_idx()
+                    .and_then(|idx| self.active_items().get(idx))
+                    .and_then(|item| item.secondary_action.as_ref())
+                    .is_some_and(|action| action.key.is_press(key_event)) =>
+            {
+                self.accept(SelectionActionKind::Secondary);
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 ..
@@ -1508,6 +1541,49 @@ mod tests {
 
     fn new_view(params: SelectionViewParams, tx: AppEventSender) -> ListSelectionView {
         ListSelectionView::new(params, tx, crate::keymap::RuntimeKeymap::defaults().list)
+    }
+
+    #[test]
+    fn secondary_action_respects_search_disabled_rows_and_dismissal() {
+        for (is_searchable, is_disabled, key, expected) in [
+            (false, false, KeyCode::Char('s'), Some("secondary")),
+            (false, false, KeyCode::Enter, Some("primary")),
+            (false, true, KeyCode::Char('s'), None),
+            (true, false, KeyCode::Char('s'), None),
+        ] {
+            let (tx, mut rx) = unbounded_channel();
+            let mut view = new_view(
+                SelectionViewParams {
+                    is_searchable,
+                    items: vec![SelectionItem {
+                        name: "Selection".into(),
+                        is_disabled,
+                        dismiss_on_select: true,
+                        actions: vec![Box::new(|tx| {
+                            tx.send(AppEvent::UpdateModel("primary".into()))
+                        })],
+                        secondary_action: Some(SelectionSecondaryAction {
+                            key: crate::key_hint::plain(KeyCode::Char('s')),
+                            action: Box::new(|tx| {
+                                tx.send(AppEvent::UpdateModel("secondary".into()))
+                            }),
+                            footer_hint: "s for secondary".into(),
+                        }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                AppEventSender::new(tx),
+            );
+            view.handle_key_event(KeyEvent::from(key));
+            let actual = rx.try_recv().ok().map(|event| match event {
+                AppEvent::UpdateModel(model) => model,
+                event => panic!("unexpected event: {event:?}"),
+            });
+            assert_eq!(actual.as_deref(), expected);
+            assert_eq!(view.completion, expected.map(|_| ViewCompletion::Accepted));
+            assert_eq!(view.search_query, if is_searchable { "s" } else { "" });
+        }
     }
 
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {

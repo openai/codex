@@ -1789,6 +1789,8 @@ async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
             reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
             developer_instructions: None,
         });
+    app.chat_widget
+        .set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
     let input_state = app
         .chat_widget
         .capture_thread_input_state()
@@ -1796,6 +1798,8 @@ async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
 
     let (chat_widget, _app_event_tx, _rx, _new_op_rx) = make_chatwidget_manual_with_sender().await;
     app.chat_widget = chat_widget;
+    app.chat_widget
+        .set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
     app.chat_widget.handle_thread_session(session.clone());
     app.chat_widget
         .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
@@ -1825,6 +1829,14 @@ async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
         ModeKind::Plan
     );
     assert_eq!(app.chat_widget.current_model(), "gpt-restored");
+    assert_eq!(
+        app.chat_widget.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    for _ in 0..2 {
+        app.chat_widget
+            .handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    }
     assert_eq!(
         app.chat_widget.current_reasoning_effort(),
         Some(ReasoningEffortConfig::High)
@@ -8949,8 +8961,25 @@ async fn changing_cyber_model_reasoning_preserves_selected_permissions() {
             .expect("primary thread should be registered");
 
         let mut tui = crate::tui::test_support::make_test_tui().expect("test tui");
-        for effort in [ReasoningEffortConfig::High, ReasoningEffortConfig::Ultra] {
-            if effort == ReasoningEffortConfig::Ultra {
+        for (effort, session_only) in [
+            (ReasoningEffortConfig::High, false),
+            (ReasoningEffortConfig::Medium, true),
+            (ReasoningEffortConfig::Ultra, false),
+            (ReasoningEffortConfig::High, true),
+            (ReasoningEffortConfig::Ultra, true),
+        ] {
+            if session_only {
+                app.handle_event(
+                    &mut tui,
+                    &mut app_server,
+                    AppEvent::SelectSessionModel {
+                        model: model_name.clone(),
+                        effort: Some(effort.clone()),
+                    },
+                )
+                .await
+                .expect("session-only reasoning selection should succeed");
+            } else if effort == ReasoningEffortConfig::Ultra {
                 app.chat_widget
                     .set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
                 app.chat_widget

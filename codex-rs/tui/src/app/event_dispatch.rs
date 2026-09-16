@@ -2131,6 +2131,9 @@ impl App {
                     }
                 }
             }
+            AppEvent::SelectSessionModel { model, effort } => {
+                self.select_session_model(app_server, model, effort).await;
+            }
             AppEvent::CyberModelAutoReviewNotice => {
                 self.chat_widget.add_warning_message(
                     "Cyber models default to \"Approve for me\" for safety reasons.".to_string(),

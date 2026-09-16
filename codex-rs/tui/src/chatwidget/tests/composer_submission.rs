@@ -1793,6 +1793,7 @@ async fn restore_thread_input_state_applies_running_state_policy() {
         submit_pending_steers_after_interrupt: true,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        plan_mode_reasoning_effort: chat.config.plan_mode_reasoning_effort.clone(),
         task_running: true,
         agent_turn_running: true,
     };

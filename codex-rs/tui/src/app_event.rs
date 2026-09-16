@@ -1141,6 +1141,12 @@ pub(crate) enum AppEvent {
         effort: Option<ReasoningEffort>,
     },
 
+    /// Apply a model and effort only to the active session, preserving saved defaults.
+    SelectSessionModel {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Show the cyber auto-review notice after the model selection confirmation.
     CyberModelAutoReviewNotice,
 

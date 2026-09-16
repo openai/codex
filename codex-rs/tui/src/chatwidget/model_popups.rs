@@ -141,6 +141,14 @@ impl ChatWidget {
                     description,
                     is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
+                    secondary_action: if requires_advanced_selection {
+                        None
+                    } else {
+                        self.session_model_selection_action(
+                            model.clone(),
+                            Some(preset.default_reasoning_effort),
+                        )
+                    },
                     actions,
                     dismiss_on_select: !requires_advanced_selection,
                     dismiss_parent_on_child_accept: requires_advanced_selection,
@@ -232,7 +240,13 @@ impl ChatWidget {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            let direct_effort = match preset.supported_reasoning_efforts.as_slice() {
+                [] => Some(preset.default_reasoning_effort.clone()),
+                [option] => Some(option.effort.clone()),
+                _ => None,
+            }
+            .filter(|effort| !Self::is_advanced_reasoning_effort(effort));
+            let single_supported_effort = direct_effort.is_some();
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();
@@ -245,6 +259,9 @@ impl ChatWidget {
                 description,
                 is_current,
                 is_default: preset.is_default,
+                secondary_action: direct_effort.and_then(|effort| {
+                    self.session_model_selection_action(preset.model.clone(), Some(effort))
+                }),
                 actions,
                 dismiss_on_select: single_supported_effort,
                 dismiss_parent_on_child_accept: !single_supported_effort,
@@ -555,7 +572,7 @@ impl ChatWidget {
             );
             let actions = self.model_selection_actions(
                 model_slug.clone(),
-                choice_effort,
+                choice_effort.clone(),
                 should_prompt_plan_mode_scope,
             );
 
@@ -564,6 +581,8 @@ impl ChatWidget {
                 description,
                 selected_description,
                 is_current: is_current_model && Some(choice) == highlight_choice.as_ref(),
+                secondary_action: self
+                    .session_model_selection_action(model_slug.clone(), choice_effort),
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()
@@ -660,6 +679,8 @@ impl ChatWidget {
                 name: Self::reasoning_effort_label(&effort),
                 description: Some(description.to_string()),
                 is_current: is_current_model && Some(&effort) == highlight_choice.as_ref(),
+                secondary_action: self
+                    .session_model_selection_action(model_slug.clone(), Some(effort.clone())),
                 actions,
                 dismiss_on_select: true,
                 ..Default::default()

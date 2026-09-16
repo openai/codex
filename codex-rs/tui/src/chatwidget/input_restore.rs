@@ -549,6 +549,7 @@ impl ChatWidget {
                 .submit_pending_steers_after_interrupt,
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
+            plan_mode_reasoning_effort: self.config.plan_mode_reasoning_effort.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.turn_lifecycle.agent_turn_running,
         })
@@ -567,6 +568,7 @@ impl ChatWidget {
             self.input_queue.recovered_queue = input_state.recovered_queue;
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.config.plan_mode_reasoning_effort = input_state.plan_mode_reasoning_effort;
             self.safety_buffering_prompt = input_state.safety_buffering_prompt;
             self.safety_buffering_source = input_state.safety_buffering_source;
             self.turn_lifecycle.restore_running(
