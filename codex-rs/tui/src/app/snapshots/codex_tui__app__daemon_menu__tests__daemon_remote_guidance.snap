@@ -1,0 +1,13 @@
+---
+source: tui/src/app/daemon_menu_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 80)"
+---
+  Daemon
+  Not connected to the local background server.
+  Manage this server on its host. Local daemon updates are unavailable for
+  remote connections.
+
+›    Install latest public stable
+     Use this CLI build
+
+  Press enter to confirm or esc to go back

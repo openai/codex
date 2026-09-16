@@ -3,6 +3,5 @@ source: tui/src/history_cell/tests.rs
 expression: "render_lines(&cell.display_lines(100)).join(\"\\n\")"
 ---
 ⚠ A background Codex service is running v0.152.1, older than your Codex CLI v0.153.0.
-  To update the service, run:
-    codex app-server daemon update
+  Use /daemon to manage the local background server.
   Updating may interrupt active or queued work.

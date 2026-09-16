@@ -156,6 +156,7 @@ impl App {
         startup_hooks_browser: Option<HooksListEntry>,
         mut startup_draft: StartupDraftPump,
         managed_worktree: Option<crate::ManagedTuiWorktree>,
+        daemon_cli_executable: Option<AbsolutePathBuf>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
 
@@ -756,6 +757,7 @@ See the Codex keymap documentation for supported actions and examples."
                     .map(|(_, key)| key.clone()),
                 ..Default::default()
             },
+            daemon_cli_executable,
             pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState {

@@ -1,4 +1,4 @@
-//! Keeps the older remote server notice in the overview's shared view state.
+//! Keeps the older server notice and local maintenance guidance in the overview.
 
 use super::*;
 
@@ -47,7 +47,14 @@ impl App {
             .view_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .server_version_notice =
-            older_server.map(|server| format!("Service v{server} < Codex CLI v{client_version}"));
+            .server_version_notice = older_server.map(|server| {
+            let guidance = if matches!(self.app_server_target, AppServerTarget::LocalDaemon { .. })
+            {
+                " · /daemon"
+            } else {
+                ""
+            };
+            format!("Service v{server} < Codex CLI v{client_version}{guidance}")
+        });
     }
 }

@@ -223,6 +223,7 @@ mod ui_consts;
 mod unarchive_prompt;
 pub(crate) mod update_action;
 mod worktree_startup;
+pub use update_action::DaemonUpdateSource;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;
@@ -1816,6 +1817,7 @@ async fn run_ratatui_app(
         prompt,
         shared,
         no_alt_screen,
+        daemon_cli_executable,
         ..
     } = cli;
     let images = shared.into_inner().images;
@@ -1908,6 +1910,7 @@ async fn run_ratatui_app(
         startup_hooks_browser,
         startup_draft,
         managed_worktree,
+        daemon_cli_executable,
     ))
     .await;
 

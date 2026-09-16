@@ -887,7 +887,10 @@ fn parse_socket_path(raw: &str) -> Result<AbsolutePathBuf, String> {
 }
 
 /// Handle the app exit and print the results. Optionally run the update action.
-fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
+fn handle_app_exit(
+    exit_info: AppExitInfo,
+    cli_executable: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
     let is_fatal = match &exit_info.exit_reason {
         ExitReason::Fatal(message) => {
             eprintln!("ERROR: {message}");
@@ -900,22 +903,41 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
     };
 
     let update_action = exit_info.update_action;
-    let color_enabled = supports_color::on(Stream::Stdout).is_some();
-    for line in exit_info.format_exit_messages(color_enabled) {
-        println!("{line}");
+    if !matches!(update_action, Some(UpdateAction::Daemon(_))) {
+        let color_enabled = supports_color::on(Stream::Stdout).is_some();
+        for line in exit_info.format_exit_messages(color_enabled) {
+            println!("{line}");
+        }
     }
     if is_fatal {
         std::io::stdout().flush()?;
         std::process::exit(1);
     }
     if let Some(action) = update_action {
-        run_update_action(action)?;
+        run_update_action(action, cli_executable)?;
     }
     Ok(())
 }
 
 /// Run the update action and print the result.
-fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
+fn run_update_action(
+    action: UpdateAction,
+    cli_executable: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    if let UpdateAction::Daemon(source) = action {
+        let executable = cli_executable
+            .ok_or_else(|| anyhow::anyhow!("Cannot locate the launching Codex CLI"))?;
+        println!("Updating the local background server...");
+        let status = std::process::Command::new(executable)
+            .args(source.command_args())
+            .status()?;
+        anyhow::ensure!(
+            status.success(),
+            "Daemon update failed with status {status}"
+        );
+        println!("Relaunch Codex to reconnect.");
+        return Ok(());
+    }
     println!();
     let cmd_str = action.command_str();
     println!("Updating Codex via `{cmd_str}`...");
@@ -996,7 +1018,7 @@ fn run_update_command() -> anyhow::Result<()> {
                 "Could not detect the Codex installation method. Please update manually: https://developers.openai.com/codex/cli/"
             );
         };
-        run_update_action(action)
+        run_update_action(action, /*cli_executable*/ None)
     }
 }
 
@@ -1158,6 +1180,14 @@ async fn cli_main(
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
+    // Retain the launch target through TUI exit, even if a launcher changes selection.
+    let daemon_cli_executable = arg0_paths
+        .codex_self_exe
+        .as_ref()
+        .and_then(|path| path.canonicalize().ok());
+    interactive.daemon_cli_executable = daemon_cli_executable
+        .clone()
+        .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
     reject_unsupported_worktree_for_subcommand(interactive.shared.worktree, &subcommand)?;
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
@@ -1244,7 +1274,7 @@ async fn cli_main(
                 arg0_paths.clone(),
             )
             .await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, daemon_cli_executable.as_deref())?;
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -1559,7 +1589,7 @@ async fn cli_main(
                 arg0_paths.clone(),
             )
             .await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, daemon_cli_executable.as_deref())?;
         }
         Some(Subcommand::Archive(cmd)) => {
             let output = run_session_archive_cli_command(
@@ -1646,7 +1676,7 @@ async fn cli_main(
                 arg0_paths.clone(),
             )
             .await?;
-            handle_app_exit(exit_info)?;
+            handle_app_exit(exit_info, daemon_cli_executable.as_deref())?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             reject_remote_mode_for_subcommand(
@@ -5217,3 +5247,7 @@ mod tests {
             .expect_err("feature should be rejected")
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "daemon_update_tests.rs"]
+mod daemon_update_tests;

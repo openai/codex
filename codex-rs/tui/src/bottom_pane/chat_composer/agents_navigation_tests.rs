@@ -13,6 +13,7 @@ fn parent_owned_thread_allows_bare_navigation_commands() {
         ("/side", SlashCommand::Side),
         ("/btw", SlashCommand::Btw),
         ("/diff ", SlashCommand::Diff),
+        ("/daemon", SlashCommand::Daemon),
     ] {
         let (mut composer, _rx) = new_test_composer();
         composer.set_parent_owned_thread();
