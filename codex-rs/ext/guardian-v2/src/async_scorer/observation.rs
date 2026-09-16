@@ -12,11 +12,13 @@ use codex_core::context::GuardianReviewEvidence;
 use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::GuardianV2Enabled;
+use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::mcp::is_node_repl_backed_server;
+use codex_protocol::openai_models::GuardianReviewMode;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::security_risk::SecurityRiskScore;
@@ -62,6 +64,17 @@ impl GuardianV2Extension {
         let scope = mcp_server
             .map(GuardianScope::for_mcp_server)
             .or_else(|| GuardianScope::for_tool(input.tool_name));
+        // Model policies review nested actions; the Code Mode wrapper leaves their scores alone.
+        // The legacy all-tools policy still scores wrappers through `other_tools`.
+        if scope.is_none()
+            && input.tool_name.is_default_namespace()
+            && input.tool_name.name == "exec"
+            && matches!(input.payload, ToolPayload::Custom { .. })
+            && matches!(input.source, ToolCallSource::Direct)
+            && policy.other_tools == GuardianReviewMode::Disabled
+        {
+            return;
+        }
         if !policy.scores_tool(input.tool_name, input.payload, scope) {
             match policy.unscored_action {
                 UnscoredAction::Ignore => {}

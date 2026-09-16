@@ -24,14 +24,13 @@ pub enum GuardianReviewMode {
 }
 
 /// A complete model policy. Omitted scopes are disabled; unknown fields are ignored.
+/// Code Mode wrappers have no approval scope; their nested tools follow this policy.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct GuardianModelPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub computer_use: Option<GuardianReviewMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<GuardianReviewMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code_mode: Option<GuardianReviewMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_changes: Option<GuardianReviewMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,7 +46,6 @@ impl GuardianModelPolicy {
         match scope {
             GuardianScope::ComputerUse => self.computer_use,
             GuardianScope::Shell => self.shell,
-            GuardianScope::CodeMode => self.code_mode,
             GuardianScope::FileChanges => self.file_changes,
             GuardianScope::Mcp => self.mcp,
             GuardianScope::Network => self.network,
@@ -62,7 +60,6 @@ impl GuardianModelPolicy {
 pub enum GuardianScope {
     ComputerUse,
     Shell,
-    CodeMode,
     FileChanges,
     Mcp,
     Network,
@@ -97,7 +94,6 @@ impl GuardianScope {
             "shell" | "shell_command" | "exec_command" | "write_stdin" | "execve" => {
                 Some(Self::Shell)
             }
-            "exec" | "wait" => Some(Self::CodeMode),
             "apply_patch" => Some(Self::FileChanges),
             "request_permissions" => Some(Self::Permissions),
             _ => None,

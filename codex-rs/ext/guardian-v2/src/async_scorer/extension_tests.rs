@@ -580,6 +580,8 @@ fn computer_use_only_classification_recognizes_direct_and_code_mode_tools() {
         (ToolName::namespaced("mcp__cua_repl__", "js"), true),
         (ToolName::plain("mcp__node_repl__js"), true),
         (ToolName::plain("mcp__cua_repl__js"), true),
+        (ToolName::plain("exec"), false),
+        (ToolName::namespaced("mcp__ordinary__", "exec"), false),
         (ToolName::namespaced("mcp__ordinary__", "js"), false),
         (ToolName::plain("read_file"), false),
         (ToolName::plain("exec_command"), false),
@@ -980,7 +982,7 @@ struct GuardianFailureFixture {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disabled_code_mode_invalidates_cached_scores() -> Result<()> {
+async fn unscored_tools_invalidate_cached_scores() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let fixture = GuardianFailureFixture::new().await?;
     let thread_store = fixture.test.codex.thread_extension_data();
@@ -1009,25 +1011,25 @@ async fn disabled_code_mode_invalidates_cached_scores() -> Result<()> {
         ),
         before,
     );
-    fixture.score_tool(ToolName::plain("exec")).await;
-    assert_eq!(
-        (
-            progress.latest_tool_call.load(Ordering::Acquire),
-            progress.latest_failed_tool_call.load(Ordering::Acquire),
-        ),
-        (before.0 + 1, before.0 + 1),
-    );
-    // An MCP tool with the same name remains in the MCP category.
-    fixture
-        .score_tool(ToolName::namespaced("mcp__ordinary", "wait"))
-        .await;
-    assert_eq!(
-        (
-            progress.latest_tool_call.load(Ordering::Acquire),
-            progress.latest_failed_tool_call.load(Ordering::Acquire),
-        ),
-        (before.0 + 2, before.0 + 2),
-    );
+    // A dynamic function named exec is not a Code Mode wrapper. An MCP tool
+    // named wait is not a Code Mode poll. Both invalidate earlier scores.
+    for (index, tool) in [
+        ToolName::plain("exec"),
+        ToolName::namespaced("mcp__ordinary", "wait"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        fixture.score_tool(tool).await;
+        let expected = before.0 + index + 1;
+        assert_eq!(
+            (
+                progress.latest_tool_call.load(Ordering::Acquire),
+                progress.latest_failed_tool_call.load(Ordering::Acquire),
+            ),
+            (expected, expected),
+        );
+    }
     Ok(())
 }
 

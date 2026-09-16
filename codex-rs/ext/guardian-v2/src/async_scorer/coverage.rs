@@ -1,5 +1,6 @@
 //! Owns Guardian's category policy and translates legacy config at the boundary.
 //! Scoring and approval consume the same policy; host-required reviews still take precedence.
+//! Model policies review nested actions; legacy tool coverage remains unchanged.
 
 use codex_extension_api::ToolPayload;
 use codex_features::GuardianV2ReviewScopeConfigToml;
@@ -44,7 +45,6 @@ impl GuardianPolicy {
             categories: GuardianModelPolicy {
                 computer_use: Some(Adaptive),
                 shell: Some(other),
-                code_mode: Some(other),
                 file_changes: Some(other),
                 mcp: Some(other),
                 network: Some(other),
@@ -95,7 +95,6 @@ impl GuardianPolicy {
         [
             self.categories.computer_use,
             self.categories.shell,
-            self.categories.code_mode,
             self.categories.file_changes,
             self.categories.mcp,
             self.categories.network,
@@ -108,7 +107,6 @@ impl GuardianPolicy {
         for mode in [
             &mut self.categories.computer_use,
             &mut self.categories.shell,
-            &mut self.categories.code_mode,
             &mut self.categories.file_changes,
             &mut self.categories.mcp,
             &mut self.categories.network,

@@ -16,7 +16,7 @@ fn guardian_policy_is_optional_and_tolerates_future_config() -> anyhow::Result<(
 
     wire["guardian"] = serde_json::json!({
         "computer_use": "adaptive", "shell": "future_mode", "future_scope": {"version": 2},
-        "mcp": null, "code_mode": "adaptive",
+        "mcp": null, "permissions": "adaptive",
     });
     let model: ModelInfo = serde_json::from_value(wire)?;
     assert_eq!(
@@ -24,7 +24,7 @@ fn guardian_policy_is_optional_and_tolerates_future_config() -> anyhow::Result<(
         Some(GuardianModelPolicy {
             computer_use: Some(GuardianReviewMode::Adaptive),
             shell: Some(GuardianReviewMode::Unknown),
-            code_mode: Some(GuardianReviewMode::Adaptive),
+            permissions: Some(GuardianReviewMode::Adaptive),
             ..Default::default()
         })
     );
