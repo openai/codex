@@ -894,6 +894,9 @@
             "non_prefixed_mcp_tool_names": {
               "$ref": "#/definitions/FeatureToml_for_NonPrefixedMcpToolNamesConfigToml"
             },
+            "nonfatal_clock_read_errors": {
+              "type": "boolean"
+            },
             "omit_app_server_notification_media": {
               "type": "boolean"
             },
@@ -6530,6 +6533,9 @@
         },
         "non_prefixed_mcp_tool_names": {
           "$ref": "#/definitions/FeatureToml_for_NonPrefixedMcpToolNamesConfigToml"
+        },
+        "nonfatal_clock_read_errors": {
+          "type": "boolean"
         },
         "omit_app_server_notification_media": {
           "type": "boolean"

@@ -1,3 +1,4 @@
+use crate::context::CurrentTimeUnavailable;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -8,6 +9,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_extension_items::ExtensionItem;
 use codex_extension_items::sleep::SleepItem;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
@@ -111,7 +113,7 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                 .input_queue
                 .subscribe_activity(turn_state.as_deref())
                 .await;
-            let sleep_result: Result<bool, FunctionCallError> = if pending_activity.is_some() {
+            let sleep_result = if pending_activity.is_some() {
                 Ok(true)
             } else {
                 let sleep = session
@@ -120,27 +122,29 @@ impl ToolExecutor<ToolInvocation> for SleepHandler {
                     .sleep(session.thread_id, Duration::from_millis(args.duration_ms));
                 tokio::pin!(sleep);
                 tokio::select! {
-                    result = &mut sleep => result
-                        .map(|()| false)
-                        .map_err(|err| {
-                            FunctionCallError::Fatal(format!("failed to sleep: {err:#}"))
-                        }),
+                    result = &mut sleep => result.map(|()| false),
                     result = activity_rx.changed() => {
                         if result.is_ok() {
                             Ok(true)
                         } else {
-                            sleep
-                                .await
-                                .map(|()| false)
-                                .map_err(|err| {
-                                    FunctionCallError::Fatal(format!("failed to sleep: {err:#}"))
-                                })
+                            sleep.await.map(|()| false)
                         }
                     }
                 }
             };
             session.emit_turn_item_completed(turn.as_ref(), item).await;
-            let interrupted = sleep_result?;
+            let interrupted = sleep_result.map_err(|err| {
+                if turn.config.features.enabled(Feature::NonfatalClockReadErrors) {
+                    tracing::error!(
+                        thread_id = %session.thread_id,
+                        turn_id = %turn.sub_id,
+                        "failed to read current time for the sleep tool; the clock provider may be stalled"
+                    );
+                    FunctionCallError::RespondToModel(CurrentTimeUnavailable::MESSAGE.to_string())
+                } else {
+                    FunctionCallError::Fatal(format!("failed to sleep: {err:#}"))
+                }
+            })?;
 
             let message = if interrupted {
                 "Sleep interrupted by new input."

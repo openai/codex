@@ -6,6 +6,7 @@ use crate::codex_thread::CodexThread;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
+use crate::context::CurrentTimeUnavailable;
 use crate::context::DeveloperInstructions;
 use crate::context::GuardianContextMode;
 use crate::context::ManagedDeveloperInstructions;
@@ -135,6 +136,7 @@ fn retain_forked_developer_message(
                 ))
             || MultiAgentModeInstructions::matches_text(text)
             || CurrentTimeReminder::matches_text(text)
+            || CurrentTimeUnavailable::matches_text(text)
             || usage_hint_texts
                 .iter()
                 .any(|usage_hint_text| usage_hint_text == text))

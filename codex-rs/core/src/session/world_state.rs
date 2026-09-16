@@ -25,7 +25,6 @@ use crate::context::world_state::WorldState;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
-use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructionsProvenance;
 
@@ -199,19 +198,19 @@ impl Session {
         }
         if turn_context.config.include_environment_context {
             let current_date = self
-                .services
-                .time_provider
-                .current_time(self.thread_id())
-                .await
-                .map_err(|err| CodexErr::Fatal(format!("failed to read current time: {err:#}")))?
-                .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string();
+                .read_clock_for_context(turn_context, "environment_date")
+                .await?
+                .map(|current_time| {
+                    current_time
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string()
+                });
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(
                     turn_context,
                     &step_context.environments,
-                    Some(current_date),
+                    current_date,
                 )
                 .await
                 .with_subagents(environment_subagents),

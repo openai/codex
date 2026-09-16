@@ -1623,8 +1623,14 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
                 .features
                 .enable(Feature::CurrentTimeReminder)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::NonfatalClockReadErrors)
+                .expect("test config should allow feature update");
+            config.include_environment_context = false;
             config.current_time_reminder = Some(CurrentTimeReminderConfig {
                 reminder_interval_seconds: 0,
+                clock_source: codex_features::CurrentTimeSource::External,
                 ..CurrentTimeReminderConfig::default()
             });
         }
@@ -1651,6 +1657,31 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
     });
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
         builder = builder.with_history_mode(ThreadHistoryMode::Paginated);
+    }
+    if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
+        #[derive(Default)]
+        struct FailFirstClockRead(std::sync::atomic::AtomicBool);
+
+        impl codex_core::TimeProvider for FailFirstClockRead {
+            fn current_time(&self, _thread_id: ThreadId) -> codex_core::TimeFuture<'_> {
+                let already_read = self.0.swap(true, std::sync::atomic::Ordering::Relaxed);
+                Box::pin(async move {
+                    anyhow::ensure!(already_read, "parent clock unavailable");
+                    Ok(chrono::Utc::now())
+                })
+            }
+
+            fn sleep(
+                &self,
+                _thread_id: ThreadId,
+                _duration: Duration,
+            ) -> codex_core::SleepFuture<'_> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        builder =
+            builder.with_external_time_provider(std::sync::Arc::new(FailFirstClockRead::default()));
     }
     let test = builder.build(&server).await?;
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {
@@ -1806,15 +1837,23 @@ async fn spawned_full_history_v2_child_uses_model_precedence_without_dropping_co
         );
     }
     if matches!(selection, FullHistoryV2ModelSelection::CurrentTimeReminders) {
-        let reminder_count = |request: &ResponsesRequest| {
+        let notice_count = |request: &ResponsesRequest, marker: &str| {
             request
                 .message_input_texts("developer")
                 .into_iter()
-                .filter(|text| text.starts_with("<current_time_reminder>"))
+                .filter(|text| text.starts_with(marker))
                 .count()
         };
-        assert_eq!(reminder_count(&parent_request), 2);
-        assert_eq!(reminder_count(&child_request), 1);
+        assert_eq!(
+            notice_count(&parent_request, "<current_time_unavailable>"),
+            1
+        );
+        assert_eq!(notice_count(&parent_request, "<current_time_reminder>"), 1);
+        assert_eq!(
+            notice_count(&child_request, "<current_time_unavailable>"),
+            0
+        );
+        assert_eq!(notice_count(&child_request, "<current_time_reminder>"), 1);
     }
     let child_body = child_request.body_json();
     if matches!(selection, FullHistoryV2ModelSelection::WorldStateIdentity) {

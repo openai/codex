@@ -338,6 +338,8 @@ pub enum Feature {
     ReasoningEffortOverride,
     /// Add current-time reminders to model-visible context.
     CurrentTimeReminder,
+    /// Report failed clock reads to the model without failing the turn.
+    NonfatalClockReadErrors,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -1658,6 +1660,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CurrentTimeReminder,
         key: "current_time_reminder",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::NonfatalClockReadErrors,
+        key: "nonfatal_clock_read_errors",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

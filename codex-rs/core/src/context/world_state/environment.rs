@@ -92,6 +92,7 @@ impl EnvironmentsState {
             shell_version: self.shell_version.clone(),
             shell_version_removed: false,
             current_date: self.current_date.clone(),
+            current_date_removed: false,
             timezone: self.timezone.clone(),
             network: self.network.clone(),
             filesystem: self.filesystem.clone(),
@@ -183,6 +184,8 @@ impl WorldStateSection for EnvironmentsState {
                 shell_version_removed: self.shell_version.is_none()
                     && previous.shell_version.is_some(),
                 current_date: self.current_date.clone(),
+                current_date_removed: self.current_date.is_none()
+                    && previous.current_date.is_some(),
                 timezone: self.timezone.clone(),
                 network: self.network.clone(),
                 filesystem: self.filesystem.clone(),
@@ -221,6 +224,7 @@ struct RenderedEnvironments {
     shell_version: Option<String>,
     shell_version_removed: bool,
     current_date: Option<String>,
+    current_date_removed: bool,
     timezone: Option<String>,
     network: Option<NetworkContext>,
     filesystem: Option<FileSystemContext>,
@@ -289,7 +293,11 @@ impl ContextualUserFragment for RenderedEnvironments {
             let shell_version = self.shell_version.as_deref();
             push_optional_element(&mut rendered, "shell_version", shell_version);
         }
-        push_optional_element(&mut rendered, "current_date", self.current_date.as_deref());
+        if self.current_date_removed {
+            rendered.push_str("  <current_date status=\"unavailable\" />\n");
+        } else {
+            push_optional_element(&mut rendered, "current_date", self.current_date.as_deref());
+        }
         push_optional_element(&mut rendered, "timezone", self.timezone.as_deref());
         if let Some(network) = &self.network {
             rendered.push_str("  ");

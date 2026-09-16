@@ -41,3 +41,31 @@ impl ContextualUserFragment for CurrentTimeReminder {
         format!("It is {}.", self.formatted_time())
     }
 }
+
+pub(crate) struct CurrentTimeUnavailable;
+
+impl CurrentTimeUnavailable {
+    pub(crate) const MESSAGE: &str = "failed to read current time";
+}
+
+impl ContextualUserFragment for CurrentTimeUnavailable {
+    fn content_kind(&self) -> ContentItemKind {
+        ContentItemKind("current_time.unavailable".to_string())
+    }
+
+    fn role(&self) -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<current_time_unavailable>", "</current_time_unavailable>")
+    }
+
+    fn body(&self) -> String {
+        Self::MESSAGE.to_string()
+    }
+}

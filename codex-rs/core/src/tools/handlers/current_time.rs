@@ -1,5 +1,6 @@
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
+use crate::context::CurrentTimeUnavailable;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -8,6 +9,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_features::Feature;
 use codex_protocol::models::ResponseInputItem;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
@@ -98,7 +100,21 @@ impl ToolExecutor<ToolInvocation> for CurrentTimeHandler {
                 .current_time(invocation.session.thread_id)
                 .await
                 .map_err(|err| {
-                    FunctionCallError::Fatal(format!("failed to read current time: {err:#}"))
+                    if invocation
+                        .turn
+                        .config
+                        .features
+                        .enabled(Feature::NonfatalClockReadErrors)
+                    {
+                        tracing::error!(
+                            thread_id = %invocation.session.thread_id,
+                            turn_id = %invocation.turn.sub_id,
+                            "failed to read current time for the clock tool; the clock provider may be stalled"
+                        );
+                        FunctionCallError::RespondToModel(CurrentTimeUnavailable::MESSAGE.to_string())
+                    } else {
+                        FunctionCallError::Fatal(format!("failed to read current time: {err:#}"))
+                    }
                 })?;
             Ok(boxed_tool_output(CurrentTimeOutput(
                 CurrentTimeReminder::new(current_time),
