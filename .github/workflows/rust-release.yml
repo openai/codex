@@ -1693,6 +1693,7 @@ jobs:
   publish-r2-assets:
     name: publish-r2-assets
     needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
@@ -1706,6 +1707,13 @@ jobs:
   publish-r2:
     name: publish-r2
     needs: [release, publish-dotslash, publish-r2-assets]
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.release.result == 'success' &&
+        needs.publish-dotslash.result == 'success' &&
+        needs.publish-r2-assets.result == 'success'
+      }}
     permissions:
       contents: read
     uses: ./.github/workflows/r2-release.yml
