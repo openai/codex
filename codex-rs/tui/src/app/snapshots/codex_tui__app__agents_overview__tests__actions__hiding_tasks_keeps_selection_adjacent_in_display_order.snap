@@ -1,0 +1,26 @@
+---
+source: tui/src/app/agents_overview_actions_tests.rs
+assertion_line: 211
+expression: "selections.join(\"\\n\")"
+---
+Project, filtered=false: › ○ Task 3  Ready
+Project, filtered=false: › ○ Task 4  Ready
+Project, filtered=false: › ○ Other 2  Ready
+Project, filtered=false: › ○ Task 1  current  Ready
+Project, filtered=true: › ○ Task 3  Ready
+Project, filtered=true: › ○ Task 4  Ready
+Project, filtered=true: › ○ Task 1  current  Ready
+Status, filtered=false: › ○ Task 3
+Status, filtered=false: › ○ Other 2
+Status, filtered=false: › ○ Task 1  current
+Status, filtered=false: › ○ Task 4
+Status, filtered=true: › ○ Task 3
+Status, filtered=true: › ○ Task 1  current
+Status, filtered=true: › ○ Task 4
+Model, filtered=false: › ○ Task 3  Ready
+Model, filtered=false: › ○ Task 4  Ready
+Model, filtered=false: › ○ Other 2  Ready
+Model, filtered=false: › ○ Task 1  current  Ready
+Model, filtered=true: › ○ Task 3  Ready
+Model, filtered=true: › ○ Task 4  Ready
+Model, filtered=true: › ○ Task 1  current  Ready

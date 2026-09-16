@@ -655,9 +655,19 @@ impl BottomPaneView for AgentsOverviewView {
         }
         if self.agents_keymap.hide.is_pressed(key) {
             if let Some(row) = self.selected_row() {
-                self.app_event_tx.send(AppEvent::HideAgentsOverviewThread {
-                    thread_id: row.thread_id,
-                });
+                let thread_id = row.thread_id;
+                let visible = self.visible_indices();
+                if !self.state().renaming
+                    && let Some(position) = visible.iter().position(|index| *index == self.selected)
+                    && let Some(next) = visible
+                        .get(position + 1)
+                        .or_else(|| visible.get(position.saturating_sub(1)))
+                {
+                    // Preserve a neighboring row when hiding rebuilds the view.
+                    self.selected = *next;
+                }
+                self.app_event_tx
+                    .send(AppEvent::HideAgentsOverviewThread { thread_id });
             }
             return;
         }
