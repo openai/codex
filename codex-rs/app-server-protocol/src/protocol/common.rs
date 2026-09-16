@@ -715,6 +715,13 @@ client_request_definitions! {
         serialization: global("memory"),
         response: v2::MemoryResetResponse,
     },
+    #[experimental("rollout/compress")]
+    /// Start a best-effort background compression pass for cold local rollouts.
+    RolloutCompress => "rollout/compress" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::RolloutCompressResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         serialization: thread_id(params.thread_id),

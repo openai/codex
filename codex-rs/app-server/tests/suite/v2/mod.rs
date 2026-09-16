@@ -103,6 +103,8 @@ mod request_user_input;
 mod request_validation;
 mod residency;
 mod review;
+#[path = "rollout_compress_tests.rs"]
+mod rollout_compress;
 mod rollout_migration;
 mod safety_check_downgrade;
 #[cfg(not(target_os = "windows"))]

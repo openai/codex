@@ -557,6 +557,7 @@ mod plugins;
 mod process_exec_processor;
 mod projects;
 mod remote_control_processor;
+mod rollout;
 mod search;
 mod thread_attachments;
 mod thread_enrichment;
