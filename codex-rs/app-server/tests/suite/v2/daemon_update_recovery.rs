@@ -460,6 +460,11 @@ async fn assert_still_running(server: &mut Child, message: &str) {
 }
 
 #[test_case::test_case("running")]
+#[test_case::test_case("plan")]
+#[test_case::test_case("read_only")]
+#[test_case::test_case("stricter_config")]
+#[test_case::test_case("different_environment")]
+#[test_case::test_case("legacy_snapshot")]
 #[test_case::test_case("completed")]
 #[test_case::test_case("canceled")]
 #[test_case::test_case("compacting")]
@@ -467,7 +472,7 @@ async fn assert_still_running(server: &mut Child, message: &str) {
 async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> {
     let home = TempDir::new()?;
     let (release, gate) = oneshot::channel();
-    let (_release_compaction, compaction_gate) = oneshot::channel();
+    let (release_compaction, compaction_gate) = oneshot::channel();
     let (mock, _completions) = start_streaming_sse_server(vec![
         vec![stream_chunk(Some(gate), "Original")?],
         vec![stream_chunk(Some(compaction_gate), "Compacted")?],
@@ -476,16 +481,36 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
     create_config_toml(home.path(), mock.uri(), "never")?;
     let socket = home.path().join("control/server.sock");
     let mut server = spawn_server(home.path(), &socket)?;
-    let mut client = connect_default_daemon_client(&socket).await?;
+    let mut client = connect_daemon_client(
+        &socket,
+        InitializeCapabilities {
+            experimental_api: true,
+            ..Default::default()
+        },
+    )
+    .await?;
     let thread = start_thread(&mut client, /*id*/ 2, json!({})).await?;
+    let local_environment = thread
+        .thread
+        .environments
+        .as_ref()
+        .and_then(|environments| environments.first())
+        .cloned();
     let id = thread.thread.id;
+    let mode = if outcome == "plan" { "plan" } else { "default" };
     let schema = json!({"type":"object","properties":{},"additionalProperties":false});
     let turn = request(
         &mut client,
         /*id*/ 3,
         "turn/start",
         json!({
-            "threadId":id,"input":[{"type":"text","text":"Do the work"}],"outputSchema":schema
+            "threadId":id,"input":[{"type":"text","text":"Do the work"}],"outputSchema":schema,
+            "sandboxPolicy": match outcome {
+                "read_only" => json!({"type":"readOnly"}),
+                "stricter_config" => json!({"type":"workspaceWrite","writableRoots":[],"networkAccess":false,"excludeTmpdirEnvVar":false,"excludeSlashTmp":false}),
+                _ => serde_json::Value::Null,
+            },
+            "collaborationMode":{"mode":mode,"settings":{"model":"mock-model","reasoning_effort":null,"developer_instructions":null}}
         }),
     )
     .await?;
@@ -527,7 +552,12 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
             .await?;
             wait_for_requests(&mock, /*count*/ 2).await?;
         }
-        "running" => {}
+        "running"
+        | "plan"
+        | "read_only"
+        | "stricter_config"
+        | "different_environment"
+        | "legacy_snapshot" => {}
         _ => unreachable!(),
     }
     request_shutdown(&server, &socket).await?;
@@ -538,14 +568,16 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
         }
     })
     .await?;
-    let expected = if outcome == "running" {
+    let interrupted = !matches!(outcome, "completed" | "canceled" | "compacting");
+    let expected = if interrupted {
         [(
             id.clone(),
             daemon_recovery::InterruptedTurn {
                 turn_id: turn["turn"]["id"].as_str().context("turn ID")?.to_string(),
-                output_schema: Some(schema),
+                output_schema: Some(schema.clone()),
                 service_tier: Some("default".into()),
                 cyber_access_program: None,
+                local_environment,
             },
         )]
         .into()
@@ -560,11 +592,168 @@ async fn managed_shutdown_records_interrupted_turn(outcome: &str) -> Result<()> 
         }
     );
     // Existing binaries can still read the candidate array and ignore the metadata entry.
-    let legacy: std::collections::BTreeSet<String> = serde_json::from_slice(&std::fs::read(path)?)?;
+    let legacy: std::collections::BTreeSet<String> =
+        serde_json::from_slice(&std::fs::read(&path)?)?;
     assert!(legacy.contains(&id));
     if server.try_wait()?.is_none() {
         server.kill().await?;
     }
+    if !interrupted {
+        return Ok(());
+    }
+    if outcome == "running" {
+        // A prior recovery can append an older turn's abort after this turn started.
+        codex_rollout::append_rollout_item_to_path(
+            thread.thread.path.as_ref().context("rollout path")?,
+            &serde_json::from_value(json!({
+                "type":"event_msg",
+                "payload":{"type":"turn_aborted","turn_id":"older-turn","reason":"interrupted"}
+            }))?,
+        )
+        .await?;
+    }
+    if outcome == "read_only" {
+        let config = home.path().join("config.toml");
+        let contents = std::fs::read_to_string(&config)?;
+        std::fs::write(
+            config,
+            contents.replace(
+                "sandbox_mode = \"read-only\"",
+                "default_permissions = \":workspace\"",
+            ),
+        )?;
+    }
+    if matches!(outcome, "different_environment" | "legacy_snapshot") {
+        let mut snapshot = daemon_recovery::read_snapshot(&path)?;
+        let saved = snapshot
+            .interrupted
+            .get_mut(&id)
+            .context("interrupted turn")?;
+        if outcome == "legacy_snapshot" {
+            saved.local_environment = None;
+        } else {
+            saved
+                .local_environment
+                .as_mut()
+                .context("local environment")?
+                .environment_id = "remote".into();
+        }
+        daemon_recovery::write_snapshot(&path, &snapshot)?;
+    }
+    let mut successor = spawn_server(home.path(), &socket)?;
+    if !matches!(outcome, "running" | "plan") {
+        let mut client = connect_default_daemon_client(&socket).await?;
+        timeout(DEFAULT_READ_TIMEOUT, async {
+            loop {
+                let loaded =
+                    request(&mut client, /*id*/ 2, "thread/loaded/list", json!({})).await?;
+                if loaded["data"]
+                    .as_array()
+                    .context("loaded IDs")?
+                    .contains(&json!(id))
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(25)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .await??;
+        // Resume serializes with the ongoing daemon restore, so the recovery attempt has finished.
+        request(
+            &mut client,
+            /*id*/ 3,
+            "thread/resume",
+            json!({"threadId":id,"excludeTurns":true}),
+        )
+        .await?;
+        let response = request(
+            &mut client,
+            /*id*/ 2,
+            "thread/read",
+            json!({"threadId":id,"includeTurns":true}),
+        )
+        .await?;
+        assert_eq!(response["thread"]["status"]["type"], "idle");
+        assert_eq!(mock.requests().await.len(), 1);
+        successor.kill().await?;
+        return Ok(());
+    }
+    // Recovery starts without a client, then its internal message survives reconnect.
+    wait_for_requests(&mock, /*count*/ 2).await?;
+    let mut client = connect_default_daemon_client(&socket).await?;
+    request(
+        &mut client,
+        /*id*/ 2,
+        "thread/resume",
+        json!({"threadId":id,"excludeTurns":true}),
+    )
+    .await?;
+    let response = request(
+        &mut client,
+        /*id*/ 3,
+        "thread/read",
+        json!({"threadId":id,"includeTurns":true}),
+    )
+    .await?;
+    let statuses: Vec<_> = response["thread"]["turns"]
+        .as_array()
+        .context("turns")?
+        .iter()
+        .filter(|turn| turn["id"] != "older-turn")
+        .map(|turn| turn["status"].clone())
+        .collect();
+    assert_eq!(statuses, vec![json!("interrupted"), json!("inProgress")]);
+    release_compaction
+        .send(())
+        .expect("continuation is waiting");
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let response = request(
+                &mut client,
+                /*id*/ 3,
+                "thread/read",
+                json!({"threadId":id,"includeTurns":true}),
+            )
+            .await?;
+            let turns = response["thread"]["turns"].as_array().context("turns")?;
+            if let Some(continued) = turns.last()
+                && continued["status"] == "completed"
+            {
+                assert_ne!(continued["id"], turn["turn"]["id"]);
+                assert!(
+                    continued["items"]
+                        .as_array()
+                        .context("items")?
+                        .iter()
+                        .all(|item| item["type"] != "userMessage")
+                );
+                break;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    let requests = mock.requests().await;
+    assert_eq!(requests.len(), 2);
+    let body: serde_json::Value = serde_json::from_slice(&requests[1])?;
+    assert_eq!(body["text"]["format"]["schema"], schema);
+    let input = body["input"].to_string();
+    assert!(
+        input.contains("Do the work") && input.contains("Continue the unfinished work"),
+        "{input}"
+    );
+    let collaboration = input
+        .rsplit("<collaboration_mode>")
+        .next()
+        .context("collaboration instructions")?;
+    assert_eq!(
+        collaboration.contains("# Plan Mode"),
+        mode == "plan",
+        "{input}"
+    );
+    successor.kill().await?;
     Ok(())
 }
 

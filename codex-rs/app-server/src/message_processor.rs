@@ -765,18 +765,18 @@ impl MessageProcessor {
 
     pub(crate) async fn restore_daemon_threads(
         &self,
-        candidates: std::collections::BTreeSet<String>,
+        mut snapshot: codex_app_server_transport::daemon_recovery::RecoverySnapshot,
     ) {
-        for thread_id in candidates {
+        for thread_id in snapshot.loaded {
             let Ok(_permit) = self.turn_admission.admit() else {
                 break;
             };
             if let Err(err) = self
                 .thread_processor
                 .thread_resume(
-                    ThreadResumeTarget::DaemonRecovery,
+                    ThreadResumeTarget::DaemonRecovery(snapshot.interrupted.remove(&thread_id)),
                     codex_app_server_protocol::ThreadResumeParams {
-                        thread_id,
+                        thread_id: thread_id.clone(),
                         exclude_turns: true,
                         ..Default::default()
                     },

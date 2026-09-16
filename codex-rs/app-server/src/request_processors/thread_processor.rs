@@ -1,3 +1,6 @@
+#[path = "daemon_continuation.rs"]
+mod daemon_continuation;
+
 #[path = "daemon_snapshot.rs"]
 mod daemon_snapshot;
 
@@ -460,7 +463,7 @@ pub(crate) struct ThreadRequestProcessor {
 /// Whether resume attaches a client or restores a cold runtime during daemon startup.
 pub(crate) enum ThreadResumeTarget {
     Client(ConnectionRequestId),
-    DaemonRecovery,
+    DaemonRecovery(Option<codex_app_server_transport::daemon_recovery::InterruptedTurn>),
 }
 
 /// Outcome of trying to satisfy a resume request from an already loaded thread.
@@ -3630,11 +3633,15 @@ impl ThreadRequestProcessor {
                 }
                 RunningThreadResumeResult::NotRunning(stored_thread) => stored_thread,
             },
-            ThreadResumeTarget::DaemonRecovery => {
+            ThreadResumeTarget::DaemonRecovery(saved) => {
                 let thread_id = ThreadId::from_string(&params.thread_id)
                     .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
                 // Recheck under the same permit as client resume, including after config loading.
                 if self.thread_manager.get_thread(thread_id).await.is_ok() {
+                    if let Some(saved) = saved {
+                        self.continue_daemon_turn(&params.thread_id, saved.clone())
+                            .await;
+                    }
                     return Ok(ControlFlow::Break(()));
                 }
                 None
@@ -3918,7 +3925,7 @@ impl ThreadRequestProcessor {
                     ThreadResumeTarget::Client(request_id) => {
                         self.request_trace_context(request_id).await
                     }
-                    ThreadResumeTarget::DaemonRecovery => None,
+                    ThreadResumeTarget::DaemonRecovery(_) => None,
                 },
                 client_mcp_extensions,
             )
@@ -3939,6 +3946,10 @@ impl ThreadRequestProcessor {
                     codex_thread
                         .emit_thread_idle_lifecycle_if_idle(ThreadIdleCause::Completed)
                         .await;
+                    if let ThreadResumeTarget::DaemonRecovery(Some(saved)) = target {
+                        self.continue_daemon_turn(&thread_id.to_string(), saved.clone())
+                            .await;
+                    }
                     let state = self.thread_state_manager.thread_state(thread_id).await;
                     self.ensure_listener_task_running(thread_id, Arc::clone(&codex_thread), state)
                         .await?;

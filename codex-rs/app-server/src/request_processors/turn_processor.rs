@@ -1150,7 +1150,9 @@ impl TurnRequestProcessor {
                         None,
                         None,
                     ),
-                    NotSubmittedReason::PendingTriggerTurn | NotSubmittedReason::PlanMode => (
+                    NotSubmittedReason::PendingTriggerTurn
+                    | NotSubmittedReason::PlanMode
+                    | NotSubmittedReason::Superseded => (
                         "no active turn to steer".to_string(),
                         None,
                         Some(AnalyticsJsonRpcError::TurnSteer(

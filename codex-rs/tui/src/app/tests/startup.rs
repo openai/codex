@@ -1377,7 +1377,7 @@ async fn owned_subagent_approval_before_thread_started_is_preserved() -> Result<
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
-    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let parent = app_server.start_thread(&app.config).await?;
     let parent_thread_id = parent.session.thread_id;
     app.enqueue_primary_thread_session(parent.session, parent.turns)

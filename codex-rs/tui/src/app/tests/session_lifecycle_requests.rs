@@ -805,11 +805,11 @@ fn spawn_approved_task_tool_call(
 #[tokio::test]
 async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() -> Result<()> {
     let (app, _codex_home) = make_history_test_app().await?;
-    let (mut app_server, requests, proxy) = start_recording_app_server(
+    let (mut app_server, requests, proxy) = Box::pin(start_recording_app_server(
         &app.config,
         /*blocked_thread_list*/ None,
         /*failed_thread_name*/ None,
-    )
+    ))
     .await?;
 
     let started = app_server.start_thread(&app.config).await?;
@@ -858,25 +858,27 @@ async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() ->
     app_server.shutdown().await?;
     proxy.await??;
     let (mut restarted_app_server, _restarted_requests, restarted_proxy) =
-        start_recording_app_server(
+        Box::pin(start_recording_app_server(
             &app.config,
             /*blocked_thread_list*/ None,
             /*failed_thread_name*/ None,
-        )
+        ))
         .await?;
-    let resumed = restarted_app_server
-        .resume_thread(
-            &app.local_settings,
-            app.config.clone(),
-            target_id,
-            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
-        )
-        .await?;
+    let resumed = Box::pin(restarted_app_server.resume_thread(
+        &app.local_settings,
+        app.config.clone(),
+        target_id,
+        crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+    ))
+    .await?;
     assert!(resumed.task_tools_available);
     assert!(restarted_app_server.task_tools_available(target_id));
-    let forked = restarted_app_server
-        .fork_thread(&app.local_settings, app.config.clone(), target_id)
-        .await?;
+    let forked = Box::pin(restarted_app_server.fork_thread(
+        &app.local_settings,
+        app.config.clone(),
+        target_id,
+    ))
+    .await?;
     assert!(forked.task_tools_available);
     assert!(restarted_app_server.task_tools_available(forked.session.thread_id));
     restarted_app_server

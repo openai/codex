@@ -37,7 +37,7 @@ impl ThreadRequestProcessor {
                     continue;
                 }
                 snapshot.loaded.insert(thread_id.to_string());
-                if let Some((turn_id, options)) = interrupted {
+                if let Some((turn_id, options, environment)) = interrupted {
                     snapshot.interrupted.insert(
                         thread_id.to_string(),
                         InterruptedTurn {
@@ -45,6 +45,7 @@ impl ThreadRequestProcessor {
                             output_schema: options.final_output_json_schema,
                             service_tier: options.service_tier,
                             cyber_access_program: options.cyber_access_program,
+                            local_environment: Some((&environment).into()),
                         },
                     );
                 }

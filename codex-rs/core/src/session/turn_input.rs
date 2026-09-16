@@ -216,7 +216,31 @@ pub(super) async fn handle(
                 | SubmittedTurnInput::ResponseItem(_)
                 | SubmittedTurnInput::InterAgentCommunication(_) => TurnStartKind::Automatic,
             };
-            start_if_idle(session, request, submission_id, kind).await
+            start_if_idle(
+                session,
+                request,
+                submission_id,
+                kind,
+                /*expected_previous_turn_id*/ None,
+            )
+            .await
+        }
+        TurnInputMode::ContinueIfIdle {
+            expected_previous_turn_id,
+        } => {
+            if !matches!(&request.input, SubmittedTurnInput::ResponseItem(_)) {
+                return Err(CodexErr::InvalidRequest(
+                    "continuation requires internal response input".to_string(),
+                ));
+            }
+            start_if_idle(
+                session,
+                request,
+                submission_id,
+                TurnStartKind::Recovery,
+                Some(expected_previous_turn_id),
+            )
+            .await
         }
         TurnInputMode::Steer { expected_turn_id } => {
             steer(session, request, expected_turn_id, submission_id).await
@@ -236,7 +260,14 @@ pub(super) async fn handle_recovery(
             turn_trigger: Some("retry".to_string()),
             ..start_options
         });
-    start_if_idle(session, request, submission_id, TurnStartKind::Recovery).await
+    start_if_idle(
+        session,
+        request,
+        submission_id,
+        TurnStartKind::Recovery,
+        /*expected_previous_turn_id*/ None,
+    )
+    .await
 }
 
 async fn start_or_steer(
@@ -335,11 +366,16 @@ async fn start_or_steer(
     }
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the previous turn check and idle reservation must be atomic"
+)]
 async fn start_if_idle(
     session: &Arc<Session>,
     request: TurnInputRequest,
     submission_id: String,
     kind: TurnStartKind,
+    expected_previous_turn_id: Option<String>,
 ) -> CodexResult<TurnInputSubmission> {
     let TurnInputRequest {
         input,
@@ -390,6 +426,13 @@ async fn start_if_idle(
         if active_turn.is_some() {
             return Ok(TurnInputSubmission::NotSubmitted {
                 reason: NotSubmittedReason::NotIdle,
+            });
+        }
+        if let Some(expected) = expected_previous_turn_id
+            && session.state.lock().await.last_started_turn_id.as_ref() != Some(&expected)
+        {
+            return Ok(TurnInputSubmission::NotSubmitted {
+                reason: NotSubmittedReason::Superseded,
             });
         }
         let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
@@ -445,7 +488,7 @@ async fn start_if_idle(
             }
             task_input.push(pending_turn_input(session, input).await);
         }
-        TurnStartKind::Automatic => {
+        TurnStartKind::Automatic | TurnStartKind::Recovery => {
             // Empty automatic user input resumes sampling without a new message.
             if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
                 session
@@ -456,9 +499,6 @@ async fn start_if_idle(
                     )
                     .await;
             }
-        }
-        TurnStartKind::Recovery => {
-            // Recovery resumes an existing turn without a new empty user message.
         }
     }
     session
@@ -508,6 +548,11 @@ async fn steer(
 }
 
 impl Session {
+    /// Called under the active-turn lock before running any task or lifecycle callback.
+    pub(crate) async fn record_started_turn(&self, turn_id: &str) {
+        self.state.lock().await.last_started_turn_id = Some(turn_id.to_string());
+    }
+
     pub(crate) async fn route_realtime_text_input(
         self: &Arc<Self>,
         text: String,

@@ -7952,12 +7952,12 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
     let state_db =
         crate::init_state_db_for_app_server_target(&config, &crate::AppServerTarget::Embedded)
             .await?;
-    let mut app_server = crate::start_app_server_for_picker(
+    let mut app_server = Box::pin(crate::start_app_server_for_picker(
         &config,
         &crate::AppServerTarget::Embedded,
         state_db.clone(),
         Arc::new(EnvironmentManager::default_for_tests()),
-    )
+    ))
     .await?;
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     app.config = config;
@@ -7968,9 +7968,8 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
     let mut tui = crate::tui::test_support::make_test_tui()?;
 
     for target_session in targets {
-        let control = app
-            .resume_target_session(&mut tui, &mut app_server, target_session)
-            .await?;
+        let control =
+            Box::pin(app.resume_target_session(&mut tui, &mut app_server, target_session)).await?;
 
         assert!(matches!(control, AppRunControl::Continue));
         assert!(!crate::session_resume::cwds_differ(

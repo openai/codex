@@ -1564,8 +1564,10 @@ async fn root_switch_loads_local_preferences_from_disk() -> Result<()> {
 async fn root_switch_preserves_idle_root_with_running_subagent() -> Result<()> {
     let mut app = make_test_app().await;
     trust_fixture_folders(&mut app);
-    let mut app_server =
-        crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref()).await?;
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await?;
     let previous = app_server.start_thread(&app.config).await?;
     let previous_root_id = previous.session.thread_id;
     app.enqueue_primary_thread_session(previous.session, previous.turns)
@@ -1662,7 +1664,8 @@ async fn overview_selection_applies_user_permissions_only_to_unloaded_threads() 
             .expect("create historical session"),
         )?);
     }
-    let mut app_server = crate::start_embedded_app_server_for_picker(&server_config).await?;
+    let mut app_server =
+        Box::pin(crate::start_embedded_app_server_for_picker(&server_config)).await?;
     let loaded = app_server
         .resume_thread(
             &crate::local_settings::LocalSettings::from(&server_config),

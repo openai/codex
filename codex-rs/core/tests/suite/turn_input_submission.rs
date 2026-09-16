@@ -8,6 +8,9 @@ use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
 use codex_core::TurnStartOptions;
 use codex_core::config::Constrained;
+use codex_core::context::ContextualUserFragment;
+use codex_core::context::InternalContextSource;
+use codex_core::context::InternalModelContextFragment;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::TurnStartAdmission;
 use codex_protocol::AgentPath;
@@ -516,6 +519,125 @@ async fn recover_turn_if_idle_preserves_id_and_resumes_plan_mode() {
     assert!(user_input_groups[0][0].starts_with("<environment_context>"));
 }
 
+/// Internal continuation creates a new turn without adding user authorization.
+#[tokio::test]
+async fn continue_turn_if_idle_starts_new_turn_with_internal_input() {
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-5.6-sol")
+        .with_config(|config| {
+            config
+                .features
+                .enable(codex_features::Feature::FastMode)
+                .unwrap();
+        })
+        .build_with_auto_env(&server)
+        .await
+        .unwrap();
+    responses::mount_sse_once(&server, responses::sse_completed("original")).await;
+    let TurnInputSubmission::Started {
+        turn_id: previous_turn_id,
+    } = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Do the work".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await
+        .unwrap()
+    else {
+        panic!("original turn did not start")
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let mock = responses::mount_sse_once(&server, responses::sse_completed("continued")).await;
+    let input = ContextualUserFragment::into(InternalModelContextFragment::new(
+        InternalContextSource::from_static("daemon_recovery"),
+        "Continue the interrupted work.",
+    ));
+    let schema = serde_json::json!({"type":"object","properties":{},"additionalProperties":false});
+    let submission = test
+        .codex
+        .continue_turn_if_idle(
+            TurnInputRequest::new(TurnInput::ResponseItem(input.clone())).on_start(
+                TurnStartOptions {
+                    final_output_json_schema: Some(schema.clone()),
+                    service_tier: Some("priority".to_string()),
+                    root_turn_id: Some("originating-turn".to_string()),
+                    ..Default::default()
+                },
+            ),
+            previous_turn_id.clone(),
+        )
+        .await
+        .unwrap();
+    let TurnInputSubmission::Started { turn_id } = submission else {
+        panic!("continuation did not start")
+    };
+    wait_for_event(&test.codex, |event| {
+        assert!(!matches!(event, EventMsg::UserMessage(_)));
+        assert!(!matches!(event, EventMsg::ItemCompleted(event)
+            if matches!(event.item, codex_protocol::items::TurnItem::UserMessage(_))));
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = mock.single_request();
+    assert!(request.has_content_kinds(&["daemon_recovery.internal_context"]));
+    let metadata: Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .expect("turn metadata"),
+    )
+    .unwrap();
+    assert_eq!(metadata["root_turn_id"], "originating-turn");
+    let body = request.body_json();
+    assert_eq!(body["text"]["format"]["schema"], schema);
+    assert_eq!(body["service_tier"], "priority");
+    // The continuation has completed, but the saved previous ID is still stale.
+    assert_eq!(
+        test.codex
+            .continue_turn_if_idle(
+                TurnInputRequest::new(TurnInput::ResponseItem(ContextualUserFragment::into(
+                    InternalModelContextFragment::new(
+                        InternalContextSource::from_static("daemon_recovery"),
+                        "Continue."
+                    ),
+                ))),
+                previous_turn_id,
+            )
+            .await
+            .unwrap(),
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::Superseded
+        }
+    );
+    assert_eq!(mock.requests().len(), 1);
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            approval_policy: Some(AskForApproval::OnRequest),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("update permissions before continuation admission");
+    assert_eq!(
+        test.codex
+            .continue_turn_if_idle(
+                TurnInputRequest::new(TurnInput::ResponseItem(input)),
+                turn_id,
+            )
+            .await
+            .unwrap(),
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::Superseded
+        }
+    );
+    assert_eq!(mock.requests().len(), 1);
+}
+
 /// Concurrent submissions must start exactly one turn and steer the other message.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_input_submission_reports_started_and_steered_for_concurrent_submissions() {
@@ -833,17 +955,32 @@ async fn start_or_steer_turn_requires_matching_active_output_schema() {
     server.shutdown().await;
 }
 
-#[test_case(Vec::new(); "automatic")]
-#[test_case(vec![UserInput::Text { text: "Do the work".into(), text_elements: Vec::new() }]; "user")]
+#[test_case(Vec::new(), "local"; "automatic")]
+#[test_case(vec![UserInput::Text { text: "Do the work".into(), text_elements: Vec::new() }], "local"; "user")]
+#[cfg_attr(unix, test_case(Vec::new(), "remote"; "remote_stays_idle"))]
 #[tokio::test]
-async fn sampling_is_ready_for_daemon_recovery(input: Vec<UserInput>) -> anyhow::Result<()> {
+async fn sampling_is_ready_for_daemon_recovery(
+    input: Vec<UserInput>,
+    executor: &str,
+) -> anyhow::Result<()> {
     let (release, gate) = oneshot::channel();
     let (server, _completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
         gate: Some(gate),
         body: responses::sse_completed("automatic"),
     }]])
     .await;
-    let test = test_codex().build_with_streaming_server(&server).await?;
+    #[cfg(unix)]
+    let remote = if executor == "remote" {
+        Some(super::multi_exec_server_sandbox::ExecServerProcess::start().await?)
+    } else {
+        None
+    };
+    let mut builder = test_codex();
+    #[cfg(unix)]
+    if let Some(remote) = &remote {
+        builder = builder.with_exec_server_url(&remote.websocket_url);
+    }
+    let test = builder.build_with_streaming_server(&server).await?;
     let StartIfIdleSubmission::Started { turn_id } = test
         .codex
         .start_turn_if_idle(TurnInputRequest::user_input(input))
@@ -857,7 +994,10 @@ async fn sampling_is_ready_for_daemon_recovery(input: Vec<UserInput>) -> anyhow:
     )
     .await?;
     let active = test.codex.interrupted_turn().await;
-    assert_eq!(active.map(|(id, _)| id), Some(turn_id));
+    assert_eq!(
+        active.map(|(id, _, _)| id),
+        (executor == "local").then_some(turn_id)
+    );
     release.send(()).expect("sampling is waiting");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

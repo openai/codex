@@ -1445,6 +1445,12 @@ impl Session {
                     &session_configuration.session_source,
                 ),
             );
+            state.last_started_turn_id = initial_history.get_rollout_items().iter().rev().find_map(|item| {
+                match item {
+                    RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => Some(event.turn_id.clone()),
+                    _ => None,
+                }
+            });
             state.base_instructions_provenance = base_instructions_provenance.clone();
             state.active_disabled_plugin_ids = session_configuration.disabled_plugin_ids.clone();
             let managed_network_requirements_configured = config

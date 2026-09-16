@@ -22,6 +22,9 @@ pub struct InterruptedTurn {
     pub output_schema: Option<serde_json::Value>,
     pub service_tier: Option<String>,
     pub cyber_access_program: Option<codex_protocol::turn_input::CyberAccessProgram>,
+    /// Only local execution with thread-owned configuration can continue automatically.
+    /// Older snapshots without this identity are reloaded without continuation.
+    pub local_environment: Option<codex_app_server_protocol::ThreadEnvironment>,
 }
 
 // Old servers accept the array and skip this non-thread entry during best-effort

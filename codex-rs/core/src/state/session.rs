@@ -84,6 +84,9 @@ pub(crate) struct SessionState {
     /// model/realtime handling on subsequent regular turns (including full-context
     /// reinjection after resume or `/compact`).
     previous_turn_settings: Option<PreviousTurnSettings>,
+    /// Latest task admitted in this runtime, retained across completion and history edits.
+    /// Cleared by standalone settings changes to invalidate pending continuation.
+    pub(crate) last_started_turn_id: Option<String>,
     /// Runtime accounting state for the active auto-compaction window.
     auto_compact_window: AutoCompactWindow,
     /// Original request effort for the current model while configuration updates remain active.
@@ -127,6 +130,7 @@ impl SessionState {
             mcp_dependency_prompted: HashSet::new(),
             additional_context: AdditionalContextStore::default(),
             previous_turn_settings: None,
+            last_started_turn_id: None,
             auto_compact_window: AutoCompactWindow::new_with_ids(auto_compact_window_ids),
             reasoning_effort_pin: ReasoningEffortPin::Unset,
             startup_prewarm: None,

@@ -34,7 +34,7 @@ pub(crate) async fn start_recovery(
     processor: std::sync::Arc<crate::message_processor::MessageProcessor>,
 ) -> io::Result<tokio::task::JoinHandle<()>> {
     let candidates = tokio::task::spawn_blocking(move || {
-        let candidates = daemon_recovery::read_candidates(&path);
+        let candidates = daemon_recovery::read_snapshot(&path);
         // Even malformed or temporarily unreadable snapshots belong to this generation only.
         match std::fs::remove_file(&path) {
             Ok(()) => candidates,
