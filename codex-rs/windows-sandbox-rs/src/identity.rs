@@ -1,4 +1,7 @@
 use crate::SandboxRuntimeAccount;
+use crate::WindowsSandboxProvisioningOutcome;
+use crate::WindowsSandboxProvisioningSettings;
+use crate::WindowsSandboxProxyListeners;
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
@@ -286,7 +289,7 @@ pub(crate) fn require_sandbox_account(
     require_sandbox_account_with_setup(
         request,
         proxy_settings_mode,
-        run_elevated_setup_with_proxy_settings,
+        run_automatic_setup,
         local_user_flags,
     )
 }
@@ -349,8 +352,10 @@ fn require_sandbox_account_with_setup(
                 Err(_) => false,
             };
             if needs_repair {
-                setup_reason =
-                    Some("sandbox account is missing, disabled, or password expired".to_string());
+                let reason = "sandbox account is missing, disabled, or password expired";
+                // Older services trust these credentials as proof of completed setup.
+                remove_sandbox_users_file(codex_home, reason)?;
+                setup_reason = Some(reason.to_string());
                 identity = None;
                 break;
             }
@@ -398,6 +403,35 @@ fn require_sandbox_account_with_setup(
         },
         desired_offline_proxy_settings,
     ))
+}
+
+// Automatic setup prefers an installed service regardless of the onboarding feature gate.
+// Only an unavailable service may fall back to the UAC helper; service errors propagate.
+fn run_automatic_setup(
+    request: SandboxSetupRequest<'_>,
+    settings: &OfflineProxySettings,
+) -> Result<()> {
+    let mut listeners = WindowsSandboxProxyListeners::from_proxy_environment(request.env_map);
+    // Preserve-mode setup can use saved ports that differ from the current environment.
+    listeners
+        .http_ports
+        .retain(|port| settings.proxy_ports.contains(port));
+    listeners
+        .socks_ports
+        .retain(|port| settings.proxy_ports.contains(port));
+    match crate::provision_windows_sandbox_via_service(
+        request.codex_home,
+        WindowsSandboxProvisioningSettings {
+            proxy_ports: settings.proxy_ports.clone(),
+            allow_local_binding: settings.allow_local_binding,
+        },
+        listeners,
+    )? {
+        WindowsSandboxProvisioningOutcome::Provisioned => Ok(()),
+        WindowsSandboxProvisioningOutcome::Unavailable => {
+            run_elevated_setup_with_proxy_settings(request, settings)
+        }
+    }
 }
 
 fn desired_offline_proxy_settings(

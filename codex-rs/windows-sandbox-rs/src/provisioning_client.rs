@@ -18,6 +18,8 @@ use anyhow::Context;
 use anyhow::anyhow;
 use anyhow::bail;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR;
+use codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR;
 use windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows_sys::Win32::Foundation::ERROR_NO_DATA;
@@ -135,6 +137,14 @@ pub fn provision_windows_sandbox_via_service(
     settings: WindowsSandboxProvisioningSettings,
     listeners: WindowsSandboxProxyListeners,
 ) -> anyhow::Result<WindowsSandboxProvisioningOutcome> {
+    // The IPC request does not carry the caller's workload-identity environment.
+    // Select helper fallback here: a service error would propagate, not fall back.
+    // service_unavailable still rejects helper fallback for registered Core.
+    if std::env::var_os(OPENAI_FEDERATION_RULE_ID_ENV_VAR).is_some()
+        || std::env::var_os(OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR).is_some()
+    {
+        return service_unavailable();
+    }
     provision(codex_home, settings, listeners, ProvisioningIntent::Setup)
 }
 
@@ -385,3 +395,7 @@ impl Drop for ServiceHandle {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "provisioning_client_tests.rs"]
+mod tests;

@@ -4,6 +4,8 @@
 //! or helper launches.
 
 use super::require_sandbox_account_with_setup;
+use super::sandbox_setup_is_complete_with_settings;
+use crate::WindowsSandboxProvisioningSettings;
 use crate::WindowsSandboxProxySettingsMode;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::setup::OFFLINE_USERNAME;
@@ -23,6 +25,7 @@ use pretty_assertions::assert_eq;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
+use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_NORMAL_ACCOUNT;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
 
@@ -77,6 +80,8 @@ fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> R
             },
             WindowsSandboxProxySettingsMode::Preserve,
             |_, _| {
+                // Older services must not accept stale credentials instead of repairing expiry.
+                assert!(!sandbox_users_path(home.path()).exists());
                 setups.set(setups.get() + 1);
                 users.offline.password =
                     BASE64.encode(crate::dpapi::protect(b"new-test-password")?);
@@ -119,18 +124,22 @@ fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> R
 }
 
 #[test]
-fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
+fn credential_setup_reconciles_policy_and_repairs_accounts() -> Result<()> {
     let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
         &PermissionProfile::read_only(),
     )?;
-    for (stored_binding, desired_binding, ports, expected_full_setups) in [
-        (true, true, "8080", 0),
-        (true, true, "", 0),
-        (true, true, "8080,3129", 0),
-        (false, false, "8080", 1),
-        (false, false, "", 1),
-        (false, true, "3128", 1),
-        (true, false, "3128", 1),
+    let enabled = Some(UF_NORMAL_ACCOUNT);
+    let disabled = Some(UF_NORMAL_ACCOUNT | UF_ACCOUNTDISABLE);
+    for (stored_binding, desired_binding, ports, account_flags, expected_full_setups) in [
+        (true, true, "8080", enabled, 0),
+        (true, true, "", enabled, 0),
+        (true, true, "8080,3129", enabled, 0),
+        (false, false, "8080", enabled, 1),
+        (false, false, "", enabled, 1),
+        (false, true, "3128", enabled, 1),
+        (true, false, "3128", enabled, 1),
+        (true, true, "3128", None, 1),
+        (true, true, "3128", disabled, 1),
     ] {
         let full_setups = Cell::new(/*value*/ 0);
         let home = tempfile::tempdir()?;
@@ -169,6 +178,7 @@ fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
                 u8::from(desired_binding).to_string(),
             ),
         ]);
+        let account_flags = Cell::new(account_flags);
         let prepare = || {
             require_sandbox_account_with_setup(
                 &SandboxSetupRequest {
@@ -179,7 +189,15 @@ fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
                     proxy_enforced: true,
                 },
                 WindowsSandboxProxySettingsMode::Reconcile,
-                |_, desired| {
+                |request, desired| {
+                    // Matching artifacts must not let setup skip account repair.
+                    assert!(!sandbox_setup_is_complete_with_settings(
+                        request.codex_home,
+                        &WindowsSandboxProvisioningSettings {
+                            proxy_ports: desired.proxy_ports.clone(),
+                            allow_local_binding: desired.allow_local_binding,
+                        }
+                    ));
                     full_setups.set(full_setups.get() + 1);
                     let mut reconciled = marker.clone();
                     reconciled.proxy_ports = desired.proxy_ports.clone();
@@ -188,9 +206,11 @@ fn credential_setup_reconciles_effective_firewall_policy() -> Result<()> {
                         setup_marker_path(home.path()),
                         serde_json::to_vec(&reconciled)?,
                     )?;
+                    fs::write(sandbox_users_path(home.path()), serde_json::to_vec(&users)?)?;
+                    account_flags.set(enabled);
                     Ok(())
                 },
-                |_| Ok(Some(UF_NORMAL_ACCOUNT)),
+                |_| Ok(account_flags.get()),
             )
         };
         for _ in 0..2 {
