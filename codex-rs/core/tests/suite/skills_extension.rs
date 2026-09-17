@@ -3754,9 +3754,7 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
             .collect(),
         warnings: Vec::new(),
     };
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let mut extensions =
-        ExtensionRegistryBuilder::<Config>::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_provider(SkillProviderSource::new(
@@ -3812,11 +3810,6 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
             .all(|length| *length > 0 && *length < 1_024)
     );
     assert!(!catalog_text.contains("additional skills omitted"));
-    let warning = event_rx.try_recv()?.into_warning();
-    assert_eq!(
-        warning.message,
-        "Skill descriptions were shortened to fit the skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest."
-    );
 
     Ok(())
 }

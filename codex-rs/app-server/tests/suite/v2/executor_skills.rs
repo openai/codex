@@ -384,12 +384,20 @@ stream_max_retries = 0
     let request_id = app_server
         .send_thread_start_request_with_auto_env(ThreadStartParams {
             model: Some("mock-model".to_string()),
-            config: matches!(
-                scenario,
+            config: match scenario {
+                ExecutorSkillScenario::VisibleWithBudgetWarning => Some(HashMap::from([(
+                    "skills.max_context_tokens".to_string(),
+                    json!(1_000),
+                )])),
                 ExecutorSkillScenario::RestrictedPermittedReference
-                    | ExecutorSkillScenario::RestrictedDeniedReference
-            )
-            .then(|| HashMap::from([("tool_output_token_limit".to_string(), json!(250))])),
+                | ExecutorSkillScenario::RestrictedDeniedReference => Some(HashMap::from([(
+                    "tool_output_token_limit".to_string(),
+                    json!(250),
+                )])),
+                ExecutorSkillScenario::ExplicitOnly | ExecutorSkillScenario::RestrictedVisible => {
+                    None
+                }
+            },
             selected_capability_roots: Some(vec![SelectedCapabilityRoot {
                 id: "demo-plugin@1".to_string(),
                 location: CapabilityRootLocation::Environment {
@@ -444,12 +452,8 @@ stream_max_retries = 0
             .await?;
     }
     if scenario == ExecutorSkillScenario::VisibleWithBudgetWarning {
-        let is_skills_budget_warning = |message: &str| {
-            message.starts_with("Exceeded skills context budget.")
-                || message.starts_with(
-                    "Skill descriptions were shortened to fit the skills context budget.",
-                )
-        };
+        let is_skills_budget_warning =
+            |message: &str| message.starts_with("Exceeded skills context budget.");
         let warning = timeout(READ_TIMEOUT, async {
             loop {
                 let warning: WarningNotification = app_server.read_notification("warning").await?;
