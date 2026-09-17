@@ -183,3 +183,7 @@ impl<H: ReviewHost> ReviewRequest<'_, H> {
         ReviewDecision::Approved
     }
 }
+
+#[cfg(test)]
+#[path = "routing_tests.rs"]
+mod tests;

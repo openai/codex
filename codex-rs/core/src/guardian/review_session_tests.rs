@@ -570,47 +570,6 @@ async fn guardian_review_session_compact_scope_change_invalidates_cached_session
     assert_ne!(cached_reuse_key, next_reuse_key);
 }
 
-#[tokio::test]
-async fn guardian_review_session_config_disables_hooks() {
-    let mut parent_config = crate::config::test_config().await;
-    parent_config
-        .features
-        .enable(Feature::CodexHooks)
-        .expect("enable hooks on parent config");
-
-    let guardian_config = build_guardian_review_session_config(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummaryConfig::default(),
-        /*personality*/ None,
-        ResolvedModelMessages::bundled(),
-    )
-    .expect("guardian config");
-
-    assert!(!guardian_config.features.enabled(Feature::CodexHooks));
-}
-
-#[tokio::test]
-async fn guardian_review_session_config_disables_skill_instructions() {
-    let mut parent_config = crate::config::test_config().await;
-    parent_config.include_skill_instructions = true;
-
-    let guardian_config = build_guardian_review_session_config(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummaryConfig::default(),
-        /*personality*/ None,
-        ResolvedModelMessages::bundled(),
-    )
-    .expect("guardian config");
-
-    assert!(!guardian_config.include_skill_instructions);
-}
-
 #[test_case::test_case(
     Some("Use the managed Guardian policy."),
     Some("Configured Guardian template:\n{{ tenant_policy_config }}"),

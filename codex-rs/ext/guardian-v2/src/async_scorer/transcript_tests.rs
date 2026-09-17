@@ -1079,50 +1079,6 @@ fn configured_reasoning_counts_against_message_budget() {
 }
 
 #[test]
-fn transcript_keeps_only_manual_approval_developer_messages() {
-    let approval_text = format!("{MANUAL_APPROVAL_DEVELOPER_PREFIX}\n\nApproved action:\n{{}}");
-    let items = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "ordinary developer context".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-        ResponseItem::Message {
-            id: None,
-            role: "developer".to_string(),
-            content: vec![ContentItem::InputText {
-                text: approval_text.clone(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        },
-    ];
-
-    let transcript = TranscriptConfig::default()
-        .build_context(ContextInput {
-            target: ContextTarget::Async,
-            history: &TestConversationHistory(&items),
-            root_conversation: &[],
-            trusted_user_answers: &[],
-            planned_action: None,
-            previous_reviews: None,
-            trusted_tool: None,
-            trusted_skill_paths: &[],
-            node_repl_images: None,
-        })
-        .expect("collect transcript")
-        .transcript_entries();
-    assert_eq!(
-        transcript,
-        vec![format!("[1] developer: {approval_text}\n")]
-    );
-}
-
-#[test]
 fn transcript_omits_media_payloads_and_keeps_readable_content() {
     let oversized_image =
         "A".repeat(TruncationPolicy::Tokens(MAX_MESSAGE_TRANSCRIPT_TOKENS).byte_budget() + 1);

@@ -42,7 +42,6 @@ use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::NetworkApprovalProtocol;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -58,7 +57,6 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -1484,42 +1482,6 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning(
         }
     );
     assert!(warnings.is_empty());
-}
-
-#[tokio::test]
-async fn routes_approval_to_guardian_requires_guardian_reviewer() {
-    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
-    let mut config = (*turn.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::User;
-    turn.config = Arc::new(config.clone());
-
-    assert!(!routes_approval_to_guardian(&turn));
-
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    turn.config = Arc::new(config);
-
-    assert!(routes_approval_to_guardian(&turn));
-}
-
-#[tokio::test]
-async fn routes_approval_to_guardian_allows_granular_review_policy() {
-    let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
-    let mut config = (*turn.config).clone();
-    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    turn.config = Arc::new(config);
-    Arc::make_mut(&mut turn.config)
-        .permissions
-        .approval_policy
-        .set(AskForApproval::Granular(GranularApprovalConfig {
-            sandbox_approval: true,
-            rules: true,
-            skill_approval: true,
-            request_permissions: true,
-            mcp_elicitations: true,
-        }))
-        .expect("test setup should allow updating approval policy");
-
-    assert!(routes_approval_to_guardian(&turn));
 }
 
 #[test]
@@ -3687,60 +3649,6 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_clears_parent_developer_instructions() {
-    let defaults = ResolvedModelMessages::bundled().auto_review();
-    let mut parent_config = test_config().await;
-    parent_config.developer_instructions =
-        Some("parent or managed config should not replace guardian policy".to_string());
-
-    let guardian_config = build_guardian_review_session_config_for_test(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummary::default(),
-        /*personality*/ None,
-        ResolvedModelMessages::bundled(),
-    )
-    .expect("guardian config");
-
-    assert_eq!(guardian_config.developer_instructions, None);
-    assert_eq!(
-        guardian_config.base_instructions,
-        Some(
-            GuardianPolicyInstructions::new(
-                defaults.policy,
-                defaults.policy_template,
-                guardian_output_contract_prompt(),
-            )
-            .render()
-        )
-    );
-}
-
-#[tokio::test]
-async fn guardian_review_session_config_clears_legacy_notify() {
-    let mut parent_config = test_config().await;
-    parent_config.notify = Some(vec![
-        "/path/to/notify".to_string(),
-        "turn-ended".to_string(),
-    ]);
-
-    let guardian_config = build_guardian_review_session_config_for_test(
-        crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
-        /*live_network_config*/ None,
-        "active-model",
-        /*reasoning_effort*/ None,
-        ReasoningSummary::default(),
-        /*personality*/ None,
-        ResolvedModelMessages::bundled(),
-    )
-    .expect("guardian config");
-
-    assert_eq!(guardian_config.notify, None);
-}
-
-#[tokio::test]
 async fn guardian_review_session_config_uses_live_network_proxy_state() {
     let mut parent_config = test_config().await;
     let mut parent_network = NetworkProxyConfig {
@@ -3788,7 +3696,8 @@ async fn guardian_review_session_config_uses_live_network_proxy_state() {
 }
 
 #[tokio::test]
-async fn guardian_review_session_config_disables_mcp_apps_plugins_memories_and_guardian_v2() {
+async fn guardian_review_session_config_isolates_parent_customizations() {
+    let defaults = ResolvedModelMessages::bundled().auto_review();
     let mut parent_config = test_config().await;
     let server: McpServerConfig =
         toml::from_str("command = \"docs-server\"").expect("deserialize MCP server");
@@ -3796,21 +3705,28 @@ async fn guardian_review_session_config_disables_mcp_apps_plugins_memories_and_g
         .mcp_servers
         .set(HashMap::from([("docs".to_string(), server)]))
         .expect("parent MCP servers are configurable");
-    parent_config
-        .features
-        .enable(Feature::Apps)
-        .expect("apps feature is configurable");
-    parent_config
-        .features
-        .enable(Feature::Plugins)
-        .expect("plugins feature is configurable");
-    parent_config
-        .features
-        .enable(Feature::GuardianV2)
-        .expect("guardian v2 feature is configurable");
+    let disabled_features = [
+        Feature::Apps,
+        Feature::Plugins,
+        Feature::GuardianV2,
+        Feature::CodexHooks,
+    ];
+    for feature in disabled_features {
+        parent_config
+            .features
+            .enable(feature)
+            .expect("enable feature on parent config");
+    }
     parent_config.include_apps_instructions = true;
+    parent_config.include_skill_instructions = true;
     parent_config.memories.use_memories = true;
     parent_config.memories.dedicated_tools = true;
+    parent_config.developer_instructions =
+        Some("parent or managed config should not replace guardian policy".to_string());
+    parent_config.notify = Some(vec![
+        "/path/to/notify".to_string(),
+        "turn-ended".to_string(),
+    ]);
 
     let guardian_config = build_guardian_review_session_config_for_test(
         crate::guardian::test_host::build_reviewer_config(&parent_config).expect("reviewer config"),
@@ -3824,12 +3740,29 @@ async fn guardian_review_session_config_disables_mcp_apps_plugins_memories_and_g
     .expect("guardian config");
 
     assert!(guardian_config.mcp_servers.get().is_empty());
-    assert!(!guardian_config.features.enabled(Feature::Apps));
-    assert!(!guardian_config.features.enabled(Feature::Plugins));
-    assert!(!guardian_config.features.enabled(Feature::GuardianV2));
+    for feature in disabled_features {
+        assert!(
+            !guardian_config.features.enabled(feature),
+            "{feature:?} should be disabled in the reviewer"
+        );
+    }
     assert!(!guardian_config.include_apps_instructions);
+    assert!(!guardian_config.include_skill_instructions);
     assert!(!guardian_config.memories.use_memories);
     assert!(!guardian_config.memories.dedicated_tools);
+    assert_eq!(guardian_config.notify, None);
+    assert_eq!(guardian_config.developer_instructions, None);
+    assert_eq!(
+        guardian_config.base_instructions,
+        Some(
+            GuardianPolicyInstructions::new(
+                defaults.policy,
+                defaults.policy_template,
+                guardian_output_contract_prompt(),
+            )
+            .render()
+        )
+    );
 }
 
 #[tokio::test]
@@ -3977,19 +3910,4 @@ async fn review_approval_request(
     )
     .await
     .expect("Guardian should handle the request")
-}
-
-/// Whether this turn should route allowed approval prompts through the guardian
-/// reviewer instead of surfacing them to the user. ARC may still block actions
-/// earlier in the flow.
-fn routes_approval_to_guardian(turn: &crate::session::turn_context::TurnContext) -> bool {
-    routes_approval_to_guardian_with_reviewer(turn, turn.config.approvals_reviewer)
-}
-
-/// Whether an approval with its own reviewer selection should be routed through guardian.
-fn routes_approval_to_guardian_with_reviewer(
-    turn: &crate::session::turn_context::TurnContext,
-    approvals_reviewer: ApprovalsReviewer,
-) -> bool {
-    routes_approval_policy_to_guardian(turn.approval_policy(), approvals_reviewer)
 }

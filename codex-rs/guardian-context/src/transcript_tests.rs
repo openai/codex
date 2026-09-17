@@ -42,7 +42,7 @@ fn entry(kind: ConversationTranscriptEntryKind, text: &str) -> ConversationTrans
 }
 
 #[test]
-fn registered_transcript_preserves_shared_roles_and_node_repl_tool_attribution() {
+fn registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution() {
     let approved_action = format!(
         "{MANUAL_APPROVAL_DEVELOPER_PREFIX}\nApproved action: {}",
         "exact action ".repeat(/*n*/ 1_000)
@@ -53,6 +53,15 @@ fn registered_transcript_preserves_shared_roles_and_node_repl_tool_attribution()
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "Inspect the workspace.".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "ordinary developer context".to_string(),
             }],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
