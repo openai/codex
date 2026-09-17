@@ -74,6 +74,8 @@ mod external_auth;
 mod fork_thread;
 mod git_enrichment;
 mod guardian_authorization;
+#[path = "guardian_cached_score_tests.rs"]
+mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
 // Uses the same command-approval harness as guardian_review below.

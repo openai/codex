@@ -2,7 +2,6 @@
 //! Keep snapshots on their existing side of the background task boundary.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 use std::time::SystemTime;
 
@@ -21,7 +20,6 @@ use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::openai_models::GuardianReviewMode;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::ModelInfo;
-use codex_protocol::security_risk::SecurityRiskScore;
 
 use super::action::ActionRenderError;
 use super::action::GuardianAction;
@@ -35,7 +33,6 @@ use super::parent_compaction::ParentCompactionError;
 use super::parent_compaction::select_parent_compaction;
 use super::sampler::LunaSampler;
 use super::score::GuardianV2ScoreProgress;
-use super::score::record_fail_closed_score;
 use codex_protocol::openai_models::GuardianUnscoredAction as UnscoredAction;
 
 impl GuardianV2Extension {
@@ -80,11 +77,7 @@ impl GuardianV2Extension {
             match policy.unscored_action {
                 UnscoredAction::Ignore => {}
                 UnscoredAction::AgeScore => {
-                    let index = score_progress
-                        .latest_tool_call
-                        .fetch_add(/*val*/ 1, Ordering::Relaxed)
-                        .saturating_add(/*rhs*/ 1);
-                    score_progress.wrapper_lag.record(&input, index);
+                    let index = score_progress.observe(&input);
                     // Unscored permission widening must not reuse an earlier approval score.
                     if input.tool_name.is_default_namespace()
                         && input.tool_name.name == "exec_command"
@@ -95,20 +88,12 @@ impl GuardianV2Extension {
                             .and_then(serde_json::Value::as_str)
                             == Some("with_additional_permissions")
                     {
-                        score_progress
-                            .latest_failed_tool_call
-                            .fetch_max(index, Ordering::Release);
+                        score_progress.invalidate(index);
                     }
                 }
                 UnscoredAction::InvalidateScore => {
-                    let index = score_progress
-                        .latest_tool_call
-                        .fetch_add(/*val*/ 1, Ordering::Relaxed)
-                        .saturating_add(/*rhs*/ 1);
-                    score_progress.wrapper_lag.record(&input, index);
-                    score_progress
-                        .latest_failed_tool_call
-                        .fetch_max(index, Ordering::Release);
+                    let index = score_progress.observe(&input);
+                    score_progress.invalidate(index);
                 }
             }
             return;
@@ -117,18 +102,12 @@ impl GuardianV2Extension {
             let info = tool.tool_info();
             is_node_repl_backed_server(&info.server_name) && info.tool.name == "js"
         }) {
-            score_progress
-                .js_executions
-                .fetch_add(/*val*/ 1, Ordering::Relaxed);
+            score_progress.observe_js_execution();
         }
         let metrics = score_progress.metrics.clone();
         let analytics = input.session_store.get::<AnalyticsEventsClient>();
         let sampled_at = SystemTime::now();
-        let tool_call_index = score_progress
-            .latest_tool_call
-            .fetch_add(/*val*/ 1, Ordering::Relaxed)
-            .saturating_add(/*rhs*/ 1);
-        score_progress.wrapper_lag.record(&input, tool_call_index);
+        let tool_call_index = score_progress.observe(&input);
         let event_sink = Arc::clone(&self.event_sink);
         let thread_id = input.thread_store.level_id().to_owned();
         let turn_id = input.turn_id.to_owned();
@@ -155,9 +134,7 @@ impl GuardianV2Extension {
         let (manager, thread, config) = match thread_context {
             Ok(context) => context,
             Err(error) => {
-                score_progress
-                    .latest_failed_tool_call
-                    .fetch_max(tool_call_index, Ordering::Release);
+                score_progress.invalidate(tool_call_index);
                 record_classification(
                     metrics.as_deref(),
                     classification_started_at.elapsed(),
@@ -178,9 +155,7 @@ impl GuardianV2Extension {
             || thread.approvals_reviewer_for_turn(input.turn_id).await == ApprovalsReviewer::User
         {
             // A skipped call invalidates older scores, including ones still in flight.
-            score_progress
-                .latest_failed_tool_call
-                .fetch_max(tool_call_index, Ordering::Release);
+            score_progress.invalidate(tool_call_index);
             return;
         }
         // A required model keeps synchronous review outside its CUA allowance.
@@ -192,7 +167,7 @@ impl GuardianV2Extension {
                     .auto_review_required_for_model(&model.slug)
             })
         {
-            input.thread_store.remove::<SecurityRiskScore>();
+            score_progress.clear_score();
             return;
         }
         input.thread_store.insert(GuardianV2Enabled);
@@ -203,7 +178,7 @@ impl GuardianV2Extension {
         let guardian_config = match guardian_config.with_model_defaults(model_defaults) {
             Ok(config) => config,
             Err(error) => {
-                record_fail_closed_score(input.thread_store, sampled_at);
+                score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
                     classification_started_at.elapsed(),
@@ -241,14 +216,12 @@ impl GuardianV2Extension {
             Ok(compaction) => compaction,
             Err(error) => {
                 let (outcome, failure_reason) = if error == ParentCompactionError::RequiresSync {
-                    score_progress
-                        .latest_failed_tool_call
-                        .fetch_max(tool_call_index, Ordering::Release);
+                    score_progress.invalidate(tool_call_index);
                     ("skipped", None)
                 } else {
                     ("failure", Some("parent_compaction_error"))
                 };
-                record_fail_closed_score(input.thread_store, sampled_at);
+                score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
                     classification_started_at.elapsed(),
@@ -269,15 +242,8 @@ impl GuardianV2Extension {
         let planned_action = match action.render(guardian_config.max_action_tokens) {
             Ok(text) => text,
             Err(ActionRenderError::TooLarge { .. }) => {
-                score_progress
-                    .oversized_tool_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(input.call_id.to_owned());
-                score_progress
-                    .latest_failed_tool_call
-                    .fetch_max(tool_call_index, Ordering::Release);
-                record_fail_closed_score(input.thread_store, sampled_at);
+                score_progress.mark_oversized(input.call_id, tool_call_index);
+                score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
                     classification_started_at.elapsed(),
@@ -287,10 +253,8 @@ impl GuardianV2Extension {
                 return;
             }
             Err(error) => {
-                score_progress
-                    .latest_failed_tool_call
-                    .fetch_max(tool_call_index, Ordering::Release);
-                record_fail_closed_score(input.thread_store, sampled_at);
+                score_progress.invalidate(tool_call_index);
+                score_progress.fail_closed(sampled_at);
                 record_classification(
                     metrics.as_deref(),
                     classification_started_at.elapsed(),

@@ -186,15 +186,18 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         };
         let thread_store = fixture.test.codex.thread_extension_data();
         if matches!(evidence, BudgetEvidence::UserInstructions) {
-            thread_store.insert(SecurityRiskScore {
-                scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
-                call_id: None,
-                action: None,
-                sampled_at: None,
-            });
+            set_cached_score(
+                thread_store,
+                SecurityRiskScore {
+                    scores: BTreeMap::from([("action_risk".to_owned(), 0.25)]),
+                    call_id: None,
+                    action: None,
+                    sampled_at: None,
+                },
+            );
             let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
             let authorization = ScoreAuthorization::current(&fixture.test.codex).await;
-            *progress.authorization.lock().unwrap() = Some(authorization);
+            seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
             assert_eq!(
                 cached_approval(
                     &fixture.registry,
@@ -242,9 +245,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         }
         let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
         tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
-            while progress.latest_scored_tool_call.load(Ordering::Acquire)
-                < progress.latest_tool_call.load(Ordering::Acquire)
-            {
+            while progress.inspect(/*call_id*/ None).lag > 0 {
                 tokio::task::yield_now().await;
             }
         })

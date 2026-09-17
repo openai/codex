@@ -88,10 +88,9 @@ impl ThreadLifecycleContributor<Config> for GuardianV2Extension {
                 .thread_store
                 .get_or_init(|| LunaSampler::new(sampler_config));
             input.thread_store.insert(guardian_config);
-            input.thread_store.insert(GuardianV2ScoreProgress {
-                metrics: input.extension_metrics.clone(),
-                ..Default::default()
-            });
+            input.thread_store.insert(GuardianV2ScoreProgress::new(
+                input.extension_metrics.clone(),
+            ));
             // Preserve the answer path selected by the host for this thread.
             input
                 .thread_store
@@ -156,11 +155,7 @@ impl ToolLifecycleContributor for GuardianV2Extension {
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
             if let Some(progress) = input.thread_store.get::<GuardianV2ScoreProgress>() {
-                progress
-                    .oversized_tool_calls
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .remove(input.call_id);
+                progress.finish(input.call_id);
             }
         })
     }

@@ -1,8 +1,8 @@
 //! Discounts only an approval's own unscored code-mode wrapper. Missing provenance
 //! keeps the full lag; the bounded history never changes scoring or failure order.
+//! The score owner's state lock protects this history.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
 
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolPayload;
@@ -17,14 +17,13 @@ struct ToolStart {
 }
 
 #[derive(Default)]
-pub(super) struct WrapperLag(Mutex<VecDeque<ToolStart>>);
+pub(super) struct WrapperLag {
+    starts: VecDeque<ToolStart>,
+}
 
 impl WrapperLag {
-    pub(super) fn record(&self, input: &ToolStartInput<'_>, index: usize) {
-        let mut starts = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pub(super) fn record(&mut self, input: &ToolStartInput<'_>, index: usize) {
+        let starts = &mut self.starts;
         let parent_wrapper_index = match &input.source {
             ToolCallSource::CodeMode { .. } => input.originating_item_id.and_then(|item_id| {
                 starts
@@ -56,14 +55,10 @@ impl WrapperLag {
     }
 
     pub(super) fn discount(&self, call_id: Option<&str>, latest_scored: usize) -> usize {
-        let starts = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         usize::from(
             call_id
                 .and_then(|call_id| {
-                    starts
+                    self.starts
                         .iter()
                         .rev()
                         .find(|start| start.call_id == call_id)
