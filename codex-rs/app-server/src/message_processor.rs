@@ -1019,15 +1019,15 @@ impl MessageProcessor {
                     return;
                 }
                 let processor_for_request = Arc::clone(&processor);
-                let result = processor_for_request
-                    .handle_initialized_client_request(
-                        connection_request_id,
-                        codex_request,
-                        request_context,
-                        session,
-                        event_stream_ready,
-                    )
-                    .await;
+                // Keep queued requests small to avoid large stack temporaries during construction.
+                let result = Box::pin(processor_for_request.handle_initialized_client_request(
+                    connection_request_id,
+                    codex_request,
+                    request_context,
+                    session,
+                    event_stream_ready,
+                ))
+                .await;
                 if let Err(error) = result {
                     processor.outgoing.send_error(error_request_id, error).await;
                 }
