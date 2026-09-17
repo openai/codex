@@ -45,6 +45,7 @@ fn trust_launch_folder(app: &mut App) {
 #[tokio::test]
 async fn command_center_new_reads_server_defaults_for_actual_destination() -> Result<()> {
     let mut tui = make_test_tui()?;
+    tui.pause_events();
     for (mode, explicit_cwd, launch_override, expected_cwd, expected_model) in [
         ("local", false, false, "launch", "server-model"),
         ("local", true, false, "destination", "destination-model"),
@@ -263,6 +264,7 @@ async fn command_center_new_reads_server_defaults_for_actual_destination() -> Re
 #[tokio::test]
 async fn command_center_new_preserves_explicit_choices_and_managed_defaults() -> Result<()> {
     let mut tui = make_test_tui()?;
+    tui.pause_events();
     for (choice, expected_model, expected_effort) in [
         ("saved", "server-model", "high"),
         ("cli_effort", "server-model", "low"),
@@ -362,6 +364,7 @@ async fn command_center_new_preserves_explicit_choices_and_managed_defaults() ->
 #[tokio::test]
 async fn command_center_new_read_failure_keeps_overview_and_does_not_start() -> Result<()> {
     let mut tui = make_test_tui()?;
+    tui.pause_events();
     for capability in [
         HistoryCapabilities::ConfigReadFails,
         HistoryCapabilities::ThreadStartFails,
@@ -459,6 +462,7 @@ async fn command_center_new_preserves_permissions_across_sessions() -> Result<()
         .await
     );
     let mut tui = make_test_tui()?;
+    tui.pause_events();
     for _ in 0..2 {
         app.new_agents_overview_session(&mut tui, &mut server, /*cwd*/ None)
             .await?;
@@ -545,6 +549,7 @@ async fn command_center_new_preserves_only_selected_server_profiles() -> Result<
         RuntimePermissionProfileOverride::from_restored_config(app.chat_widget.config_ref()),
     );
     let mut tui = make_test_tui()?;
+    tui.pause_events();
     app.new_agents_overview_session(&mut tui, &mut server, /*cwd*/ None)
         .await?;
     assert_eq!(
@@ -647,6 +652,7 @@ async fn command_center_new_restores_blank_drafts_and_builtin_permissions() -> R
     )
     .await?;
     let mut tui = make_test_tui()?;
+    tui.pause_events();
     app.new_agents_overview_session(&mut tui, &mut server, /*cwd*/ None)
         .await?;
     let first = app.chat_widget.thread_id().unwrap();
@@ -855,6 +861,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
         )
         .await?;
         let mut tui = make_test_tui()?;
+        tui.pause_events();
         let new_session = app.new_agents_overview_session(
             &mut tui,
             &mut server,
@@ -958,6 +965,7 @@ async fn command_center_new_checkout_and_worktree_preserve_source_and_default_br
                 &mut failed_server,
                 Some(unused.cwd.clone().abs()),
                 Some((manager.clone(), unused.clone())),
+                /*startup_draft*/ None,
             )
             .await?;
             assert_eq!(app.chat_widget.thread_id(), Some(second));

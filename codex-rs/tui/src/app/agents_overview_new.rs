@@ -2,6 +2,9 @@
 //! Worktrees start at the repository default branch and bind only the new session.
 
 use super::*;
+use crate::startup_draft::StartupDraftInitialScreen;
+use crate::startup_draft::StartupDraftPump;
+use crate::startup_draft::StartupDraftSessionAction;
 
 /// Owns a freshly created checkout until the UI accepts its completion event.
 /// Dropping a cancelled worker or undelivered event removes only a clean checkout.
@@ -39,13 +42,46 @@ impl App {
         app_server: &mut AppServerSession,
         cwd: Option<AbsolutePathBuf>,
     ) -> Result<AppRunControl> {
+        if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
+            return Ok(AppRunControl::Continue);
+        }
+        let previous_thread = self.current_displayed_thread_id();
+        let mut draft = self
+            .agents_overview
+            .new_session_draft
+            .take()
+            .unwrap_or_else(|| {
+                Box::new(StartupDraftPump::new(
+                    tui,
+                    StartupDraftInitialScreen::Composer,
+                    StartupDraftSessionAction::NewFromCommandCenter,
+                ))
+            });
+        let mut display_config = self.chat_widget.config_ref().clone();
+        if let Some(cwd) = cwd.as_ref() {
+            display_config.cwd = cwd.clone();
+        }
+        draft.apply_config(&display_config);
+        tui.terminal.clear()?;
         // Keep the large session-start future off the TUI's stack in dev builds.
-        Box::pin(
-            self.start_agents_overview_session(
-                tui, app_server, cwd, /*managed_worktree*/ None,
-            ),
-        )
-        .await
+        let result = Box::pin(self.start_agents_overview_session(
+            tui,
+            app_server,
+            cwd,
+            /*managed_worktree*/ None,
+            Some(&mut draft),
+        ))
+        .await;
+        if self.current_displayed_thread_id() != previous_thread {
+            draft.flush_pending_paste_newline(tui).await?;
+            self.chat_widget.restore_startup_draft(draft.take_draft());
+        } else {
+            // Retain edits if setup fails so retrying `n` does not lose the draft.
+            draft.flush_pending_events(tui).await?;
+            self.agents_overview.new_session_draft = Some(draft);
+        }
+        tui.frame_requester().schedule_frame();
+        result
     }
 
     pub(in crate::app) async fn start_agents_overview_session(
@@ -57,6 +93,7 @@ impl App {
             codex_worktree::WorktreeManager,
             codex_worktree::ManagedWorktree,
         )>,
+        mut startup_draft: Option<&mut StartupDraftPump>,
     ) -> Result<AppRunControl> {
         if self.reconnect.offline || self.windows_sandbox_blocks_thread_switch() {
             if let Some((_, checkout)) = &managed_worktree {
@@ -68,7 +105,7 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
         let Some((config, remote_cwd)) = self
-            .agents_overview_session_config(tui, app_server, cwd)
+            .agents_overview_session_config(tui, app_server, cwd, startup_draft.as_deref_mut())
             .await
         else {
             if let Some((_, checkout)) = &managed_worktree {
@@ -94,15 +131,22 @@ impl App {
                 display_label: active.id,
             })
         });
-        let result = app_server
-            .start_thread_with_session_start_source(
-                &crate::local_settings::LocalSettings::from(&config),
+        let local_settings = crate::local_settings::LocalSettings::from(&config);
+        if let Some(draft) = startup_draft.as_deref_mut() {
+            draft.apply_config(&config);
+        }
+        let result = StartupDraftPump::run_with_optional_draft(
+            startup_draft.as_deref_mut(),
+            tui,
+            Box::pin(app_server.start_thread_with_session_start_source(
+                &local_settings,
                 &config,
                 /*session_start_source*/ None,
                 remote_cwd.as_deref(),
                 selected_profile.as_ref(),
-            )
-            .await;
+            )),
+        )
+        .await;
         let started = match result {
             Ok(started) => started,
             Err(error) => {
@@ -144,9 +188,14 @@ impl App {
             .insert(thread_id, started.clone());
         // Use the dashboard's existing attachment path, which preserves running agents
         // and unsent input in the previous session. Do not send an initial turn.
-        let control = self
-            .attach_agents_overview_thread(tui, app_server, thread_id, Some((config, started)))
-            .await?;
+        let control = Box::pin(self.attach_agents_overview_thread(
+            tui,
+            app_server,
+            thread_id,
+            Some((config, started)),
+            startup_draft,
+        ))
+        .await?;
         if self.current_displayed_thread_id() != Some(thread_id) {
             self.agents_overview.blank_sessions.remove(&thread_id);
             let _ = app_server.thread_unsubscribe(thread_id).await;
@@ -184,7 +233,7 @@ impl App {
             return;
         }
         let Some((config, _)) = self
-            .agents_overview_session_config(tui, app_server, cwd)
+            .agents_overview_session_config(tui, app_server, cwd, /*startup_draft*/ None)
             .await
         else {
             return;

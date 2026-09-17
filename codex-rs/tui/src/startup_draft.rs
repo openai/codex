@@ -61,6 +61,8 @@ pub(crate) enum StartupDraftInitialScreen {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StartupDraftSessionAction {
     New,
+    /// Keep in-app creation alive while allowing draft edits until setup finishes.
+    NewFromCommandCenter,
     Resume,
     Fork,
 }
@@ -111,25 +113,11 @@ impl StartupDraft {
             initialized_terminal.enhanced_keys_supported,
             initialized_terminal.stderr_guard,
         );
-        let (app_event_tx, app_event_rx) = unbounded_channel();
-        let bottom_pane = startup_draft_bottom_pane(
-            AppEventSender::new(app_event_tx),
-            tui.frame_requester(),
-            tui.enhanced_keys_supported(),
-        );
-        let events = tui.event_stream();
+        let pump = StartupDraftPump::new(&tui, initial_screen, session_action);
         let mut draft = Self {
             tui,
             terminal_restore_guard,
-            pump: StartupDraftPump {
-                header: startup_session_header(/*config*/ None),
-                bottom_pane,
-                events,
-                app_event_rx,
-                initial_screen,
-                session_action,
-                pending_paste_newline: None,
-            },
+            pump,
         };
         draft.pump.show_initial_screen(&mut draft.tui)?;
         Ok(draft)
@@ -165,6 +153,43 @@ impl StartupDraft {
 }
 
 impl StartupDraftPump {
+    pub(crate) fn new(
+        tui: &Tui,
+        initial_screen: StartupDraftInitialScreen,
+        session_action: StartupDraftSessionAction,
+    ) -> Self {
+        let (app_event_tx, app_event_rx) = unbounded_channel();
+        Self {
+            header: startup_session_header(/*config*/ None),
+            bottom_pane: startup_draft_bottom_pane(
+                AppEventSender::new(app_event_tx),
+                tui.frame_requester(),
+                tui.enhanced_keys_supported(),
+            ),
+            events: tui.event_stream(),
+            app_event_rx,
+            initial_screen,
+            session_action,
+            pending_paste_newline: None,
+        }
+    }
+
+    /// Keep a provisional composer responsive when the caller has one to display.
+    pub(crate) async fn run_with_optional_draft<F, T, E>(
+        draft: Option<&mut Self>,
+        tui: &mut Tui,
+        future: F,
+    ) -> Result<T, E>
+    where
+        F: Future<Output = Result<T, E>>,
+        E: From<io::Error>,
+    {
+        match draft {
+            Some(draft) => draft.run_until(tui, future).await?,
+            None => future.await,
+        }
+    }
+
     /// Refresh the session header and safe editor shortcuts without enabling modal editing.
     pub(crate) fn apply_config(&mut self, config: &Config) {
         let local_settings = crate::local_settings::LocalSettings::from(config);
@@ -264,6 +289,10 @@ impl StartupDraftPump {
 
     /// Preserve the editable draft, its cursor, and any pending large-paste placeholders.
     pub(crate) fn into_draft(mut self) -> ComposerDraftSnapshot {
+        self.take_draft()
+    }
+
+    pub(crate) fn take_draft(&mut self) -> ComposerDraftSnapshot {
         self.bottom_pane.flush_composer_paste_burst();
         self.bottom_pane.composer_draft_snapshot()
     }
@@ -346,16 +375,22 @@ impl StartupDraftPump {
                         self.pending_paste_newline = Some((Instant::now(), "\n".to_string()));
                     }
                 }
-                handle_startup_draft_key(&mut self.bottom_pane, key).inspect_err(|error| {
-                    if StartupCancelled::matches(error)
-                        && let Err(clear_error) = tui.terminal.clear()
-                    {
-                        tracing::warn!(
-                            error = %clear_error,
-                            "failed to clear the cancelled startup composer"
-                        );
+                match handle_startup_draft_key(&mut self.bottom_pane, key) {
+                    Err(error) if StartupCancelled::matches(&error) => {
+                        // In-app setup owns a live creation request. Keep pumping input
+                        // instead of abandoning it or blocking on cancellation cleanup.
+                        if self.session_action != StartupDraftSessionAction::NewFromCommandCenter {
+                            if let Err(clear_error) = tui.terminal.clear() {
+                                tracing::warn!(
+                                    error = %clear_error,
+                                    "failed to clear the cancelled startup composer"
+                                );
+                            }
+                            return Err(error);
+                        }
                     }
-                })?;
+                    result => result?,
+                }
             }
             TuiEvent::Paste(text) => {
                 if self.initial_screen == StartupDraftInitialScreen::Composer {
@@ -477,7 +512,7 @@ fn startup_draft_renderable<'a>(
     let mut renderable = FlexRenderable::new();
     renderable.push(/*flex*/ 1, RenderableItem::Borrowed(header));
     let loading_message = match session_action {
-        StartupDraftSessionAction::New => None,
+        StartupDraftSessionAction::New | StartupDraftSessionAction::NewFromCommandCenter => None,
         StartupDraftSessionAction::Resume => Some("  Resuming session…"),
         StartupDraftSessionAction::Fork => Some("  Forking session…"),
     };
