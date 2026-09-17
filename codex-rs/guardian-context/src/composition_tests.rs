@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::models::ImageDetail;
+use codex_protocol::models::ImageReference;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -56,12 +58,21 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
 }
 
 #[test]
-fn long_text_delivery_is_lossless_bounded_and_fully_budgeted() {
+fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
     let text = "é🙂\"\n".repeat(/*n*/ 20_000);
+    let file_image = ImageReference::File {
+        file_id: "file_123".to_owned(),
+    };
     let context = ComposedContext {
         sections: vec![SectionOutput {
             id: "planned_action",
-            delivery: text_content(vec![text.clone()]),
+            delivery: SectionDelivery::UserContent(vec![
+                Budgeted::required(ContentItem::InputText { text: text.clone() }),
+                Budgeted::required(ContentItem::InputImage {
+                    image: file_image.clone(),
+                    detail: Some(ImageDetail::High),
+                }),
+            ]),
         }],
         truncations: Vec::new(),
     };
@@ -70,7 +81,15 @@ fn long_text_delivery_is_lossless_bounded_and_fully_budgeted() {
     let ResponseItem::Message { content, .. } = &messages[0] else {
         panic!("user message")
     };
-    let parts = content
+    let (image, text_content) = content.split_last().expect("message content");
+    assert_eq!(
+        image,
+        &ContentItem::InputImage {
+            image: file_image.clone(),
+            detail: Some(ImageDetail::High),
+        }
+    );
+    let parts = text_content
         .iter()
         .map(|item| match item {
             ContentItem::InputText { text } => text.as_str(),
@@ -84,14 +103,16 @@ fn long_text_delivery_is_lossless_bounded_and_fully_budgeted() {
             .all(|part| part.len() <= TruncationPolicy::Tokens(9_000).byte_budget())
     );
     assert!(estimated >= crate::estimate_input_tokens(&messages[0]));
-    assert_eq!(
-        context.into_user_inputs().unwrap(),
-        parts
-            .into_iter()
-            .map(|part| UserInput::Text {
-                text: part.to_owned(),
-                text_elements: Vec::new(),
-            })
-            .collect::<Vec<_>>()
-    );
+    let mut expected_inputs = parts
+        .into_iter()
+        .map(|part| UserInput::Text {
+            text: part.to_owned(),
+            text_elements: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    expected_inputs.push(UserInput::Image {
+        image: file_image,
+        detail: Some(ImageDetail::High),
+    });
+    assert_eq!(context.into_user_inputs().unwrap(), expected_inputs);
 }

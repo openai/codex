@@ -25,6 +25,15 @@ fn image() -> ContentItem {
     }
 }
 
+fn file_image() -> ContentItem {
+    ContentItem::InputImage {
+        image: ImageReference::File {
+            file_id: "file_123".to_string(),
+        },
+        detail: Some(codex_protocol::models::ImageDetail::Original),
+    }
+}
+
 fn text(value: &str) -> ContentItem {
     ContentItem::InputText {
         text: value.to_string(),
@@ -45,21 +54,23 @@ fn trim(items: Vec<ResponseItem>, max_tokens: usize) -> Vec<ResponseItem> {
 #[test]
 fn image_only_boundary_is_atomic_and_does_not_backfill_older_messages() {
     let newest = message(vec![text("new")]);
-    let items = vec![
-        message(vec![text("old")]),
-        message(vec![image()]),
-        newest.clone(),
-    ];
-    let image_tokens = images::content_item_token_count(&image());
-    for (max_tokens, expected) in [
-        (
-            image_tokens + 1,
-            vec![message(vec![image()]), newest.clone()],
-        ),
-        (image_tokens, vec![newest.clone()]),
-        (1, vec![newest]),
-    ] {
-        assert_eq!(trim(items.clone(), max_tokens), expected);
+    for image in [image(), file_image()] {
+        let items = vec![
+            message(vec![text("old")]),
+            message(vec![image.clone()]),
+            newest.clone(),
+        ];
+        let image_tokens = images::content_item_token_count(&image);
+        for (max_tokens, expected) in [
+            (
+                image_tokens + 1,
+                vec![message(vec![image.clone()]), newest.clone()],
+            ),
+            (image_tokens, vec![newest.clone()]),
+            (1, vec![newest.clone()]),
+        ] {
+            assert_eq!(trim(items.clone(), max_tokens), expected);
+        }
     }
 }
 

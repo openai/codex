@@ -508,20 +508,26 @@ async fn run_review_on_session(
                 .any(|(_, cost)| cost.image_count > 0)
             {
                 let reviewer_history = review_session.session.clone_history().await;
-                let reviewer_image_urls = reviewer_history
-                    .raw_items()
-                    .flat_map(|item| match item {
-                        ResponseItem::Message { content, .. } => content.as_slice(),
-                        _ => &[],
-                    })
-                    .filter_map(|item| match item {
-                        ContentItem::InputImage {
-                            image: ImageReference::Inline { image_url },
-                            ..
-                        } => Some(image_url.as_str()),
-                        _ => None,
-                    })
-                    .collect::<HashSet<_>>();
+                let mut reviewer_image_urls = HashSet::new();
+                let mut reviewer_file_ids = HashSet::new();
+                for item in reviewer_history.raw_items() {
+                    let ResponseItem::Message { content, .. } = item else {
+                        continue;
+                    };
+                    for item in content {
+                        let ContentItem::InputImage { image, .. } = item else {
+                            continue;
+                        };
+                        match image {
+                            ImageReference::Inline { image_url } => {
+                                reviewer_image_urls.insert(image_url.as_str());
+                            }
+                            ImageReference::File { file_id } => {
+                                reviewer_file_ids.insert(file_id.as_str());
+                            }
+                        }
+                    }
+                }
                 let context_window = model_info.resolved_context_window().map(|supported| {
                     params
                         .spawn_config
@@ -542,7 +548,7 @@ async fn run_review_on_session(
                     } else {
                         ImagePreparationMode::DetailBased
                     };
-                    prompt_items.context.retain_images(|image_url, detail| {
+                    prompt_items.context.retain_images(|image, detail| {
                         *detail = match normalize_output_image_detail(&model_info, *detail) {
                             _ if mode == ImagePreparationMode::UnifiedBudget => {
                                 Some(ImageDetail::Original)
@@ -550,15 +556,23 @@ async fn run_review_on_session(
                             Some(ImageDetail::Low) => Some(ImageDetail::High),
                             detail => detail,
                         };
-                        let prepared_image_url = match resize_image(image_url, detail, mode) {
-                            Ok(Some(prepared)) => Cow::Owned(prepared.into_data_url()),
-                            Ok(None) => Cow::Borrowed(image_url),
-                            Err(error) => {
-                                warn!(%error, "failed to prepare guardian review image");
-                                return false;
+                        match image {
+                            ImageReference::Inline { image_url } => {
+                                let prepared_image_url = match resize_image(image_url, detail, mode)
+                                {
+                                    Ok(Some(prepared)) => Cow::Owned(prepared.into_data_url()),
+                                    Ok(None) => Cow::Borrowed(image_url),
+                                    Err(error) => {
+                                        warn!(%error, "failed to prepare guardian review image");
+                                        return false;
+                                    }
+                                };
+                                !reviewer_image_urls.contains(prepared_image_url.as_str())
                             }
-                        };
-                        !reviewer_image_urls.contains(prepared_image_url.as_ref())
+                            ImageReference::File { file_id } => {
+                                !reviewer_file_ids.contains(file_id.as_str())
+                            }
+                        }
                     });
                     let prompt: ResponseItem =
                         ResponseInputItem::from(prompt_items.context.clone().into_user_inputs()?)

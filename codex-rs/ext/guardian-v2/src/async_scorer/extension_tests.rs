@@ -1677,6 +1677,8 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
 
     let user_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGPgEpEDAABoAD1UCKP3AAAAAElFTkSuQmCC";
     let tool_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGOQE+ECAACQAD304kFaAAAAAElFTkSuQmCC";
+    let user_file_id = "file_user";
+    let tool_file_id = "file_tool";
     let history = vec![
         ResponseItem::Message {
             id: None,
@@ -1688,6 +1690,12 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
                 ContentItem::InputImage {
                     image: ImageReference::Inline {
                         image_url: user_image.to_owned(),
+                    },
+                    detail: Some(ImageDetail::High),
+                },
+                ContentItem::InputImage {
+                    image: ImageReference::File {
+                        file_id: user_file_id.to_owned(),
                     },
                     detail: Some(ImageDetail::High),
                 },
@@ -1719,6 +1727,12 @@ async fn contributor_includes_transcript_images_by_default() -> Result<()> {
                     },
                     detail: Some(ImageDetail::High),
                 },
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::File {
+                        file_id: tool_file_id.to_owned(),
+                    },
+                    detail: Some(ImageDetail::High),
+                },
             ]),
             internal_chat_message_metadata_passthrough: None,
         },
@@ -1740,7 +1754,7 @@ enabled = true
         .expect("Luna user content should be an array");
 
     assert_eq!(
-        content[content.len() - 2..],
+        content[content.len() - 4..],
         [
             json!({
                 "type": "input_image",
@@ -1748,7 +1762,15 @@ enabled = true
             }),
             json!({
                 "type": "input_image",
+                "file_id": user_file_id,
+            }),
+            json!({
+                "type": "input_image",
                 "image_url": tool_image,
+            }),
+            json!({
+                "type": "input_image",
+                "file_id": tool_file_id,
             }),
         ]
     );

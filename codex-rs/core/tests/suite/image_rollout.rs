@@ -57,8 +57,8 @@ use std::time::Duration;
 const UPLOADED_FILE_ID: &str = "file_uploaded_image";
 
 #[derive(Default)]
-struct RecordingFileAttachmentStore {
-    uploads: Mutex<Vec<UploadRequest>>,
+pub(super) struct RecordingFileAttachmentStore {
+    pub(super) uploads: Mutex<Vec<UploadRequest>>,
 }
 
 impl AttachmentStore for RecordingFileAttachmentStore {

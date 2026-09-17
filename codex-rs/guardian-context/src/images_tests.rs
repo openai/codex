@@ -1,6 +1,11 @@
 use super::MAX_TRANSCRIPT_IMAGE_BYTES;
 use super::TranscriptImageInput;
 use super::TranscriptImages;
+use crate::CollectedContext;
+use crate::ContextPresentation;
+use crate::ContextSection;
+use crate::RenderedTranscript;
+use crate::composition::user_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -99,12 +104,18 @@ fn image_selection_preserves_source_policy_order_and_both_limits() {
     );
 }
 
-/// File-backed images stay out of Guardian without consuming its inline-image capacity.
+/// File-backed history images share count and reference-byte limits with inline images.
 #[test]
-fn file_images_are_omitted_without_displacing_inline_images() {
+fn file_images_are_selected_from_history_sources() {
     let file_image = ContentItem::InputImage {
         image: ImageReference::File {
             file_id: "file_123".to_string(),
+        },
+        detail: Some(ImageDetail::High),
+    };
+    let tool_file_image = ContentItem::InputImage {
+        image: ImageReference::File {
+            file_id: "file_tool".to_string(),
         },
         detail: Some(ImageDetail::High),
     };
@@ -112,7 +123,7 @@ fn file_images_are_omitted_without_displacing_inline_images() {
         ResponseItem::Message {
             id: None,
             role: "user".into(),
-            content: vec![image("first"), file_image.clone(), image("second")],
+            content: vec![image("first"), file_image.clone()],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
         },
@@ -138,16 +149,7 @@ fn file_images_are_omitted_without_displacing_inline_images() {
             internal_chat_message_metadata_passthrough: None,
         },
     ];
-    let repl = [
-        file_image,
-        image("fourth"),
-        ContentItem::InputImage {
-            image: ImageReference::File {
-                file_id: "file_repl".to_string(),
-            },
-            detail: Some(ImageDetail::High),
-        },
-    ];
+    let repl = [image("fourth")];
 
     assert_eq!(
         TranscriptImages::collect(
@@ -159,8 +161,94 @@ fn file_images_are_omitted_without_displacing_inline_images() {
             }
         ),
         TranscriptImages {
-            images: ["first", "second", "third", "fourth"].map(image).to_vec(),
-            omitted_bytes: 0,
+            images: vec![file_image, tool_file_image, image("third"), image("fourth")],
+            omitted_bytes: "first".len(),
+        }
+    );
+
+    // Count-only eviction must remain observable even when no inline bytes were omitted.
+    let file_images =
+        ["file_1", "file_2", "file_3", "file_4", "file_5"].map(|file_id| ContentItem::InputImage {
+            image: ImageReference::File {
+                file_id: file_id.to_owned(),
+            },
+            detail: Some(ImageDetail::High),
+        });
+    let history = [ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: file_images.to_vec(),
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+    let selected = TranscriptImages::collect(
+        &history,
+        TranscriptImageInput {
+            enabled: true,
+            include_tool_outputs: true,
+            node_repl_images: &[],
+        },
+    );
+    assert_eq!(
+        selected,
+        TranscriptImages {
+            images: file_images[1..].to_vec(),
+            omitted_bytes: "file_1".len(),
+        }
+    );
+    let context = CollectedContext {
+        sections: vec![ContextSection::TranscriptImages(selected)],
+    }
+    .compose(
+        ContextPresentation::Async,
+        RenderedTranscript {
+            items: Vec::new(),
+            omission_note: None,
+            truncations: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        context
+            .truncations
+            .iter()
+            .map(|observation| (
+                observation.component,
+                observation.original_bytes,
+                observation.retained_bytes,
+            ))
+            .collect::<Vec<_>>(),
+        vec![("transcript_image", "file_1".len(), 0)]
+    );
+
+    // Newer evidence evicts the full-budget ID; the oversized ID must not displace it.
+    let content = [
+        ImageReference::File {
+            file_id: "x".repeat(MAX_TRANSCRIPT_IMAGE_BYTES),
+        },
+        ImageReference::Inline {
+            image_url: "recent".into(),
+        },
+        ImageReference::File {
+            file_id: "y".repeat(MAX_TRANSCRIPT_IMAGE_BYTES + 1),
+        },
+    ]
+    .map(|image| ContentItem::InputImage {
+        image,
+        detail: Some(ImageDetail::High),
+    });
+    assert_eq!(
+        TranscriptImages::collect(
+            &[user_message(content.to_vec())],
+            TranscriptImageInput {
+                enabled: true,
+                include_tool_outputs: true,
+                node_repl_images: &[],
+            },
+        ),
+        TranscriptImages {
+            images: vec![image("recent")],
+            omitted_bytes: 2 * MAX_TRANSCRIPT_IMAGE_BYTES + 1,
         }
     );
 }

@@ -2577,8 +2577,39 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
     assert!(estimated > text_only_estimated);
 }
 
+/// File images use the fixed estimate for normal detail and the maximum patch count for original.
 #[test]
-fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
+fn file_images_use_detail_appropriate_estimates() {
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: "file_high".to_string(),
+                },
+                detail: Some(ImageDetail::High),
+            },
+            ContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: "file_original".to_string(),
+                },
+                detail: Some(ImageDetail::Original),
+            },
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = RESIZED_IMAGE_BYTES_ESTIMATE
+        .saturating_add(approx_bytes_for_tokens(/*tokens*/ 10_000) as i64);
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
+fn function_call_output_estimates_inline_and_file_images() {
     let payload = "B".repeat(50_000);
     let image_url = format!("data:image/png;base64,{payload}");
     let item = ResponseItem::FunctionCallOutput {
@@ -2594,14 +2625,22 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
                 image: ImageReference::Inline { image_url },
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: "file_original".to_string(),
+                },
+                detail: Some(ImageDetail::Original),
+            },
         ]),
         internal_chat_message_metadata_passthrough: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
     let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected =
-        "call-abc".len() as i64 + "Screenshot captured".len() as i64 + RESIZED_IMAGE_BYTES_ESTIMATE;
+    let expected = "call-abc".len() as i64
+        + "Screenshot captured".len() as i64
+        + RESIZED_IMAGE_BYTES_ESTIMATE
+        + approx_bytes_for_tokens(/*tokens*/ 10_000) as i64;
 
     assert_eq!(estimated, expected);
     assert!(estimated < raw_len);

@@ -1,5 +1,6 @@
 //! Bounded image selection shared by Guardian consumers.
 //! Keeps source order and evicts oldest images using the existing count/byte caps.
+//! Byte caps cover inline URLs and file ID strings, not referenced file contents.
 //! Consumers still choose source visibility and model-specific image detail.
 
 use crate::ContextSection;
@@ -29,6 +30,7 @@ pub struct TranscriptImageInput<'a> {
 #[derive(Clone, Default, PartialEq)]
 pub struct TranscriptImages {
     pub images: Vec<ContentItem>,
+    /// Omitted inline payload or file ID bytes, not the size of referenced files.
     pub omitted_bytes: usize,
 }
 
@@ -56,37 +58,37 @@ impl TranscriptImages {
         }
 
         let mut images = VecDeque::new();
-        let mut image_bytes = 0usize;
+        let mut image_reference_bytes = 0usize;
         let mut omitted_bytes = 0usize;
-        let mut include_image = |image_url: &str, detail: Option<ImageDetail>| {
-            if image_url.len() > MAX_TRANSCRIPT_IMAGE_BYTES {
-                omitted_bytes = omitted_bytes.saturating_add(image_url.len());
+        let mut include_image = |image: &ImageReference, detail: Option<ImageDetail>| {
+            let reference_bytes = match image {
+                ImageReference::Inline { image_url } => image_url.len(),
+                ImageReference::File { file_id } => file_id.len(),
+            };
+            if reference_bytes > MAX_TRANSCRIPT_IMAGE_BYTES {
+                omitted_bytes = omitted_bytes.saturating_add(reference_bytes);
                 return;
             }
             while images.len() >= MAX_TRANSCRIPT_IMAGES
-                || image_bytes + image_url.len() > MAX_TRANSCRIPT_IMAGE_BYTES
+                || image_reference_bytes + reference_bytes > MAX_TRANSCRIPT_IMAGE_BYTES
             {
-                let Some(ContentItem::InputImage {
-                    image: ImageReference::Inline { image_url },
-                    ..
-                }) = images.pop_front()
-                else {
+                let Some(ContentItem::InputImage { image, .. }) = images.pop_front() else {
                     break;
                 };
-                image_bytes -= image_url.len();
-                omitted_bytes = omitted_bytes.saturating_add(image_url.len());
+                let evicted_bytes = match image {
+                    ImageReference::Inline { image_url } => image_url.len(),
+                    ImageReference::File { file_id } => file_id.len(),
+                };
+                image_reference_bytes = image_reference_bytes.saturating_sub(evicted_bytes);
+                omitted_bytes = omitted_bytes.saturating_add(evicted_bytes);
             }
-            image_bytes += image_url.len();
+            image_reference_bytes = image_reference_bytes.saturating_add(reference_bytes);
             images.push_back(ContentItem::InputImage {
-                image: ImageReference::Inline {
-                    image_url: image_url.to_owned(),
-                },
+                image: image.clone(),
                 detail,
             });
         };
 
-        // TODO(kc) Include file-backed images once Guardian can admit them without resolving or
-        // applying byte-based checks in Core.
         for item in items {
             match item {
                 ResponseItem::Message { role, content, .. }
@@ -94,15 +96,10 @@ impl TranscriptImages {
                 {
                     for item in content {
                         match item {
-                            ContentItem::InputImage {
-                                image: ImageReference::Inline { image_url },
-                                detail,
-                            } => include_image(image_url, *detail),
-                            ContentItem::InputImage {
-                                image: ImageReference::File { .. },
-                                ..
+                            ContentItem::InputImage { image, detail } => {
+                                include_image(image, *detail)
                             }
-                            | ContentItem::InputText { .. }
+                            ContentItem::InputText { .. }
                             | ContentItem::InputAudio { .. }
                             | ContentItem::OutputText { .. } => {}
                         }
@@ -115,15 +112,10 @@ impl TranscriptImages {
                     if let Some(content) = output.content_items() {
                         for item in content {
                             match item {
-                                FunctionCallOutputContentItem::InputImage {
-                                    image: ImageReference::Inline { image_url },
-                                    detail,
-                                } => include_image(image_url, *detail),
-                                FunctionCallOutputContentItem::InputImage {
-                                    image: ImageReference::File { .. },
-                                    ..
+                                FunctionCallOutputContentItem::InputImage { image, detail } => {
+                                    include_image(image, *detail)
                                 }
-                                | FunctionCallOutputContentItem::InputText { .. }
+                                FunctionCallOutputContentItem::InputText { .. }
                                 | FunctionCallOutputContentItem::InputAudio { .. }
                                 | FunctionCallOutputContentItem::EncryptedContent { .. } => {}
                             }
@@ -137,9 +129,9 @@ impl TranscriptImages {
             for image in input.node_repl_images {
                 match image {
                     ContentItem::InputImage {
-                        image: ImageReference::Inline { image_url },
+                        image: image @ ImageReference::Inline { .. },
                         detail,
-                    } => include_image(image_url, *detail),
+                    } => include_image(image, *detail),
                     ContentItem::InputImage {
                         image: ImageReference::File { .. },
                         ..

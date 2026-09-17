@@ -292,17 +292,7 @@ impl ComposedContext {
                         }));
                         continue;
                     }
-                    ContentItem::InputImage {
-                        image: ImageReference::Inline { image_url },
-                        detail,
-                    } => UserInput::Image {
-                        image: ImageReference::Inline { image_url },
-                        detail,
-                    },
-                    ContentItem::InputImage {
-                        image: ImageReference::File { .. },
-                        ..
-                    } => continue,
+                    ContentItem::InputImage { image, detail } => UserInput::Image { image, detail },
                     ContentItem::InputAudio { .. } | ContentItem::OutputText { .. } => {
                         return Err(SectionError::UnsupportedDelivery {
                             section: section.id,
@@ -330,10 +320,6 @@ impl ComposedContext {
                                     }
                                 }));
                             }
-                            ContentItem::InputImage {
-                                image: ImageReference::File { .. },
-                                ..
-                            } => {}
                             content => user_content.push(content),
                         }
                     }

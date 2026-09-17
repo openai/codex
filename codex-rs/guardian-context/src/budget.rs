@@ -108,7 +108,9 @@ impl SectionCost {
             ContentItem::InputImage {
                 image: ImageReference::File { .. },
                 ..
-            } => {}
+            } => {
+                self.image_count = self.image_count.saturating_add(1);
+            }
             ContentItem::InputAudio { audio_url } => {
                 // Guardian currently has no audio contributor. Count a future opaque
                 // payload conservatively until its consumer supplies modality costs.
@@ -214,17 +216,16 @@ pub(super) fn content_framing_tokens(item_count: usize) -> usize {
 
 fn adjusted_tokens(mut bytes: usize, content: &[ContentItem]) -> usize {
     for item in content {
-        if let ContentItem::InputImage {
-            image: ImageReference::Inline { image_url },
-            ..
-        } = item
-        {
-            let payload = ByteCount::measure(|counter| serde_json::to_writer(counter, image_url));
-            if payload == usize::MAX {
-                return usize::MAX;
+        if let ContentItem::InputImage { image, .. } = item {
+            if let ImageReference::Inline { image_url } = image {
+                let payload =
+                    ByteCount::measure(|counter| serde_json::to_writer(counter, image_url));
+                if payload == usize::MAX {
+                    return usize::MAX;
+                }
+                bytes = bytes.saturating_sub(payload.saturating_sub(2));
             }
             bytes = bytes
-                .saturating_sub(payload.saturating_sub(2))
                 .saturating_add(TruncationPolicy::Tokens(IMAGE_TOKEN_RESERVATION).byte_budget());
         }
     }
