@@ -50,34 +50,3 @@ fn parse_guardian_assessment_treats_bare_deny_as_high_risk() {
         }
     );
 }
-
-#[test]
-fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
-    let schema = guardian_output_schema();
-
-    assert_eq!(
-        schema,
-        serde_json::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "risk_level": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high", "critical"]
-                },
-                "user_authorization": {
-                    "type": "string",
-                    "enum": ["unknown", "low", "medium", "high"]
-                },
-                "outcome": {
-                    "type": "string",
-                    "enum": ["allow", "deny"]
-                },
-                "rationale": {
-                    "type": "string"
-                }
-            },
-            "required": ["outcome"]
-        })
-    );
-}

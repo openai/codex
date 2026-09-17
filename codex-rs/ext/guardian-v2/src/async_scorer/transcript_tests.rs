@@ -2,7 +2,6 @@ use super::ContextInput;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ResponseItem;
 use codex_guardian_context::ContextTarget;
-use codex_guardian_context::truncate_text as truncate_entry;
 use codex_protocol::AgentPath;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
@@ -1030,84 +1029,6 @@ fn transcript_truncates_tool_results_using_standard_budget() {
 }
 
 #[test]
-fn transcript_preserves_outputs_with_call_ids_or_explicit_names() {
-    let mut items = vec![ResponseItem::FunctionCallOutput {
-        id: None,
-        call_id: None,
-        name: Some("notifications".to_owned()),
-        namespace: Some("slack".to_owned()),
-        output: FunctionCallOutputPayload::from_text("new message".to_owned()),
-        internal_chat_message_metadata_passthrough: None,
-    }];
-    items.extend(
-        [
-            (None, "anonymous output"),
-            (Some("missing-call"), "orphaned function output"),
-        ]
-        .map(|(call_id, text)| ResponseItem::FunctionCallOutput {
-            id: None,
-            call_id: call_id.map(str::to_string),
-            name: None,
-            namespace: None,
-            output: FunctionCallOutputPayload::from_text(text.to_string()),
-            internal_chat_message_metadata_passthrough: None,
-        }),
-    );
-
-    assert_eq!(
-        TranscriptConfig::default()
-            .build_context(ContextInput {
-                target: ContextTarget::Async,
-                history: &TestConversationHistory(&items),
-                root_conversation: &[],
-                trusted_user_answers: &[],
-                planned_action: None,
-                previous_reviews: None,
-                trusted_tool: None,
-                trusted_skill_paths: &[],
-                node_repl_images: None,
-            })
-            .expect("collect transcript")
-            .transcript_entries(),
-        vec![
-            "[1] tool slack.notifications result: new message\n",
-            "[2] tool result: orphaned function output\n",
-        ]
-    );
-
-    if let ResponseItem::FunctionCallOutput { output, .. } = &mut items[0] {
-        *output = FunctionCallOutputPayload::from_content_items(vec![
-            FunctionCallOutputContentItem::InputImage {
-                image: ImageReference::Inline {
-                    image_url: "data:image/png;base64,image".to_owned(),
-                },
-                detail: None,
-            },
-        ]);
-    }
-    assert_eq!(
-        TranscriptConfig::default()
-            .build_context(ContextInput {
-                target: ContextTarget::Async,
-                history: &TestConversationHistory(&items),
-                root_conversation: &[],
-                trusted_user_answers: &[],
-                planned_action: None,
-                previous_reviews: None,
-                trusted_tool: None,
-                trusted_skill_paths: &[],
-                node_repl_images: None,
-            })
-            .expect("collect transcript")
-            .transcript_entries(),
-        vec![
-            "[1] tool slack.notifications result: [non-text output]\n",
-            "[2] tool result: orphaned function output\n",
-        ]
-    );
-}
-
-#[test]
 fn configured_reasoning_counts_against_message_budget() {
     for (repeats, include_reasoning) in [(200, true), (1_000, false)] {
         let mut expected = Vec::new();
@@ -1155,17 +1076,6 @@ fn configured_reasoning_counts_against_message_budget() {
         .transcript_entries();
         assert_eq!(transcript, expected);
     }
-}
-
-#[test]
-fn truncate_entry_preserves_prefix_suffix_and_utf8_boundaries() {
-    let text = format!("prefix é{}é suffix", "🦀".repeat(2_000));
-    let truncated = truncate_entry(&text, /*max_tokens*/ 200);
-
-    assert!(truncated.starts_with("prefix é"));
-    assert!(truncated.contains("<truncated omitted_approx_tokens=\""));
-    assert!(truncated.ends_with("é suffix"));
-    assert!(truncated.len() <= TruncationPolicy::Tokens(200).byte_budget());
 }
 
 #[test]

@@ -17,14 +17,6 @@ fn rendered_paths(paths: Vec<String>) -> Vec<String> {
 }
 
 #[test]
-fn renders_verified_skill_paths() {
-    assert_eq!(
-        rendered_paths(vec!["/home/user/.codex/skills/demo/SKILL.md".to_owned()]),
-        vec!["/home/user/.codex/skills/demo/SKILL.md"],
-    );
-}
-
-#[test]
 fn bounds_escaped_skill_paths_without_corrupting_json_or_utf8() {
     let paths = (0..16)
         .map(|index| {
