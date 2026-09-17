@@ -769,6 +769,7 @@ impl Session {
         &self,
         session_configuration: &SessionConfiguration,
         cwd: AbsolutePathBuf,
+        workspace_roots: Vec<AbsolutePathBuf>,
     ) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
         let config = session_configuration.original_config_do_not_use.clone();
@@ -776,7 +777,6 @@ impl Session {
         per_turn_config.cwd = cwd;
         per_turn_config.permissions.approval_policy =
             session_configuration.step_settings.approval_policy.clone();
-        let workspace_roots = self.services.turn_environments.primary_workspace_roots();
         per_turn_config.workspace_roots = workspace_roots.clone();
         per_turn_config
             .permissions
@@ -818,8 +818,15 @@ impl Session {
         &self,
         session_configuration: &SessionConfiguration,
     ) -> Config {
-        let mut config =
-            self.build_per_turn_config(session_configuration, session_configuration.cwd().clone());
+        let workspace_roots =
+            crate::environment_selection::ThreadEnvironments::primary_workspace_roots_for(
+                &session_configuration.environments,
+            );
+        let mut config = self.build_per_turn_config(
+            session_configuration,
+            session_configuration.cwd().clone(),
+            workspace_roots,
+        );
         config.model = Some(
             session_configuration
                 .step_settings
@@ -1008,22 +1015,25 @@ impl Session {
         if let Some(service_tier) = service_tier_for_turn {
             Arc::make_mut(&mut configuration.step_settings).service_tier = Some(service_tier);
         }
+        let turn_environments = self.activate_turn_environments(&configuration).await;
         let turn_context = self
-            .new_turn_from_configuration(sub_id, configuration, options)
+            .new_turn_from_configuration(sub_id, configuration, turn_environments, options)
             .await;
         Ok(Some((turn_context, commit.snapshot)))
     }
 
-    /// Constructs a turn from the exact committed settings without starting a task.
+    /// Builds a context from the caller's chosen settings and environments without starting work.
     async fn new_turn_from_configuration(
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
+        turn_environments: TurnEnvironmentSnapshot,
         options: NewTurnContextOptions,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
+            turn_environments,
             options,
             TurnMultiAgentRuntime::ResolveAndStore,
             self.git_enrichment_policy,
@@ -1036,9 +1046,11 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
     ) -> Arc<TurnContext> {
+        let turn_environments = self.services.turn_environments.snapshot().await;
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
+            turn_environments,
             NewTurnContextOptions::default(),
             TurnMultiAgentRuntime::Preview,
             GitEnrichmentPolicy::Skip,
@@ -1051,11 +1063,11 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
+        turn_environments: TurnEnvironmentSnapshot,
         options: NewTurnContextOptions,
         multi_agent_runtime: TurnMultiAgentRuntime,
         git_enrichment_policy: GitEnrichmentPolicy,
     ) -> Arc<TurnContext> {
-        let turn_environments = self.services.turn_environments.snapshot().await;
         let primary_turn_environment = turn_environments.primary();
         // TODO(anp): Migrate per-turn config and legacy TurnContext cwd consumers to PathUri so
         // a foreign primary environment does not fall back to the session's host cwd.
@@ -1063,7 +1075,11 @@ impl Session {
             .as_ref()
             .and_then(|turn_environment| turn_environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let per_turn_config = self.build_per_turn_config(&session_configuration, cwd.clone());
+        let per_turn_config = self.build_per_turn_config(
+            &session_configuration,
+            cwd.clone(),
+            turn_environments.primary_workspace_roots(),
+        );
         let network_permission_profile = primary_turn_environment
             .map(TurnEnvironment::permission_profile)
             .cloned()
@@ -1215,21 +1231,30 @@ impl Session {
         }
     }
 
+    /// Builds a context without starting work or changing the current environments.
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
-        self.new_turn_with_default_settings(
+        let session_configuration = self.default_turn_configuration().await;
+        let turn_environments = self.services.turn_environments.snapshot().await;
+        self.new_turn_from_configuration(
             self.next_internal_sub_id(),
+            session_configuration,
+            turn_environments,
             NewTurnContextOptions::default(),
         )
         .await
     }
 
+    /// Prepares new work on the saved environments; context-only callers keep the current ones.
     pub(crate) async fn new_turn_with_default_settings(
         &self,
         sub_id: String,
         options: NewTurnContextOptions,
     ) -> Arc<TurnContext> {
         let session_configuration = self.default_turn_configuration().await;
-        self.new_turn_from_configuration(sub_id, session_configuration, options)
+        let turn_environments = self
+            .activate_turn_environments(&session_configuration)
+            .await;
+        self.new_turn_from_configuration(sub_id, session_configuration, turn_environments, options)
             .await
     }
 

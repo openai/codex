@@ -645,7 +645,7 @@ async fn automatic_admission_rechecks_plan_mode_without_committing_sparse_settin
         .await
         .expect("explicit settings update accepts the same patch");
     assert_eq!(
-        session.services.turn_environments.selections(),
+        session.configured_environment_selections().await,
         proposed_environments.environments
     );
     assert!(session.mcp_refresh.is_pending());

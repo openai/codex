@@ -704,7 +704,7 @@ async fn environment_mcp_policy_filters_runtime_config_and_model_tools(
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let response = mount_sse_once(
+    mount_sse_once(
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-1"),
@@ -786,6 +786,9 @@ async fn environment_mcp_policy_filters_runtime_config_and_model_tools(
         },
     )
     .await?;
+    fixture
+        .submit_text_turn("start with pending environment configuration")
+        .await?;
     let (pending_config, _) = fixture.codex.current_mcp_config_and_runtime_context().await;
     let pending_servers = pending_config.mcp_server_catalog.configured_servers();
     assert!(!pending_servers["allowed"].enabled);
@@ -856,6 +859,15 @@ async fn environment_mcp_policy_filters_runtime_config_and_model_tools(
         )
         .await?;
 
+    let response = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-2"),
+            responses::ev_assistant_message("msg-2", "done"),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
     fixture
         .submit_text_turn("show the available MCP tools")
         .await?;

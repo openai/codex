@@ -908,8 +908,9 @@ impl CodexThread {
         self.session.refresh_codex_apps_tools().await
     }
 
+    /// Returns the environments configured for future turns.
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
-        self.session.services.turn_environments.selections()
+        self.session.configured_environment_selections().await
     }
 
     /// Installs resolved environment configuration and capability roots on this thread.

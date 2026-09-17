@@ -14,6 +14,7 @@ use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
+use crate::session::SessionSettingsUpdate;
 use crate::thread_manager::StartThreadOptions;
 use crate::tools::handlers::multi_agents_common::thread_spawn_source;
 use assert_matches::assert_matches;
@@ -66,6 +67,7 @@ use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::InMemoryThreadStore;
@@ -897,17 +899,21 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
                 .environments
                 .primary()
                 .expect("parent environment");
-            let thread_config = environment.config().clone();
-            let mut owner_config = thread_config.clone();
+            let mut owner_config = environment.config().clone();
             owner_config.allow_login_shell = false;
             let mut selection = environment.selection();
             selection.config = EnvironmentConfigState::Ready(owner_config);
             parent_thread
                 .session
-                .services
-                .turn_environments
-                .update_selections(std::slice::from_ref(&selection), &thread_config);
-            parent_turn = parent_thread.session.new_default_turn().await;
+                .update_settings(SessionSettingsUpdate {
+                    environments: Some(TurnEnvironmentSelections::new(
+                        parent_turn.config.cwd.clone(),
+                        vec![selection],
+                    )),
+                    ..Default::default()
+                })
+                .await
+                .expect("save parent environments");
             parent_thread.session.mark_interrupted();
             // The fixture has no task runner to finish the turn or consume child results.
             *parent_thread.session.active_turn.lock().await = None;
@@ -921,6 +927,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
                 .ensure_multi_agent_v2_child_loaded(spawned_agent.thread_id)
                 .await
                 .expect("known child should reload through its parent");
+            parent_turn = parent_thread.session.new_default_turn().await;
             assert!(harness.manager.get_thread(parent_thread_id).await.is_err());
         }
     }

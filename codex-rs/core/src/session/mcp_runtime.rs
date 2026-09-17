@@ -36,7 +36,6 @@ impl Session {
         &self,
         current: &SessionConfiguration,
         next: &SessionConfiguration,
-        updates: &SessionSettingsUpdate,
     ) -> bool {
         current.cwd() != next.cwd()
             || current.step_settings.approval_policy.value()
@@ -44,9 +43,6 @@ impl Session {
             || current.step_settings.approvals_reviewer != next.step_settings.approvals_reviewer
             || current.permission_profile() != next.permission_profile()
             || current.windows_sandbox_level != next.windows_sandbox_level
-            || updates.environments.as_ref().is_some_and(|environments| {
-                environments.environments != self.services.turn_environments.selections()
-            })
     }
 
     /// Waits on this session's refreshed server before tool execution is admitted.
@@ -76,19 +72,25 @@ impl Session {
         &self,
         auth: Option<CodexAuth>,
     ) -> McpDesiredState {
-        let (session_configuration, disabled_plugin_ids) = {
+        let (session_configuration, disabled_plugin_ids, environments) = {
             let state = self.state.lock().await;
+            // MCP tools must use current environments, not the selection saved for the next turn.
             (
                 state.session_configuration.clone(),
                 state.active_disabled_plugin_ids.clone(),
+                self.services.turn_environments.snapshot(),
             )
         };
-        let environments = self.services.turn_environments.snapshot().await;
+        let environments = environments.await;
         let cwd = environments
             .primary()
             .and_then(|environment| environment.cwd().to_abs_path().ok())
             .unwrap_or_else(|| session_configuration.cwd().clone());
-        let config = self.build_per_turn_config(&session_configuration, cwd);
+        let config = self.build_per_turn_config(
+            &session_configuration,
+            cwd,
+            environments.primary_workspace_roots(),
+        );
         let local_process_cwd = environments
             .local_environment_cwd()
             .unwrap_or_else(|| session_configuration.cwd().clone())
@@ -116,7 +118,11 @@ impl Session {
     ) -> anyhow::Result<()> {
         let cwd = AbsolutePathBuf::from_absolute_path(mcp_runtime_cwd)
             .unwrap_or_else(|_| session_configuration.cwd().clone());
-        let config = self.build_per_turn_config(session_configuration, cwd);
+        let config = self.build_per_turn_config(
+            session_configuration,
+            cwd,
+            resolved_environments.primary_workspace_roots(),
+        );
         let local_process_cwd = resolved_environments
             .local_environment_cwd()
             .unwrap_or_else(|| session_configuration.cwd().clone())

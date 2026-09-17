@@ -104,6 +104,8 @@ pub(crate) struct SessionConfiguration {
 
     /// Desired configured inputs inherited by future turns.
     pub(super) step_settings: Arc<StepSettings>,
+    /// Ordered environments inherited by future turns.
+    pub(super) environments: Vec<TurnEnvironmentSelection>,
     /// Explicit startup overrides used when resolving effective model metadata.
     pub(super) model_info_overrides: ModelInfoOverrides,
 
@@ -419,6 +421,7 @@ impl SessionConfiguration {
         let current_cwd = self.cwd().clone();
         if let Some(environments) = &updates.environments {
             next_configuration.legacy_fallback_cwd = environments.legacy_fallback_cwd.clone();
+            next_configuration.environments = environments.environments.clone();
         }
         let cwd_changed = next_configuration.legacy_fallback_cwd != current_cwd;
         if let Some(runtime_workspace_roots) = &updates.runtime_workspace_roots {
@@ -1402,6 +1405,7 @@ impl Session {
                 environment_selections,
                 &session_configuration.inferred_environment_config(),
             );
+            session_configuration.environments = turn_environments.selections();
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(instructions));
             let plugin_skill_warmup = warm_plugins_and_skills_for_session_init(

@@ -9,6 +9,7 @@ use codex_core::EnvironmentConfig;
 use codex_core::EnvironmentNetworkPolicy;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::WaitForEnvironmentToolConfig;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
@@ -1558,10 +1559,6 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
     .await?;
 
     assert_eq!(
-        test.codex.inspect_selected_capability_roots().ready_roots,
-        vec![root("first-root")]
-    );
-    assert_eq!(
         second
             .thread
             .inspect_selected_capability_roots()
@@ -1629,6 +1626,10 @@ async fn shared_executor_keeps_ready_capability_roots_scoped_to_each_attachment(
         wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
     }
 
+    assert_eq!(
+        test.codex.inspect_selected_capability_roots().ready_roots,
+        vec![root("first-updated-root")]
+    );
     let requests = response_mock.requests();
     let root_fragments = requests
         .iter()
@@ -1978,6 +1979,146 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
         vec![recovered_selection]
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn future_pending_environment_can_finish_without_retargeting_the_active_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(WaitForEnvironmentTestExtension));
+    extensions.prompt_contributor(Arc::new(ReadyCapabilityRootsTestExtension::default()));
+    let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
+        });
+    let test = builder.build_with_auto_env(&server).await?;
+    let selection = test.codex.environment_selections().await.remove(0);
+    let active = TurnEnvironmentSelection {
+        config: EnvironmentConfigState::Pending,
+        ..selection
+    };
+    let future_cwd = active.cwd.join("future-environment")?;
+    test.fs()
+        .create_directory(
+            &future_cwd,
+            CreateDirectoryOptions {
+                recursive: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    let future = TurnEnvironmentSelection {
+        cwd: future_cwd.clone(),
+        workspace_roots: vec![future_cwd],
+        ..active.clone()
+    };
+    let owner_config = |selection: &TurnEnvironmentSelection, id: &str| EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        workspace_roots: selection.workspace_roots.clone(),
+        permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
+        shell_environment_policy: Default::default(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+        windows_sandbox_private_desktop: test.config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: test.config.features.use_legacy_landlock(),
+        exec_policy: None,
+        mcp_policy: None,
+        network_policy: None,
+        selected_capability_roots: vec![SelectedCapabilityRoot {
+            id: id.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: selection.environment_id.clone(),
+                path: selection.cwd.clone(),
+            },
+        }],
+    };
+    let thread = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![active.clone()]),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(
+                    "wait-for-active-environment",
+                    "wait_for_environment",
+                    &json!({ "environment_id": active.environment_id }).to_string(),
+                ),
+                ev_completed("waiting"),
+            ]),
+            sse(vec![ev_completed("active-done")]),
+            sse(vec![ev_completed("future-done")]),
+        ],
+    )
+    .await;
+    let request = |text: &str| {
+        TurnInputRequest::user_input(vec![UserInput::Text {
+            text: text.to_string(),
+            text_elements: Vec::new(),
+        }])
+    };
+    thread.start_or_steer_turn(request("wait")).await?;
+    wait_for_response_request_count(&response_mock, /*expected_count*/ 1).await;
+    assert!(matches!(
+        thread
+            .start_or_steer_turn(
+                request("use the other environment next turn").with_thread_settings(
+                    ThreadSettingsOverrides {
+                        environments: Some(TurnEnvironmentSelections::new(
+                            test.config.cwd.clone(),
+                            vec![future.clone()],
+                        )),
+                        ..Default::default()
+                    },
+                )
+            )
+            .await?,
+        TurnInputSubmission::Steered { .. }
+    ));
+    thread
+        .environment_ready(&future, owner_config(&future, "future-root"))
+        .await?;
+    assert!(matches!(
+        thread.environment_selections().await[0].config,
+        EnvironmentConfigState::Ready(_)
+    ));
+    thread
+        .environment_ready(&active, owner_config(&active, "active-root"))
+        .await?;
+    wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    thread.start_or_steer_turn(request("next turn")).await?;
+    wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = response_mock.requests();
+    let (output, _) = requests[1]
+        .function_call_output_content_and_success("wait-for-active-environment")
+        .context("active wait output should be model visible")?;
+    assert_eq!(
+        serde_json::from_str::<Value>(&output.context("active wait output should contain JSON")?)?,
+        json!({ "environment_id": active.environment_id, "status": "ready" })
+    );
+    let ready_roots = requests[1..]
+        .iter()
+        .map(|request| {
+            request
+                .message_input_texts("user")
+                .into_iter()
+                .rfind(|text| text.contains("<ready_capability_roots>"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ready_roots,
+        ["active-root", "future-root"].map(|root| Some(format!(
+            "<ready_capability_roots>{root}</ready_capability_roots>"
+        )))
+    );
     Ok(())
 }
 

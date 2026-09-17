@@ -322,18 +322,13 @@ impl AgentControl {
         parent: Option<Arc<CodexThread>>,
     ) -> CodexResult<()> {
         let state = self.upgrade()?;
-        let parent = if let Some(parent) = parent {
+        let owner_thread_id = parent.as_ref().map(|parent| parent.session.thread_id);
+        if let Some(parent) = &parent {
             let parent_thread_id = parent.session.thread_id;
-            let turn = parent.session.new_default_turn().await;
-            config = build_agent_resume_config(&turn).map_err(|_| {
-                CodexErr::InvalidRequest(format!(
-                    "cannot resume multi-agent v2 child {thread_id} with the current parent settings"
-                ))
-            })?;
             let registered_parent = state.get_thread(parent_thread_id).await.ok();
             if !registered_parent
                 .as_ref()
-                .is_some_and(|registered| Arc::ptr_eq(registered, &parent))
+                .is_some_and(|registered| Arc::ptr_eq(registered, parent))
                 || !parent.is_running()
                 || parent.multi_agent_version() != Some(MultiAgentVersion::V2)
                 || !Arc::ptr_eq(&self.state, &parent.session.services.agent_control.state)
@@ -342,11 +337,7 @@ impl AgentControl {
                     "cannot resume multi-agent v2 child {thread_id}: parent ownership is unavailable; resume the parent first"
                 )));
             }
-            Some((parent, turn.environments.clone()))
-        } else {
-            None
-        };
-        let owner_thread_id = parent.as_ref().map(|(parent, _)| parent.session.thread_id);
+        }
         if owner_thread_id.is_none() && state.get_thread(thread_id).await.is_ok() {
             self.touch_loaded_v2_residency(&state, thread_id).await;
             return Ok(());
@@ -400,6 +391,20 @@ impl AgentControl {
                 return Ok(());
             }
         }
+        let parent = if let Some(parent) = parent {
+            let turn = parent
+                .session
+                .new_turn_with_default_settings(Uuid::now_v7().to_string(), Default::default())
+                .await;
+            config = build_agent_resume_config(&turn).map_err(|_| {
+                CodexErr::InvalidRequest(format!(
+                    "cannot resume multi-agent v2 child {thread_id} with the current parent settings"
+                ))
+            })?;
+            Some((parent, turn.environments.clone()))
+        } else {
+            None
+        };
         config.model_reasoning_effort = stored_reasoning_effort;
         if let Some(role_name) = session_source.get_agent_role() {
             let runtime_approval_policy = config.permissions.approval_policy.value();

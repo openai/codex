@@ -14,6 +14,7 @@ use codex_protocol::protocol::TurnEnvironmentSelection;
 use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::config::NetworkProxySpec;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::session::Session;
 use crate::session::session::SessionConfiguration;
 use crate::session::session::SessionSettingsUpdate;
@@ -108,7 +109,7 @@ impl Session {
         current: &SessionConfiguration,
         updates: &SessionSettingsUpdate,
     ) -> ConstraintResult<SessionConfiguration> {
-        let current_environments = self.services.turn_environments.selections();
+        let current_environments = &current.environments;
         if let Some(environments) = &updates.environments
             && let Some(environment) = environments.environments.iter().find(|environment| {
                 environment.config == EnvironmentConfigState::FromThread
@@ -126,7 +127,47 @@ impl Session {
             });
         }
 
-        current.apply(updates, &current_environments)
+        current.apply(updates, current_environments)
+    }
+
+    /// Activates the environments accepted for a new task. Configuration may have arrived for
+    /// those same environments while its settings were being prepared.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "do not change environments while another task is running"
+    )]
+    pub(super) async fn activate_turn_environments(
+        &self,
+        configuration: &SessionConfiguration,
+    ) -> TurnEnvironmentSnapshot {
+        let snapshot = {
+            let active = self.active_turn.lock().await;
+            let state = self.state.lock().await;
+            // Another task may have started while this one was preparing its settings.
+            if active.as_ref().is_none_or(|turn| turn.task.is_none()) {
+                let mut environments = configuration.environments.clone();
+                let latest_environments = &state.session_configuration.environments;
+                for environment in &mut environments {
+                    if let Some(latest) = latest_environments.iter().find(|latest| {
+                        latest.environment_id == environment.environment_id
+                            && latest.cwd == environment.cwd
+                            && latest.workspace_roots == environment.workspace_roots
+                    }) {
+                        environment.config = latest.config.clone();
+                    }
+                }
+                if environments != self.services.turn_environments.selections() {
+                    self.mark_mcp_runtime_dirty();
+                    self.services.turn_environments.update_selections(
+                        &environments,
+                        &configuration.inferred_environment_config(),
+                    );
+                    self.schedule_mcp_prewarm();
+                }
+            }
+            self.services.turn_environments.snapshot()
+        };
+        snapshot.await
     }
 
     pub(crate) async fn environment_ready(
@@ -148,39 +189,79 @@ impl Session {
             .await
     }
 
+    /// Records configuration, or a failure to obtain it, for this environment and workspace.
+    /// The running turn and future turns may use different environments. Update the matching
+    /// selection or selections so work already waiting can still finish, and check successful
+    /// configuration before saving either list.
     async fn update_environment_configuration(
         &self,
         selection: &TurnEnvironmentSelection,
         config: EnvironmentConfigState,
     ) -> CodexResult<()> {
         // Serialize owner callbacks with ordinary thread settings updates.
-        let state = self.state.lock().await;
-        let mut environments = self.services.turn_environments.selections();
-        let Some(environment) = environments.iter_mut().find(|environment| {
+        let mut state = self.state.lock().await;
+        let mut current = self.services.turn_environments.selections();
+        let mut future = state.session_configuration.environments.clone();
+        let matches = |environment: &TurnEnvironmentSelection| {
             environment.environment_id == selection.environment_id
                 && environment.cwd == selection.cwd
                 && environment.workspace_roots == selection.workspace_roots
-        }) else {
-            return Err(CodexErr::InvalidRequest(format!(
-                "environment `{}` is not selected on this thread with the requested workspace",
-                selection.environment_id
-            )));
         };
+        let (current_environment, future_environment) = match (
+            current.iter_mut().find(|environment| matches(environment)),
+            future.iter_mut().find(|environment| matches(environment)),
+        ) {
+            (None, None) => {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "environment `{}` is not selected on this thread with the requested workspace",
+                    selection.environment_id
+                )));
+            }
+            (Some(current), Some(future)) if current.config != future.config => {
+                // Update the selection still waiting for configuration. If neither is waiting,
+                // keep the existing behavior of updating the current one.
+                if matches!(future.config, EnvironmentConfigState::Pending) {
+                    (None, Some(future))
+                } else {
+                    (Some(current), None)
+                }
+            }
+            (Some(current), future) => (Some(current), future),
+            (None, Some(future)) => (None, Some(future)),
+        };
+        let update_current = current_environment.is_some();
+        let update_future = future_environment.is_some();
 
-        environment.config = config;
-        if matches!(environment.config, EnvironmentConfigState::Ready(_)) {
-            state
-                .session_configuration
-                .validate(&environments)
-                .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+        if let Some(environment) = current_environment {
+            environment.config = config.clone();
+        }
+        if let Some(environment) = future_environment {
+            environment.config = config.clone();
+        }
+        if matches!(config, EnvironmentConfigState::Ready(_)) {
+            let validate = |environments: &[TurnEnvironmentSelection]| {
+                state
+                    .session_configuration
+                    .validate(environments)
+                    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
+            };
+            if update_current {
+                validate(&current)?;
+            }
+            if update_future && (!update_current || current != future) {
+                validate(&future)?;
+            }
         }
 
-        // Invalidate MCP before installed configuration can wake a waiting turn.
-        self.mark_mcp_runtime_dirty();
-        self.services.turn_environments.update_selections(
-            &environments,
-            &state.session_configuration.inferred_environment_config(),
-        );
+        state.session_configuration.environments = future;
+        if update_current {
+            // Invalidate MCP before installed configuration can wake a waiting turn.
+            self.mark_mcp_runtime_dirty();
+            self.services.turn_environments.update_selections(
+                &current,
+                &state.session_configuration.inferred_environment_config(),
+            );
+        }
         Ok(())
     }
 

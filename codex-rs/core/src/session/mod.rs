@@ -835,6 +835,7 @@ impl Session {
                 approval_policy: config.permissions.approval_policy.clone(),
                 approvals_reviewer: config.approvals_reviewer,
             }),
+            environments: environment_selections.clone(),
             model_info_overrides: config.to_models_manager_config().into(),
             developer_instructions: config.developer_instructions.clone(),
             base_instructions,
@@ -1882,22 +1883,15 @@ impl Session {
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let mcp_inputs_changed =
-                self.mcp_inputs_differ(&state.session_configuration, &updated, &updates);
             let root_service_tier_changed = updated.parent_thread_id.is_none()
                 && state.session_configuration.step_settings.service_tier
                     != updated.step_settings.service_tier;
+            let environment_config = updated.inferred_environment_config();
+            let mcp_inputs_changed = self.mcp_inputs_differ(&state.session_configuration, &updated);
             if mcp_inputs_changed {
                 self.mark_mcp_runtime_dirty();
             }
-            let environment_config = updated.inferred_environment_config();
-            if let Some(environments) = &updates.environments {
-                self.services
-                    .turn_environments
-                    .update_selections(&environments.environments, &environment_config);
-            } else if state.session_configuration.inferred_environment_config()
-                != environment_config
-            {
+            if state.session_configuration.inferred_environment_config() != environment_config {
                 self.services
                     .turn_environments
                     .update_thread_config(&environment_config);
@@ -1918,7 +1912,7 @@ impl Session {
                 configuration: state.session_configuration.clone(),
                 snapshot: state
                     .session_configuration
-                    .thread_settings_snapshot(&self.services.turn_environments.selections()),
+                    .thread_settings_snapshot(&state.session_configuration.environments),
             };
             (
                 commit,
@@ -1945,32 +1939,33 @@ impl Session {
     ) -> ConstraintResult<ThreadConfigSnapshot> {
         let state = self.state.lock().await;
         let configuration = self.apply_session_settings(&state.session_configuration, updates)?;
-        let environments = updates.environments.as_ref().map_or_else(
-            || self.services.turn_environments.selections(),
-            |environments| environments.environments.clone(),
-        );
-        Ok(configuration.thread_config_snapshot(environments))
+        Ok(configuration.thread_config_snapshot(configuration.environments.clone()))
     }
 
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         let state = self.state.lock().await;
         state
             .session_configuration
-            .thread_config_snapshot(self.services.turn_environments.selections())
+            .thread_config_snapshot(state.session_configuration.environments.clone())
+    }
+
+    pub(crate) async fn configured_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
+        let state = self.state.lock().await;
+        state.session_configuration.environments.clone()
     }
 
     pub(crate) async fn thread_settings_snapshot(&self) -> ThreadSettingsSnapshot {
         let state = self.state.lock().await;
         state
             .session_configuration
-            .thread_settings_snapshot(&self.services.turn_environments.selections())
+            .thread_settings_snapshot(&state.session_configuration.environments)
     }
 
     pub(crate) async fn restorable_thread_settings(&self) -> CodexThreadSettingsOverrides {
         let state = self.state.lock().await;
         state
             .session_configuration
-            .restorable_thread_settings(self.services.turn_environments.selections())
+            .restorable_thread_settings(state.session_configuration.environments.clone())
     }
 
     pub(crate) async fn set_app_server_client_info(

@@ -4014,6 +4014,7 @@ async fn set_rate_limits_retains_previous_credits() {
     };
     let session_configuration = SessionConfiguration {
         provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
+        environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
             collaboration_mode,
             reasoning_summary: config.model_reasoning_summary,
@@ -4136,6 +4137,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     };
     let session_configuration = SessionConfiguration {
         provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
+        environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
             collaboration_mode,
             reasoning_summary: config.model_reasoning_summary,
@@ -4755,6 +4757,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
 
     SessionConfiguration {
         provider: create_model_provider(config.model_provider.clone(), /*auth_manager*/ None),
+        environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
             collaboration_mode,
             reasoning_summary: config.model_reasoning_summary,
@@ -5742,7 +5745,7 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 
     let state = session.state.lock().await;
     assert_eq!(state.session_configuration.cwd(), &updated_cwd);
-    assert!(session.services.turn_environments.selections().is_empty());
+    assert!(state.session_configuration.environments.is_empty());
 }
 
 #[tokio::test]
@@ -5772,7 +5775,7 @@ async fn environment_settings_preserve_explicit_primary_cwd() {
     let state = session.state.lock().await;
     assert_eq!(state.session_configuration.cwd(), &updated_cwd);
     assert_eq!(
-        session.services.turn_environments.selections()[0].cwd,
+        state.session_configuration.environments[0].cwd,
         PathUri::from_abs_path(&environment_cwd)
     );
 }
@@ -5841,6 +5844,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
             config.model_provider.clone(),
             Some(Arc::clone(&auth_manager)),
         ),
+        environments: Vec::new(),
         step_settings: Arc::new(StepSettings {
             collaboration_mode,
             reasoning_summary: config.model_reasoning_summary,
@@ -6018,6 +6022,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
             Some(Arc::clone(&auth_manager)),
@@ -6234,8 +6239,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     };
-    let per_turn_config =
-        session.build_per_turn_config(&session_configuration, session_configuration.cwd().clone());
+    let per_turn_config = session.build_per_turn_config(
+        &session_configuration,
+        session_configuration.cwd().clone(),
+        crate::environment_selection::ThreadEnvironments::primary_workspace_roots_for(
+            &session_configuration.environments,
+        ),
+    );
     let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = session
         .services
@@ -6328,6 +6338,7 @@ async fn make_session_with_config_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
             Some(Arc::clone(&auth_manager)),
@@ -6460,6 +6471,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
             Some(Arc::clone(&auth_manager)),
@@ -7536,7 +7548,55 @@ async fn turn_environments_set_primary_environment() {
 }
 
 #[tokio::test]
-async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_environments() {
+async fn new_task_does_not_change_an_already_running_tasks_environments() {
+    let (session, running_turn, events) = make_session_and_context_with_rx().await;
+    let current_cwd = running_turn.config.cwd.clone();
+    let next_workspace = tempfile::tempdir().expect("next workspace");
+    let next_cwd = next_workspace.path().abs();
+    let finish = Arc::new(Notify::new());
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            environments: Some(TurnEnvironmentSelections::new(
+                next_cwd.clone(),
+                vec![local(next_cwd.clone())],
+            )),
+            ..Default::default()
+        })
+        .await
+        .expect("save next task's settings");
+    session
+        .spawn_task(
+            running_turn,
+            Vec::new(),
+            HeldStepTask {
+                kind: TaskKind::Regular,
+                finish: Arc::clone(&finish),
+            },
+        )
+        .await;
+
+    let candidate = session
+        .new_turn_with_default_settings("candidate".into(), Default::default())
+        .await;
+    assert_eq!(candidate.config.cwd, current_cwd);
+    assert_eq!(candidate.config.workspace_roots, vec![current_cwd.clone()]);
+    assert_eq!(
+        session.services.turn_environments.selections(),
+        vec![local(current_cwd)]
+    );
+
+    finish.notify_one();
+    recv_terminal_event(&events, TerminalEventKind::TurnComplete).await;
+    let next = session
+        .new_turn_with_default_settings("next".into(), Default::default())
+        .await;
+    assert_eq!(next.config.cwd, next_cwd);
+    assert_eq!(next.config.workspace_roots, vec![next_cwd]);
+}
+
+#[tokio::test]
+async fn task_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_environments() {
     let (session, _initial_turn, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
     let selected_cwd =
@@ -7551,7 +7611,9 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
         })
         .await
         .expect("environment selection update should succeed");
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .new_turn_with_default_settings("task".into(), Default::default())
+        .await;
 
     let turn_environments = &turn_context.environments;
     assert_eq!(turn_environments.turn_environments().count(), 1);
@@ -7573,7 +7635,7 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
 }
 
 #[tokio::test]
-async fn default_turn_honors_empty_stored_thread_environments() {
+async fn task_turn_honors_empty_stored_thread_environments() {
     let (session, _initial_turn, _rx) = make_session_and_context_with_rx().await;
     let session_cwd = session.get_config().await.cwd.clone();
 
@@ -7587,7 +7649,9 @@ async fn default_turn_honors_empty_stored_thread_environments() {
         })
         .await
         .expect("environment selection update should succeed");
-    let turn_context = session.new_default_turn().await;
+    let turn_context = session
+        .new_turn_with_default_settings("task".into(), Default::default())
+        .await;
 
     assert!(turn_context.environments.primary().is_none());
     assert!(
@@ -8202,6 +8266,7 @@ where
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
             Some(Arc::clone(&auth_manager)),
@@ -8421,8 +8486,13 @@ where
         forked_from_ordinal_exclusive: None,
         next_internal_sub_id: AtomicU64::new(0),
     });
-    let per_turn_config =
-        session.build_per_turn_config(&session_configuration, session_configuration.cwd().clone());
+    let per_turn_config = session.build_per_turn_config(
+        &session_configuration,
+        session_configuration.cwd().clone(),
+        crate::environment_selection::ThreadEnvironments::primary_workspace_roots_for(
+            &session_configuration.environments,
+        ),
+    );
     let plugins_input = per_turn_config.plugins_config_input();
     let plugin_outcome = session
         .services
