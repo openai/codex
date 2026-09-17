@@ -179,8 +179,9 @@ pub fn environment_id_from_cwd(cwd: &Path) -> String {
     format!("cwd-{short}")
 }
 
-/// Computes the OS keyring account name used to store the local secrets passphrase.
-pub fn compute_keyring_account(codex_home: &Path) -> String {
+/// Computes the OS keyring account name used to store a local namespace's passphrase.
+/// Existing namespaces retain their shared key; gateway credentials use an independent key.
+pub fn compute_keyring_account(codex_home: &Path, namespace: LocalSecretsNamespace) -> String {
     let canonical = codex_home
         .canonicalize()
         .unwrap_or_else(|_| codex_home.to_path_buf())
@@ -191,7 +192,15 @@ pub fn compute_keyring_account(codex_home: &Path) -> String {
     let digest = hasher.finalize();
     let hex = format!("{digest:x}");
     let short = hex.get(..16).unwrap_or(hex.as_str());
-    format!("secrets|{short}")
+    let home_account = format!("secrets|{short}");
+    // Separate keys also prevent concurrent first writes to the gateway and primary
+    // stores from overwriting each other's newly generated encryption key.
+    match namespace {
+        LocalSecretsNamespace::GatewayOAuth => format!("{home_account}|gateway-oauth"),
+        LocalSecretsNamespace::ManagedSecrets
+        | LocalSecretsNamespace::CodexAuth
+        | LocalSecretsNamespace::McpOAuth => home_account,
+    }
 }
 
 pub(crate) fn keyring_service() -> &'static str {

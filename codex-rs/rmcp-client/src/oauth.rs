@@ -1526,7 +1526,7 @@ mod tests {
         let env = TempCodexHome::new();
         let store = MockKeyringStore::default();
         store.set_error(
-            &compute_keyring_account(env.path()),
+            &compute_keyring_account(env.path(), LocalSecretsNamespace::McpOAuth),
             KeyringError::Invalid("error".into(), "save".into()),
         );
         let tokens = sample_tokens();

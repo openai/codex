@@ -41,10 +41,6 @@ impl fmt::Debug for OAuthError {
 #[derive(Clone, Copy)]
 pub(crate) enum ErrorBodyLimit {
     Unlimited,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Used by GatewayAuthManager in the following PR")
-    )]
     Bytes(usize),
 }
 

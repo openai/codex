@@ -381,7 +381,7 @@ fn assert_keyring_saved_auth_and_removed_fallback(
         mock_keyring.saved_value(&old_key).is_none(),
         "legacy keyring auth entry should not be used"
     );
-    let secrets_key = compute_keyring_account(codex_home);
+    let secrets_key = compute_keyring_account(codex_home, LocalSecretsNamespace::CodexAuth);
     assert!(
         mock_keyring.saved_value(&secrets_key).is_some(),
         "secrets backend should persist an encryption passphrase in the keyring"
@@ -576,7 +576,10 @@ fn factory_uses_secrets_backend_only_when_requested() -> anyhow::Result<()> {
     secrets_storage.save(&secrets_auth)?;
     assert!(
         secrets_keyring
-            .saved_value(&compute_keyring_account(secrets_home.path()))
+            .saved_value(&compute_keyring_account(
+                secrets_home.path(),
+                LocalSecretsNamespace::CodexAuth,
+            ))
             .is_some()
     );
     assert!(encrypted_auth_file(secrets_home.path()).exists());
@@ -724,7 +727,7 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
         Arc::new(mock_keyring.clone()),
         AuthKeyringBackendKind::Secrets,
     );
-    let key = compute_keyring_account(codex_home.path());
+    let key = compute_keyring_account(codex_home.path(), LocalSecretsNamespace::CodexAuth);
 
     let encrypted = auth_with_prefix("encrypted");
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &encrypted)?;
@@ -766,7 +769,7 @@ fn auto_auth_storage_save_falls_back_when_keyring_errors() -> anyhow::Result<()>
         Arc::new(mock_keyring.clone()),
         AuthKeyringBackendKind::Secrets,
     );
-    let key = compute_keyring_account(codex_home.path());
+    let key = compute_keyring_account(codex_home.path(), LocalSecretsNamespace::CodexAuth);
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
 
     let auth = auth_with_prefix("fallback");
