@@ -67,6 +67,7 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use tokio::time::timeout;
 use tracing::Level;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_test::internal::MockWriter;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -2212,6 +2213,11 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         .with_writer(MockWriter::new(output))
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
+    // Keep two dispatchers alive so a parallel test that first registers a communication
+    // callsite without a subscriber cannot globally disable it for our capturing subscriber.
+    let _parallel_dispatch = tracing::Dispatch::new(
+        tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::OFF),
+    );
 
     let server = start_mock_server().await;
     let message = if plaintext {

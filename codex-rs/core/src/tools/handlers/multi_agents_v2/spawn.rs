@@ -129,7 +129,7 @@ async fn handle_spawn_agent(
     let child_depth = next_thread_spawn_depth(&session_source);
     let prepared = prepare_agent_spawn_config(
         &session,
-        turn.as_ref(),
+        step_context.as_ref(),
         SpawnConfigOptions {
             version: SpawnConfigVersion::V2,
             full_history_fork: matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory)),

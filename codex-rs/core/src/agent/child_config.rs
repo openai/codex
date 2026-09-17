@@ -1,4 +1,4 @@
-//! Prepares child configuration from the invoking turn and requested overrides.
+//! Prepares child configuration from captured step settings and requested overrides.
 //!
 //! Spawn and reload share live runtime policy; role and model precedence, full-history
 //! inheritance, and validation messages remain the same for each multi-agent version.
@@ -7,6 +7,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::config::Config;
 use crate::session::session::Session;
+use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
@@ -49,16 +50,18 @@ pub(crate) struct PreparedSpawnConfig {
 /// Resolves child settings before starting the thread, retaining the invoking tool's precedence.
 pub(crate) async fn prepare_agent_spawn_config(
     session: &Session,
-    turn: &TurnContext,
+    step_context: &StepContext,
     options: SpawnConfigOptions<'_>,
 ) -> Result<PreparedSpawnConfig, String> {
-    let mut config = build_agent_spawn_config(&session.get_base_instructions().await, turn)?;
+    let turn = step_context.turn.as_ref();
+    let mut config =
+        build_agent_spawn_config(&session.get_base_instructions().await, step_context)?;
     if options.version == SpawnConfigVersion::V1 && options.full_history_fork {
         reject_full_fork_agent_type_override(options.role_name)?;
     }
     apply_requested_spawn_agent_model_overrides(
         session,
-        turn,
+        step_context,
         &mut config,
         options.model,
         options.reasoning_effort,
@@ -99,15 +102,19 @@ pub(crate) async fn prepare_agent_spawn_config(
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
-/// runtime-owned fields carried by the turn, including model selection, reasoning settings,
-/// approval policy, sandbox, and cwd. Role-specific overrides are layered
+/// model selection and reasoning settings captured for the invoking step, plus the turn's
+/// runtime approval policy, sandbox, and cwd. Role-specific overrides are layered
 /// after this step; skipping this helper and cloning stale config state directly can send the child
 /// agent out with the wrong provider or runtime policy.
 pub(crate) fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
-    turn: &TurnContext,
+    step_context: &StepContext,
 ) -> Result<Config, String> {
-    let mut config = build_agent_shared_config(turn)?;
+    let mut config = build_agent_shared_config(step_context.turn.as_ref())?;
+    let settings = &step_context.settings;
+    config.model = Some(settings.model_info.slug.clone());
+    config.model_reasoning_effort = settings.effective_reasoning_effort();
+    config.model_reasoning_summary = Some(settings.reasoning_summary);
     config.base_instructions = Some(base_instructions.text.clone());
     config.base_instructions_provenance = base_instructions.provenance.clone();
     Ok(config)
@@ -188,11 +195,12 @@ fn apply_spawn_agent_runtime_overrides(
 
 async fn apply_requested_spawn_agent_model_overrides(
     session: &Session,
-    turn: &TurnContext,
+    step_context: &StepContext,
     config: &mut Config,
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
 ) -> Result<(), String> {
+    let turn = step_context.turn.as_ref();
     let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
         .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
@@ -234,8 +242,8 @@ async fn apply_requested_spawn_agent_model_overrides(
 
     if let Some(reasoning_effort) = requested_reasoning_effort {
         validate_spawn_agent_reasoning_effort(
-            &turn.model_info().slug,
-            &turn.model_info().supported_reasoning_levels,
+            &step_context.settings.model_info.slug,
+            &step_context.settings.model_info.supported_reasoning_levels,
             &reasoning_effort,
         )?;
         config.model_reasoning_effort = Some(reasoning_effort);

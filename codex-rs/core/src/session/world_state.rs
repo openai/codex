@@ -275,9 +275,7 @@ impl Session {
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(step_context),
         );
-        if let Some(usage_hint_text) =
-            super::multi_agents::usage_hint_text(step_context, &turn_context.session_source)
-        {
+        if let Some(usage_hint_text) = super::multi_agents::usage_hint_text(step_context) {
             let usage_hint = MultiAgentUsageHintState::new(usage_hint_text);
             multi_agent_mode = multi_agent_mode.with_usage_hint(&usage_hint);
             world_state.add_section(usage_hint);

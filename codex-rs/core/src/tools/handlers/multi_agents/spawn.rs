@@ -94,7 +94,7 @@ async fn handle_spawn_agent(
         .await;
     let prepared = prepare_agent_spawn_config(
         &session,
-        turn.as_ref(),
+        step_context.as_ref(),
         SpawnConfigOptions {
             version: SpawnConfigVersion::V1,
             full_history_fork: args.fork_context,

@@ -16,10 +16,7 @@ pub(crate) struct ResolvedMultiAgentV2UsageHints {
     pub(crate) subagent: Option<MultiAgentRoleInstructions>,
 }
 
-pub(super) fn usage_hint_text(
-    step_context: &StepContext,
-    session_source: &SessionSource,
-) -> Option<MultiAgentRoleInstructions> {
+pub(super) fn usage_hint_text(step_context: &StepContext) -> Option<MultiAgentRoleInstructions> {
     let turn_context = step_context.turn.as_ref();
     if turn_context.multi_agent_version != MultiAgentVersion::V2 {
         return None;
@@ -32,7 +29,7 @@ pub(super) fn usage_hint_text(
         multi_agent_messages,
         !turn_context.config.update_plan_enabled && turn_context.config.model_catalog.is_none(),
     );
-    match session_source {
+    match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => snapshot.subagent,
         SessionSource::Cli
         | SessionSource::VSCode
