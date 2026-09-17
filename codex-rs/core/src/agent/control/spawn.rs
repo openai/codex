@@ -961,6 +961,11 @@ impl AgentControl {
                     .get_or_insert_default()
                     .inherited_user_message = true;
             }
+            if let Some(metadata) = &mut envelope.metadata
+                && metadata.sender_user_messages.take().is_some()
+            {
+                metadata.user_input_order = None;
+            }
             let response_item = &mut envelope.item;
             if matches!(response_item, ResponseItem::AgentMessage { .. }) {
                 return false;

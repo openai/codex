@@ -735,7 +735,7 @@ pub(crate) async fn record_pending_input(
                 .await;
         }
         TurnInput::FunctionCallOutput(item) => {
-            sess.record_conversation_items(turn_context, model_info, std::slice::from_ref(&item))
+            sess.record_annotated_conversation_items(turn_context, model_info, vec![item.clone()])
                 .await;
             if let ResponseItem::FunctionCallOutput {
                 id: Some(id),
@@ -743,7 +743,7 @@ pub(crate) async fn record_pending_input(
                 namespace,
                 output,
                 ..
-            } = item
+            } = item.item
             {
                 let item = TurnItem::FunctionCallOutput(FunctionCallOutputItem {
                     id: id.to_string(),

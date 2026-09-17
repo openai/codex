@@ -2202,15 +2202,36 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
         "type": "verified_answer", "turn_id": "parent-answer-turn", "call_id": "parent-answer-call",
         "questions": [{"question": "Parent-local action?", "answer": "Parent only."}]
     })).expect("verified answer fixture");
+    let delivery = codex_history::ResponseItemEnvelope {
+        item: serde_json::from_value(serde_json::json!({
+            "type": "function_call_output", "id": "parent-delivery",
+            "name": "send_message_to_thread", "output": "Parent delivery"
+        }))
+        .unwrap(),
+        metadata: Some(codex_history::CodexHarnessMetadata {
+            user_input_order: Some(7),
+            sender_user_messages: Some(Box::new(codex_history::SenderUserMessages {
+                receiver_turn_id: "parent-turn".to_owned(),
+                receiver_message_id: "parent-delivery".to_owned(),
+                text: "Parent-only sender context".to_owned(),
+            })),
+            ..Default::default()
+        }),
+    };
     let mut retained_context = codex_history::RetainedContext::default();
     retained_context.record(&answer_event);
+    retained_context.record_sender_user_messages(delivery.metadata.as_ref().unwrap());
     parent_thread
         .session
         .persist_rollout_items(&[
             RolloutItem::Compacted(CompactedItem {
                 message: String::new(),
                 replacement_history: Some(
-                    replacement_history.into_iter().map(Into::into).collect(),
+                    replacement_history
+                        .into_iter()
+                        .map(Into::into)
+                        .chain([delivery.clone()])
+                        .collect(),
                 ),
                 retained_context: Some(retained_context),
                 guardian_history: Some(codex_history::GuardianHistoryCheckpoint(vec![
@@ -2225,6 +2246,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
                 latest_token_usage_record: None,
             }),
             RolloutItem::RetainedContext(answer_event),
+            RolloutItem::ResponseItem(delivery),
             RolloutItem::TurnContext(turn_context.to_turn_context_item()),
             rollout_response_item(spawn_agent_call(&parent_spawn_call_id)),
         ])

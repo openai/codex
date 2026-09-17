@@ -116,3 +116,78 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
     });
     assert_eq!(context.into_user_inputs().unwrap(), expected_inputs);
 }
+
+#[test]
+fn sender_restrictions_survive_budget_trimming_for_both_reviewers() {
+    for presentation in [
+        ContextPresentation::SyncFull {
+            session_id: "receiver",
+        },
+        ContextPresentation::SyncDelta {
+            session_id: "receiver",
+        },
+        ContextPresentation::Async,
+    ] {
+        let sender = vec!["user: Only use the staging pool.\n".to_owned()];
+        let context = CollectedContext {
+            sections: vec![
+                ContextSection::SenderUserMessages {
+                    items: sender.clone(),
+                },
+                ContextSection::ConversationTranscript { items: Vec::new() },
+            ],
+        }
+        .compose(
+            presentation,
+            RenderedTranscript {
+                items: vec![Budgeted::optional(
+                    "old tool output ".repeat(/*n*/ 2_000),
+                    BudgetPriority::Tool,
+                )],
+                omission_note: None,
+                truncations: Vec::new(),
+            },
+        )
+        .unwrap();
+        let selected = context
+            .clone()
+            .enforce_budget(
+                crate::RequestBudget {
+                    max_input_tokens: 1_000,
+                    existing_context_tokens: 0,
+                },
+                "evidence omitted".to_owned(),
+                crate::HistoryTruncation::Allow,
+            )
+            .unwrap();
+        assert!(selected.estimated_tokens() <= 1_000);
+        assert_eq!(selected.truncations.len(), 1);
+        let sender_section = selected
+            .sections
+            .into_iter()
+            .find(|section| section.id == "sender_user_messages")
+            .unwrap();
+        let SectionDelivery::UserContent(items) = sender_section.delivery else {
+            panic!("sender context must remain user evidence");
+        };
+        assert_eq!(
+            items,
+            vec![Budgeted::required(ContentItem::InputText {
+                text: sender[0].clone()
+            })]
+        );
+        assert!(matches!(
+            context.enforce_budget(
+                crate::RequestBudget {
+                    max_input_tokens: 1,
+                    existing_context_tokens: 0
+                },
+                "evidence omitted".to_owned(),
+                crate::HistoryTruncation::Allow,
+            ),
+            Err(SectionError::EvidenceLimitExceeded {
+                section: "request_budget"
+            })
+        ));
+    }
+}

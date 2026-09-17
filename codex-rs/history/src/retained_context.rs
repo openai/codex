@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::CodexHarnessMetadata;
 use crate::ResponseItemEnvelope;
+use crate::SenderUserMessages;
 
 const MAX_FAMILY_RECORDS: usize = 8;
 const MAX_RECORD_BYTES: usize = 16_384;
@@ -149,6 +150,9 @@ pub struct RetainedContext {
     user_messages_incomplete: bool,
     #[serde(default)]
     next_order: u64,
+    /// Delivery snapshots share local input order, so later steers can be undone independently.
+    #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
+    sender_deliveries: VecDeque<Ordered<SenderUserMessages>>,
 }
 
 fn legacy_user_messages_incomplete() -> bool {
@@ -202,6 +206,35 @@ impl RetainedContextEvent {
 }
 
 impl RetainedContext {
+    /// Context for the latest delivery still present in this task's retained history.
+    pub fn sender_user_messages(&self) -> Option<&SenderUserMessages> {
+        self.sender_deliveries.back().map(|entry| &entry.value)
+    }
+
+    /// Retains host metadata with the delivery's acceptance order, including during replay.
+    pub fn record_sender_user_messages(&mut self, metadata: &CodexHarnessMetadata) -> bool {
+        let Some(messages) = metadata.sender_user_messages.as_deref() else {
+            return false;
+        };
+        if self
+            .sender_deliveries
+            .iter()
+            .any(|entry| entry.value.receiver_message_id == messages.receiver_message_id)
+        {
+            return false;
+        }
+        let mut messages = messages.clone();
+        messages.bound();
+        let order = self.record_order(metadata.user_input_order);
+        self.sender_deliveries.push_back(Ordered {
+            inherited: false,
+            order,
+            value: messages,
+        });
+        bound_family(&mut self.sender_deliveries, /*incomplete*/ &mut false);
+        true
+    }
+
     /// Reserves order without retaining pending input that hooks may reject or cancel.
     pub fn reserve_order(&mut self) -> u64 {
         let order = self.next_order;
@@ -396,6 +429,17 @@ impl RetainedContext {
                 self.next_order = self.next_order.max(entry.order.saturating_add(1));
             }
         }
+        for entry in &mut self.sender_deliveries {
+            entry.value.bound();
+            self.next_order = self.next_order.max(entry.order.saturating_add(1));
+        }
+        bound_family(&mut self.sender_deliveries, /*incomplete*/ &mut false);
+        for metadata in surviving_items
+            .iter()
+            .filter_map(|item| item.metadata.as_ref())
+        {
+            self.record_sender_user_messages(metadata);
+        }
         for order in surviving_items
             .iter()
             .filter_map(|item| item.metadata.as_ref())
@@ -435,6 +479,8 @@ impl RetainedContext {
                     .map(Ordered::key)
             })
         }) {
+            self.sender_deliveries
+                .retain(|entry| entry.key() < boundary);
             self.verified_answers.retain(|entry| entry.key() < boundary);
             self.user_messages.retain(|entry| entry.key() < boundary);
             return;
@@ -447,6 +493,10 @@ impl RetainedContext {
         self.verified_answers.retain(|answer| {
             source != RetainedInputSource::Inherited
                 && !turn_ids.contains(&answer.value.turn_id.as_str())
+        });
+        self.sender_deliveries.retain(|entry| {
+            source != RetainedInputSource::Inherited
+                && !turn_ids.contains(&entry.value.receiver_turn_id.as_str())
         });
         self.user_messages.retain(|message| {
             (source != RetainedInputSource::Inherited || message.inherited)

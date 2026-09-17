@@ -77,6 +77,10 @@ pub struct CodexHarnessMetadata {
     /// Copied parent context stays model-visible but must not become child-local authorization.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherited_user_message: bool,
+
+    /// Sender context captured by the host when this task message was accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_user_messages: Option<Box<SenderUserMessages>>,
 }
 
 impl ResponseItemEnvelope {
@@ -175,6 +179,9 @@ impl JsonSchema for RolloutItem {
 mod guardian_history;
 mod reconciled_retained_context;
 mod retained_context;
+mod sender_user_messages;
+
+pub use sender_user_messages::SenderUserMessages;
 
 pub use reconciled_retained_context::ReconciledRetainedContext;
 pub use retained_context::RetainedContext;

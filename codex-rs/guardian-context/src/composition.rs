@@ -136,6 +136,9 @@ impl CollectedContext {
                 ContextSection::RootConversation { items } => {
                     (4, "root_conversation", text_content(items))
                 }
+                ContextSection::SenderUserMessages { items } => {
+                    (4, "sender_user_messages", text_content(items))
+                }
                 ContextSection::RetainedUserInstructions { items } => {
                     (5, "retained_user_instructions", text_content(items))
                 }

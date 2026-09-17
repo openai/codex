@@ -21,6 +21,7 @@ pub enum ContextSection<T = ConversationTranscriptEntry> {
     RootConversation { items: Vec<String> },
     TrustedUserAnswers { items: Vec<String> },
     RetainedUserInstructions { items: Vec<String> },
+    SenderUserMessages { items: Vec<String> },
     PlannedAction(PlannedAction),
     PreviousReviews(PreviousReviews),
     TrustedTool(TrustedTool),

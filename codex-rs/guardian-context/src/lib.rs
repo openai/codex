@@ -18,6 +18,7 @@ use codex_protocol::models::ResponseItem;
 use authorization::RootConversationSection;
 use authorization::TrustedUserAnswersSection;
 use retained_instructions::RetainedUserInstructionsSection;
+use sender_user_messages::SenderUserMessagesSection;
 use transcript::ConversationTranscriptSection;
 
 pub use action::ActionPresentation;
@@ -44,6 +45,7 @@ pub use verified_answers::render_verified_answer;
 pub use verified_answers::render_verified_answers;
 
 mod retained_instructions;
+mod sender_user_messages;
 
 mod action;
 mod enforcement;
@@ -254,6 +256,7 @@ pub fn default_registry() -> &'static SectionRegistry {
         registry.register(trusted_tool::TrustedToolSection);
         registry.register(trusted_skills::TrustedSkillsSection);
         registry.register(RootConversationSection);
+        registry.register(SenderUserMessagesSection);
         registry.register(RetainedUserInstructionsSection);
         registry.register(TrustedUserAnswersSection);
         registry.register(ConversationTranscriptSection);
