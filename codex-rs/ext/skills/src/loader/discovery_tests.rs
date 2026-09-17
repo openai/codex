@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::SkillDiscoveryMode;
@@ -27,7 +28,7 @@ fn canonical_uri(path: &Path) -> PathUri {
 
 async fn discover(root: &Path) -> SkillDiscovery {
     discover_skills(
-        LOCAL_FS.as_ref(),
+        &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
         &canonical_uri(root),
         SkillDiscoveryOptions {
             directory_symlinks: DirectorySymlinkPolicy::Follow,

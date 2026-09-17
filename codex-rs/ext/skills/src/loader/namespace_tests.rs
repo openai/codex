@@ -4,6 +4,7 @@ use std::path::Path;
 #[cfg(unix)]
 use std::sync::Arc;
 
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 #[cfg(unix)]
 use codex_protocol::protocol::SkillScope;
@@ -50,7 +51,7 @@ async fn namespaces_for(
     let root = canonical_uri(root);
     namespace_roots.insert(root.clone());
     let resolver = SkillNamespaceResolver::discover(
-        LOCAL_FS.as_ref(),
+        &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
         &root,
         skill_paths,
         plugin_roots,

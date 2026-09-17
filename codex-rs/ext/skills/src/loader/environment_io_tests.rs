@@ -1,6 +1,9 @@
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_skills::EnvironmentSkillMetadata;
 use codex_utils_path_uri::PathUri;
@@ -50,11 +53,14 @@ async fn loads_nearest_plugin_namespaces_without_reading_unused_sibling_manifest
         .expect("skill");
     }
 
-    let file_system =
-        RecordingFileSystem::new(LOCAL_FS.as_ref(), ManifestMetadataBehavior::Immediate);
+    let file_system = Arc::new(RecordingFileSystem::new(
+        LOCAL_FS.as_ref(),
+        ManifestMetadataBehavior::Immediate,
+    ));
+    let executor: Arc<dyn ExecutorFileSystem> = file_system.clone();
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
     let outcome = load_environment_skills_from_root(
-        &file_system,
+        &FileSystemEnvironmentAccessor::unrestricted(&executor),
         &root_uri,
         /*restriction_product*/ None,
     )
@@ -130,11 +136,14 @@ async fn reuses_walk_inventory_for_missing_skill_metadata() {
         skill_paths.push(skill_path);
     }
 
-    let file_system =
-        RecordingFileSystem::new(LOCAL_FS.as_ref(), ManifestMetadataBehavior::Immediate);
+    let file_system = Arc::new(RecordingFileSystem::new(
+        LOCAL_FS.as_ref(),
+        ManifestMetadataBehavior::Immediate,
+    ));
+    let executor: Arc<dyn ExecutorFileSystem> = file_system.clone();
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
     let outcome = load_environment_skills_from_root(
-        &file_system,
+        &FileSystemEnvironmentAccessor::unrestricted(&executor),
         &root_uri,
         /*restriction_product*/ None,
     )
@@ -193,15 +202,15 @@ async fn reads_skill_files_while_resolving_plugin_namespaces() {
     )
     .expect("skill");
 
-    let file_system = RecordingFileSystem::new(
+    let file_system: Arc<dyn ExecutorFileSystem> = Arc::new(RecordingFileSystem::new(
         LOCAL_FS.as_ref(),
         ManifestMetadataBehavior::WaitForSkillRead,
-    );
+    ));
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
     let outcome = tokio::time::timeout(
         Duration::from_secs(5),
         load_environment_skills_from_root(
-            &file_system,
+            &FileSystemEnvironmentAccessor::unrestricted(&file_system),
             &root_uri,
             /*restriction_product*/ None,
         ),

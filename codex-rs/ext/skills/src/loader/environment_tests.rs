@@ -2,6 +2,7 @@ use std::fs;
 
 use codex_exec_server::CapabilityRootDiscoverRequest;
 use codex_exec_server::CapabilityRootsDiscoverParams;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::LOCAL_FS;
 use codex_exec_server::discover_capability_roots;
 use codex_protocol::protocol::Product;
@@ -50,8 +51,9 @@ policy:
     .expect("metadata");
 
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
+    let file_system = FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS);
     let outcome =
-        load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Codex)).await;
+        load_environment_skills_from_root(&file_system, &root_uri, Some(Product::Codex)).await;
 
     assert_eq!(
         outcome.skills,
@@ -78,11 +80,10 @@ policy:
         }]
     );
     let atlas =
-        load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Atlas)).await;
+        load_environment_skills_from_root(&file_system, &root_uri, Some(Product::Atlas)).await;
     assert_eq!(atlas.skills, outcome.skills);
     let filtered =
-        load_environment_skills_from_root(LOCAL_FS.as_ref(), &root_uri, Some(Product::Chatgpt))
-            .await;
+        load_environment_skills_from_root(&file_system, &root_uri, Some(Product::Chatgpt)).await;
     assert!(filtered.skills.is_empty());
 }
 
@@ -116,7 +117,7 @@ async fn executor_bundle_parser_matches_direct_environment_loader() {
 
     let root_uri = PathUri::from_host_native_path(root.path()).expect("root URI");
     let existing = load_environment_skills_from_root(
-        LOCAL_FS.as_ref(),
+        &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
         &root_uri,
         /*restriction_product*/ None,
     )
@@ -184,7 +185,7 @@ async fn executor_bundle_preserves_parent_namespace_and_manifest_precedence() {
 
     let root_uri = PathUri::from_host_native_path(&skills_root).expect("skills root URI");
     let existing = load_environment_skills_from_root(
-        LOCAL_FS.as_ref(),
+        &FileSystemEnvironmentAccessor::unrestricted(&LOCAL_FS),
         &root_uri,
         /*restriction_product*/ None,
     )

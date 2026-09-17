@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use codex_exec_server::EnvironmentManager;
+use codex_exec_server::FileSystemEnvironmentAccessor;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_protocol::capabilities::CapabilityRootLocation;
@@ -113,8 +114,10 @@ impl SkillProvider for ExecutorSkillProvider {
                     ));
                     continue;
                 };
+                // TODO(anp): Take this accessor from the selected turn root when discovery receives
+                // turn permissions; until then, preserve direct access through its existing filesystem.
                 let outcome = load_environment_skills_from_root(
-                    file_system.as_ref(),
+                    &FileSystemEnvironmentAccessor::unrestricted(&file_system),
                     path,
                     self.restriction_product,
                 )

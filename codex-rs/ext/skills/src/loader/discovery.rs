@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::io;
 
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::EnvironmentAccess;
 use codex_exec_server::WalkEntryKind;
 use codex_exec_server::WalkOptions;
 use codex_utils_path_uri::PathUri;
@@ -52,7 +52,7 @@ pub(super) enum SkillMetadataDiscovery {
 }
 
 pub(super) async fn discover_skills(
-    file_system: &dyn ExecutorFileSystem,
+    file_system: &dyn EnvironmentAccess,
     root: &PathUri,
     options: SkillDiscoveryOptions,
 ) -> SkillDiscovery {
@@ -81,7 +81,6 @@ pub(super) async fn discover_skills(
                     HiddenDirectoryPolicy::Skip
                 ),
             },
-            /*sandbox*/ None,
         )
         .await
     {
