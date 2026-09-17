@@ -1417,10 +1417,16 @@ impl PluginsManager {
             }
             return Some(needs_effective_plugins_refresh);
         }
+        let metadata_changed = cache.plugins.as_ref().is_none_or(|previous| {
+            !crate::remote_metadata::installed_plugin_metadata_eq(previous, &plugins)
+        });
         cache.plugins = Some(plugins);
         drop(cache);
-        self.clear_loaded_plugins_cache();
-        Some(true)
+        let changed = needs_effective_plugins_refresh || metadata_changed;
+        if changed {
+            self.clear_loaded_plugins_cache();
+        }
+        Some(changed)
     }
 
     #[cfg(test)]
