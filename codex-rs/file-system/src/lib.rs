@@ -1,3 +1,4 @@
+mod environment_accessor;
 mod exec_permission_profile_serde;
 mod find_up;
 
@@ -18,6 +19,10 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+pub use environment_accessor::EnvironmentAccess;
+pub use environment_accessor::EnvironmentAccessExt;
+pub use environment_accessor::EnvironmentAccessKey;
+pub use environment_accessor::FileSystemEnvironmentAccessor;
 pub use find_up::FindUpErrorPolicy;
 pub use find_up::find_nearest_ancestor_with_markers;
 pub use find_up::find_nearest_native_ancestor_with_markers;

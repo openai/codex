@@ -1123,6 +1123,11 @@ impl Environment {
         Arc::clone(&self.filesystem)
     }
 
+    /// Borrows the shared filesystem identity without extending the environment's lifetime.
+    pub fn filesystem_ref(&self) -> &Arc<dyn ExecutorFileSystem> {
+        &self.filesystem
+    }
+
     /// Returns a filesystem view that fails instead of starting or waiting for a connection.
     pub fn get_filesystem_without_reconnect(&self) -> Arc<dyn ExecutorFileSystem> {
         match &self.remote_client {
