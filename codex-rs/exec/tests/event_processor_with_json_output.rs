@@ -399,12 +399,69 @@ fn web_search_completion_preserves_query_and_action() {
                             query: Some("rust async await".to_string()),
                             queries: None,
                         },
+                        results: None,
                     }),
                 },
             })],
             status: CodexStatus::Running,
         }
     );
+}
+
+#[test]
+fn web_search_page_actions_and_results_survive_json_output() {
+    let url = "https://example.com/docs";
+    for (action, expected_action) in [
+        (
+            ApiWebSearchAction::OpenPage {
+                url: Some(url.to_string()),
+            },
+            json!({"type": "open_page", "url": url}),
+        ),
+        (
+            ApiWebSearchAction::FindInPage {
+                url: Some(url.to_string()),
+                pattern: Some("configuration".to_string()),
+            },
+            json!({"type": "find_in_page", "url": url, "pattern": "configuration"}),
+        ),
+    ] {
+        for results in [
+            None,
+            Some(vec![]),
+            Some(vec![json!({"url": url, "content": "configuration"})]),
+            Some(vec![json!({"url": url, "error": {"status": 404}})]),
+        ] {
+            let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+            let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+                ItemCompletedNotification {
+                    item: ThreadItem::WebSearch(ApiWebSearchItem {
+                        id: "search-1".to_string(),
+                        query: url.to_string(),
+                        action: Some(action.clone()),
+                        results: results.clone(),
+                    }),
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    completed_at_ms: 0,
+                },
+            ));
+
+            let mut expected_item = json!({
+                "id": "search-1",
+                "type": "web_search",
+                "query": url,
+                "action": expected_action,
+            });
+            if let Some(results) = results {
+                expected_item["results"] = json!(results);
+            }
+            assert_eq!(
+                serde_json::to_value(collected.events).expect("serialize web search events"),
+                json!([{"type": "item.completed", "item": expected_item}]),
+            );
+        }
+    }
 }
 
 #[test]
@@ -451,6 +508,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                         id: "search-1".to_string(),
                         query: String::new(),
                         action: WebSearchAction::Other,
+                        results: None,
                     }),
                 },
             })],
@@ -470,6 +528,7 @@ fn web_search_start_and_completion_reuse_item_id() {
                             query: Some("rust async await".to_string()),
                             queries: None,
                         },
+                        results: None,
                     }),
                 },
             })],
