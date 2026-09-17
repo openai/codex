@@ -203,6 +203,7 @@ struct ModelClientState {
     originator: String,
     model_verbosity: Option<VerbosityConfig>,
     content_item_kinds_enabled: bool,
+    reasoning_effort_override_enabled: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -476,6 +477,7 @@ impl ModelClient {
         originator: String,
         model_verbosity: Option<VerbosityConfig>,
         content_item_kinds_enabled: bool,
+        reasoning_effort_override_enabled: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -502,6 +504,7 @@ impl ModelClient {
                 originator,
                 model_verbosity,
                 content_item_kinds_enabled,
+                reasoning_effort_override_enabled,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -856,6 +859,11 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info);
+        if !self.state.reasoning_effort_override_enabled {
+            // Disabling overrides must also recover threads with saved updates.
+            // Filter only the request copy; persisted history remains unchanged.
+            input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
+        }
         let is_openai = self.state.provider.info().is_openai();
         let (instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
