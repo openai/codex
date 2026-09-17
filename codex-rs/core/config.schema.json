@@ -4139,6 +4139,7 @@
               "previous_permission_mode": null,
               "prompt_stack_back": null,
               "skip_question": null,
+              "toggle_voice": null,
               "toggle_voice_mute": null
             },
             "composer": {
@@ -4649,6 +4650,14 @@
           ],
           "description": "Skip the focused question."
         },
+        "toggle_voice": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Start or stop a voice conversation."
+        },
         "toggle_voice_mute": {
           "allOf": [
             {
@@ -5008,6 +5017,7 @@
             "previous_permission_mode": null,
             "prompt_stack_back": null,
             "skip_question": null,
+            "toggle_voice": null,
             "toggle_voice_mute": null
           }
         },

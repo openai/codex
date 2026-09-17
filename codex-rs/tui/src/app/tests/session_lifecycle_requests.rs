@@ -2743,14 +2743,13 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
     .await?;
 
     app_server.remember_thread_history_mode(paginated_thread_id, ThreadHistoryMode::Legacy);
-    let resumed = app_server
-        .resume_thread(
-            &app.local_settings,
-            app.config.clone(),
-            paginated_thread_id,
-            crate::app_server_session::ResumeModelSettings::RestoreFromThread,
-        )
-        .await?;
+    let resumed = Box::pin(app_server.resume_thread(
+        &app.local_settings,
+        app.config.clone(),
+        paginated_thread_id,
+        crate::app_server_session::ResumeModelSettings::RestoreFromThread,
+    ))
+    .await?;
     assert_eq!(resumed.session.thread_id, paginated_thread_id);
     assert!(recorded_params(&requests, "thread/read").is_empty());
     let resume_requests = recorded_params(&requests, "thread/resume");
@@ -2764,18 +2763,16 @@ async fn paginated_workflows_never_request_full_thread_history() -> Result<()> {
     )
     .await?;
     assert!(!cells.is_empty());
-    app_server
-        .fork_thread(&app.local_settings, app.config.clone(), paginated_thread_id)
+    Box::pin(app_server.fork_thread(&app.local_settings, app.config.clone(), paginated_thread_id))
         .await?;
     let mut side_config = app.config.clone();
     side_config.ephemeral = true;
-    app_server
-        .fork_side_thread(
-            &crate::local_settings::LocalSettings::from(&side_config),
-            side_config,
-            paginated_thread_id,
-        )
-        .await?;
+    Box::pin(app_server.fork_side_thread(
+        &crate::local_settings::LocalSettings::from(&side_config),
+        side_config,
+        paginated_thread_id,
+    ))
+    .await?;
 
     let paginated_reads = recorded_params(&requests, "thread/read");
     assert!(!paginated_reads.is_empty());

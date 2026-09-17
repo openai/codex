@@ -123,6 +123,8 @@ pub struct TuiGlobalKeymap {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiChatKeymap {
+    /// Start or stop a voice conversation.
+    pub toggle_voice: Option<KeybindingsSpec>,
     /// Toggle the microphone in an active voice conversation.
     pub toggle_voice_mute: Option<KeybindingsSpec>,
     /// Interrupt the active turn.

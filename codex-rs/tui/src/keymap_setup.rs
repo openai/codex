@@ -1173,6 +1173,22 @@ mod tests {
     }
 
     #[test]
+    fn picker_voice_toggle_snapshot() {
+        assert_snapshot!(
+            "keymap_voice_toggle",
+            render_picker(
+                build_keymap_action_menu_params(
+                    "chat".into(),
+                    "toggle_voice".into(),
+                    &RuntimeKeymap::defaults(),
+                    &TuiKeymap::default(),
+                ),
+                /*width*/ 80,
+            )
+        );
+    }
+
+    #[test]
     fn picker_question_actions_snapshot() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params_for_selected_action(

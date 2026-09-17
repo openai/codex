@@ -115,6 +115,8 @@ pub(crate) struct AppKeymap {
 /// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
+    /// Start or stop a voice conversation.
+    pub(crate) toggle_voice: Vec<KeyBinding>,
     /// Toggle capture in the active voice session.
     pub(crate) toggle_voice_mute: Vec<KeyBinding>,
     chord_hints: Arc<RuntimeChordKeymap>,
@@ -627,6 +629,13 @@ impl RuntimeKeymap {
                     || configured_context_alias_is_used(&keymap.list, alias)
                     || configured_context_alias_is_used(&keymap.approval, alias)
             });
+        let voice_toggle_default_is_shadowed = keymap.chat.toggle_voice.is_none()
+            && (configured_main_surface_alias_is_used(keymap, "f8")
+                || configured_context_alias_is_used(&keymap.vim_search, "f8")
+                || chords.bindings.iter().any(|binding| {
+                    binding.action.context.overlaps(KeymapContext::Chat)
+                        && binding.chord.prefix.parts() == key_hint::plain(KeyCode::F(8)).parts()
+                }));
         // Preserve existing Ctrl+X shortcuts and chord prefixes when adding this default.
         let voice_mute_default_is_shadowed = keymap.chat.toggle_voice_mute.is_none()
             && (configured_main_surface_alias_is_used(keymap, "ctrl-x")
@@ -689,6 +698,15 @@ impl RuntimeKeymap {
         };
 
         let mut chat = ChatKeymap {
+            toggle_voice: if voice_toggle_default_is_shadowed {
+                Vec::new()
+            } else {
+                resolve_bindings(
+                    keymap.chat.toggle_voice.as_ref(),
+                    &defaults.chat.toggle_voice,
+                    "tui.keymap.chat.toggle_voice",
+                )?
+            },
             toggle_voice_mute: if voice_mute_default_is_shadowed {
                 Vec::new()
             } else {
@@ -1570,6 +1588,7 @@ impl RuntimeKeymap {
             },
             chords: Arc::default(),
             chat: ChatKeymap {
+                toggle_voice: default_bindings![plain(KeyCode::F(8))],
                 toggle_voice_mute: default_bindings![ctrl(KeyCode::Char('x'))],
                 chord_hints: Arc::default(),
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
@@ -1864,6 +1883,7 @@ impl RuntimeKeymap {
     ///    backtracking, intentionally stay outside this configurable keymap.
     fn validate_conflicts(&self) -> Result<(), String> {
         for (action, bindings) in [
+            ("toggle_voice", &self.chat.toggle_voice),
             (
                 "previous_permission_mode",
                 &self.chat.previous_permission_mode,
@@ -1883,14 +1903,15 @@ impl RuntimeKeymap {
             }
         }
         #[cfg(unix)]
-        if self
-            .app
-            .open_agents
-            .contains(&key_hint::ctrl(KeyCode::Char('z')))
-        {
-            return Err(
-                "tui.keymap.global.open_agents: ctrl-z is reserved for suspend".to_string(),
-            );
+        for (action, bindings) in [
+            ("global.open_agents", &self.app.open_agents),
+            ("chat.toggle_voice", &self.chat.toggle_voice),
+        ] {
+            if bindings.contains(&key_hint::ctrl(KeyCode::Char('z'))) {
+                return Err(format!(
+                    "tui.keymap.{action}: ctrl-z is reserved for suspend"
+                ));
+            }
         }
         if self.app.open_agents.iter().any(|binding| {
             matches!(binding.parts(), (KeyCode::Char(_), modifiers)
@@ -1923,6 +1944,7 @@ impl RuntimeKeymap {
             ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
             ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
             ("toggle_side_conversation", side_toggle_bindings.as_slice()),
+            ("chat.toggle_voice", self.chat.toggle_voice.as_slice()),
             (
                 "chat.toggle_voice_mute",
                 self.chat.toggle_voice_mute.as_slice(),
@@ -2077,6 +2099,7 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
+                ("chat.toggle_voice", self.chat.toggle_voice.as_slice()),
                 (
                     "chat.toggle_voice_mute",
                     self.chat.toggle_voice_mute.as_slice(),

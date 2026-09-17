@@ -260,6 +260,7 @@ define_runtime_action_bindings! {
         toggle_side_conversation,
     ],
     "chat" => Chat, chat, chat [
+        toggle_voice,
         interrupt_turn,
         decrease_reasoning_effort,
         increase_reasoning_effort,
