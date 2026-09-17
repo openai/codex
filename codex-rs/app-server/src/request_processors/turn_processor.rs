@@ -1607,11 +1607,10 @@ impl TurnRequestProcessor {
             let is_running = matches!(thread.agent_status().await, AgentStatus::Running);
             {
                 let mut thread_state = thread_state.lock().await;
-                if let Some(active_turn) = thread_state.active_turn_snapshot() {
-                    if active_turn.id != turn_id {
+                if let Some(active_turn_id) = thread_state.active_turn_id() {
+                    if active_turn_id != turn_id {
                         return Err(invalid_request(format!(
-                            "expected active turn id {turn_id} but found {}",
-                            active_turn.id
+                            "expected active turn id {turn_id} but found {active_turn_id}"
                         )));
                     }
                 } else if thread_state.last_terminal_turn_id.as_deref() == Some(turn_id.as_str())

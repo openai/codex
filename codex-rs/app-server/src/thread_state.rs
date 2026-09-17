@@ -165,6 +165,11 @@ impl ThreadState {
         self.current_turn_history.active_turn_snapshot()
     }
 
+    /// Returns the same turn ID as `active_turn_snapshot` without cloning its items.
+    pub(crate) fn active_turn_id(&self) -> Option<&str> {
+        self.current_turn_history.active_turn_id()
+    }
+
     pub(crate) fn register_shutdown_drain_waiter(&mut self) -> oneshot::Receiver<()> {
         let (completion_tx, completion_rx) = oneshot::channel();
         self.shutdown_drain_waiter = Some(completion_tx);
@@ -459,7 +464,7 @@ impl ThreadStateManager {
                 thread_id = %thread_id,
                 listener_generation = thread_state.listener_generation,
                 had_listener = thread_state.cancel_tx.is_some(),
-                had_active_turn = thread_state.active_turn_snapshot().is_some(),
+                had_active_turn = thread_state.active_turn_id().is_some(),
                 "clearing thread listener during thread-state teardown"
             );
             thread_state.clear_listener();
@@ -483,7 +488,7 @@ impl ThreadStateManager {
                 thread_id = %thread_id,
                 listener_generation = thread_state.listener_generation,
                 had_listener = thread_state.cancel_tx.is_some(),
-                had_active_turn = thread_state.active_turn_snapshot().is_some(),
+                had_active_turn = thread_state.active_turn_id().is_some(),
                 "clearing thread listener during app-server shutdown"
             );
             thread_state.clear_listener();

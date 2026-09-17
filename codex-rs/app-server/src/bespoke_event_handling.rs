@@ -881,7 +881,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 Some(turn_id) => Some(turn_id),
                 None => {
                     let state = thread_state.lock().await;
-                    state.active_turn_snapshot().map(|turn| turn.id)
+                    state.active_turn_id().map(str::to_owned)
                 }
             };
             let server_name = request.server_name.clone();
