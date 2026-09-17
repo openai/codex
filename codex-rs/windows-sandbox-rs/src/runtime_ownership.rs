@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::System::Registry as registry;
+use windows_sys::Win32::UI::Shell::SHDeleteEmptyKeyW;
 
 /// Selects legacy helper materialization or verified app-contained Core for setup.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -188,7 +189,17 @@ pub fn remove_installation() -> Result<()> {
     match status {
         foundation::ERROR_SUCCESS
         | foundation::ERROR_FILE_NOT_FOUND
-        | foundation::ERROR_PATH_NOT_FOUND => flush_installation(INSTALLATION_KEY),
+        | foundation::ERROR_PATH_NOT_FOUND => {
+            flush_installation(INSTALLATION_KEY)?;
+            // Best-effort pruning preserves any remaining values or subkeys.
+            let _ = unsafe {
+                SHDeleteEmptyKeyW(
+                    registry::HKEY_LOCAL_MACHINE,
+                    to_wide(INSTALLATION_KEY).as_ptr(),
+                )
+            };
+            Ok(())
+        }
         status => Err(io::Error::from_raw_os_error(status as i32))
             .context("remove protected legacy sandbox installation record"),
     }

@@ -190,7 +190,7 @@ fn write_response(
 
 fn response_error_message(error: &anyhow::Error) -> String {
     let mut message = String::new();
-    for character in error.to_string().chars() {
+    for character in format!("{error:#}").chars() {
         let character = if character.is_control() {
             ' '
         } else {
