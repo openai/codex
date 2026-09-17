@@ -12,6 +12,7 @@ use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::MultiAgentMessages;
 use codex_protocol::openai_models::MultiAgentModeMessages;
 use codex_protocol::openai_models::MultiAgentRoleMessages;
+use codex_protocol::openai_models::MultiAgentToolMessages;
 use codex_protocol::openai_models::PermissionMessages;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMessages;
@@ -86,6 +87,11 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
             send_user_message_async: Some(ToolMessage {
                 description: Some(async_message_description.to_string()),
             }),
+            multi_agent: Some(MultiAgentToolMessages {
+                spawn_agent: Some(ToolMessage {
+                    description: Some("Catalog spawn description.".to_string()),
+                }),
+            }),
         }),
         instructions_template: Some("template".to_string()),
         instructions_variables: Some(ModelInstructionsVariables {
@@ -147,6 +153,16 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
                 personality_pragmatic: Some("pragmatic".to_string()),
             }),
             persistent_instructions: Some(String::new()),
+            tools: Some(ToolMessages {
+                send_user_message_async: Some(ToolMessage {
+                    description: Some(String::new()),
+                }),
+                multi_agent: Some(MultiAgentToolMessages {
+                    spawn_agent: Some(ToolMessage {
+                        description: Some(String::new()),
+                    }),
+                }),
+            }),
             approvals: Some(ApprovalMessages {
                 on_request: Some("user approvals".to_string()),
                 on_request_auto_review: None,

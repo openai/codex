@@ -76,6 +76,7 @@ async fn persistent_async_message_guidance_follows_tool_availability(
                 send_user_message_async: Some(ToolMessage {
                     description: Some("Catalog async message description.".to_string()),
                 }),
+                ..Default::default()
             });
         })
         .with_config(|config| {
@@ -248,6 +249,7 @@ async fn freeform_async_message_emits_an_item_without_ending_the_turn(
                 send_user_message_async: Some(ToolMessage {
                     description: Some("Questions only.".to_string()),
                 }),
+                ..Default::default()
             });
         })
         .with_config(move |config| {
@@ -340,10 +342,10 @@ async fn freeform_async_message_emits_an_item_without_ending_the_turn(
 
 #[test_case(None, "send_user_message_async"; "fallback_description")]
 #[test_case(None, "request_user_input_async"; "current_catalog_name")]
-#[test_case(Some(ToolMessages { send_user_message_async: None }), "send_user_message_async"; "missing_tool")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage::default()) }), "send_user_message_async"; "missing_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()) }) }), "send_user_message_async"; "catalog_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some(String::new()) }) }), "send_user_message_async"; "empty_description")]
+#[test_case(Some(ToolMessages::default()), "send_user_message_async"; "missing_tool")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage::default()), ..Default::default() }), "send_user_message_async"; "missing_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()) }), ..Default::default() }), "send_user_message_async"; "catalog_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some(String::new()) }), ..Default::default() }), "send_user_message_async"; "empty_description")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_async_emits_item_and_does_not_end_the_turn(
     tool_messages: Option<ToolMessages>,

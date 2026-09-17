@@ -44,6 +44,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::MultiAgentMessages;
 use codex_protocol::openai_models::MultiAgentModeMessages;
 use codex_protocol::openai_models::MultiAgentRoleMessages;
+use codex_protocol::openai_models::MultiAgentToolMessages;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::ToolMessage;
@@ -86,6 +87,7 @@ use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_completed;
 use core_test_support::responses::sse_response;
@@ -2224,7 +2226,7 @@ async fn model_activation_uses_destination_metadata_defaults(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_async_description_follows_mid_turn_model_changes() -> Result<()> {
+async fn tool_descriptions_follow_mid_turn_model_changes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2238,6 +2240,11 @@ async fn request_user_input_async_description_follows_mid_turn_model_changes() -
     .await;
     let test = step_settings_test()
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("test config should allow feature update");
+            config.multi_agent_v2.expose_spawn_agent_model_overrides = false;
             for model in &mut config
                 .model_catalog
                 .as_mut()
@@ -2254,6 +2261,11 @@ async fn request_user_input_async_description_follows_mid_turn_model_changes() -
                     .tools = Some(ToolMessages {
                     send_user_message_async: Some(ToolMessage {
                         description: Some(format!("Async message description for {}.", model.slug)),
+                    }),
+                    multi_agent: Some(MultiAgentToolMessages {
+                        spawn_agent: Some(ToolMessage {
+                            description: Some(format!("Spawn description for {}.", model.slug)),
+                        }),
                     }),
                 });
             }
@@ -2290,13 +2302,20 @@ async fn request_user_input_async_description_follows_mid_turn_model_changes() -
                     .iter()
                     .find(|tool| tool["name"] == "request_user_input_async")
                     .expect("async message tool");
-                json!({"model": body["model"], "description": tool["description"]})
+                let spawn = namespace_child_tool(&body, "collaboration", "spawn_agent")
+                    .expect("spawn agent tool");
+                json!({
+                    "model": body["model"],
+                    "async_description": tool["description"],
+                    "spawn_description": spawn["description"].as_str().expect("spawn description").trim(),
+                })
             })
             .collect::<Vec<_>>(),
         [MODEL_A, MODEL_B]
             .map(|model| json!({
                 "model": model,
-                "description": format!("Async message description for {model}."),
+                "async_description": format!("Async message description for {model}."),
+                "spawn_description": format!("Spawn description for {model}."),
             }))
             .to_vec(),
     );

@@ -576,6 +576,8 @@ pub struct ConfirmationPolicies {
 pub struct ToolMessages {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_user_message_async: Option<ToolMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent: Option<MultiAgentToolMessages>,
 }
 
 /// Model-owned messages for a built-in tool.
@@ -585,6 +587,15 @@ pub struct ToolMessage {
     /// empty without disabling the tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+}
+
+/// Model-owned descriptions for Multi-Agent V2 tools, independent of their runtime namespace.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct MultiAgentToolMessages {
+    /// Replaces the static description. Missing or null uses the bundled text; an empty string
+    /// suppresses it. Generated model information and local usage hints are retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spawn_agent: Option<ToolMessage>,
 }
 
 /// Model-owned defaults for the context-window token-budget feature.
@@ -1022,6 +1033,7 @@ mod tests {
                 (
                     expected.as_ref().map(|tool| ToolMessages {
                         send_user_message_async: tool.clone(),
+                        ..Default::default()
                     }),
                     expected.map(|tool| tool.map(|tool| match tool.description {
                         Some(description) => serde_json::json!({"description": description}),
@@ -1029,6 +1041,43 @@ mod tests {
                     })),
                 )
             );
+        }
+    }
+
+    #[test]
+    fn spawn_agent_messages_preserve_sparse_and_empty_values() {
+        for (value, expected) in [
+            (serde_json::json!({}), serde_json::json!({})),
+            (
+                serde_json::json!({"multi_agent": null}),
+                serde_json::json!({}),
+            ),
+            (
+                serde_json::json!({"multi_agent": {"spawn_agent": null}}),
+                serde_json::json!({"multi_agent": {}}),
+            ),
+            (
+                serde_json::json!({"multi_agent": {"spawn_agent": {"description": null}}}),
+                serde_json::json!({"multi_agent": {"spawn_agent": {}}}),
+            ),
+            (
+                serde_json::json!({"multi_agent": {"spawn_agent": {"description": "Catalog spawn"}}}),
+                serde_json::json!({"multi_agent": {"spawn_agent": {"description": "Catalog spawn"}}}),
+            ),
+            (
+                serde_json::json!({"multi_agent": {"spawn_agent": {"description": ""}}}),
+                serde_json::json!({"multi_agent": {"spawn_agent": {"description": ""}}}),
+            ),
+        ] {
+            let tools: ToolMessages =
+                serde_json::from_value(value).expect("deserialize tool messages");
+            assert_eq!(
+                serde_json::to_value(&tools).expect("serialize tool messages"),
+                expected
+            );
+            let restored: ToolMessages =
+                serde_json::from_value(expected).expect("restore tool messages");
+            assert_eq!(restored, tools);
         }
     }
 
@@ -1331,6 +1380,11 @@ mod tests {
                 send_user_message_async: Some(ToolMessage {
                     description: Some("Catalog description".to_string()),
                 }),
+                multi_agent: Some(MultiAgentToolMessages {
+                    spawn_agent: Some(ToolMessage {
+                        description: Some("Catalog spawn description".to_string()),
+                    }),
+                }),
             }),
             instructions_template: None,
             instructions_variables: None,
@@ -1403,6 +1457,7 @@ mod tests {
                 send_user_message_async: Some(ToolMessage {
                     description: Some(String::new()),
                 }),
+                ..Default::default()
             }),
             instructions_template: Some("canonical instructions".to_string()),
             ..Default::default()
