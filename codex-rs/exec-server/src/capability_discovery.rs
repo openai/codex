@@ -76,6 +76,13 @@ async fn discover_root(
         error: None,
     };
 
+    if let Some(sandbox) = sandbox
+        && let Err(error) = sandbox.validate_file_system_paths_for_current_host()
+    {
+        discovery.error = Some(format!("failed to inspect capability root {path}: {error}"));
+        return discovery;
+    }
+
     #[cfg(target_os = "windows")]
     if sandbox.is_some_and(|context| {
         context.should_run_in_sandbox() && !context.windows_sandbox_is_requested()

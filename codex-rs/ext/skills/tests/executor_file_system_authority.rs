@@ -312,6 +312,7 @@ async fn windows_executor_skill_read_requires_a_requested_sandbox() {
             &FileSystemSandboxPolicy::restricted(Vec::new()),
             NetworkSandboxPolicy::Restricted,
         ),
+        PathUri::parse("file:///C:/skill").expect("Windows resource cwd"),
     );
     let resource = SkillResourceId::environment(
         "skill://windows-root/C:/skill/SKILL.md",
@@ -978,7 +979,10 @@ async fn high_level_discovery_cache_separates_filesystem_permission_contexts() {
         .expect("update executor skill");
     let sandbox_contexts = HashMap::from([(
         "local".to_string(),
-        FileSystemSandboxContext::from_permission_profile(PermissionProfile::Disabled),
+        FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::Disabled,
+            PathUri::from_host_native_path(&test_root).expect("skill root URI"),
+        ),
     )]);
     let second_snapshot = cache.snapshot(&executor_roots, &sandbox_contexts).await;
     let second_discovery = second_snapshot.roots()[0]

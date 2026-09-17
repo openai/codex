@@ -59,7 +59,7 @@ async fn prepare_apply_patch_uses_action_policy_before_turn_policy() {
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(permission_profile);
     let sandbox = environment.sandbox_context(/*additional_permissions*/ None);
-    let context = sandbox.policy_context().expect("local sandbox context");
+    let context = sandbox.policy_context();
 
     let prepared = prepare_apply_patch(
         &step,

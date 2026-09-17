@@ -24,7 +24,7 @@ struct FileReadRegistration {
 pub(super) async fn open(
     client: ExecServerClient,
     path: PathUri,
-    sandbox: Option<FileSystemSandboxContext>,
+    sandbox: Option<&FileSystemSandboxContext>,
 ) -> FileSystemResult<FileSystemReadStream> {
     let registration = FileReadRegistration {
         client,
@@ -37,7 +37,7 @@ pub(super) async fn open(
         .fs_open(FsOpenParams {
             handle_id: registration.handle_id.clone(),
             path,
-            sandbox,
+            sandbox: sandbox.cloned(),
         })
         .await
         .map_err(map_remote_error)?;

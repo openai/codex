@@ -92,8 +92,8 @@ impl Session {
                         /*has_managed_network_requirements*/ false,
                     )
                     .then(|| FileSystemSandboxContext {
-                        permissions: environment.permission_profile().clone().into(),
-                        cwd: Some(environment.cwd().clone()),
+                        permissions: environment.permission_profile().clone(),
+                        cwd: environment.cwd().clone(),
                         workspace_roots: environment.workspace_roots().to_vec(),
                         user_home_dir: None,
                         temporary_directories: None,

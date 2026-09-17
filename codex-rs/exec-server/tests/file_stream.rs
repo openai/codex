@@ -373,12 +373,14 @@ fn read_only_sandbox(path: std::path::PathBuf) -> codex_exec_server::FileSystemS
 
     let path = AbsolutePathBuf::from_absolute_path(&path)
         .unwrap_or_else(|err| panic!("sandbox path should be absolute: {err}"));
-    FileSystemSandboxContext::from_permission_profile(PermissionProfile::from_runtime_permissions(
+    let cwd = PathUri::from_abs_path(&path);
+    let permissions = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: path.into(),
             access: FileSystemAccessMode::Read,
             missing_path_behavior: None,
         }]),
         NetworkSandboxPolicy::Restricted,
-    ))
+    );
+    FileSystemSandboxContext::from_permission_profile(permissions, cwd)
 }

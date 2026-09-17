@@ -46,7 +46,7 @@ async fn mxc_tmpdir_uses_command_environment_over_rpc() -> Result<()> {
             FileSystemAccessMode::Write,
         ),
     ]);
-    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(&fs, NetworkSandboxPolicy::Restricted),
         cwd.clone(),
     );

@@ -79,7 +79,10 @@ impl FileSystemHandler {
             .first()
             .and_then(|root| root.sandbox.as_ref())
             .filter(|sandbox| {
-                sandbox.should_run_in_sandbox()
+                sandbox
+                    .validate_file_system_paths_for_current_host()
+                    .is_ok()
+                    && sandbox.should_run_in_sandbox()
                     && (!cfg!(target_os = "windows") || sandbox.windows_sandbox_is_requested())
                     && params
                         .roots

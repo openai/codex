@@ -271,7 +271,10 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     request.exec_server_shell_snapshot = None;
 
     request.exec_server_sandbox = Some(
-        codex_exec_server::FileSystemSandboxContext::from_permission_profile(permission_profile),
+        codex_exec_server::FileSystemSandboxContext::from_permission_profile(
+            permission_profile,
+            request.cwd.clone(),
+        ),
     );
     let first = params_for_request(&request);
     let second = params_for_request(&request);

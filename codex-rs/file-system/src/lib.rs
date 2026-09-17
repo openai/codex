@@ -1,3 +1,4 @@
+mod exec_permission_profile_serde;
 mod find_up;
 
 use bytes::Bytes;
@@ -16,6 +17,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 pub use find_up::FindUpErrorPolicy;
 pub use find_up::find_nearest_ancestor_with_markers;
@@ -187,18 +189,13 @@ impl From<FileSystemPath> for ExecFileSystemPath {
     }
 }
 
-impl TryFrom<ExecFileSystemPath> for FileSystemPath {
-    type Error = io::Error;
-
-    fn try_from(value: ExecFileSystemPath) -> Result<Self, Self::Error> {
-        Ok(match value {
-            ExecFileSystemPath::Path { path } => {
-                path.to_abs_path()?;
-                Self::Path { path }
-            }
+impl From<ExecFileSystemPath> for FileSystemPath {
+    fn from(value: ExecFileSystemPath) -> Self {
+        match value {
+            ExecFileSystemPath::Path { path } => Self::Path { path },
             ExecFileSystemPath::GlobPattern { pattern } => Self::GlobPattern { pattern },
             ExecFileSystemPath::Special { value } => Self::Special { value },
-        })
+        }
     }
 }
 
@@ -220,15 +217,13 @@ impl From<FileSystemSandboxEntry> for ExecFileSystemSandboxEntry {
     }
 }
 
-impl TryFrom<ExecFileSystemSandboxEntry> for FileSystemSandboxEntry {
-    type Error = io::Error;
-
-    fn try_from(value: ExecFileSystemSandboxEntry) -> Result<Self, Self::Error> {
-        Ok(Self {
-            path: value.path.try_into()?,
+impl From<ExecFileSystemSandboxEntry> for FileSystemSandboxEntry {
+    fn from(value: ExecFileSystemSandboxEntry) -> Self {
+        Self {
+            path: value.path.into(),
             access: value.access,
             missing_path_behavior: value.missing_path_behavior,
-        })
+        }
     }
 }
 
@@ -258,26 +253,22 @@ impl From<ManagedFileSystemPermissions> for ExecManagedFileSystemPermissions {
     }
 }
 
-impl TryFrom<ExecManagedFileSystemPermissions> for ManagedFileSystemPermissions {
-    type Error = io::Error;
-
-    fn try_from(value: ExecManagedFileSystemPermissions) -> Result<Self, Self::Error> {
-        Ok(match value {
+impl From<ExecManagedFileSystemPermissions> for ManagedFileSystemPermissions {
+    fn from(value: ExecManagedFileSystemPermissions) -> Self {
+        match value {
             ExecManagedFileSystemPermissions::Restricted {
                 entries,
                 glob_scan_max_depth,
             } => Self::Restricted {
-                entries: entries
-                    .into_iter()
-                    .map(TryInto::try_into)
-                    .collect::<io::Result<_>>()?,
+                entries: entries.into_iter().map(Into::into).collect(),
                 glob_scan_max_depth,
             },
             ExecManagedFileSystemPermissions::Unrestricted => Self::Unrestricted,
-        })
+        }
     }
 }
 
+/// Executor permission profile whose explicit filesystem paths serialize as file URIs.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ExecPermissionProfile {
@@ -307,21 +298,19 @@ impl From<PermissionProfile> for ExecPermissionProfile {
     }
 }
 
-impl TryFrom<ExecPermissionProfile> for PermissionProfile {
-    type Error = io::Error;
-
-    fn try_from(value: ExecPermissionProfile) -> Result<Self, Self::Error> {
-        Ok(match value {
+impl From<ExecPermissionProfile> for PermissionProfile {
+    fn from(value: ExecPermissionProfile) -> Self {
+        match value {
             ExecPermissionProfile::Managed {
                 file_system,
                 network,
             } => Self::Managed {
-                file_system: file_system.try_into()?,
+                file_system: file_system.into(),
                 network,
             },
             ExecPermissionProfile::Disabled => Self::Disabled,
             ExecPermissionProfile::External { network } => Self::External { network },
-        })
+        }
     }
 }
 
@@ -349,12 +338,16 @@ impl From<WindowsSandboxLevel> for WindowsSandboxSelection {
     }
 }
 
+/// Filesystem sandbox policy and the selected executor paths needed to interpret it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileSystemSandboxContext {
-    pub permissions: ExecPermissionProfile,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<PathUri>,
+    /// Serializes paths as executor file URIs instead of the profile's default native paths.
+    #[serde(with = "exec_permission_profile_serde")]
+    pub permissions: PermissionProfile,
+    /// Working directory on the selected executor used to interpret sandbox permissions.
+    /// Required even for absolute permissions; a process may use a different working directory.
+    pub cwd: PathUri,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_roots: Vec<PathUri>,
     /// Executor-local user home used to resolve home-relative policy paths.
@@ -391,23 +384,14 @@ impl FileSystemSandboxContext {
             &file_system_sandbox_policy,
             NetworkSandboxPolicy::from(&sandbox_policy),
         );
-        Ok(Self::from_permission_profile_with_cwd(permissions, cwd))
+        Ok(Self::from_permission_profile(permissions, cwd))
     }
 
-    pub fn from_permission_profile(permissions: PermissionProfile) -> Self {
-        Self::from_permissions_and_cwd(permissions, /*cwd*/ None)
-    }
-
-    pub fn from_permission_profile_with_cwd(permissions: PermissionProfile, cwd: PathUri) -> Self {
-        Self::from_permissions_and_cwd(permissions, Some(cwd))
-    }
-
-    fn from_permissions_and_cwd(permissions: PermissionProfile, cwd: Option<PathUri>) -> Self {
-        let workspace_roots = cwd.iter().cloned().collect();
+    pub fn from_permission_profile(permissions: PermissionProfile, cwd: PathUri) -> Self {
         Self {
-            permissions: permissions.into(),
+            permissions,
+            workspace_roots: vec![cwd.clone()],
             cwd,
-            workspace_roots,
             user_home_dir: None,
             temporary_directories: None,
             windows_sandbox_selection: WindowsSandboxSelection::Disabled,
@@ -418,11 +402,11 @@ impl FileSystemSandboxContext {
     }
 
     pub fn should_run_in_sandbox(&self) -> bool {
-        let Ok(permissions) = PermissionProfile::try_from(self.permissions.clone()) else {
+        if self.validate_file_system_paths_for_current_host().is_err() {
             // A sandbox context for another host must not select the unsandboxed filesystem.
             return true;
-        };
-        let file_system_policy = permissions.file_system_sandbox_policy();
+        }
+        let file_system_policy = self.permissions.file_system_sandbox_policy();
         matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
             && !file_system_policy.has_full_disk_write_access()
     }
@@ -432,25 +416,101 @@ impl FileSystemSandboxContext {
         self.windows_sandbox_selection != WindowsSandboxSelection::Disabled
     }
 
+    /// Checks that explicit permission paths can be enforced by the current host. An
+    /// orchestrator can still construct this context with paths belonging to another executor.
+    pub fn validate_file_system_paths_for_current_host(&self) -> io::Result<()> {
+        if let PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted { entries, .. },
+            ..
+        } = &self.permissions
+        {
+            for entry in entries {
+                if let FileSystemPath::Path { path } = &entry.path {
+                    path.to_abs_path().map_err(|error| {
+                        io::Error::new(
+                            error.kind(),
+                            format!("invalid sandbox permission path URI: {error}"),
+                        )
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Borrows the executor-owned paths needed to interpret filesystem policy entries.
-    ///
-    /// Returns `None` after the cwd has been omitted from a transport context.
-    pub fn policy_context(&self) -> Option<FileSystemSandboxPolicyContext<'_>> {
-        Some(FileSystemSandboxPolicyContext {
-            cwd: self.cwd.as_ref()?,
+    pub fn policy_context(&self) -> FileSystemSandboxPolicyContext<'_> {
+        FileSystemSandboxPolicyContext {
+            cwd: &self.cwd,
             workspace_roots: &self.workspace_roots,
             user_home_dir: self.user_home_dir.as_ref(),
             temporary_directories: self.temporary_directories.as_deref(),
-        })
+        }
     }
+}
 
-    pub fn has_cwd_dependent_permissions(&self) -> bool {
-        match &self.permissions {
+/// Filesystem RPC wire context; older clients can omit the policy cwd before executor resolution.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireFileSystemSandboxContext {
+    permissions: ExecPermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<PathUri>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    policy_context: Option<WireFileSystemPolicyContext>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    workspace_roots: Vec<PathUri>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user_home_dir: Option<PathUri>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    temporary_directories: Option<Vec<PathUri>>,
+    #[serde(rename = "windowsSandboxLevel")]
+    windows_sandbox_selection: WindowsSandboxSelection,
+    #[serde(default)]
+    windows_sandbox_private_desktop: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    windows_sandbox_proxy_settings_mode: Option<WindowsSandboxProxySettingsMode>,
+    #[serde(default)]
+    use_legacy_landlock: bool,
+}
+
+/// New filesystem clients provide these paths independently of the legacy helper launch cwd.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireFileSystemPolicyContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<PathUri>,
+    #[serde(default)]
+    workspace_roots: Vec<PathUri>,
+}
+
+impl From<FileSystemSandboxContext> for WireFileSystemSandboxContext {
+    fn from(sandbox: FileSystemSandboxContext) -> Self {
+        let FileSystemSandboxContext {
+            permissions,
+            cwd,
+            workspace_roots,
+            user_home_dir,
+            temporary_directories,
+            windows_sandbox_selection,
+            windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode,
+            use_legacy_landlock,
+        } = sandbox;
+        let permissions = ExecPermissionProfile::from(permissions);
+        // Older filesystem clients sent cwd and roots only when permissions needed them; old
+        // executors also use that cwd to launch their helper. The explicit context is independent.
+        let legacy_needs_cwd = match &permissions {
             ExecPermissionProfile::Managed {
                 file_system: ExecManagedFileSystemPermissions::Restricted { entries, .. },
                 ..
             } => entries.iter().any(|entry| match &entry.path {
-                ExecFileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
+                ExecFileSystemPath::GlobPattern { pattern } => match cwd.infer_path_convention() {
+                    Some(convention) => LegacyAppPathString::from_string(pattern)
+                        .to_path_uri(convention)
+                        .is_err(),
+                    None => true,
+                },
                 ExecFileSystemPath::Special {
                     value: FileSystemSpecialPath::ProjectRoots { .. },
                 } => true,
@@ -462,15 +522,73 @@ impl FileSystemSandboxContext {
             }
             | ExecPermissionProfile::Disabled
             | ExecPermissionProfile::External { .. } => false,
+        };
+        Self {
+            permissions,
+            cwd: legacy_needs_cwd.then(|| cwd.clone()),
+            workspace_roots: if legacy_needs_cwd {
+                workspace_roots.clone()
+            } else {
+                Vec::new()
+            },
+            policy_context: Some(WireFileSystemPolicyContext {
+                cwd: Some(cwd),
+                workspace_roots,
+            }),
+            user_home_dir,
+            temporary_directories,
+            windows_sandbox_selection,
+            windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode,
+            use_legacy_landlock,
+        }
+    }
+}
+
+impl WireFileSystemSandboxContext {
+    /// Returns the policy cwd supplied by the client, falling back to the legacy cwd field.
+    pub fn cwd(&self) -> Option<&PathUri> {
+        match &self.policy_context {
+            Some(policy_context) => policy_context.cwd.as_ref().or(self.cwd.as_ref()),
+            None => self.cwd.as_ref(),
         }
     }
 
-    pub fn drop_cwd_if_unused(mut self) -> Self {
-        if !self.has_cwd_dependent_permissions() {
-            self.cwd = None;
-            self.workspace_roots.clear();
+    /// Returns whether a legacy filesystem policy needs the client's cwd to be interpreted.
+    pub fn requires_cwd(&self) -> bool {
+        let ExecPermissionProfile::Managed {
+            file_system: ExecManagedFileSystemPermissions::Restricted { entries, .. },
+            ..
+        } = &self.permissions
+        else {
+            return false;
+        };
+
+        entries.iter().any(|entry| match &entry.path {
+            ExecFileSystemPath::GlobPattern { pattern } => !Path::new(pattern).is_absolute(),
+            ExecFileSystemPath::Special {
+                value: FileSystemSpecialPath::ProjectRoots { .. },
+            } => true,
+            ExecFileSystemPath::Path { .. } | ExecFileSystemPath::Special { .. } => false,
+        })
+    }
+
+    /// Constructs the strict context after executor ingress has resolved the policy cwd.
+    pub fn into_context(self, cwd: PathUri) -> FileSystemSandboxContext {
+        FileSystemSandboxContext {
+            permissions: self.permissions.into(),
+            cwd,
+            workspace_roots: match self.policy_context {
+                Some(policy_context) => policy_context.workspace_roots,
+                None => self.workspace_roots,
+            },
+            user_home_dir: self.user_home_dir,
+            temporary_directories: self.temporary_directories,
+            windows_sandbox_selection: self.windows_sandbox_selection,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode: self.windows_sandbox_proxy_settings_mode,
+            use_legacy_landlock: self.use_legacy_landlock,
         }
-        self
     }
 }
 

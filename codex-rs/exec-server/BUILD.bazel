@@ -20,6 +20,8 @@ codex_rust_crate(
     ],
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
+        "//codex-rs/windows-sandbox-rs:codex-command-runner",
+        "//codex-rs/windows-sandbox-rs:codex-windows-sandbox-setup",
     ],
     integration_compile_data_extra = [
         "src/proto/codex.exec_server.relay.v1.rs",

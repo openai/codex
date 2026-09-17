@@ -265,15 +265,10 @@ async fn file_system_sandbox_context_preserves_executor_workspace_permissions() 
     );
     let expected_permissions =
         PermissionProfile::from_runtime_permissions(&file_system_policy, network_policy);
-    let native_permissions: PermissionProfile = sandbox
-        .permissions
-        .clone()
-        .try_into()
-        .expect("native sandbox permissions");
-    assert_eq!(native_permissions, expected_permissions);
+    assert_eq!(sandbox.permissions, expected_permissions);
     assert_eq!(
         sandbox.cwd,
-        Some(codex_utils_path_uri::PathUri::from_abs_path(&path))
+        codex_utils_path_uri::PathUri::from_abs_path(&path)
     );
     assert_eq!(
         sandbox.windows_sandbox_selection,
@@ -348,8 +343,8 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
     assert_eq!(
         ApplyPatchRuntime::file_system_sandbox_context_for_attempt(&req, &attempt),
         Some(FileSystemSandboxContext {
-            permissions: permissions.into(),
-            cwd: Some(cwd.clone()),
+            permissions,
+            cwd: cwd.clone(),
             workspace_roots: vec![cwd],
             user_home_dir: Some(user_home_dir),
             temporary_directories: None,

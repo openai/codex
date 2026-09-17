@@ -588,7 +588,7 @@ async fn remote_read_file_materializes_environment_workspace_roots() -> Result<(
         access: FileSystemAccessMode::Read,
         missing_path_behavior: None,
     }]);
-    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         PathUri::from_host_native_path(tmp.path())?,
     );
@@ -632,7 +632,7 @@ async fn remote_read_file_preserves_empty_workspace_roots() -> Result<()> {
         access: FileSystemAccessMode::Read,
         missing_path_behavior: None,
     }]);
-    let mut sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         PathUri::from_host_native_path(tmp.path())?,
     );

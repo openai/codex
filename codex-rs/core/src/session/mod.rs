@@ -3055,13 +3055,7 @@ impl Session {
 
         let requested_permissions = args.permissions;
         let sandbox_context = environment.sandbox_context(/*additional_permissions*/ None);
-        let Some(context) = sandbox_context.policy_context() else {
-            return Some(RequestPermissionsResponse {
-                permissions: RequestPermissionProfile::default(),
-                scope: PermissionGrantScope::Turn,
-                strict_auto_review: false,
-            });
-        };
+        let context = sandbox_context.policy_context();
         {
             let originating_turn_state = {
                 let active = self.active_turn.lock().await;
@@ -3292,19 +3286,11 @@ impl Session {
                 let sandbox_context = entry
                     .environment
                     .sandbox_context(/*additional_permissions*/ None);
-                let response = if let Some(context) = sandbox_context.policy_context() {
-                    Self::normalize_request_permissions_response(
-                        entry.requested_permissions,
-                        response,
-                        &context,
-                    )
-                } else {
-                    RequestPermissionsResponse {
-                        permissions: RequestPermissionProfile::default(),
-                        scope: PermissionGrantScope::Turn,
-                        strict_auto_review: false,
-                    }
-                };
+                let response = Self::normalize_request_permissions_response(
+                    entry.requested_permissions,
+                    response,
+                    &sandbox_context.policy_context(),
+                );
                 self.record_granted_request_permissions_for_turn(
                     &response,
                     &entry.environment.selection.environment_id,

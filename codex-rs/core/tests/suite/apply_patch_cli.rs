@@ -43,6 +43,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
@@ -935,6 +936,151 @@ async fn intercepted_apply_patch_verification_uses_local_sandbox() -> Result<()>
         std::fs::read_to_string(&denied_target)?,
         "outside content\n",
         "verification failure should leave the denied target unchanged"
+    );
+    Ok(())
+}
+
+/// An intercepted update can verify allowed absolute paths after the turn cwd disappears,
+/// while the same turn still cannot read or update an explicitly denied target.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_removed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_target_windows!(
+        Ok(()),
+        "the default Windows restricted-token test backend cannot enforce denied reads"
+    );
+
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let test = harness.test();
+    let workspace = test.workspace_path_uri("")?;
+    let original_cwd = test.workspace_path_uri("policy-cwd")?;
+    let allowed_target = test.workspace_path_uri("allowed.txt")?;
+    let denied_target = test.workspace_path_uri("denied.txt")?;
+    harness.create_dir_all("policy-cwd").await?;
+    harness.write_file("allowed.txt", "original\n").await?;
+    harness.write_file("denied.txt", "private\n").await?;
+
+    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+            missing_path_behavior: None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: workspace.clone(),
+            },
+            access: FileSystemAccessMode::Write,
+            missing_path_behavior: None,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: denied_target.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
+        },
+    ]);
+    let permissions = PermissionProfile::from_runtime_permissions(
+        &file_system_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permissions, test.config.cwd.as_path());
+    let selection = TurnEnvironmentSelection {
+        cwd: original_cwd,
+        workspace_roots: vec![workspace.clone()],
+        ..test.executor_environment().selection().clone()
+    };
+
+    let workdir = workspace.inferred_native_path_string();
+    let allowed_patch = format!(
+        "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: {}\n@@\n-original\n+changed\n*** End Patch\nEOF\n",
+        allowed_target.inferred_native_path_string(),
+    );
+    let denied_patch = format!(
+        "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: {}\n@@\n-private\n+changed\n*** End Patch\nEOF\n",
+        denied_target.inferred_native_path_string(),
+    );
+    let responses = mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_response_created("resp-remove"),
+                ev_exec_command_call_with_args(
+                    "remove-cwd",
+                    &json!({"cmd": "rmdir policy-cwd", "workdir": workdir, "login": false}),
+                ),
+                ev_completed("resp-remove"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-allowed"),
+                ev_exec_command_call_with_args(
+                    "patch-allowed",
+                    &json!({"cmd": allowed_patch, "workdir": workdir, "login": false}),
+                ),
+                ev_completed("resp-allowed"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-denied"),
+                ev_exec_command_call_with_args(
+                    "patch-denied",
+                    &json!({"cmd": denied_patch, "workdir": workdir, "login": false}),
+                ),
+                ev_completed("resp-denied"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "remove the turn cwd, then update the allowed and denied files".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![selection],
+                )),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert!(!harness.path_exists("policy-cwd").await?);
+    let allowed_output = responses
+        .function_call_output_text("patch-allowed")
+        .expect("the model should receive the allowed patch output");
+    assert!(allowed_output.contains("Success."), "{allowed_output}");
+    let denied_output = responses
+        .function_call_output_text("patch-denied")
+        .expect("the model should receive the denied patch output");
+    assert!(
+        denied_output.contains("apply_patch verification failed")
+            && denied_output.contains("Failed to read"),
+        "{denied_output}",
+    );
+    assert_eq!(
+        (
+            harness.read_file_text("allowed.txt").await?,
+            harness.read_file_text("denied.txt").await?,
+        ),
+        ("changed\n".to_string(), "private\n".to_string()),
     );
     Ok(())
 }

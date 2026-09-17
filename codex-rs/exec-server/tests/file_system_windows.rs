@@ -14,6 +14,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::FileSystemSandboxContext;
@@ -22,6 +23,13 @@ use codex_exec_server::ReadFileOptions;
 use codex_exec_server::RemoveOptions;
 use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server::WriteFileOptions;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxType;
 use codex_utils_path_uri::PathUri;
@@ -427,6 +435,118 @@ async fn file_system_remote_fs_helper_respects_windows_sandbox_write_policy(
         "sandboxed fs helper must not create blocked file after error: {error}"
     );
 
+    Ok(())
+}
+
+/// An elevated filesystem helper must enforce relative deny globs from the policy cwd.
+#[test_case(FileSystemImplementation::Local ; "local")]
+#[test_case(FileSystemImplementation::Remote ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(remote_exec_server)]
+async fn file_system_elevated_relative_read_denial_uses_policy_cwd(
+    implementation: FileSystemImplementation,
+) -> Result<()> {
+    // Both implementations re-enter this test binary; the elevated backend finds its helpers
+    // next to that binary, while Cargo and Bazel provide them separately.
+    let test_exe = std::env::current_exe()?;
+    let resources = test_exe
+        .parent()
+        .context("Windows test executable should have a parent directory")?
+        .join("codex-resources");
+    if let Err(error) = std::fs::create_dir_all(&resources)
+        && !(error.kind() == std::io::ErrorKind::PermissionDenied && resources.is_dir())
+    {
+        return Err(error).context("create Windows sandbox test resources");
+    }
+    for name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
+        let source = codex_utils_cargo_bin::cargo_bin(name)?;
+        let destination = resources.join(Path::new(name).with_extension("exe"));
+        if let Err(error) = std::fs::copy(&source, &destination)
+            && !(error.kind() == std::io::ErrorKind::PermissionDenied && destination.is_file())
+        {
+            return Err(error).with_context(|| format!("stage Windows sandbox helper {name}"));
+        }
+    }
+    let context = create_file_system_context(implementation).await?;
+    let tmp = tempfile::TempDir::new()?;
+    let policy_cwd = tmp.path().join("checkout");
+    let selected_files = policy_cwd.join("files");
+    let other_files = tmp.path().join("files");
+    std::fs::create_dir_all(&selected_files)?;
+    std::fs::create_dir(&other_files)?;
+    let allowed_neighbor = selected_files.join("allowed.txt");
+    let denied = selected_files.join("blocked.env");
+    let same_name_outside = other_files.join("blocked.env");
+    std::fs::write(&allowed_neighbor, b"allowed neighbor")?;
+    std::fs::write(&denied, b"denied")?;
+    std::fs::write(&same_name_outside, b"allowed outside")?;
+
+    let cwd = PathUri::from_host_native_path(&policy_cwd)?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: PathUri::from_host_native_path(tmp.path())?,
+            },
+            FileSystemAccessMode::Write,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: "files/*.env".to_string(),
+            },
+            FileSystemAccessMode::Deny,
+        ),
+    ]);
+    let mut sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd,
+    );
+    sandbox.windows_sandbox_selection = WindowsSandboxSelection::Elevated;
+
+    let file_system = &context.file_system;
+    let allowed_neighbor = file_system
+        .read_file(
+            &PathUri::from_host_native_path(&allowed_neighbor)?,
+            ReadFileOptions::default(),
+            Some(&sandbox),
+        )
+        .await?;
+    let same_name_outside = file_system
+        .read_file(
+            &PathUri::from_host_native_path(&same_name_outside)?,
+            ReadFileOptions::default(),
+            Some(&sandbox),
+        )
+        .await?;
+    let denied = file_system
+        .read_file(
+            &PathUri::from_host_native_path(&denied)?,
+            ReadFileOptions::default(),
+            Some(&sandbox),
+        )
+        .await
+        .expect_err("read matching the policy-cwd denial must be rejected");
+    assert_eq!(
+        (
+            allowed_neighbor.as_slice(),
+            same_name_outside.as_slice(),
+            denied.kind(),
+        ),
+        (
+            b"allowed neighbor".as_slice(),
+            b"allowed outside".as_slice(),
+            std::io::ErrorKind::InvalidInput,
+        )
+    );
+    assert!(
+        denied.to_string().contains("Access is denied"),
+        "expected Windows access denial, got: {denied}"
+    );
     Ok(())
 }
 

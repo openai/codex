@@ -12,7 +12,6 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ToolError;
 use codex_features::Feature;
-use codex_file_system::ExecPermissionProfile;
 use codex_file_system::FileSystemSandboxContext;
 use codex_network_proxy::EnvironmentNetworkPolicy;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -69,7 +68,7 @@ impl TerminalPolicy {
     fn file_system_context(&self) -> FileSystemSandboxContext {
         let mut context = self.sandbox.clone();
         // Network changes require review, not rejection for denied-read drift.
-        if let ExecPermissionProfile::Managed { network, .. } = &mut context.permissions {
+        if let PermissionProfile::Managed { network, .. } = &mut context.permissions {
             *network = NetworkSandboxPolicy::Restricted;
         }
         context
@@ -131,7 +130,7 @@ impl TerminalPermissions {
         Ok(if bypassed || &self.policy != current {
             SandboxPermissions::RequireEscalated
         } else if self.policy.sandbox.permissions
-            == effective_permission_profile(baseline, /*additional_permissions*/ None).into()
+            == effective_permission_profile(baseline, /*additional_permissions*/ None)
         {
             SandboxPermissions::UseDefault
         } else {
@@ -145,7 +144,7 @@ impl TerminalPermissions {
     ) -> Result<String, serde_json::Error> {
         let authority = if self.launch_permissions.requires_escalated_permissions() {
             "This terminal was launched outside the sandbox, bypassing any managed network proxy."
-        } else if self.policy.sandbox.permissions == ExecPermissionProfile::Disabled {
+        } else if self.policy.sandbox.permissions == PermissionProfile::Disabled {
             "This terminal runs without a filesystem sandbox."
         } else {
             match sandbox_permissions {

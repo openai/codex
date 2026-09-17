@@ -322,14 +322,7 @@ impl ExecCommandHandler {
         let requested_additional_permissions = additional_permissions.clone();
         let sandbox_context =
             turn_environment.sandbox_context(/*additional_permissions*/ None);
-        let Some(permission_context) =
-            file_system_sandbox_policy_context_for_cwd(&sandbox_context, &cwd)
-        else {
-            manager.release_process_id(process_id).await;
-            return Err(FunctionCallError::RespondToModel(
-                "selected environment sandbox context is missing cwd".to_string(),
-            ));
-        };
+        let permission_context = file_system_sandbox_policy_context_for_cwd(&sandbox_context, &cwd);
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
             turn_environment,

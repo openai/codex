@@ -106,7 +106,7 @@ impl RemoteFileSystem {
     ) -> FileSystemResult<FileSystemReadStream> {
         trace!("remote fs read_file_stream");
         let client = self.client.get().await.map_err(map_remote_error)?;
-        file_stream::open(client, path.clone(), remote_sandbox_context(sandbox)).await
+        file_stream::open(client, path.clone(), sandbox).await
     }
 
     async fn write_file(
@@ -410,9 +410,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
 fn remote_sandbox_context(
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> Option<FileSystemSandboxContext> {
-    sandbox
-        .cloned()
-        .map(FileSystemSandboxContext::drop_cwd_if_unused)
+    sandbox.cloned()
 }
 
 fn map_remote_error(error: ExecServerError) -> io::Error {
@@ -451,7 +449,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn remote_sandbox_context_drops_unused_cwd() {
+    fn remote_sandbox_context_preserves_cwd_for_absolute_permissions() {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Path {
                 path: absolute_test_path("remote-root").into(),
@@ -461,15 +459,14 @@ mod tests {
         }]);
         let permissions =
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        let sandbox_context = FileSystemSandboxContext::from_permission_profile_with_cwd(
-            permissions,
-            path_uri("host-checkout"),
-        );
+        let cwd = path_uri("executor-checkout");
+        let sandbox_context =
+            FileSystemSandboxContext::from_permission_profile(permissions, cwd.clone());
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
 
-        assert_eq!(remote_context.cwd, None);
+        assert_eq!(remote_context.cwd, cwd);
     }
 
     #[test]
@@ -485,12 +482,12 @@ mod tests {
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
         let cwd = path_uri("host-checkout");
         let sandbox_context =
-            FileSystemSandboxContext::from_permission_profile_with_cwd(permissions, cwd.clone());
+            FileSystemSandboxContext::from_permission_profile(permissions, cwd.clone());
 
         let remote_context =
             remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
 
-        assert_eq!(remote_context.cwd, Some(cwd));
+        assert_eq!(remote_context.cwd, cwd);
     }
 
     #[test]

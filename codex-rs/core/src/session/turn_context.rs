@@ -222,8 +222,8 @@ impl TurnEnvironment {
             additional_permissions.as_ref(),
         );
         FileSystemSandboxContext {
-            permissions: permissions.into(),
-            cwd: Some(self.cwd().clone()),
+            permissions,
+            cwd: self.cwd().clone(),
             workspace_roots: self.workspace_roots().to_vec(),
             user_home_dir: self.user_home_dir.clone(),
             temporary_directories: self.temporary_directories.clone(),

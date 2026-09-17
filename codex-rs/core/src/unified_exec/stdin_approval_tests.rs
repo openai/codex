@@ -20,6 +20,7 @@ fn terminal_permissions(profile: &PermissionProfile) -> TerminalPermissions {
         policy: TerminalPolicy {
             sandbox: FileSystemSandboxContext::from_permission_profile(
                 effective_permission_profile(profile, /*additional_permissions*/ None),
+                PathUri::from_host_native_path(std::env::temp_dir()).expect("local temporary cwd"),
             ),
             environment_network: None,
             controller_network: None,

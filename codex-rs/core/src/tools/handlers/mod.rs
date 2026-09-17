@@ -243,10 +243,10 @@ pub(super) struct EffectiveAdditionalPermissions {
 pub(super) fn file_system_sandbox_policy_context_for_cwd<'a>(
     sandbox_context: &'a FileSystemSandboxContext,
     cwd: &'a PathUri,
-) -> Option<codex_protocol::permissions::FileSystemSandboxPolicyContext<'a>> {
-    let mut context = sandbox_context.policy_context()?;
+) -> codex_protocol::permissions::FileSystemSandboxPolicyContext<'a> {
+    let mut context = sandbox_context.policy_context();
     context.cwd = cwd;
-    Some(context)
+    context
 }
 
 pub(super) fn implicit_granted_permissions(
@@ -298,9 +298,9 @@ pub(super) async fn apply_granted_turn_permissions(
         if additional_permissions.is_none() {
             Some(granted.clone())
         } else {
-            effective_permissions.as_ref().and_then(|effective| {
-                preapproved_permission_profile(effective, granted, context.as_ref()?)
-            })
+            effective_permissions
+                .as_ref()
+                .and_then(|effective| preapproved_permission_profile(effective, granted, &context))
         }
     });
     let permissions_preapproved = preapproved_permissions.is_some();

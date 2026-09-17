@@ -5,6 +5,8 @@ mod fake_bwrap;
 
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use codex_exec_server::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use codex_exec_server::CapabilityRootDiscovery;
 use codex_exec_server::CapabilityRootsDiscoverParams;
@@ -14,12 +16,26 @@ use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server::WindowsSandboxSelection;
 use codex_exec_server_protocol::CapabilityRootDiscoverRequest;
+use codex_exec_server_protocol::EXEC_METHOD;
+#[cfg(unix)]
+use codex_exec_server_protocol::EXEC_READ_METHOD;
+use codex_exec_server_protocol::FS_OPEN_METHOD;
+#[cfg(unix)]
+use codex_exec_server_protocol::FS_READ_BLOCK_METHOD;
+use codex_exec_server_protocol::FS_READ_FILE_METHOD;
+#[cfg(unix)]
+use codex_exec_server_protocol::FsReadBlockResponse;
+use codex_exec_server_protocol::FsReadFileResponse;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCResponse;
+#[cfg(unix)]
+use codex_exec_server_protocol::ReadResponse;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -183,6 +199,715 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
     Ok(())
 }
 
+#[tokio::test]
+async fn executor_legacy_missing_or_null_sandbox_cwd_keeps_absolute_requests_working()
+-> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    std::fs::write(workspace.path().join("note.txt"), b"contents")?;
+    write_file(
+        &workspace.path().join("skills/demo/SKILL.md"),
+        "---\nname: demo\ndescription: Demo.\n---\n",
+    )?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let path = cwd.join("note.txt")?;
+    let program = std::env::current_exe()?.to_string_lossy().into_owned();
+    // A process with sandbox intent needs an enforceable profile and an enabled Windows backend.
+    let process_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path { path: cwd.clone() },
+            FileSystemAccessMode::Write,
+        ),
+    ]);
+    let mut process_sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&process_policy, NetworkSandboxPolicy::Enabled),
+        cwd.clone(),
+    );
+    process_sandbox.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
+    let sandbox =
+        FileSystemSandboxContext::from_permission_profile(PermissionProfile::Disabled, cwd.clone());
+    let requests = [
+        (
+            EXEC_METHOD,
+            serde_json::json!({
+                "processId": "sandbox-cwd", "argv": [program, "--help"], "cwd": cwd,
+                "env": {}, "tty": false, "sandbox": process_sandbox,
+            }),
+            "/sandbox",
+        ),
+        (
+            FS_READ_FILE_METHOD,
+            serde_json::json!({ "path": path, "sandbox": sandbox }),
+            "/sandbox",
+        ),
+        (
+            CAPABILITY_ROOTS_DISCOVER_METHOD,
+            serde_json::json!({ "roots": [{ "id": "root", "path": cwd, "sandbox": sandbox }] }),
+            "/roots/0/sandbox",
+        ),
+    ];
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+
+    for (method, request, sandbox_pointer) in requests {
+        for (index, legacy_cwd) in [None, Some(serde_json::Value::Null)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut request = request.clone();
+            if method == EXEC_METHOD {
+                request["processId"] = serde_json::json!(format!("sandbox-cwd-{index}"));
+            }
+            let sandbox = request
+                .pointer_mut(sandbox_pointer)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("sandbox request");
+            if let Some(legacy_cwd) = legacy_cwd {
+                sandbox.insert("cwd".to_string(), legacy_cwd);
+            } else {
+                sandbox.remove("cwd");
+            }
+            sandbox.remove("workspaceRoots");
+            let request_id = server.send_request(method, request).await?;
+            let response = server
+                .wait_for_event(|event| match event {
+                    JSONRPCMessage::Response(response) => response.id == request_id,
+                    JSONRPCMessage::Error(error) => error.id == request_id,
+                    JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+                })
+                .await?;
+            let JSONRPCMessage::Response(response) = response else {
+                anyhow::bail!("expected legacy {method} to succeed, got {response:?}");
+            };
+            if method == FS_READ_FILE_METHOD {
+                let read: FsReadFileResponse = serde_json::from_value(response.result)?;
+                assert_eq!(STANDARD.decode(read.data_base64)?, b"contents");
+            } else if method == CAPABILITY_ROOTS_DISCOVER_METHOD {
+                let discovery: CapabilityRootsDiscoverResponse =
+                    serde_json::from_value(response.result)?;
+                assert_eq!(
+                    discovery.roots[0]
+                        .skills
+                        .iter()
+                        .map(|skill| &skill.instructions.path)
+                        .collect::<Vec<_>>(),
+                    vec![&cwd.join("skills/demo/SKILL.md")?],
+                );
+            }
+        }
+    }
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// Old filesystem clients cannot replace the original cwd for rules whose meaning depends on it.
+#[tokio::test]
+async fn executor_legacy_filesystem_rejects_missing_cwd_for_dynamic_permissions()
+-> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+
+    for path in [
+        FileSystemPath::Special {
+            value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+        },
+        FileSystemPath::GlobPattern {
+            pattern: "secrets/**".to_string(),
+        },
+    ] {
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+            path,
+            FileSystemAccessMode::Deny,
+        )]);
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
+            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+            cwd.clone(),
+        );
+        for legacy_cwd in [None, Some(serde_json::Value::Null)] {
+            let mut sandbox = serde_json::to_value(&sandbox)?;
+            let fields = sandbox.as_object_mut().expect("sandbox object");
+            if let Some(legacy_cwd) = legacy_cwd {
+                fields.insert("cwd".to_string(), legacy_cwd);
+            } else {
+                fields.remove("cwd");
+            }
+            fields.remove("workspaceRoots");
+            for (method, request) in [
+                (
+                    FS_READ_FILE_METHOD,
+                    serde_json::json!({ "path": cwd, "sandbox": sandbox }),
+                ),
+                (
+                    FS_OPEN_METHOD,
+                    serde_json::json!({ "handleId": "denied", "path": cwd, "sandbox": sandbox }),
+                ),
+                (
+                    CAPABILITY_ROOTS_DISCOVER_METHOD,
+                    serde_json::json!({ "roots": [{ "id": "root", "path": cwd, "sandbox": sandbox }] }),
+                ),
+            ] {
+                let request_id = server.send_request(method, request).await?;
+                let response = server
+                    .wait_for_event(|event| match event {
+                        JSONRPCMessage::Response(response) => response.id == request_id,
+                        JSONRPCMessage::Error(error) => error.id == request_id,
+                        JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+                    })
+                    .await?;
+                let JSONRPCMessage::Error(error) = response else {
+                    anyhow::bail!(
+                        "expected legacy {method} to reject dynamic permissions, got {response:?}"
+                    );
+                };
+                assert_eq!(
+                    (error.error.code, error.error.message.as_str()),
+                    (
+                        -32602,
+                        "file system sandbox context with dynamic permissions requires cwd"
+                    ),
+                    "{method}",
+                );
+            }
+        }
+    }
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// Providing cwd lets project roots and relative rules be enforced against the original directory.
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_legacy_filesystem_accepts_cwd_for_dynamic_permissions() -> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    write_file(&workspace.path().join("allowed.txt"), "allowed")?;
+    write_file(&workspace.path().join("secret.txt"), "secret")?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+            },
+            FileSystemAccessMode::Write,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: "secret*".to_string(),
+            },
+            FileSystemAccessMode::Deny,
+        ),
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+    let request_id = server
+        .send_request(
+            FS_READ_FILE_METHOD,
+            serde_json::json!({"path": cwd.join("secret.txt")?}),
+        )
+        .await?;
+    let response = server
+        .wait_for_event(|event| match event {
+            JSONRPCMessage::Response(response) => response.id == request_id,
+            JSONRPCMessage::Error(error) => error.id == request_id,
+            JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+        })
+        .await?;
+    let JSONRPCMessage::Response(response) = response else {
+        anyhow::bail!(
+            "expected the denied path to be readable without a sandbox, got {response:?}"
+        );
+    };
+    let read: FsReadFileResponse = serde_json::from_value(response.result)?;
+    assert_eq!(STANDARD.decode(read.data_base64)?, b"secret");
+
+    for (name, permitted) in [("allowed.txt", true), ("secret.txt", false)] {
+        let request_id = server
+            .send_request(
+                FS_READ_FILE_METHOD,
+                serde_json::json!({
+                    "path": cwd.join(name)?, "sandbox": sandbox,
+                }),
+            )
+            .await?;
+        let response = server
+            .wait_for_event(|event| match event {
+                JSONRPCMessage::Response(response) => response.id == request_id,
+                JSONRPCMessage::Error(error) => error.id == request_id,
+                JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+            })
+            .await?;
+        match response {
+            JSONRPCMessage::Response(response) if permitted => {
+                let read: FsReadFileResponse = serde_json::from_value(response.result)?;
+                assert_eq!(STANDARD.decode(read.data_base64)?, b"allowed");
+            }
+            JSONRPCMessage::Error(error) if !permitted => {
+                assert_eq!(error.error.code, -32600, "{error:?}");
+                assert!(
+                    matches!(
+                        error.error.message.as_str(),
+                        "Permission denied (os error 13)" | "Operation not permitted (os error 1)"
+                    ),
+                    "expected a filesystem permission denial: {error:?}"
+                );
+            }
+            response => anyhow::bail!("unexpected filesystem result for {name}: {response:?}"),
+        }
+    }
+    server.shutdown().await?;
+    Ok(())
+}
+
+/// A present policy context can omit cwd: legacy cwd still anchors denials, and only static
+/// filesystem policies can use the executor default when both cwd fields are absent.
+#[tokio::test]
+async fn executor_legacy_nested_policy_context_cwd_uses_available_fallbacks() -> anyhow::Result<()>
+{
+    let workspace = tempfile::tempdir()?;
+    write_file(&workspace.path().join("allowed.txt"), "allowed")?;
+    write_file(&workspace.path().join("secret.txt"), "secret")?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let static_permissions = if cfg!(unix) {
+        PermissionProfile::read_only()
+    } else {
+        // The direct Windows test fixture has no enabled platform sandbox.
+        PermissionProfile::Disabled
+    };
+    let static_sandbox =
+        FileSystemSandboxContext::from_permission_profile(static_permissions, cwd.clone());
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: "secret*".to_string(),
+            },
+            FileSystemAccessMode::Deny,
+        ),
+    ]);
+    let dynamic_sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+
+    for (shape, policy_context) in [
+        ("missing", serde_json::json!({"workspaceRoots": [cwd]})),
+        (
+            "null",
+            serde_json::json!({"cwd": null, "workspaceRoots": [cwd]}),
+        ),
+    ] {
+        for (case, sandbox, legacy_cwd, name, expected) in [
+            (
+                "static allowed without legacy cwd",
+                &static_sandbox,
+                None::<&PathUri>,
+                "allowed.txt",
+                Ok(b"allowed".as_slice()),
+            ),
+            (
+                "static secret without legacy cwd",
+                &static_sandbox,
+                None,
+                "secret.txt",
+                Ok(b"secret".as_slice()),
+            ),
+            (
+                "dynamic without legacy cwd",
+                &dynamic_sandbox,
+                None,
+                "allowed.txt",
+                Err(-32602),
+            ),
+            // The default Windows test backend cannot enforce read denials at runtime.
+            #[cfg(unix)]
+            (
+                "dynamic allowed with legacy cwd",
+                &dynamic_sandbox,
+                Some(&cwd),
+                "allowed.txt",
+                Ok(b"allowed".as_slice()),
+            ),
+            #[cfg(unix)]
+            (
+                "dynamic secret with legacy cwd",
+                &dynamic_sandbox,
+                Some(&cwd),
+                "secret.txt",
+                Err(-32600),
+            ),
+        ] {
+            let mut sandbox = serde_json::to_value(sandbox)?;
+            let fields = sandbox.as_object_mut().expect("sandbox object");
+            fields.insert("policyContext".to_string(), policy_context.clone());
+            if let Some(legacy_cwd) = legacy_cwd {
+                fields.insert("cwd".to_string(), serde_json::to_value(legacy_cwd)?);
+            } else {
+                fields.remove("cwd");
+            }
+            fields.remove("workspaceRoots");
+            let request_id = server
+                .send_request(
+                    FS_READ_FILE_METHOD,
+                    serde_json::json!({"path": cwd.join(name)?, "sandbox": sandbox}),
+                )
+                .await?;
+            let response = server
+                .wait_for_event(|event| match event {
+                    JSONRPCMessage::Response(response) => response.id == request_id,
+                    JSONRPCMessage::Error(error) => error.id == request_id,
+                    JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+                })
+                .await?;
+            match (response, expected) {
+                (JSONRPCMessage::Response(response), Ok(contents)) => {
+                    let read: FsReadFileResponse = serde_json::from_value(response.result)?;
+                    assert_eq!(
+                        STANDARD.decode(read.data_base64)?,
+                        contents,
+                        "{shape}: {case}"
+                    );
+                }
+                (JSONRPCMessage::Error(error), Err(-32602)) => assert_eq!(
+                    (error.error.code, error.error.message.as_str()),
+                    (
+                        -32602,
+                        "file system sandbox context with dynamic permissions requires cwd"
+                    ),
+                    "{shape}: {case}",
+                ),
+                (JSONRPCMessage::Error(error), Err(-32600)) => {
+                    assert_eq!(error.error.code, -32600, "{shape}: {case}: {error:?}");
+                    assert!(
+                        matches!(
+                            error.error.message.as_str(),
+                            "Permission denied (os error 13)"
+                                | "Operation not permitted (os error 1)"
+                        ),
+                        "{shape}: {case}: {error:?}",
+                    );
+                }
+                (response, expected) => anyhow::bail!(
+                    "unexpected {shape} nested cwd result for {case}: expected {expected:?}, got {response:?}"
+                ),
+            }
+        }
+    }
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_legacy_exec_uses_process_cwd_for_relative_denials() -> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    std::fs::write(workspace.path().join("allowed.txt"), b"allowed")?;
+    std::fs::write(workspace.path().join("secret.txt"), b"secret")?;
+    let cwd = PathUri::from_host_native_path(workspace.path())?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: "secret*".to_string(),
+            },
+            FileSystemAccessMode::Deny,
+        ),
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        cwd.clone(),
+    );
+    let process_env =
+        std::collections::HashMap::from([("PATH".to_string(), std::env::var("PATH")?)]);
+    #[cfg(target_os = "linux")]
+    let process_env = {
+        let mut process_env = process_env;
+        // Bazel-provided bubblewrap lives in runfiles, not necessarily on the process PATH.
+        for name in [
+            "CARGO_BIN_EXE_bwrap",
+            "RUNFILES_DIR",
+            "RUNFILES_MANIFEST_FILE",
+            "TEST_SRCDIR",
+            "TEST_WORKSPACE",
+        ] {
+            if let Ok(value) = std::env::var(name) {
+                process_env.insert(name.to_string(), value);
+            }
+        }
+        process_env
+    };
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+    for (index, legacy_cwd) in [None, Some(serde_json::Value::Null)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut sandbox = serde_json::to_value(&sandbox)?;
+        let fields = sandbox.as_object_mut().expect("sandbox object");
+        if let Some(legacy_cwd) = legacy_cwd {
+            fields.insert("cwd".to_string(), legacy_cwd);
+        } else {
+            fields.remove("cwd");
+        }
+        let process = format!("legacy-relative-{index}");
+        let request_id = server.send_request(EXEC_METHOD, serde_json::json!({
+            "processId": process, "argv": ["/bin/sh", "-c", "cat allowed.txt && if cat secret.txt 2>/dev/null; then exit 9; fi"], "cwd": cwd,
+            "env": process_env, "tty": false, "sandbox": sandbox,
+        })).await?;
+        let start = server
+            .wait_for_event(|event| match event {
+                JSONRPCMessage::Response(response) => response.id == request_id,
+                JSONRPCMessage::Error(error) => error.id == request_id,
+                JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+            })
+            .await?;
+        if !matches!(start, JSONRPCMessage::Response(_)) {
+            anyhow::bail!("expected legacy process to start, got {start:?}");
+        }
+        let mut after_seq = None;
+        let mut output = Vec::new();
+        let (exit_code, failure, sandbox_denied) = loop {
+            let request_id = server
+                .send_request(
+                    EXEC_READ_METHOD,
+                    serde_json::json!({
+                        "processId": process, "afterSeq": after_seq, "waitMs": 1000,
+                    }),
+                )
+                .await?;
+            let response = server
+                .wait_for_event(|event| match event {
+                    JSONRPCMessage::Response(response) => response.id == request_id,
+                    JSONRPCMessage::Error(error) => error.id == request_id,
+                    JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+                })
+                .await?;
+            let JSONRPCMessage::Response(response) = response else {
+                anyhow::bail!("expected legacy process output, got {response:?}");
+            };
+            let response: ReadResponse = serde_json::from_value(response.result)?;
+            output.extend(response.chunks.into_iter().flat_map(|chunk| chunk.chunk.0));
+            after_seq = response.next_seq.checked_sub(1).or(after_seq);
+            if response.closed {
+                break (
+                    response.exit_code,
+                    response.failure,
+                    response.sandbox_denied,
+                );
+            }
+        };
+        assert_eq!(
+            (exit_code, String::from_utf8(output)?),
+            (Some(0), "allowed".to_string()),
+            "legacy process failed: {failure:?}; sandbox denied: {sandbox_denied}"
+        );
+    }
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_legacy_filesystem_cwd_keeps_absolute_read_allow_and_deny_rules()
+-> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    let allowed = workspace.path().join("allowed");
+    let denied = workspace.path().join("denied");
+    for (root, name) in [(&allowed, "allowed"), (&denied, "denied")] {
+        write_file(&root.join("note.txt"), "contents")?;
+        write_file(
+            &root.join(format!("skills/{name}/SKILL.md")),
+            &format!("---\nname: {name}\ndescription: {name}.\n---\n"),
+        )?;
+    }
+    let allowed = PathUri::from_host_native_path(allowed)?;
+    let denied = PathUri::from_host_native_path(denied)?;
+    let policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Read,
+        ),
+        FileSystemSandboxEntry::new(
+            FileSystemPath::Path {
+                path: denied.clone(),
+            },
+            FileSystemAccessMode::Deny,
+        ),
+    ]);
+    let sandbox = FileSystemSandboxContext::from_permission_profile(
+        PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
+        PathUri::from_host_native_path(workspace.path())?,
+    );
+    let mut server = exec_server().await?;
+    initialize(&mut server).await?;
+
+    let request_id = server
+        .send_request(
+            FS_READ_FILE_METHOD,
+            serde_json::json!({"path": denied.join("note.txt")?}),
+        )
+        .await?;
+    let response = server
+        .wait_for_event(|event| match event {
+            JSONRPCMessage::Response(response) => response.id == request_id,
+            JSONRPCMessage::Error(error) => error.id == request_id,
+            JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+        })
+        .await?;
+    let JSONRPCMessage::Response(response) = response else {
+        anyhow::bail!(
+            "expected the denied path to be readable without a sandbox, got {response:?}"
+        );
+    };
+    let read: FsReadFileResponse = serde_json::from_value(response.result)?;
+    assert_eq!(STANDARD.decode(read.data_base64)?, b"contents");
+
+    for (index, legacy_cwd) in [None, Some(serde_json::Value::Null)]
+        .into_iter()
+        .enumerate()
+    {
+        let mut sandbox = serde_json::to_value(&sandbox)?;
+        let fields = sandbox.as_object_mut().expect("sandbox object");
+        if let Some(legacy_cwd) = legacy_cwd {
+            fields.insert("cwd".to_string(), legacy_cwd);
+        } else {
+            fields.remove("cwd");
+        }
+        fields.remove("workspaceRoots");
+        for (root, permitted) in [(&allowed, true), (&denied, false)] {
+            let handle = format!("legacy-{index}-{permitted}");
+            for (method, request) in [
+                (
+                    FS_READ_FILE_METHOD,
+                    serde_json::json!({ "path": root.join("note.txt")?, "sandbox": sandbox }),
+                ),
+                (
+                    FS_OPEN_METHOD,
+                    serde_json::json!({ "handleId": handle, "path": root.join("note.txt")?, "sandbox": sandbox }),
+                ),
+            ] {
+                let request_id = server.send_request(method, request).await?;
+                let response = server
+                    .wait_for_event(|event| match event {
+                        JSONRPCMessage::Response(response) => response.id == request_id,
+                        JSONRPCMessage::Error(error) => error.id == request_id,
+                        JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+                    })
+                    .await?;
+                match response {
+                    JSONRPCMessage::Response(response) if permitted => {
+                        if method == FS_READ_FILE_METHOD {
+                            let read: FsReadFileResponse = serde_json::from_value(response.result)?;
+                            assert_eq!(STANDARD.decode(read.data_base64)?, b"contents");
+                        } else {
+                            let request_id = server.send_request(FS_READ_BLOCK_METHOD, serde_json::json!({ "handleId": handle, "offset": 0, "len": 16 })).await?;
+                            let block = server
+                                .wait_for_event(|event| match event {
+                                    JSONRPCMessage::Response(response) => response.id == request_id,
+                                    JSONRPCMessage::Error(error) => error.id == request_id,
+                                    JSONRPCMessage::Request(_)
+                                    | JSONRPCMessage::Notification(_) => false,
+                                })
+                                .await?;
+                            let JSONRPCMessage::Response(block) = block else {
+                                anyhow::bail!("expected to read the legacy stream, got {block:?}");
+                            };
+                            let block: FsReadBlockResponse = serde_json::from_value(block.result)?;
+                            assert_eq!(block.chunk.0, b"contents");
+                        }
+                    }
+                    JSONRPCMessage::Error(error) if !permitted => {
+                        assert_eq!(error.error.code, -32600, "{method}: {error:?}");
+                        assert!(
+                            matches!(
+                                error.error.message.as_str(),
+                                "Permission denied (os error 13)"
+                                    | "Operation not permitted (os error 1)"
+                            ),
+                            "expected a filesystem permission denial for {method}: {error:?}"
+                        );
+                    }
+                    response => {
+                        anyhow::bail!("unexpected legacy {method} result for {root}: {response:?}")
+                    }
+                }
+            }
+        }
+        let request_id = server
+            .send_request(
+                CAPABILITY_ROOTS_DISCOVER_METHOD,
+                serde_json::json!({ "roots": [
+            { "id": "allowed", "path": allowed, "sandbox": sandbox },
+            { "id": "denied", "path": denied, "sandbox": sandbox },
+        ] }),
+            )
+            .await?;
+        let discovery = server
+            .wait_for_event(|event| match event {
+                JSONRPCMessage::Response(response) => response.id == request_id,
+                JSONRPCMessage::Error(error) => error.id == request_id,
+                JSONRPCMessage::Request(_) | JSONRPCMessage::Notification(_) => false,
+            })
+            .await?;
+        let JSONRPCMessage::Response(discovery) = discovery else {
+            anyhow::bail!("expected legacy capability discovery, got {discovery:?}");
+        };
+        let discovery: CapabilityRootsDiscoverResponse = serde_json::from_value(discovery.result)?;
+        assert_eq!(
+            discovery
+                .roots
+                .iter()
+                .map(|root| (
+                    root.id.as_str(),
+                    root.skills
+                        .iter()
+                        .map(|skill| &skill.instructions.path)
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("allowed", vec![&allowed.join("skills/allowed/SKILL.md")?]),
+                ("denied", vec![]),
+            ]
+        );
+    }
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sandboxed_discovery_batches_roots_without_combining_different_permissions()
 -> anyhow::Result<()> {
@@ -208,7 +933,7 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
         FileSystemAccessMode::Read,
     );
     let policy = FileSystemSandboxPolicy::restricted(vec![read_workspace]);
-    let shared_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let shared_sandbox = FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
         workspace_uri,
     );
@@ -328,7 +1053,7 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
         FileSystemAccessMode::Read,
     );
     let first_policy = FileSystemSandboxPolicy::restricted(vec![read_first_root]);
-    let first_only_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let first_only_sandbox = FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(
             &first_policy,
             NetworkSandboxPolicy::Restricted,
@@ -341,7 +1066,7 @@ async fn sandboxed_discovery_batches_roots_without_combining_different_permissio
         FileSystemAccessMode::Read,
     );
     let second_policy = FileSystemSandboxPolicy::restricted(vec![read_second_root]);
-    let second_only_sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+    let second_only_sandbox = FileSystemSandboxContext::from_permission_profile(
         PermissionProfile::from_runtime_permissions(
             &second_policy,
             NetworkSandboxPolicy::Restricted,
@@ -441,7 +1166,7 @@ async fn sandboxed_discovery_follows_only_permitted_external_symlinks() -> anyho
 
     for (scenario, entries, has_skill, has_mcp) in cases {
         let policy = FileSystemSandboxPolicy::restricted(entries);
-        let sandbox = FileSystemSandboxContext::from_permission_profile_with_cwd(
+        let sandbox = FileSystemSandboxContext::from_permission_profile(
             PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted),
             root_uri.clone(),
         );

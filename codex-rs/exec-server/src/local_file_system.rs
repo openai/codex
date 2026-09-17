@@ -99,6 +99,9 @@ impl LocalFileSystem {
         &'a dyn ExecutorFileSystem,
         Option<&'a FileSystemSandboxContext>,
     )> {
+        if let Some(sandbox) = sandbox {
+            sandbox.validate_file_system_paths_for_current_host()?;
+        }
         if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
             Ok((self.sandboxed()?, sandbox))
         } else {
@@ -113,6 +116,9 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<tokio::fs::File> {
+        if let Some(sandbox) = sandbox {
+            sandbox.validate_file_system_paths_for_current_host()?;
+        }
         if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
             return self.sandboxed()?.open_file_for_read(path, sandbox).await;
         }
@@ -1225,12 +1231,6 @@ pub(crate) fn resolve_existing_path(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
-pub(crate) fn current_sandbox_cwd() -> io::Result<PathBuf> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| io::Error::other(format!("failed to read current dir: {err}")))?;
-    resolve_existing_path(cwd.as_path())
-}
-
 fn copy_symlink(source: &Path, target: &Path) -> io::Result<()> {
     let link_target = std::fs::read_link(source)?;
     #[cfg(unix)]
@@ -1349,6 +1349,7 @@ mod walk_tests {
                 &FileSystemSandboxPolicy::restricted(Vec::new()),
                 NetworkSandboxPolicy::Restricted,
             ),
+            root.clone(),
         );
         let options = WalkOptions {
             max_depth: 1,

@@ -97,8 +97,8 @@ impl ApplyPatchRuntime {
             req.additional_permissions.as_ref(),
         );
         Some(FileSystemSandboxContext {
-            permissions: permissions.into(),
-            cwd: Some(attempt.sandbox_cwd.clone()),
+            permissions,
+            cwd: attempt.sandbox_cwd.clone(),
             workspace_roots: attempt.workspace_roots.to_vec(),
             user_home_dir: req.turn_environment.user_home_dir.clone(),
             temporary_directories: None,
