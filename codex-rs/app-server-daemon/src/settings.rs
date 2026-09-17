@@ -178,6 +178,38 @@ impl DaemonSettings {
     }
 }
 
+pub(crate) async fn telemetry_tags(path: &Path) -> Result<[(&'static str, &'static str); 4]> {
+    let raw: Map<String, Value> = read_settings(path).await?;
+    // Validate the same snapshot used for presence checks, using the existing settings parser.
+    let settings: StoredSettings = serde_json::from_value(Value::Object(raw.clone()))?;
+    settings.updater.validate()?;
+    validate_shutdown_grace(settings.shutdown_grace_seconds)?;
+    let updater = raw.get("updater");
+    let presence = |configured| if configured { "configured" } else { "default" };
+    Ok([
+        (
+            "auto_update",
+            if settings.updater.auto_update_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        ),
+        (
+            "auto_update_setting",
+            presence(updater.is_some_and(|value| value.get("autoUpdateEnabled").is_some())),
+        ),
+        (
+            "update_interval_setting",
+            presence(updater.is_some_and(|value| value.get("updateIntervalMinutes").is_some())),
+        ),
+        (
+            "shutdown_grace_setting",
+            presence(raw.contains_key("shutdownGraceSeconds")),
+        ),
+    ])
+}
+
 async fn read_settings<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
     let contents = match fs::read_to_string(path).await {
         Ok(contents) => contents,

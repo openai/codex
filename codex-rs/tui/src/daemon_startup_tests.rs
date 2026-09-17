@@ -5,6 +5,25 @@ use crate::legacy_core::config::ConfigBuilder;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
+#[test]
+fn daemon_launch_telemetry_records_once_on_connection_or_early_return() {
+    for connected in [false, true] {
+        let observations = std::cell::RefCell::new(Vec::new());
+        let launch = daemon_telemetry::Launch(Some(|target: &AppServerTarget, actual: bool| {
+            observations.borrow_mut().push((target.clone(), actual));
+        }));
+        if connected {
+            launch.record(&AppServerTarget::Embedded, connected);
+        } else {
+            drop(launch);
+        }
+        assert_eq!(
+            observations.into_inner(),
+            vec![(AppServerTarget::Embedded, connected)]
+        );
+    }
+}
+
 #[cfg(windows)]
 #[tokio::test]
 async fn daemon_connection_rejects_unprotected_socket_before_handshake() -> color_eyre::Result<()> {

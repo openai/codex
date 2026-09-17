@@ -1061,6 +1061,7 @@ async fn run_ratatui_app(
     environment_manager: Arc<EnvironmentManager>,
     managed_worktree: Option<ManagedTuiWorktree>,
     daemon_startup_warning: Option<String>,
+    launch_telemetry: daemon_telemetry::Launch<impl FnOnce(&AppServerTarget, bool)>,
     startup_draft: startup_draft::StartupDraft,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
@@ -1126,6 +1127,7 @@ async fn run_ratatui_app(
             ),
         )
         .await;
+    launch_telemetry.record(&app_server_target, matches!(&startup_app_server, Ok(Ok(_))));
     let app_server_session = match startup_app_server {
         Ok(Ok(app_server)) => {
             AppServerSession::new(app_server, app_server_target.thread_params_mode())
@@ -2185,6 +2187,7 @@ fn should_show_bedrock_setup_wizard(
 }
 
 mod daemon_startup;
+mod daemon_telemetry;
 
 #[cfg(test)]
 #[path = "daemon_startup_tests.rs"]

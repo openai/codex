@@ -11,6 +11,7 @@ pub use prepare_install::InstallRequest;
 pub use prepare_install::update_from_cli;
 mod remote_control_client;
 mod settings;
+pub mod telemetry;
 mod thread_recovery;
 mod update_loop;
 

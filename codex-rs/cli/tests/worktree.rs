@@ -446,7 +446,29 @@ trust_level = "trusted"
             );
         }
         if matches!(startup_result, Ok(Ok(()))) && renamed.is_ok() {
-            session.writer_sender().send(b"/quit\r".to_vec()).await?;
+            if !fork {
+                for (input, expected) in [
+                    ("/daemon\r", "Install latest public stable"),
+                    ("\r", "Update and exit"),
+                    ("\x1b[B\r", "Updating the local background server..."),
+                ] {
+                    session
+                        .writer_sender()
+                        .send(input.as_bytes().to_vec())
+                        .await?;
+                    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+                        while !output.contains(expected) {
+                            let bytes = stdout.recv().await.context("TUI exited before handoff")?;
+                            output.push_str(&String::from_utf8_lossy(&bytes));
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                    .await
+                    .with_context(|| format!("waiting for {expected}: {output}"))??;
+                }
+            } else {
+                session.writer_sender().send(b"/quit\r".to_vec()).await?;
+            }
         } else {
             session.terminate();
         }
@@ -459,7 +481,9 @@ trust_level = "trusted"
             }
         })
         .await;
-        assert_eq!(exit, 0, "{output}");
+        let elevated_handoff = cfg!(windows)
+            && output.contains("start the Windows daemon from a non-elevated terminal");
+        assert_eq!(exit, i32::from(elevated_handoff), "{output}");
         assert!(!output.contains("The checkout was kept"), "{output}");
         let metrics = server
             .received_requests()
@@ -470,11 +494,20 @@ trust_level = "trusted"
             .map(|request| serde_json::from_slice::<Value>(&request.body))
             .collect::<serde_json::Result<Vec<_>>>()?;
         if analytics {
-            let point = metrics
+            let exported = metrics
                 .iter()
                 .flat_map(|payload| payload["resourceMetrics"].as_array().into_iter().flatten())
                 .flat_map(|resource| resource["scopeMetrics"].as_array().into_iter().flatten())
                 .flat_map(|scope| scope["metrics"].as_array().into_iter().flatten())
+                .collect::<Vec<_>>();
+            let update = exported
+                .iter()
+                .find(|metric| metric["name"] == "codex.daemon.update")
+                .context("handoff metric")?;
+            let update_point = &update["sum"]["dataPoints"][0];
+            assert_eq!(update_point["asInt"], 1);
+            let point = exported
+                .iter()
                 .filter(|metric| metric["name"] == "codex.tui.start")
                 .flat_map(|metric| metric["sum"]["dataPoints"].as_array().into_iter().flatten())
                 .next()
@@ -498,6 +531,12 @@ trust_level = "trusted"
                     ("app_server_mode", "in_process"),
                     ("terminal_name", "unknown"),
                     ("multiplexer", "none"),
+                    ("daemon_selection_reason", "incompatible_option"),
+                    ("daemon_auto_start", "disabled"),
+                    ("auto_update", "enabled"),
+                    ("auto_update_setting", "default"),
+                    ("update_interval_setting", "default"),
+                    ("shutdown_grace_setting", "default"),
                 ])
             );
         } else {

@@ -58,6 +58,7 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod app_cmd;
 mod cloud_config;
 mod daemon_install;
+mod daemon_telemetry;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
 mod doctor;
@@ -936,6 +937,7 @@ fn run_update_action(
         println!("Updating the local background server...");
         let status = std::process::Command::new(executable)
             .args(source.command_args())
+            .env(codex_app_server_daemon::telemetry::HANDOFF_ENV, "1")
             .status()?;
         anyhow::ensure!(
             status.success(),
@@ -1451,11 +1453,18 @@ async fn cli_main(
                         from_cli: true,
                         yes,
                     } => {
-                        if let Some(output) = codex_app_server_daemon::update_from_cli(|request| {
+                        let result = codex_app_server_daemon::update_from_cli(|request| {
                             daemon_install::confirm_install(request, yes)
                         })
-                        .await?
-                        {
+                        .await;
+                        daemon_telemetry::record_command(
+                            &root_config_overrides,
+                            analytics_default_enabled,
+                            "this_cli",
+                            &result,
+                        )
+                        .await;
+                        if let Some(output) = result? {
                             println!("{}", serde_json::to_string(&output)?);
                         }
                     }
@@ -1499,9 +1508,19 @@ async fn cli_main(
                             daemon_cli.subcommand,
                             AppServerDaemonSubcommand::Update { .. }
                         ) {
-                            let output =
-                                codex_app_server_daemon::update(http_client_factory).await?;
-                            println!("{}", serde_json::to_string(&output)?);
+                            let result = codex_app_server_daemon::update(http_client_factory)
+                                .await
+                                .map(Some);
+                            daemon_telemetry::record_command(
+                                &root_config_overrides,
+                                analytics_default_enabled,
+                                "public_stable",
+                                &result,
+                            )
+                            .await;
+                            if let Some(output) = result? {
+                                println!("{}", serde_json::to_string(&output)?);
+                            }
                         } else {
                             let AppServerDaemonSubcommand::PidUpdateLoop {
                                 restore_release, ..
