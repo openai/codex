@@ -50,4 +50,4 @@ expression: "normalize_completion_timestamps(&\n(normalize_snapshot_paths(term.b
     "path": "C:\\Program Files\\App",
     "regex": "^foo.*(bar)?$"
   }
-  done [completion time]
+  [completion time]

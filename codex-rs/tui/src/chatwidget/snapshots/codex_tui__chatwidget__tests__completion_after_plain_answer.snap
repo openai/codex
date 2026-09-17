@@ -4,4 +4,4 @@ expression: normalize_completion_timestamps(& (text))
 ---
 • The change is ready.
 
-  Worked for [duration] · done [completion time]
+  Worked for [duration] · [completion time]

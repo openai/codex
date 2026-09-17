@@ -4,4 +4,4 @@ expression: rendered_retry
 ---
 › Handle the safety-buffered request
   Keep the accepted steer
-⚠ Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.• done  done [completion time]
+⚠ Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.• done  [completion time]

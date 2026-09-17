@@ -2,12 +2,12 @@
 source: tui/src/chatwidget/tests/completion_styling_tests.rs
 expression: "&transcript"
 ---
-› done Sep 6, 2000 at 2:32 PM
-• done Sep 6, 2000 at 2:32 PM
-  └ done Sep 6, 2000 at 2:32 PM
+› Sep 6, 2000 at 2:32 PM
+• Sep 6, 2000 at 2:32 PM
+  └ Sep 6, 2000 at 2:32 PM
   The job was done Sep 6, 2000 at 2:32 PM
-  done Sep 6, 2000 at 2:32 PM is the expected text
-  Worked for 2m 5s · done Sep 6, 2000 at 2:32 PM is quoted
+  Sep 6, 2000 at 2:32 PM is the expected text
+  Worked for 2m 5s · Sep 6, 2000 at 2:32 PM is quoted
 
-  done 3:24 PM
-  Worked for 1h 2m 3s · done Sep 6, 2000 at 2:32 PM
+  3:24 PM
+  Worked for 1h 2m 3s · Sep 6, 2000 at 2:32 PM

@@ -7,4 +7,4 @@ expression: normalize_completion_timestamps(& (combined))
 
 • Final response.
 
-  Worked for [duration] · done [completion time]
+  Worked for [duration] · [completion time]

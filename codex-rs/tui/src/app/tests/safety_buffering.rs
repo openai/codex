@@ -923,7 +923,8 @@ goals = true
                 .as_any()
                 .is::<crate::history_cell::FinalMessageSeparator>()
             {
-                replayed_history.push_str(&normalize_completion_timestamps(rendered));
+                replayed_history
+                    .push_str(&normalize_completion_timestamps(cell.as_ref(), rendered));
             } else {
                 replayed_history.push_str(&rendered);
             }

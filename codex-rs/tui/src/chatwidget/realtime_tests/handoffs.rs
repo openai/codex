@@ -156,7 +156,9 @@ async fn delegation_started_before_peer_connection_keeps_its_voice_origin() {
     let mut rendered_history = Vec::new();
     commit_realtime_history_events(&mut chat, &mut events);
     while let Ok(event) = events.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
+        if let AppEvent::InsertHistoryCell(cell) = event
+            && !cell.as_any().is::<FinalMessageSeparator>()
+        {
             let rendered = cell
                 .transcript_lines(/*width*/ 80)
                 .iter()
@@ -169,7 +171,7 @@ async fn delegation_started_before_peer_connection_keeps_its_voice_origin() {
     }
     insta::assert_snapshot!(
         "voice_delegation_during_connection",
-        without_completion_metadata(&rendered_history.join("\n"))
+        rendered_history.join("\n")
     );
 }
 
@@ -322,21 +324,20 @@ async fn explicit_final_answer_can_explain_private_channel_markers() {
     commit_realtime_history_events(&mut chat, &mut events);
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
-            AppEvent::InsertHistoryCell(cell) => Some(
-                cell.transcript_lines(/*width*/ 80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
+            AppEvent::InsertHistoryCell(cell) if !cell.as_any().is::<FinalMessageSeparator>() => {
+                Some(
+                    cell.transcript_lines(/*width*/ 80)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");
-    insta::assert_snapshot!(
-        "explicit_final_answer_with_channel_marker",
-        without_completion_metadata(&rendered)
-    );
+    insta::assert_snapshot!("explicit_final_answer_with_channel_marker", rendered);
 }
 
 #[tokio::test]

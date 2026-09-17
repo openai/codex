@@ -826,11 +826,11 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
         /*replay_kind*/ None,
     );
 
-    let completion_cells = drain_insert_history(&mut rx)
+    let completion_cells = drain_insert_history_normalized(&mut rx)
         .iter()
-        .map(|lines| normalize_completion_timestamps(lines_to_single_string(lines).trim()))
+        .map(|lines| lines_to_single_string(lines).trim().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(completion_cells, vec!["done [completion time]"]);
+    assert_eq!(completion_cells, vec!["[completion time]"]);
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_widget().is_none());
     assert_eq!(

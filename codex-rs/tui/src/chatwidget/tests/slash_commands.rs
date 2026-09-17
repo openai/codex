@@ -2180,16 +2180,14 @@ async fn slash_export_opens_destination_picker() {
     }
     chat.add_error_message("Copy failed: clipboard unavailable".to_string());
     chat.add_error_message("Export failed: missing parent".to_string());
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_normalized(&mut rx);
     assert_chatwidget_snapshot!(
         "slash_export_completion_message",
-        normalize_completion_timestamps(
-            cells
-                .iter()
-                .map(|cell| lines_to_single_string(cell).trim().to_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        ),
+        cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell).trim().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
 }
 

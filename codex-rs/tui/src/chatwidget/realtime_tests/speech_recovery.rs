@@ -401,22 +401,21 @@ async fn answer_exceeding_speech_budget_is_shown_in_full_instead() {
     assert!(chat.realtime_conversation.pending_speech.is_empty());
     let rendered = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
-            AppEvent::InsertHistoryCell(cell) => Some(
-                cell.transcript_lines(/*width*/ 80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
+            AppEvent::InsertHistoryCell(cell) if !cell.as_any().is::<FinalMessageSeparator>() => {
+                Some(
+                    cell.transcript_lines(/*width*/ 80)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            }
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        without_completion_metadata(&rendered)
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" "),
+        rendered.split_whitespace().collect::<Vec<_>>().join(" "),
         format!("• {text}")
             .split_whitespace()
             .collect::<Vec<_>>()

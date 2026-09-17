@@ -6,4 +6,4 @@ expression: normalize_completion_timestamps(& (combined))
 
 • Streaming response.
 
-  done [completion time]
+  [completion time]

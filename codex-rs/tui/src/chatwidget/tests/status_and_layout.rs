@@ -5806,16 +5806,14 @@ printf 'fenced within fenced\n'
 
     // Finalize the stream without sending a final AgentMessage, to flush any tail.
     handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
-    for lines in drain_insert_history(&mut rx) {
+    for lines in drain_insert_history_normalized(&mut rx) {
         crate::insert_history::insert_history_lines(&mut term, lines)
             .expect("Failed to insert history lines in test");
     }
 
     assert_chatwidget_snapshot!(
         "chatwidget_markdown_code_blocks_vt100_snapshot",
-        normalize_completion_timestamps(normalize_snapshot_paths(
-            term.backend().vt100().screen().contents()
-        ))
+        normalize_snapshot_paths(term.backend().vt100().screen().contents())
     );
 }
 

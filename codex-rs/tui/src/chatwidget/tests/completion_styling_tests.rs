@@ -56,7 +56,7 @@ fn saved_completion_label() -> String {
     Local
         .timestamp_opt(COMPLETED_AT, /*nsecs*/ 0)
         .unwrap()
-        .format("done %b %-d, %Y at %-I:%M %p")
+        .format("%b %-d, %Y at %-I:%M %p")
         .to_string()
 }
 
@@ -73,7 +73,7 @@ async fn completion_follows_plain_and_streamed_tool_answers() {
         }
         complete_turn(&mut chat, completed_turn(Some(125_000), Some(COMPLETED_AT)));
 
-        let text = drain_insert_history(&mut rx)
+        let text = drain_insert_history_normalized(&mut rx)
             .iter()
             .map(|lines| lines_to_single_string(lines))
             .collect::<String>();
@@ -83,7 +83,7 @@ async fn completion_follows_plain_and_streamed_tool_answers() {
             } else {
                 "completion_after_plain_answer"
             },
-            normalize_completion_timestamps(text),
+            text,
         );
     }
 }
@@ -109,7 +109,7 @@ async fn completion_live_applies_duration_threshold_and_preserves_timestamp_fall
             let time = if completed_at.is_some() {
                 saved_completion_label()
             } else {
-                time.format("done %-I:%M %p").to_string()
+                time.format("%-I:%M %p").to_string()
             };
             format!("{prefix}{time}")
         });
@@ -192,7 +192,7 @@ async fn completion_replay_waits_for_older_turn_items_to_load() {
     let older_time = Local
         .timestamp_opt(older_completed_at, /*nsecs*/ 0)
         .unwrap()
-        .format("done %b %-d, %Y at %-I:%M %p");
+        .format("%b %-d, %Y at %-I:%M %p");
     assert_eq!(
         completion_labels(&mut rx),
         format!("Worked for 2m 5s · {older_time}"),
@@ -228,14 +228,31 @@ async fn completion_failed_and_interrupted_turns_do_not_report_success() {
 }
 
 #[test]
-fn completion_snapshot_normalization_is_explicit_and_line_scoped() {
+fn completion_snapshot_normalization_preserves_clock_only_message_lines() {
     let timestamp = "Sep 6, 2000 at 2:32 PM";
     let transcript = format!(
-        "› done {timestamp}\n• done {timestamp}\n  └ done {timestamp}\n  The job was done {timestamp}\n  done {timestamp} is the expected text\n  Worked for 2m 5s · done {timestamp} is quoted\n\n  done 3:24 PM\n  Worked for 1h 2m 3s · done {timestamp}\n"
+        "› {timestamp}\n• {timestamp}\n  └ {timestamp}\n  The job was done {timestamp}\n  {timestamp} is the expected text\n  Worked for 2m 5s · {timestamp} is quoted\n\n  3:24 PM\n  Worked for 1h 2m 3s · {timestamp}\n"
+    );
+    let message = history_cell::PlainHistoryCell::new(
+        transcript
+            .lines()
+            .map(|line| Line::from(line.to_owned()))
+            .collect(),
     );
     assert_chatwidget_snapshot!("completion_like_transcript_text", &transcript);
     assert_eq!(
-        normalize_completion_timestamps(&transcript),
-        "› done Sep 6, 2000 at 2:32 PM\n• done Sep 6, 2000 at 2:32 PM\n  └ done Sep 6, 2000 at 2:32 PM\n  The job was done Sep 6, 2000 at 2:32 PM\n  done Sep 6, 2000 at 2:32 PM is the expected text\n  Worked for 2m 5s · done Sep 6, 2000 at 2:32 PM is quoted\n\n  done [completion time]\n  Worked for [duration] · done [completion time]\n"
+        normalize_completion_timestamps(&message, &transcript),
+        transcript
+    );
+
+    let footer =
+        history_cell::FinalMessageSeparator::new(Some(3_723), /*runtime_metrics*/ None)
+            .with_completed_at(Local.timestamp_opt(COMPLETED_AT, /*nsecs*/ 0).unwrap());
+    assert_eq!(
+        normalize_completion_timestamps(
+            &footer,
+            lines_to_single_string(&footer.display_lines(/*width*/ 80))
+        ),
+        "  Worked for [duration] · [completion time]\n"
     );
 }

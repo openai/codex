@@ -40,13 +40,13 @@ fn completion_label_shows_duration_only_above_sixty_seconds() {
     .collect::<Vec<_>>();
 
     insta::assert_snapshot!(labels.join("\n"), @"
-    done 2:32 PM
-    done 2:32 PM
-    done 2:32 PM
-    done 2:32 PM
-    Worked for 1m 1s · done 2:32 PM
-    Worked for 2m 5s · done 2:32 PM
-    Worked for 1h 0m 5s · done 2:32 PM
+    2:32 PM
+    2:32 PM
+    2:32 PM
+    2:32 PM
+    Worked for 1m 1s · 2:32 PM
+    Worked for 2m 5s · 2:32 PM
+    Worked for 1h 0m 5s · 2:32 PM
     ");
 }
 
@@ -60,9 +60,9 @@ fn completion_label_includes_date_when_viewed_on_another_day() {
     .with_completed_at(completed_at);
     let tomorrow = completed_at.date_naive().succ_opt().expect("next day");
 
-    insta::assert_snapshot!(cell.label(tomorrow).expect("completion label"), @"Worked for 2m 5s · done Sep 6 at 2:32 PM");
+    insta::assert_snapshot!(cell.label(tomorrow).expect("completion label"), @"Worked for 2m 5s · Sep 6 at 2:32 PM");
     let next_year = tomorrow.with_year(/*year*/ 2001).expect("valid next year");
-    insta::assert_snapshot!(cell.label(next_year).expect("completion label"), @"Worked for 2m 5s · done Sep 6, 2000 at 2:32 PM");
+    insta::assert_snapshot!(cell.label(next_year).expect("completion label"), @"Worked for 2m 5s · Sep 6, 2000 at 2:32 PM");
 }
 
 #[test]
@@ -75,9 +75,9 @@ fn completion_uses_twelve_hour_time_at_midnight_noon_and_afternoon() {
             .expect("completion label")
     });
     insta::assert_snapshot!(labels.join("\n"), @"
-    done 12:32 AM
-    done 12:32 PM
-    done 3:32 PM
+    12:32 AM
+    12:32 PM
+    3:32 PM
     ");
 }
 
@@ -115,13 +115,13 @@ fn completion_wraps_metadata_and_preserves_unwrapped_raw_text() {
     let lines = cell.display_lines(/*width*/ 24);
     let rendered = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
 
-    insta::assert_snapshot!(rendered.join("\n"), @"
-      Worked for 2m 5s ·
-      done Sep 6, 2000 at
-      2:32 PM · Local tools:
-      3 calls (2.5s)
+    insta::assert_snapshot!(rendered.join("\n"), @r"
+    Worked for 2m 5s · Sep
+    6, 2000 at 2:32 PM ·
+    Local tools: 3 calls
+    (2.5s)
     ");
-    insta::assert_snapshot!(cell.raw_lines()[0].to_string(), @"Worked for 2m 5s · done Sep 6, 2000 at 2:32 PM · Local tools: 3 calls (2.5s)");
+    insta::assert_snapshot!(cell.raw_lines()[0].to_string(), @"Worked for 2m 5s · Sep 6, 2000 at 2:32 PM · Local tools: 3 calls (2.5s)");
     for width in [0, 1, 5, 24] {
         assert!(
             cell.display_lines(width)
@@ -163,6 +163,6 @@ fn completion_rendering_uses_the_captured_display_date() {
             .with_completed_at(completed_at);
     cell.display_date = completed_at.date_naive();
 
-    insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"  done 2:32 PM");
-    assert_eq!(cell.raw_lines(), vec![Line::from("done 2:32 PM")]);
+    insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"  2:32 PM");
+    assert_eq!(cell.raw_lines(), vec![Line::from("2:32 PM")]);
 }

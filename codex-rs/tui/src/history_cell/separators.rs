@@ -65,11 +65,11 @@ impl FinalMessageSeparator {
         }
         if let Some(completed_at) = self.completed_at {
             let format = if completed_at.date_naive() == today {
-                "done %-I:%M %p"
+                "%-I:%M %p"
             } else if completed_at.year() == today.year() {
-                "done %b %-d at %-I:%M %p"
+                "%b %-d at %-I:%M %p"
             } else {
-                "done %b %-d, %Y at %-I:%M %p"
+                "%b %-d, %Y at %-I:%M %p"
             };
             label_parts.push(completed_at.format(format).to_string());
         }
