@@ -34,7 +34,8 @@ impl StreamingCodeHighlighter {
     /// Unknown languages and oversized input retain a permanent plain-text fallback. A changed
     /// theme or failed replay returns `None`, requiring the caller to render the whole fence again.
     pub(crate) fn new(code: &str, lang: &str, theme_revision: u64) -> Option<Self> {
-        let theme = match theme_lock().read() {
+        let active_theme = theme_lock();
+        let theme = match active_theme.read() {
             Ok(theme) => theme,
             Err(poisoned) => poisoned.into_inner(),
         };
@@ -90,7 +91,8 @@ impl StreamingCodeHighlighter {
         {
             return None;
         }
-        let theme = match theme_lock().read() {
+        let active_theme = theme_lock();
+        let theme = match active_theme.read() {
             Ok(theme) => theme,
             Err(poisoned) => poisoned.into_inner(),
         };

@@ -1,0 +1,66 @@
+---
+source: tui/src/markdown_render_tests.rs
+expression: rendered
+---
+[
+    (
+        "catppuccin-mocha",
+        [
+            Line::from_iter([
+                Span::from("Use "),
+                Span::from("src/main.rs").fg(Color::Rgb(166, 227, 161)),
+                Span::from(" and "),
+                Span::from("./").fg(Color::Rgb(166, 227, 161)),
+            ]),
+            Line::from_iter([
+                Span::from("src/lib.rs").fg(Color::Rgb(166, 227, 161)),
+                Span::from("."),
+            ]),
+        ],
+    ),
+    (
+        "catppuccin-latte",
+        [
+            Line::from_iter([
+                Span::from("Use "),
+                Span::from("src/main.rs").fg(Color::Rgb(64, 160, 43)),
+                Span::from(" and "),
+                Span::from("./").fg(Color::Rgb(64, 160, 43)),
+            ]),
+            Line::from_iter([
+                Span::from("src/lib.rs").fg(Color::Rgb(64, 160, 43)),
+                Span::from("."),
+            ]),
+        ],
+    ),
+    (
+        "ansi",
+        [
+            Line::from_iter([
+                Span::from("Use "),
+                Span::from("src/main.rs").green(),
+                Span::from(" and "),
+                Span::from("./").green(),
+            ]),
+            Line::from_iter([
+                Span::from("src/lib.rs").green(),
+                Span::from("."),
+            ]),
+        ],
+    ),
+    (
+        "no-markup-color",
+        [
+            Line::from_iter([
+                Span::from("Use "),
+                Span::from("src/main.rs").cyan(),
+                Span::from(" and "),
+                Span::from("./").cyan(),
+            ]),
+            Line::from_iter([
+                Span::from("src/lib.rs").cyan(),
+                Span::from("."),
+            ]),
+        ],
+    ),
+]

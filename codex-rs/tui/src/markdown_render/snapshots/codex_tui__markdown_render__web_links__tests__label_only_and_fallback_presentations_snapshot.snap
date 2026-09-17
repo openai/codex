@@ -8,7 +8,7 @@ expression: presentations
             Span::from("plain "),
             Span::from("plain").cyan().underlined(),
             Span::from(" "),
-            Span::from("code").cyan(),
+            Span::from("code").fg(Color::Rgb(166, 227, 161)),
             Span::from(" "),
             Span::from("code").cyan().underlined(),
         ]),
@@ -31,7 +31,7 @@ expression: presentations
             Span::from("https://example.com").cyan().underlined(),
             Span::from(")"),
             Span::from(" "),
-            Span::from("code").cyan(),
+            Span::from("code").fg(Color::Rgb(166, 227, 161)),
         ]),
         Line::from_iter([
             Span::from("code").cyan().underlined(),

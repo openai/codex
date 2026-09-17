@@ -35,10 +35,13 @@
 //! unusably short chunks, expansive cells form tall narrow strips across enough
 //! body rows, or even 3-char-wide columns cannot fit, body rows render as
 //! key/value records.
+//!
+//! Inline code and local file paths share the active syntax theme's raw-markup foreground.
 
 use crate::markdown_text_merge::DecodedTextMerge;
 use crate::render::highlight::current_syntax_theme;
 use crate::render::highlight::foreground_style_for_scopes;
+use crate::render::highlight::foreground_style_for_scopes_with_theme;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::style::table_separator_style;
@@ -109,6 +112,12 @@ struct MarkdownStyles {
 
 impl Default for MarkdownStyles {
     fn default() -> Self {
+        Self::for_theme(&crate::render::highlight::current_syntax_theme())
+    }
+}
+
+impl MarkdownStyles {
+    fn for_theme(theme: &syntect::highlighting::Theme) -> Self {
         Self {
             h1: Style::new().bold().underlined(),
             h2: Style::new().bold(),
@@ -116,7 +125,14 @@ impl Default for MarkdownStyles {
             h4: Style::new().italic(),
             h5: Style::new().italic(),
             h6: Style::new().italic(),
-            code: Style::new().cyan(),
+            code: foreground_style_for_scopes_with_theme(
+                theme,
+                &[
+                    "markup.inline.raw.string.markdown",
+                    "markup.raw.inline.markdown",
+                ],
+            )
+            .unwrap_or_else(|| Style::new().cyan()),
             emphasis: Style::new().italic(),
             strong: Style::new().bold(),
             strikethrough: Style::new().crossed_out(),

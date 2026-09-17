@@ -16,7 +16,8 @@
 //! config is resolved) to persist the user preference and seed the `THEME`
 //! lock.  After that, [`set_syntax_theme`] and [`current_syntax_theme`] can
 //! swap/snapshot the theme for live preview.  All highlighting functions read
-//! the theme via `theme_lock()`.
+//! the theme via `theme_lock()`. Unit tests isolate the active theme and its
+//! revision per thread so parallel tests cannot change each other’s rendering.
 //!
 //! **Guardrails:** inputs exceeding 512 KB or 10 000 lines, or containing an
 //! individual line longer than 4 KiB, are rejected early (returns `None`) to
@@ -32,7 +33,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::RwLock;
+#[cfg(not(test))]
 use std::sync::atomic::AtomicU64;
+#[cfg(not(test))]
 use std::sync::atomic::Ordering;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Color as SyntectColor;
@@ -55,10 +58,18 @@ pub(crate) use streaming::StreamingCodeHighlighter;
 // -- Global singletons -------------------------------------------------------
 
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+#[cfg(not(test))]
 static THEME: OnceLock<RwLock<Theme>> = OnceLock::new();
+#[cfg(not(test))]
 static THEME_REVISION: AtomicU64 = AtomicU64::new(0);
 static THEME_OVERRIDE: OnceLock<Option<String>> = OnceLock::new();
 static CODEX_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static TEST_THEME: std::cell::OnceCell<std::sync::Arc<RwLock<Theme>>> = const { std::cell::OnceCell::new() };
+    static TEST_THEME_REVISION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 // Syntect/bat encode ANSI palette semantics in alpha:
 // `a=0` => indexed ANSI palette via RGB payload, `a=1` => terminal default.
@@ -95,7 +106,11 @@ pub(crate) fn set_theme_override(
     let warning = validate_theme_name(name.as_deref(), codex_home.as_deref());
     let override_set_ok = THEME_OVERRIDE.set(name.clone()).is_ok();
     let codex_home_set_ok = CODEX_HOME.set(codex_home.clone()).is_ok();
-    if THEME.get().is_some() {
+    #[cfg(not(test))]
+    let initialized = THEME.get().is_some();
+    #[cfg(test)]
+    let initialized = TEST_THEME.with(|theme| theme.get().is_some());
+    if initialized {
         set_syntax_theme(resolve_theme_with_override(
             name.as_deref(),
             codex_home.as_deref(),
@@ -243,28 +258,47 @@ fn build_default_theme() -> Theme {
     resolve_theme_with_override(name, codex_home)
 }
 
-fn theme_lock() -> &'static RwLock<Theme> {
-    THEME.get_or_init(|| RwLock::new(build_default_theme()))
+fn theme_lock() -> impl std::ops::Deref<Target = RwLock<Theme>> {
+    #[cfg(not(test))]
+    {
+        THEME.get_or_init(|| RwLock::new(build_default_theme()))
+    }
+    #[cfg(test)]
+    TEST_THEME.with(|theme| {
+        theme
+            .get_or_init(|| std::sync::Arc::new(RwLock::new(build_default_theme())))
+            .clone()
+    })
 }
 
 /// Swap the active syntax theme at runtime and invalidate rendered-content caches.
 pub(crate) fn set_syntax_theme(theme: Theme) {
-    let mut guard = match theme_lock().write() {
+    let active_theme = theme_lock();
+    let mut guard = match active_theme.write() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
     *guard = theme;
+    #[cfg(not(test))]
     THEME_REVISION.fetch_add(1, Ordering::Release);
+    #[cfg(test)]
+    TEST_THEME_REVISION.with(|revision| revision.set(revision.get().wrapping_add(1)));
 }
 
 /// Return the revision of the active syntax theme for rendered-content caches.
 pub(crate) fn syntax_theme_revision() -> u64 {
-    THEME_REVISION.load(Ordering::Acquire)
+    #[cfg(not(test))]
+    {
+        THEME_REVISION.load(Ordering::Acquire)
+    }
+    #[cfg(test)]
+    TEST_THEME_REVISION.with(std::cell::Cell::get)
 }
 
 /// Clone the current syntax theme (e.g. to save for cancel-restore).
 pub(crate) fn current_syntax_theme() -> Theme {
-    match theme_lock().read() {
+    let active_theme = theme_lock();
+    match active_theme.read() {
         Ok(theme) => theme.clone(),
         Err(poisoned) => poisoned.into_inner().clone(),
     }
@@ -666,7 +700,8 @@ fn highlighted_line_spans(ranges: Vec<(SyntectStyle, &str)>) -> Vec<Span<'static
 /// Each inner Vec represents one source line.  Returns None when the language
 /// is not recognized or the input exceeds safety limits.
 fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'static>>>> {
-    let theme_guard = match theme_lock().read() {
+    let active_theme = theme_lock();
+    let theme_guard = match active_theme.read() {
         Ok(theme_guard) => theme_guard,
         Err(poisoned) => poisoned.into_inner(),
     };
@@ -731,6 +766,15 @@ mod tests {
     use syntect::highlighting::StyleModifier;
     use syntect::highlighting::ThemeItem;
     use syntect::highlighting::ThemeSettings;
+
+    #[test]
+    fn active_theme_and_revision_are_isolated_between_test_threads() {
+        let original = (current_syntax_theme(), syntax_theme_revision());
+        std::thread::spawn(|| set_syntax_theme(Theme::default()))
+            .join()
+            .unwrap();
+        assert_eq!((current_syntax_theme(), syntax_theme_revision()), original);
+    }
 
     fn write_minimal_tmtheme(path: &Path) {
         // Minimal valid .tmTheme plist (enough for syntect to parse).
