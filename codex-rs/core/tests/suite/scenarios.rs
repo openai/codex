@@ -642,6 +642,70 @@ text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);"#,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_reads_code_mode_call_timing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            // Use the selected cwd as the workspace root on local and remote executors.
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.code_mode.experimental_show_cell_overhead = true;
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable code mode");
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("enable code-mode-only tools");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable the code-mode host");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("exec-response"),
+                ev_custom_tool_call("exec-call", "exec", "text('ready');"),
+                ev_completed("exec-response"),
+            ]),
+            sse(vec![
+                ev_response_created("wait-response"),
+                ev_function_call_with_namespace(
+                    "wait-call",
+                    "functions",
+                    "wait",
+                    r#"{"cell_id":"missing"}"#,
+                ),
+                ev_completed("wait-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("final", "The call completed; the missing-cell wait failed."),
+                ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Run a code cell, then inspect its timing and a failed wait.")
+        .await?;
+    insta::assert_snapshot!(
+        "astra_code_mode_call_timing",
+        context_snapshot::format_request_history_snapshot(
+            "Astra receives host and handler timings on completed and failed code-mode calls.",
+            &mock.requests(),
+            &ContextSnapshotOptions::default(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Result<()> {
     skip_if_no_network!(Ok(()));
     core_test_support::skip_if_remote!(Ok(()), "plugin and MCP fixtures use host-local paths");

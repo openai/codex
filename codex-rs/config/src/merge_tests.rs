@@ -256,6 +256,45 @@ fn multi_agent_v2_cli_overrides_preserve_boolean_and_nested_configuration() {
 }
 
 #[test]
+fn code_mode_overrides_preserve_enabled_state_and_cell_overhead() {
+    for feature_path in ["features", "profiles.work.features"] {
+        for enabled in [true, false] {
+            let toggle = (
+                format!("{feature_path}.code_mode"),
+                TomlValue::Boolean(enabled),
+            );
+            let overhead = (
+                format!("{feature_path}.code_mode.experimental_show_cell_overhead"),
+                TomlValue::Boolean(true),
+            );
+            let expected = parse_toml(&format!(
+                "[{feature_path}.code_mode]\nenabled = {enabled}\nexperimental_show_cell_overhead = true\n",
+            ));
+
+            // Adding a display option must preserve the toggle in either override order.
+            for overrides in [
+                vec![toggle.clone(), overhead.clone()],
+                vec![overhead, toggle],
+            ] {
+                assert_eq!(crate::build_cli_overrides_layer(&overrides), expected);
+            }
+
+            let boolean_layer = parse_toml(&format!("[{feature_path}]\ncode_mode = {enabled}\n"));
+            let table_layer = parse_toml(&format!(
+                "[{feature_path}.code_mode]\nexperimental_show_cell_overhead = true\n",
+            ));
+            for (mut base, overlay) in [
+                (boolean_layer.clone(), table_layer.clone()),
+                (table_layer, boolean_layer),
+            ] {
+                merge_toml_values(&mut base, &overlay);
+                assert_eq!(base, expected);
+            }
+        }
+    }
+}
+
+#[test]
 fn sleep_tool_overrides_preserve_disabled_state_and_mode() {
     for feature_path in ["features", "profiles.work.features"] {
         let disabled = (

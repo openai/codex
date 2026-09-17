@@ -34,17 +34,28 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
 #[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 
-/// Model output and the structured timing consumed by Bridge describe the same
-/// host operation over either transport, including missing-cell responses.
-#[test_case("exec", "grpc"; "exec_grpc")]
-#[test_case("wait", "grpc"; "wait_grpc")]
-#[test_case("exec", "stdio"; "exec_stdio")]
-#[test_case("wait", "stdio"; "wait_stdio")]
+enum TimingOutput {
+    HostOnly,
+    WithOverhead,
+}
+
+/// Responses with overhead use the same host and handler measurements as Bridge,
+/// including app-server waiting. The default shows only host duration.
+#[test_case("exec", "grpc", TimingOutput::HostOnly; "exec_grpc_host_only")]
+#[test_case("wait", "grpc", TimingOutput::HostOnly; "wait_grpc_host_only")]
+#[test_case("exec", "stdio", TimingOutput::HostOnly; "exec_stdio_host_only")]
+#[test_case("wait", "stdio", TimingOutput::HostOnly; "wait_stdio_host_only")]
+#[test_case("exec", "grpc", TimingOutput::WithOverhead; "exec_grpc_with_overhead")]
+#[test_case("wait", "grpc", TimingOutput::WithOverhead; "wait_grpc_with_overhead")]
+#[test_case("exec", "stdio", TimingOutput::WithOverhead; "exec_stdio_with_overhead")]
+#[test_case("wait", "stdio", TimingOutput::WithOverhead; "wait_stdio_with_overhead")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_model_output_uses_structured_host_timing(
     tool_name: &str,
     transport: &str,
+    timing_output: TimingOutput,
 ) -> Result<()> {
+    let experimental_show_cell_overhead = matches!(timing_output, TimingOutput::WithOverhead);
     let mut host = match transport {
         "grpc" => Some(
             Command::new(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
@@ -100,9 +111,13 @@ async fn code_mode_model_output_uses_structured_host_timing(
     )
     .await;
     let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&model_server.uri())
-        .enable_feature(Feature::CodeModeOnly)
-        .write(codex_home.path())?;
+    let mut config =
+        MockResponsesConfig::new(&model_server.uri()).enable_feature(Feature::CodeModeOnly);
+    if experimental_show_cell_overhead {
+        config = config
+            .with_extra_config("[features.code_mode]\nexperimental_show_cell_overhead = true");
+    }
+    config.write(codex_home.path())?;
     let mut builder = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_json_logging("codex_code_mode::timing=info,codex_core::tools::parallel=info");
@@ -133,12 +148,16 @@ async fn code_mode_model_output_uses_structured_host_timing(
         })
         .await?;
     let _: TurnStartResponse = app_server.read_response(start_id).await?;
-    let timing = app_server
+    let host_timing = app_server
         .wait_for_json_log_event("codex.code_mode.host_timing")
         .await?;
     // Hold only the app-server after the host outcome, so local elapsed time
     // cannot round to the same displayed duration as the host measurement.
     tokio::time::sleep(Duration::from_millis(/*millis*/ 300)).await;
+    assert!(
+        follow_up.requests().is_empty(),
+        "the model must not receive the result while elicitation is outstanding"
+    );
     let decrement_id = app_server
         .send_request(
             "thread/decrement_elicitation",
@@ -151,14 +170,45 @@ async fn code_mode_model_output_uses_structured_host_timing(
     let completed: TurnCompletedNotification =
         app_server.read_notification("turn/completed").await?;
     assert_eq!(completed.turn.status, TurnStatus::Completed);
-    let fields = &timing["fields"];
-    let code_mode_host_duration_ns = fields["code_mode_host_duration_ns"]
+    let host_fields = &host_timing["fields"];
+    let code_mode_host_duration_ns = host_fields["code_mode_host_duration_ns"]
         .as_u64()
         .context("missing host timing")?;
-    assert_eq!(fields["conversation_id"], thread.thread.id);
-    assert_eq!(fields["turn_id"], completed.turn.id);
-    assert_eq!(fields["call_id"], "timed-call");
-    assert_eq!(fields["tool_name"], tool_name);
+    assert_eq!(host_fields["conversation_id"], thread.thread.id);
+    assert_eq!(host_fields["turn_id"], completed.turn.id);
+    assert_eq!(host_fields["call_id"], "timed-call");
+    assert_eq!(host_fields["tool_name"], tool_name);
+    let handler_timing = app_server
+        .wait_for_json_log_event("codex.tool_call")
+        .await?;
+    let handler_fields = &handler_timing["fields"];
+    let handler_duration_ms = handler_fields["handler_duration_ms"]
+        .as_u64()
+        .context("missing handler timing")?;
+    assert_eq!(
+        [
+            &handler_fields["conversation.id"],
+            &handler_fields["turn_id"],
+            &handler_fields["call_id"],
+            &handler_fields["tool_name"],
+        ],
+        [
+            &host_fields["conversation_id"],
+            &host_fields["turn_id"],
+            &host_fields["call_id"],
+            &host_fields["tool_name"],
+        ]
+    );
+    assert_eq!(handler_fields["tool_source"], "direct");
+    assert_eq!(handler_fields["execution_started"], true);
+    // The host stopped its timer before the elicitation hold. The outer handler
+    // must include that hold, with some allowance for its millisecond precision.
+    let overhead_ns =
+        i128::from(handler_duration_ms) * 1_000_000 - i128::from(code_mode_host_duration_ns);
+    assert!(
+        overhead_ns >= 250_000_000,
+        "handler timing omitted the post-host elicitation hold: {overhead_ns}ns"
+    );
     let request = follow_up.single_request();
     let output = if tool_name == "exec" {
         request.custom_tool_call_output("timed-call")
@@ -170,12 +220,19 @@ async fn code_mode_model_output_uses_structured_host_timing(
     } else {
         "Script failed"
     };
-    let seconds = Duration::from_nanos(code_mode_host_duration_ns).as_secs_f32();
-    let seconds = (seconds * 10.0).round() / 10.0;
-    assert_eq!(
-        output["output"][0]["text"],
+    let expected_header = if experimental_show_cell_overhead {
+        let total_seconds = Duration::from_millis(handler_duration_ms).as_secs_f64();
+        let host_seconds = Duration::from_nanos(code_mode_host_duration_ns).as_secs_f64();
+        let overhead_seconds = overhead_ns as f64 / 1_000_000_000.0;
+        format!(
+            "{status}\nWall time {total_seconds:.3} seconds (code-mode {host_seconds:.3} seconds; overhead {overhead_seconds:.3} seconds)\nOutput:\n"
+        )
+    } else {
+        let seconds = Duration::from_nanos(code_mode_host_duration_ns).as_secs_f32();
+        let seconds = (seconds * 10.0).round() / 10.0;
         format!("{status}\nWall time {seconds:.1} seconds\nOutput:\n")
-    );
+    };
+    assert_eq!(output["output"][0]["text"], expected_header);
     Ok(())
 }
 

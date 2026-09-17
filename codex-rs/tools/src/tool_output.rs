@@ -18,6 +18,10 @@ pub trait ToolOutput: Send {
 
     fn success_for_logging(&self) -> bool;
 
+    /// Finalizes output using the same completed handler duration reported in tool-call logs.
+    /// Called before recording model-visible history; implementations must not measure time here.
+    fn set_handler_duration_ms(&mut self, _handler_duration_ms: u64) {}
+
     /// Whether this output contains external context that should disable memory generation when
     /// `memories.disable_on_external_context` is enabled.
     fn contains_external_context(&self) -> bool {
@@ -73,6 +77,10 @@ where
 
     fn success_for_logging(&self) -> bool {
         (**self).success_for_logging()
+    }
+
+    fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {
+        (**self).set_handler_duration_ms(handler_duration_ms);
     }
 
     fn contains_external_context(&self) -> bool {

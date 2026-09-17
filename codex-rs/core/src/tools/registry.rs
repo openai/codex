@@ -232,6 +232,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
         self.original.success_for_logging()
     }
 
+    fn set_handler_duration_ms(&mut self, handler_duration_ms: u64) {
+        self.original.set_handler_duration_ms(handler_duration_ms);
+    }
+
     fn fallback_token_limit_override(&self) -> Option<usize> {
         self.original.fallback_token_limit_override()
     }

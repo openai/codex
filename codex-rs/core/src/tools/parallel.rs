@@ -32,7 +32,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ToolResultMetadata;
 
 struct ToolCallTimingGuard {
-    started_at: Instant,
+    started_at: Option<Instant>,
     execution_started_at: Arc<OnceLock<Instant>>,
     conversation_id: String,
     turn_id: String,
@@ -130,8 +130,14 @@ impl ToolCallRuntime {
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
-        let tool_call_timing_guard =
-            ToolCallTimingGuard::capture(started, &session.thread_id, &turn.sub_id, &call, &source);
+        let tool_call_timing_guard = ToolCallTimingGuard::capture(
+            started,
+            &session.thread_id,
+            &turn.sub_id,
+            &call,
+            &source,
+            turn.config.code_mode.experimental_show_cell_overhead,
+        );
         let execution_started_at = tool_call_timing_guard
             .as_ref()
             .map(|timing| Arc::clone(&timing.execution_started_at));
@@ -213,8 +219,8 @@ impl ToolCallRuntime {
         ));
 
         async move {
-            let _tool_call_timing_guard = tool_call_timing_guard;
-            tokio::select! {
+            let mut tool_call_timing_guard = tool_call_timing_guard;
+            let mut result = tokio::select! {
                 res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
                     if terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
@@ -224,30 +230,40 @@ impl ToolCallRuntime {
                         abort_dispatch_span.record("aborted", true);
                         dispatch_handle.abort();
                         match dispatch_handle.await {
-                            Ok(result) => return result,
-                            Err(err) if err.is_cancelled() => {}
-                            Err(err) => return Err(Self::tool_task_join_error(err)),
+                            Ok(result) => result,
+                            Err(err) if err.is_cancelled() => {
+                                let response = Self::aborted_response(&call, secs);
+                                call_trace::result_ready(
+                                    thread_id,
+                                    &abort_turn.sub_id,
+                                    &call.tool_name,
+                                    &call.call_id,
+                                    trace_source,
+                                );
+                                notify_tool_aborted(
+                                    abort_session.as_ref(),
+                                    abort_turn.as_ref(),
+                                    call.call_id.as_str(),
+                                    &call.tool_name,
+                                    abort_source,
+                                )
+                                .await;
+                                Ok(response)
+                            }
+                            Err(err) => Err(Self::tool_task_join_error(err)),
                         }
-                        let response = Self::aborted_response(&call, secs);
-                        call_trace::result_ready(
-                            thread_id,
-                            &abort_turn.sub_id,
-                            &call.tool_name,
-                            &call.call_id,
-                            trace_source,
-                        );
-                        notify_tool_aborted(
-                            abort_session.as_ref(),
-                            abort_turn.as_ref(),
-                            call.call_id.as_str(),
-                            &call.tool_name,
-                            abort_source,
-                        )
-                        .await;
-                        Ok(response)
                     }
                 },
+            };
+            // Use one completion measurement for logging and response formatting.
+            // Measuring inside a handler would omit routing and output processing.
+            if let Some(timing) = tool_call_timing_guard.as_mut()
+                && let Some(handler_duration_ms) = timing.finish()
+                && let Ok(result) = &mut result
+            {
+                result.result.set_handler_duration_ms(handler_duration_ms);
             }
+            result
         }
         .in_current_span()
     }
@@ -312,6 +328,7 @@ impl ToolCallTimingGuard {
         turn_id: &str,
         call: &ToolCall,
         source: &ToolCallSource,
+        experimental_show_cell_overhead: bool,
     ) -> Option<Self> {
         // Code-mode calls are nested within a direct code-mode tool call whose
         // timing already includes them. Suppress nested guards so consumers do
@@ -319,13 +336,13 @@ impl ToolCallTimingGuard {
         if !matches!(
             source,
             ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
-        ) || !tracing::enabled!(tracing::Level::INFO)
+        ) || (!experimental_show_cell_overhead && !tracing::enabled!(tracing::Level::INFO))
         {
             return None;
         }
 
         Some(Self {
-            started_at,
+            started_at: Some(started_at),
             execution_started_at: Arc::new(OnceLock::new()),
             conversation_id: conversation_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -333,10 +350,11 @@ impl ToolCallTimingGuard {
             tool_name: call.tool_name.clone(),
         })
     }
-}
 
-impl Drop for ToolCallTimingGuard {
-    fn drop(&mut self) {
+    /// Log call timing once and return the handler duration in milliseconds.
+    fn finish(&mut self) -> Option<u64> {
+        // Taking the start instant keeps normal completion and Drop from logging twice.
+        let started_at = self.started_at.take()?;
         let completed_at = Instant::now();
         // Snapshot once so a concurrently-starting dispatch cannot make one
         // event internally inconsistent.
@@ -346,12 +364,10 @@ impl Drop for ToolCallTimingGuard {
             .copied()
             .filter(|execution_started_at| *execution_started_at <= completed_at);
         let duration_ms = |duration: std::time::Duration| u64::try_from(duration.as_millis()).ok();
-        let total_duration_ms = duration_ms(completed_at.duration_since(self.started_at));
+        let total_duration_ms = duration_ms(completed_at.duration_since(started_at));
         let dispatch_duration_ms = execution_started_at.map_or_else(
             || total_duration_ms,
-            |execution_started_at| {
-                duration_ms(execution_started_at.duration_since(self.started_at))
-            },
+            |execution_started_at| duration_ms(execution_started_at.duration_since(started_at)),
         );
         let handler_duration_ms = execution_started_at.map_or(Some(0), |execution_started_at| {
             duration_ms(completed_at.duration_since(execution_started_at))
@@ -388,6 +404,14 @@ impl Drop for ToolCallTimingGuard {
                 );
             }
         }
+        handler_duration_ms
+    }
+}
+
+impl Drop for ToolCallTimingGuard {
+    fn drop(&mut self) {
+        // Cancellation can drop the outer future before its normal completion path runs.
+        let _ = self.finish();
     }
 }
 
@@ -434,6 +458,7 @@ mod tests {
                 "turn-id",
                 &call,
                 &ToolCallSource::Direct,
+                /*experimental_show_cell_overhead*/ false,
             );
             assert!(
                 direct_guard.is_some(),
@@ -450,11 +475,44 @@ mod tests {
                     cell_id: "cell-1".to_string(),
                     runtime_tool_call_id: "runtime-call-1".to_string(),
                 },
+                /*experimental_show_cell_overhead*/ false,
             );
             assert!(
                 code_mode_guard.is_none(),
                 "nested code-mode calls should not create overlapping timing events"
             );
+        });
+    }
+
+    #[test]
+    fn output_timing_works_without_logs_and_excludes_dispatch_waiting() {
+        tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), || {
+            let call = ToolCall {
+                tool_name: codex_tools::ToolName::plain("exec"),
+                call_id: "call-1".to_string(),
+                payload: ToolPayload::Custom {
+                    input: "text('ready')".to_string(),
+                },
+                encrypted_function_args: None,
+            };
+            let started_at = Instant::now() - Duration::from_secs(/*secs*/ 5);
+            let mut timing = ToolCallTimingGuard::capture(
+                started_at,
+                &"conversation-id",
+                "turn-id",
+                &call,
+                &ToolCallSource::Direct,
+                /*experimental_show_cell_overhead*/ true,
+            )
+            .expect("model-visible timing must not depend on INFO logging");
+            timing
+                .execution_started_at
+                .set(started_at + Duration::from_secs(/*secs*/ 4))
+                .expect("execution start is unset");
+            let handler_ms = timing.finish().expect("completed handler duration");
+            assert!(u128::from(handler_ms) <= started_at.elapsed().as_millis() - 4_000);
+            assert!(handler_ms >= 1_000);
+            assert_eq!(timing.finish(), None, "completion is consumed exactly once");
         });
     }
 

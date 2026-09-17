@@ -1,5 +1,4 @@
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
@@ -13,6 +12,7 @@ use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
+use super::output::CodeModeToolOutput;
 use super::telemetry::CodeModeToolCallGuard;
 use super::telemetry::trace_id;
 
@@ -39,7 +39,7 @@ impl CodeModeExecuteHandler {
         originating_call: Option<crate::tools::context::ToolCallOrigin>,
         code: String,
         telemetry: &mut CodeModeToolCallGuard,
-    ) -> Result<FunctionToolOutput, FunctionCallError> {
+    ) -> Result<CodeModeToolOutput, FunctionCallError> {
         let args =
             codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
         let exec = ExecContext {
@@ -146,14 +146,13 @@ impl CodeModeExecuteHandler {
         let wall_time = response
             .code_mode_host_duration()
             .unwrap_or_else(|| started_at.elapsed());
-        handle_runtime_response(
+        Ok(handle_runtime_response(
             &step_context.settings.model_info,
             response,
             args.max_output_tokens,
             wall_time,
-        )
-        .await
-        .map_err(FunctionCallError::RespondToModel)
+            exec.turn.config.code_mode.experimental_show_cell_overhead,
+        ))
     }
 }
 
