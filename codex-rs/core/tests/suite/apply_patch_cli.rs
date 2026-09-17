@@ -52,11 +52,13 @@ use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
 use core_test_support::TestTargetOs;
 use core_test_support::assert_regex_match;
+use core_test_support::is_wine_exec_test_environment;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_exec_command_call_with_args;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -242,6 +244,68 @@ pub async fn mount_apply_patch(
         ),
     )
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mxc_config_routes_command_and_patch_to_the_windows_executor() -> Result<()> {
+    if !is_wine_exec_test_environment() {
+        return Ok(());
+    }
+
+    let harness = apply_patch_harness_with(|builder| {
+        builder.with_pre_build_hook(|home| {
+            fs::write(home.join("config.toml"), "[windows]\nsandbox = \"mxc\"\n")
+                .expect("write MXC config");
+        })
+    })
+    .await?;
+    let exec_response = mount_function_call_agent_response(
+        harness.server(),
+        "mxc-exec",
+        &json!({"cmd": "Write-Output should-not-run"}).to_string(),
+        "exec_command",
+    )
+    .await;
+    harness
+        .submit_with_permission_profile(
+            "exercise MXC command routing",
+            PermissionProfile::workspace_write(),
+        )
+        .await?;
+    mount_apply_patch(
+        &harness,
+        "mxc-patch",
+        "*** Begin Patch\n*** Add File: should-not-exist.txt\n+blocked\n*** End Patch",
+        "done",
+    )
+    .await;
+    harness
+        .submit_with_permission_profile(
+            "exercise MXC patch routing",
+            PermissionProfile::workspace_write(),
+        )
+        .await?;
+
+    let exec_output = harness.function_call_stdout("mxc-exec").await;
+    assert!(
+        exec_output.contains("native MXC is unavailable"),
+        "expected MXC unavailability error, got: {exec_output:?}"
+    );
+    let patch_output = harness.apply_patch_output("mxc-patch").await;
+    assert!(
+        patch_output.contains("Failed to write file"),
+        "expected apply_patch failure, got: {patch_output:?}"
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        &exec_response
+            .function_call
+            .single_request()
+            .header("x-codex-turn-metadata")
+            .expect("turn metadata header"),
+    )?;
+    assert_eq!(metadata["sandbox"], "windows_mxc");
+
+    Ok(())
 }
 
 async fn mount_apply_patch_model_output(

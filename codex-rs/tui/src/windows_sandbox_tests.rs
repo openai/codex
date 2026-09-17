@@ -11,36 +11,45 @@ fn windows_sandbox_server_policy_controls_setup_choices() {
             Some("unelevated"),
             serde_json::Value::Null,
             Some(Unelevated),
-            (true, true, false),
+            (true, true, false, true),
         ),
         (
             Some("unelevated"),
             json!(["elevated"]),
             Some(Elevated),
-            (true, false, true),
+            (true, false, true, true),
         ),
         (
             None,
             json!(["unelevated", "elevated"]),
             Some(Elevated),
-            (true, true, true),
+            (true, true, true, true),
         ),
         (
             None,
             json!(["unelevated"]),
             Some(Unelevated),
-            (false, true, false),
+            (false, true, false, true),
         ),
-        (Some("unelevated"), json!([]), None, (false, false, false)),
         (
             Some("unelevated"),
-            json!(["mxc"]),
+            json!([]),
             None,
-            (false, false, false),
+            (false, false, false, false),
+        ),
+        (
+            Some("mxc"),
+            json!(["elevated"]),
+            None,
+            (true, false, false, true),
         ),
     ] {
         let config = serde_json::from_value(json!({
-            "config": {"windows": {"sandbox": configured}}, "origins": {}
+            "config": {
+                "windows": {"sandbox": configured},
+                "features": {"elevated_windows_sandbox": configured == Some("mxc")}
+            },
+            "origins": {}
         }))
         .unwrap();
         let requirements = serde_json::from_value(json!({
@@ -53,7 +62,8 @@ fn windows_sandbox_server_policy_controls_setup_choices() {
             (
                 state.allows(Elevated),
                 state.allows(Unelevated),
-                state.requires_elevated()
+                state.requires_elevated(),
+                state.is_enabled(),
             ),
             expected
         );

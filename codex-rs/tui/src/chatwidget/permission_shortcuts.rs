@@ -64,7 +64,7 @@ impl ChatWidget {
                             | crate::app::WindowsSandboxHost::Unknown
                     ) || (self.windows_sandbox_host != crate::app::WindowsSandboxHost::Remote
                         && reviewer == ApprovalsReviewer::User
-                        && self.windows_sandbox_config.level() == WindowsSandboxLevel::Disabled))
+                        && !self.windows_sandbox_config.is_enabled()))
                 {
                     continue;
                 }

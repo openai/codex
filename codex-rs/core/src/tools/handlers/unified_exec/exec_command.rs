@@ -212,7 +212,10 @@ impl ExecCommandHandler {
             && SandboxManager::new().select_initial(
                 turn_environment.permission_profile(),
                 SandboxablePreference::Auto,
-                turn_environment.config().windows_sandbox_level,
+                codex_protocol::sandbox::effective_windows_sandbox_type(
+                    turn_environment.config().windows_sandbox_type,
+                    turn_environment.config().windows_sandbox_level,
+                ),
                 turn.network.is_some(),
             ) != SandboxType::None;
         // `to_abs_path()` alone cannot identify foreign drive paths: `file:///C:/repo` is

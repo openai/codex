@@ -54,6 +54,7 @@ pub(super) async fn spawn_command_under_sandbox(
         &[PathUri::from_abs_path(sandbox_cwd)],
         &codex_linux_sandbox_exe,
         /*codex_self_exe*/ &None,
+        codex_protocol::sandbox::SandboxType::None,
         /*use_legacy_landlock*/ false,
     )
     .map_err(|err| io::Error::other(err.to_string()))?;

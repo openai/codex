@@ -368,7 +368,7 @@ impl ChatWidget {
                     // cannot be set up from this TUI's Windows account.
                     return apply_actions();
                 }
-                if self.windows_sandbox_config.level() == WindowsSandboxLevel::Disabled {
+                if !self.windows_sandbox_config.is_enabled() {
                     let preset = preset.clone();
                     return vec![Box::new(move |tx| {
                         tx.send(AppEvent::OpenWindowsSandboxEnablePrompt {

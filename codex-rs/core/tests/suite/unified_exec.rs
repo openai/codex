@@ -505,6 +505,7 @@ async fn exec_command_uses_installed_environment_shell_policy_with_explicit_over
                     ..Default::default()
                 },
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&harness.test().config),
+                windows_sandbox_type: harness.test().config.permissions.windows_sandbox_type,
                 windows_sandbox_private_desktop: harness
                     .test()
                     .config

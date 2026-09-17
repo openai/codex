@@ -20,10 +20,16 @@ pub(crate) fn select_sandbox(
         WindowsSandboxSelection::Elevated => WindowsSandboxLevel::Elevated,
         WindowsSandboxSelection::Mxc => return (SandboxType::WindowsMxc, None),
     };
+    let windows_sandbox_type = match windows_sandbox_level {
+        WindowsSandboxLevel::Disabled => SandboxType::None,
+        WindowsSandboxLevel::RestrictedToken | WindowsSandboxLevel::Elevated => {
+            SandboxType::WindowsRestrictedToken
+        }
+    };
     let sandbox_type = manager.select_initial(
         permission_profile,
         SandboxablePreference::Require,
-        windows_sandbox_level,
+        windows_sandbox_type,
         has_managed_network_requirements,
     );
     (sandbox_type, Some(windows_sandbox_level))

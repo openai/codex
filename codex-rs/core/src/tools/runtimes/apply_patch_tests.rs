@@ -29,6 +29,7 @@ fn test_turn_environment(environment_id: &str) -> crate::session::turn_context::
                 allow_login_shell: true,
                 workspace_roots: Vec::new(),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_type: SandboxType::None,
                 windows_sandbox_private_desktop: true,
                 use_legacy_landlock: false,
                 permission_profile: PermissionProfileSnapshot::legacy(
@@ -248,6 +249,7 @@ async fn file_system_sandbox_context_preserves_executor_workspace_permissions() 
         workspace_roots: std::slice::from_ref(&sandbox_policy_cwd),
         sandbox_exe: None,
         use_legacy_landlock: true,
+        windows_sandbox_type: SandboxType::WindowsRestrictedToken,
         windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
         windows_sandbox_private_desktop: true,
         network_denial_cancellation_token: None,
@@ -316,6 +318,7 @@ async fn file_system_sandbox_context_respects_sandbox_request() {
         workspace_roots: std::slice::from_ref(&sandbox_policy_cwd),
         sandbox_exe: None,
         use_legacy_landlock: false,
+        windows_sandbox_type: SandboxType::None,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,

@@ -98,6 +98,7 @@ impl Session {
                         user_home_dir: None,
                         temporary_directories: None,
                         windows_sandbox_selection: executor_windows_sandbox_selection(
+                            environment.config().windows_sandbox_type,
                             environment.config().windows_sandbox_level,
                             environment.cwd(),
                         ),

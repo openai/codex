@@ -125,13 +125,13 @@ pub enum ExecCapturePolicy {
 
 fn select_process_exec_tool_sandbox_type(
     permission_profile: &PermissionProfile,
-    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
+    windows_sandbox_type: SandboxType,
     enforce_managed_network: bool,
 ) -> SandboxType {
     SandboxManager::new().select_initial(
         permission_profile,
         SandboxablePreference::Auto,
-        windows_sandbox_level,
+        windows_sandbox_type,
         enforce_managed_network,
     )
 }
@@ -308,6 +308,13 @@ pub async fn process_exec_tool_call(
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let windows_sandbox_type = if params.windows_sandbox_level
+        == codex_protocol::config_types::WindowsSandboxLevel::Disabled
+    {
+        SandboxType::None
+    } else {
+        SandboxType::WindowsRestrictedToken
+    };
     let windows_sandbox_workspace_roots = windows_sandbox_workspace_roots
         .iter()
         .map(PathUri::from_abs_path)
@@ -319,6 +326,7 @@ pub async fn process_exec_tool_call(
         &windows_sandbox_workspace_roots,
         codex_linux_sandbox_exe,
         codex_self_exe,
+        windows_sandbox_type,
         use_legacy_landlock,
     )?;
 
@@ -328,6 +336,7 @@ pub async fn process_exec_tool_call(
 
 /// Transform a portable exec request into the concrete argv/env that should be
 /// spawned under the requested sandbox policy.
+#[allow(clippy::too_many_arguments)]
 pub fn build_exec_request(
     params: ExecParams,
     permission_profile: &PermissionProfile,
@@ -335,6 +344,7 @@ pub fn build_exec_request(
     windows_sandbox_workspace_roots: &[PathUri],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     codex_self_exe: &Option<PathBuf>,
+    windows_sandbox_type: SandboxType,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
     let ExecParams {
@@ -358,7 +368,7 @@ pub fn build_exec_request(
     let enforce_managed_network = network.is_some();
     let sandbox_type = select_process_exec_tool_sandbox_type(
         permission_profile,
-        windows_sandbox_level,
+        windows_sandbox_type,
         enforce_managed_network,
     );
     tracing::debug!("Sandbox type: {sandbox_type:?}");

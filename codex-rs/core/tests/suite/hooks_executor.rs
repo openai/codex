@@ -838,6 +838,7 @@ impl ExecutorHookFixture {
                     ),
                     shell_environment_policy: Default::default(),
                     windows_sandbox_level: WindowsSandboxLevel::from_config(&self.test.config),
+                    windows_sandbox_type: self.test.config.permissions.windows_sandbox_type,
                     windows_sandbox_private_desktop: self
                         .test
                         .config

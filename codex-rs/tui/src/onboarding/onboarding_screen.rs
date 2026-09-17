@@ -18,8 +18,6 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_exec_server::LOCAL_FS;
 use codex_git_utils::resolve_root_git_project_for_trust;
-#[cfg(target_os = "windows")]
-use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -149,7 +147,7 @@ impl OnboardingScreen {
                 config.cwd.display().to_string(),
             )
             .await
-            .is_ok_and(|state| state.level() == WindowsSandboxLevel::Disabled)
+            .is_ok_and(|state| !state.is_enabled())
         } else {
             false
         };

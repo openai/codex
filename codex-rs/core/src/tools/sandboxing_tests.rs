@@ -74,6 +74,43 @@ fn restricted_sandbox_requires_exec_approval_on_request() {
 }
 
 #[test]
+fn windows_sandbox_selection_distinguishes_configured_and_executor_defaults() {
+    let cwd = PathUri::parse("file:///C:/workspace").expect("Windows path URI");
+    assert_eq!(
+        executor_windows_sandbox_level(
+            SandboxType::WindowsMxc,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &cwd,
+        ),
+        codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+    );
+    assert_eq!(
+        executor_windows_sandbox_selection(
+            SandboxType::WindowsMxc,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &cwd,
+        ),
+        codex_file_system::WindowsSandboxSelection::Mxc,
+    );
+    assert_eq!(
+        configured_windows_sandbox_selection(
+            SandboxType::None,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &cwd,
+        ),
+        codex_file_system::WindowsSandboxSelection::Disabled,
+    );
+    assert_eq!(
+        executor_windows_sandbox_selection(
+            SandboxType::None,
+            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            &cwd,
+        ),
+        codex_file_system::WindowsSandboxSelection::RestrictedToken,
+    );
+}
+
+#[test]
 fn default_exec_approval_requirement_rejects_sandbox_prompt_when_granular_disables_it() {
     let policy = AskForApproval::Granular(GranularApprovalConfig {
         sandbox_approval: false,
@@ -257,6 +294,7 @@ fn windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backend() {
         workspace_roots: std::slice::from_ref(&cwd_uri),
         sandbox_exe: None,
         use_legacy_landlock: false,
+        windows_sandbox_type: SandboxType::WindowsRestrictedToken,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Elevated,
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
@@ -328,6 +366,7 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         workspace_roots: std::slice::from_ref(&cwd_uri),
         sandbox_exe: None,
         use_legacy_landlock: false,
+        windows_sandbox_type: SandboxType::None,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,

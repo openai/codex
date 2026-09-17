@@ -6,7 +6,7 @@ use anyhow::bail;
 use codex_cloud_config::cloud_config_bundle_loader_for_storage_without_cache;
 use codex_config::ConfigLoadOptions;
 use codex_config::ConfigRequirementsToml;
-use codex_config::types::WindowsSandboxModeToml;
+use codex_config::WindowsSandboxImplementationToml;
 use codex_core::config::bootstrap_auth_config;
 use codex_core::config::load_config_toml_with_layer_stack;
 use codex_windows_sandbox::WindowsSandboxProvisioningSettings;
@@ -92,7 +92,7 @@ fn validate_requirements(
         .windows
         .as_ref()
         .and_then(|windows| windows.allowed_sandbox_implementations.as_ref())
-        .is_some_and(|allowed| !allowed.contains(&WindowsSandboxModeToml::Elevated))
+        .is_some_and(|allowed| !allowed.contains(&WindowsSandboxImplementationToml::Elevated))
     {
         bail!("managed policy does not permit the elevated Windows sandbox");
     }

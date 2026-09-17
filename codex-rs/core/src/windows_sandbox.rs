@@ -9,6 +9,7 @@ use codex_login::default_client::originator;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::sandbox::effective_windows_sandbox_type;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
@@ -27,6 +28,19 @@ pub fn managed_proxy_routing_for_windows_sandbox(
     }
 }
 
+/// Adapts the selected implementation for legacy checks that only understand setup levels.
+/// Backend selection must continue to use [`SandboxType`] directly.
+pub(crate) fn windows_sandbox_level_for_legacy_checks(
+    sandbox_type: SandboxType,
+    sandbox_level: WindowsSandboxLevel,
+) -> WindowsSandboxLevel {
+    if effective_windows_sandbox_type(sandbox_type, sandbox_level) == SandboxType::WindowsMxc {
+        WindowsSandboxLevel::RestrictedToken
+    } else {
+        sandbox_level
+    }
+}
+
 pub trait WindowsSandboxLevelExt {
     fn from_config(config: &Config) -> WindowsSandboxLevel;
     fn from_features(features: &Features) -> WindowsSandboxLevel;
@@ -37,6 +51,7 @@ impl WindowsSandboxLevelExt for WindowsSandboxLevel {
         match config.permissions.windows_sandbox_mode {
             Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
             Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
+            Some(WindowsSandboxModeToml::Mxc) => WindowsSandboxLevel::Disabled,
             None => Self::from_features(&config.features),
         }
     }
@@ -64,7 +79,7 @@ pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml) -> bool {
     cfg.windows
         .as_ref()
         .and_then(|windows| windows.sandbox_private_desktop)
-        .unwrap_or(true)
+        .unwrap_or_else(|| resolve_windows_sandbox_mode(cfg) != Some(WindowsSandboxModeToml::Mxc))
 }
 
 pub fn legacy_windows_sandbox_mode(

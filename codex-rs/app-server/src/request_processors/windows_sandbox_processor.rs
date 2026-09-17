@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(target_os = "windows")]
 use anyhow::Context as _;
+use codex_protocol::sandbox::SandboxType;
 use codex_utils_path_uri::PathUri;
 
 #[derive(Clone)]
@@ -302,6 +303,12 @@ fn determine_windows_sandbox_readiness(config: &Config) -> WindowsSandboxReadine
     if !cfg!(windows) {
         return WindowsSandboxReadinessResponse {
             status: WindowsSandboxReadiness::NotConfigured,
+        };
+    }
+
+    if config.permissions.windows_sandbox_type == SandboxType::WindowsMxc {
+        return WindowsSandboxReadinessResponse {
+            status: WindowsSandboxReadiness::Ready,
         };
     }
 

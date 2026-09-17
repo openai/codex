@@ -720,6 +720,7 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
                 shell_environment_policy: Default::default(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                windows_sandbox_type: test.config.permissions.windows_sandbox_type,
                 windows_sandbox_private_desktop: test
                     .config
                     .permissions
@@ -750,6 +751,7 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
                 permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
                 shell_environment_policy: Default::default(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                windows_sandbox_type: test.config.permissions.windows_sandbox_type,
                 windows_sandbox_private_desktop: test
                     .config
                     .permissions
@@ -861,6 +863,7 @@ async fn environment_command_policy_changes_invalidate_session_approvals() -> Re
                         ),
                         shell_environment_policy: Default::default(),
                         windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                        windows_sandbox_type: test.config.permissions.windows_sandbox_type,
                         windows_sandbox_private_desktop: test
                             .config
                             .permissions

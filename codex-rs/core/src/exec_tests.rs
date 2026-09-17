@@ -1187,7 +1187,7 @@ fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() 
                 &FileSystemSandboxPolicy::unrestricted(),
                 NetworkSandboxPolicy::Restricted,
             ),
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            SandboxType::None,
             /*enforce_managed_network*/ false,
         ),
         expected
@@ -1219,6 +1219,7 @@ fn build_exec_request_projects_workspace_roots_only_for_windows_sandbox() -> Res
             roots,
             &Some(temp_dir.path().join("codex-linux-sandbox")),
             /*codex_self_exe*/ &None,
+            SandboxType::WindowsRestrictedToken,
             /*use_legacy_landlock*/ false,
         )
     };

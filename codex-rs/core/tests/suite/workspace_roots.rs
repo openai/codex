@@ -7,6 +7,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::sandbox::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 #[cfg(windows)]
@@ -277,6 +278,7 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
                     ),
                     shell_environment_policy: Default::default(),
                     windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+                    windows_sandbox_type: SandboxType::WindowsRestrictedToken,
                     windows_sandbox_private_desktop: test
                         .config
                         .permissions

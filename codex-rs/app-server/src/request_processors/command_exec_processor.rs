@@ -320,6 +320,7 @@ impl CommandExecRequestProcessor {
             windows_sandbox_workspace_roots.as_slice(),
             &codex_linux_sandbox_exe,
             &self.arg0_paths.codex_self_exe,
+            self.config.permissions.windows_sandbox_type,
             use_legacy_landlock,
         )
         .map_err(|err| internal_error(format!("exec failed: {err}")))?;

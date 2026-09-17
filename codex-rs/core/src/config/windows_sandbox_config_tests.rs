@@ -23,6 +23,14 @@ fn configured_mode_takes_priority_without_persisting_feature_fallback() -> std::
                 level: WindowsSandboxLevel::RestrictedToken,
             },
         ),
+        (
+            Some(WindowsSandboxModeToml::Mxc),
+            PreparedWindowsSandboxConfig {
+                mode: Some(WindowsSandboxModeToml::Mxc),
+                sandbox_type: SandboxType::WindowsMxc,
+                level: WindowsSandboxLevel::Disabled,
+            },
+        ),
     ] {
         let actual = prepare_windows_sandbox_config(
             configured_mode,

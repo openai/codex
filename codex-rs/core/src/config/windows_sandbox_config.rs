@@ -37,15 +37,19 @@ pub fn prepare_windows_sandbox_config(
     } else {
         configured_mode
     };
-    let level = match effective_mode {
-        Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
-        Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-        None => WindowsSandboxLevel::Disabled,
-    };
-    let sandbox_type = if level == WindowsSandboxLevel::Disabled {
-        SandboxType::None
-    } else {
-        SandboxType::WindowsRestrictedToken
+    let (sandbox_type, level) = match effective_mode {
+        Some(WindowsSandboxModeToml::Elevated) => (
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Elevated,
+        ),
+        Some(WindowsSandboxModeToml::Unelevated) => (
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::RestrictedToken,
+        ),
+        Some(WindowsSandboxModeToml::Mxc) => {
+            (SandboxType::WindowsMxc, WindowsSandboxLevel::Disabled)
+        }
+        None => (SandboxType::None, WindowsSandboxLevel::Disabled),
     };
     Ok(PreparedWindowsSandboxConfig {
         mode,

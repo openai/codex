@@ -9,6 +9,7 @@ use crate::exec_policy::AllowPrefixRules;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::ShellSnapshotFile;
 use crate::shell_snapshot::ShellSnapshotSandbox;
+use crate::tools::sandboxing::configured_windows_sandbox_selection;
 use crate::tools::sandboxing::executor_windows_sandbox_selection;
 use arc_swap::ArcSwap;
 use codex_core_plugins::PluginCommandAttribution;
@@ -228,12 +229,32 @@ impl TurnEnvironment {
             user_home_dir: self.user_home_dir.clone(),
             temporary_directories: self.temporary_directories.clone(),
             windows_sandbox_selection: executor_windows_sandbox_selection(
+                config.windows_sandbox_type,
                 config.windows_sandbox_level,
                 self.cwd(),
             ),
             windows_sandbox_private_desktop: config.windows_sandbox_private_desktop,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: config.use_legacy_landlock,
+        }
+    }
+
+    pub(crate) fn windows_sandbox_selection_for_turn_metadata(
+        &self,
+    ) -> codex_file_system::WindowsSandboxSelection {
+        let config = self.config();
+        if self.environment.is_remote() {
+            executor_windows_sandbox_selection(
+                config.windows_sandbox_type,
+                config.windows_sandbox_level,
+                self.cwd(),
+            )
+        } else {
+            configured_windows_sandbox_selection(
+                config.windows_sandbox_type,
+                config.windows_sandbox_level,
+                self.cwd(),
+            )
         }
     }
 
@@ -863,6 +884,16 @@ impl Session {
             per_turn_config.permissions.approval_policy.value(),
             per_turn_config.approvals_reviewer,
         );
+        let windows_sandbox_selection = environments
+            .primary()
+            .map(TurnEnvironment::windows_sandbox_selection_for_turn_metadata)
+            .unwrap_or_else(|| {
+                configured_windows_sandbox_selection(
+                    session_configuration.windows_sandbox_type,
+                    session_configuration.windows_sandbox_level,
+                    &PathUri::from_abs_path(&cwd),
+                )
+            });
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -874,7 +905,7 @@ impl Session {
             sub_id.clone(),
             cwd.clone(),
             &permission_profile,
-            session_configuration.windows_sandbox_level,
+            windows_sandbox_selection,
             network.is_some(),
             auto_review_enabled,
             model_info,

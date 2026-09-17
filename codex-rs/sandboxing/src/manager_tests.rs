@@ -31,7 +31,7 @@ fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
     let sandbox = manager.select_initial(
         &PermissionProfile::Disabled,
         SandboxablePreference::Auto,
-        WindowsSandboxLevel::Disabled,
+        SandboxType::None,
         /*has_managed_network_requirements*/ false,
     );
     assert_eq!(sandbox, SandboxType::None);
@@ -45,7 +45,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
     let sandbox = manager.select_initial(
         &PermissionProfile::Disabled,
         SandboxablePreference::Auto,
-        WindowsSandboxLevel::Disabled,
+        SandboxType::None,
         /*has_managed_network_requirements*/ true,
     );
     assert_eq!(sandbox, expected);
@@ -69,9 +69,26 @@ fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
     let sandbox = manager.select_initial(
         &permissions,
         SandboxablePreference::Auto,
-        WindowsSandboxLevel::Disabled,
+        SandboxType::None,
         /*has_managed_network_requirements*/ false,
     );
+    assert_eq!(sandbox, expected);
+}
+
+#[test]
+fn explicit_mxc_only_overrides_the_windows_sandbox() {
+    let manager = SandboxManager::new();
+    let sandbox = manager.select_initial(
+        &PermissionProfile::read_only(),
+        SandboxablePreference::Auto,
+        SandboxType::WindowsMxc,
+        /*has_managed_network_requirements*/ false,
+    );
+    let expected = if cfg!(windows) {
+        SandboxType::WindowsMxc
+    } else {
+        get_platform_sandbox(/*windows_sandbox_enabled*/ false).unwrap_or(SandboxType::None)
+    };
     assert_eq!(sandbox, expected);
 }
 

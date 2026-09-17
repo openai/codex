@@ -104,7 +104,7 @@ impl App {
                     windows_sandbox_ready(app_server).await;
             }
             let show_nux = std::mem::take(&mut self.windows_sandbox.prompt_after_trust)
-                && self.chat_widget.windows_sandbox_config.mode.is_none()
+                && !self.chat_widget.windows_sandbox_config.is_enabled()
                 || self.chat_widget.windows_sandbox_config.requires_elevated();
             if self.windows_sandbox_setup_is_local() {
                 self.chat_widget.maybe_prompt_windows_sandbox_enable(

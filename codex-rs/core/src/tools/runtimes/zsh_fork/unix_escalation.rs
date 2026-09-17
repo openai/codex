@@ -768,7 +768,7 @@ impl CoreShellCommandExecutor {
         let sandbox = sandbox_manager.select_initial(
             permission_profile,
             SandboxablePreference::Auto,
-            self.windows_sandbox_level,
+            SandboxType::None,
             self.network.is_some(),
         );
         let cwd = PathUri::from_abs_path(workdir);

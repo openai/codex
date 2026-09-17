@@ -366,6 +366,7 @@ async fn skill_mcp_dependency_oauth_uses_configured_http_client() -> Result<()> 
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::Disabled),
         shell_environment_policy: Default::default(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&fixture.config),
+        windows_sandbox_type: fixture.config.permissions.windows_sandbox_type,
         windows_sandbox_private_desktop: fixture.config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: fixture.config.features.use_legacy_landlock(),
         exec_policy: None,

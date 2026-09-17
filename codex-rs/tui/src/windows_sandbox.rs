@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WindowsSandboxConfig {
+    pub(crate) mxc_selected: bool,
     pub(crate) mode: Option<WindowsSandboxSetupMode>,
     // None means policy has not been loaded; a loaded null list allows both modes.
     pub(crate) requirements: Option<Option<Vec<WindowsSandboxSetupMode>>>,
@@ -23,14 +24,22 @@ impl WindowsSandboxConfig {
         config: &ConfigReadResponse,
         requirements: ConfigRequirementsReadResponse,
     ) -> Self {
+        let configured_sandbox = config
+            .config
+            .additional
+            .get("windows")
+            .and_then(|windows| windows.get("sandbox"));
+        let mxc_selected = configured_sandbox
+            .and_then(|implementation| serde_json::from_value(implementation.clone()).ok())
+            == Some(WindowsSandboxImplementation::Mxc);
         let mut state = Self {
-            mode: config
-                .config
-                .additional
-                .get("windows")
-                .and_then(|windows| windows.get("sandbox"))
+            mxc_selected,
+            mode: configured_sandbox
                 .and_then(|mode| serde_json::from_value(mode.clone()).ok())
                 .or_else(|| {
+                    if mxc_selected {
+                        return None;
+                    }
                     let features = config.config.additional.get("features")?;
                     [
                         (
@@ -72,7 +81,8 @@ impl WindowsSandboxConfig {
                     }),
             ),
         };
-        if let Some(Some(allowed)) = &state.requirements
+        if !state.mxc_selected
+            && let Some(Some(allowed)) = &state.requirements
             && !state.mode.is_some_and(|mode| allowed.contains(&mode))
         {
             // Managed requirements prefer elevated when the configured value is disallowed.
@@ -84,6 +94,10 @@ impl WindowsSandboxConfig {
             .find(|mode| allowed.contains(mode));
         }
         state
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.mxc_selected || self.mode.is_some()
     }
 
     pub(crate) fn level(&self) -> WindowsSandboxLevel {

@@ -114,6 +114,18 @@ pub(super) async fn spawn_review_thread(
         step_settings.telemetry(&parent_turn_context.session_telemetry);
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
+    #[allow(deprecated)]
+    let windows_sandbox_selection = parent_turn_context
+        .environments
+        .primary()
+        .map(TurnEnvironment::windows_sandbox_selection_for_turn_metadata)
+        .unwrap_or_else(|| {
+            crate::tools::sandboxing::configured_windows_sandbox_selection(
+                parent_turn_context.config.permissions.windows_sandbox_type,
+                parent_turn_context.windows_sandbox_level,
+                &codex_utils_path_uri::PathUri::from_abs_path(&parent_turn_context.cwd),
+            )
+        });
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
@@ -125,7 +137,7 @@ pub(super) async fn spawn_review_thread(
         #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile(),
-        parent_turn_context.windows_sandbox_level,
+        windows_sandbox_selection,
         parent_turn_context.network.is_some(),
         auto_review_enabled,
         &model_info,

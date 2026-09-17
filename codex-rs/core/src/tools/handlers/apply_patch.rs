@@ -37,6 +37,7 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
 use crate::tools::sandboxing::ToolCtx;
+use crate::windows_sandbox::windows_sandbox_level_for_legacy_checks;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::ApplyPatchFileUpdateMode;
@@ -556,7 +557,10 @@ async fn execute_verified_patch(
     let sandbox_route = if turn_environment.environment.is_remote() {
         PatchSandboxRoute::ExecutorManaged
     } else {
-        PatchSandboxRoute::Platform(turn_environment.config().windows_sandbox_level)
+        PatchSandboxRoute::Platform(windows_sandbox_level_for_legacy_checks(
+            turn_environment.config().windows_sandbox_type,
+            turn_environment.config().windows_sandbox_level,
+        ))
     };
     let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
         effective_patch_permissions(

@@ -287,12 +287,12 @@ The origin of a required `chatgpt_base_url` must match the discovered origin by 
 
 ## Windows sandbox implementation selection
 
-`windowsSandbox/setupStart` and `windowsSandbox/readiness` apply only to the
-legacy `elevated` and `unelevated` backends. Clients resolve the desired sandbox
-implementation from configuration. When it is `mxc`, they skip both methods;
-`allowedWindowsSandboxImplementations` can allow `mxc` independently of the
-legacy setup modes. Non-Windows hosts report `notConfigured` for the legacy
-readiness API.
+`windowsSandbox/setupStart` applies only to the legacy `elevated` and
+`unelevated` backends. `windowsSandbox/readiness` reports `ready` when MXC is
+selected so clients do not offer legacy setup. The
+`allowedWindowsSandboxImplementations` requirement governs only the legacy
+backends and does not restrict MXC. Its `mxc` enum member is retained for wire
+compatibility but is not emitted. Non-Windows hosts report `notConfigured`.
 
 MXC uses the standard `command/exec` streaming and process-control path, including
 ConPTY when `tty` is enabled. The buffered legacy Windows sandbox restrictions on
