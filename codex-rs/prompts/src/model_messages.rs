@@ -151,13 +151,23 @@ impl<'a> ResolvedModelMessages<'a> {
             .unwrap_or(REQUEST_USER_INPUT_ASYNC_DESCRIPTION)
     }
 
-    /// Returns the V2 spawn tool's static description override, leaving missing text to the tool.
-    pub fn spawn_agent_description_override(&self) -> Option<&'a str> {
-        self.catalog_messages
+    /// Selects a V2 tool's static description by its name, independently of its runtime namespace.
+    /// Missing text retains the tool's bundled description; an empty string replaces it.
+    pub fn multi_agent_tool_description_override(&self, tool_name: &str) -> Option<&'a str> {
+        let tools = self
+            .catalog_messages
             .and_then(|messages| messages.tools.as_ref())
-            .and_then(|tools| tools.multi_agent.as_ref())
-            .and_then(|tools| tools.spawn_agent.as_ref())
-            .and_then(|tool| tool.description.as_deref())
+            .and_then(|tools| tools.multi_agent.as_ref())?;
+        let tool = match tool_name {
+            "spawn_agent" => &tools.spawn_agent,
+            "send_message" => &tools.send_message,
+            "followup_task" => &tools.followup_task,
+            "wait_agent" => &tools.wait_agent,
+            "interrupt_agent" => &tools.interrupt_agent,
+            "list_agents" => &tools.list_agents,
+            _ => return None,
+        };
+        tool.as_ref()?.description.as_deref()
     }
 
     /// Resolves persistent-mode instructions without deciding whether the mode is active.

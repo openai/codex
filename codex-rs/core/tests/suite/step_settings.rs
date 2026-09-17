@@ -2229,6 +2229,15 @@ async fn model_activation_uses_destination_metadata_defaults(
 async fn tool_descriptions_follow_mid_turn_model_changes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    const MULTI_AGENT_TOOLS: [&str; 6] = [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "interrupt_agent",
+        "list_agents",
+    ];
+
     let server = start_mock_server().await;
     let response_mock = mount_sse_sequence(
         &server,
@@ -2254,18 +2263,24 @@ async fn tool_descriptions_follow_mid_turn_model_changes() -> Result<()> {
                 model
                     .experimental_supported_tools
                     .push("send_user_message_async".to_string());
+                let description = |name| {
+                    Some(ToolMessage {
+                        description: Some(format!("{name} description for {}.", model.slug)),
+                    })
+                };
                 model
                     .model_messages
                     .as_mut()
                     .expect("model instruction metadata")
                     .tools = Some(ToolMessages {
-                    send_user_message_async: Some(ToolMessage {
-                        description: Some(format!("Async message description for {}.", model.slug)),
-                    }),
+                    send_user_message_async: description("Async message"),
                     multi_agent: Some(MultiAgentToolMessages {
-                        spawn_agent: Some(ToolMessage {
-                            description: Some(format!("Spawn description for {}.", model.slug)),
-                        }),
+                        spawn_agent: description("spawn_agent"),
+                        send_message: description("send_message"),
+                        followup_task: description("followup_task"),
+                        wait_agent: description("wait_agent"),
+                        interrupt_agent: description("interrupt_agent"),
+                        list_agents: description("list_agents"),
                     }),
                 });
             }
@@ -2302,12 +2317,14 @@ async fn tool_descriptions_follow_mid_turn_model_changes() -> Result<()> {
                     .iter()
                     .find(|tool| tool["name"] == "request_user_input_async")
                     .expect("async message tool");
-                let spawn = namespace_child_tool(&body, "collaboration", "spawn_agent")
-                    .expect("spawn agent tool");
+                let descriptions = MULTI_AGENT_TOOLS.map(|name| {
+                    let tool = namespace_child_tool(&body, "collaboration", name).expect(name);
+                    (name.to_string(), json!(tool["description"].as_str().expect("tool description").trim()))
+                }).into_iter().collect::<serde_json::Map<String, Value>>();
                 json!({
                     "model": body["model"],
                     "async_description": tool["description"],
-                    "spawn_description": spawn["description"].as_str().expect("spawn description").trim(),
+                    "multi_agent_descriptions": descriptions,
                 })
             })
             .collect::<Vec<_>>(),
@@ -2315,7 +2332,10 @@ async fn tool_descriptions_follow_mid_turn_model_changes() -> Result<()> {
             .map(|model| json!({
                 "model": model,
                 "async_description": format!("Async message description for {model}."),
-                "spawn_description": format!("Spawn description for {model}."),
+                "multi_agent_descriptions": MULTI_AGENT_TOOLS
+                    .map(|name| (name.to_string(), json!(format!("{name} description for {model}."))))
+                    .into_iter()
+                    .collect::<serde_json::Map<String, Value>>(),
             }))
             .to_vec(),
     );

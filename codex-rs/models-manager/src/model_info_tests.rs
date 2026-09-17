@@ -91,6 +91,7 @@ fn base_instruction_override_is_literal_and_preserves_catalog_messages() {
                 spawn_agent: Some(ToolMessage {
                     description: Some("Catalog spawn description.".to_string()),
                 }),
+                ..Default::default()
             }),
         }),
         instructions_template: Some("template".to_string()),
@@ -161,6 +162,7 @@ fn personality_none_strips_catalog_instruction_sources_through_the_next_h1() {
                     spawn_agent: Some(ToolMessage {
                         description: Some(String::new()),
                     }),
+                    ..Default::default()
                 }),
             }),
             approvals: Some(ApprovalMessages {
