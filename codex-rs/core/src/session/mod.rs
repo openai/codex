@@ -64,6 +64,7 @@ use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_attachment_store::AttachmentStore;
+use codex_attachment_store::InlineAttachmentStore;
 use codex_connectors::connector_runtime_context_key;
 use codex_context_fragments::RenderedFragment;
 use codex_exec_server::Environment;
@@ -1706,11 +1707,16 @@ impl Session {
             .into_iter()
             .map(|envelope| (envelope.item, envelope.metadata))
             .unzip();
-        let _ = prepare_image_response_items(
+        // Replay must not upload or migrate recorded history. The inline store returns prepared
+        // inline bytes, while existing file references bypass preparation and remain unchanged.
+        // Bound replay future size now that image preparation can await storage.
+        let _ = Box::pin(prepare_image_response_items(
             &mut prepared_history,
             ImagePreparationMode::DetailBased,
             ImageResizeNoticeMode::Disabled,
-        );
+            &InlineAttachmentStore,
+        ))
+        .await;
         prepare_audio_response_items(&mut prepared_history);
         assert_eq!(
             prepared_history.len(),
@@ -3476,7 +3482,7 @@ impl Session {
     }
 
     /// Prepares media using the originating model and preserves existing item identity.
-    pub(crate) fn prepare_conversation_items_for_history<'a>(
+    pub(crate) async fn prepare_conversation_items_for_history<'a>(
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
@@ -3498,11 +3504,14 @@ impl Session {
         } else {
             ImageResizeNoticeMode::Disabled
         };
-        let image_preparations = prepare_image_response_items(
+        // Keep nested image-upload futures out of every caller's future frame.
+        let image_preparations = Box::pin(prepare_image_response_items(
             &mut items,
             image_preparation_mode,
             image_resize_notice_mode,
-        );
+            self.services.image_store.as_ref(),
+        ))
+        .await;
         prepare_audio_response_items(&mut items);
         // Most response items get their passthrough turn ID at the durable history boundary.
         for item in &mut items {
@@ -3591,8 +3600,9 @@ impl Session {
         model_info: &ModelInfo,
         items: &[ResponseItem],
     ) {
-        let (items, image_preparations) =
-            self.prepare_conversation_items_for_history(turn_context, model_info, items);
+        let (items, image_preparations) = self
+            .prepare_conversation_items_for_history(turn_context, model_info, items)
+            .await;
         let items = items
             .into_owned()
             .into_iter()
@@ -3911,11 +3921,13 @@ impl Session {
         communication: InterAgentCommunication,
     ) {
         let response_item = communication.to_model_input_item();
-        let (items, _) = self.prepare_conversation_items_for_history(
-            turn_context,
-            model_info,
-            std::slice::from_ref(&response_item),
-        );
+        let (items, _) = self
+            .prepare_conversation_items_for_history(
+                turn_context,
+                model_info,
+                std::slice::from_ref(&response_item),
+            )
+            .await;
         let items = items.as_ref();
         let response_item = items[0].clone();
         {

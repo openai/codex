@@ -12,6 +12,7 @@ pub(crate) use setup::run_guardian_review_session;
 mod context_policy;
 use context_policy::ReviewContextPolicy;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -68,8 +69,7 @@ use crate::context::GuardianNodeReplPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::image_preparation::ImagePreparationMode;
-use crate::image_preparation::ImageResizeNoticeMode;
-use crate::image_preparation::prepare_response_items;
+use crate::image_preparation::resize_image;
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::SessionIo;
 use crate::session::session::Session;
@@ -80,7 +80,6 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::turn_input::TurnInputMode;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::turn_input::TurnInputSubmission;
-use codex_protocol::user_input::UserInput;
 use codex_thread_store::PersistContext;
 use codex_tools::normalize_output_image_detail;
 use codex_utils_path_uri::PathUri;
@@ -486,7 +485,8 @@ async fn run_review_on_session(
 
             let parent_history = params.parent_history.conversation_history_snapshot();
             let history = if GuardianContextMode::from_history(parent_history.as_ref())
-                == GuardianContextMode::ThreadOwned {
+                == GuardianContextMode::ThreadOwned
+            {
                 parent_history
             } else {
                 params.parent_session.conversation_history_snapshot().await
@@ -515,7 +515,10 @@ async fn run_review_on_session(
                         _ => &[],
                     })
                     .filter_map(|item| match item {
-                        ContentItem::InputImage { image: ImageReference::Inline { image_url }, .. } => Some(image_url.as_str()),
+                        ContentItem::InputImage {
+                            image: ImageReference::Inline { image_url },
+                            ..
+                        } => Some(image_url.as_str()),
                         _ => None,
                     })
                     .collect::<HashSet<_>>();
@@ -547,27 +550,15 @@ async fn run_review_on_session(
                             Some(ImageDetail::Low) => Some(ImageDetail::High),
                             detail => detail,
                         };
-                        let mut prepared = vec![
-                            ResponseInputItem::from(vec![UserInput::Image {
-                                image: ImageReference::Inline {
-                                    image_url: image_url.to_owned(),
-                                },
-                                detail: *detail,
-                            }])
-                            .into(),
-                        ];
-                        prepare_response_items(
-                            &mut prepared,
-                            mode,
-                            ImageResizeNoticeMode::Disabled,
-                        );
-                        let Some(ResponseItem::Message { content, .. }) = prepared.first() else {
-                            return false;
+                        let prepared_image_url = match resize_image(image_url, detail, mode) {
+                            Ok(Some(prepared)) => Cow::Owned(prepared.into_data_url()),
+                            Ok(None) => Cow::Borrowed(image_url),
+                            Err(error) => {
+                                warn!(%error, "failed to prepare guardian review image");
+                                return false;
+                            }
                         };
-                        content.iter().any(|item| {
-                            matches!(item, ContentItem::InputImage { image: ImageReference::Inline { image_url }, .. }
-                                if !reviewer_image_urls.contains(image_url.as_str()))
-                        })
+                        !reviewer_image_urls.contains(prepared_image_url.as_ref())
                     });
                     let prompt: ResponseItem =
                         ResponseInputItem::from(prompt_items.context.clone().into_user_inputs()?)

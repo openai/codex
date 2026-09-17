@@ -1,6 +1,14 @@
 use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_attachment_store::AttachmentStore;
+use codex_attachment_store::AttachmentStoreError;
+use codex_attachment_store::AttachmentStoreErrorKind;
+use codex_attachment_store::ResolveFuture;
+use codex_attachment_store::ResolveRequest;
+use codex_attachment_store::UploadFuture;
+use codex_attachment_store::UploadRequest;
+use codex_attachment_store::UploadResult;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
 use codex_history::RolloutItem;
@@ -42,7 +50,37 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
+
+const UPLOADED_FILE_ID: &str = "file_uploaded_image";
+
+#[derive(Default)]
+struct RecordingFileAttachmentStore {
+    uploads: Mutex<Vec<UploadRequest>>,
+}
+
+impl AttachmentStore for RecordingFileAttachmentStore {
+    fn upload(&self, request: UploadRequest) -> UploadFuture<'_> {
+        self.uploads.lock().expect("uploads lock").push(request);
+        Box::pin(async {
+            Ok(UploadResult::File {
+                file_id: UPLOADED_FILE_ID.to_string(),
+            })
+        })
+    }
+
+    fn resolve<'a>(&'a self, request: ResolveRequest<'a>) -> ResolveFuture<'a> {
+        let file_id = request.file_id;
+        Box::pin(async move {
+            Err(AttachmentStoreError::new(
+                AttachmentStoreErrorKind::NotFound,
+                format!("attachment `{file_id}` was not found"),
+            ))
+        })
+    }
+}
 
 fn find_user_message_with_image(text: &str) -> Option<ResponseItem> {
     for line in text.lines() {
@@ -437,12 +475,15 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
         .join("\n");
     fs::write(&rollout_path, format!("{rollout}\n"))?;
 
-    let mut resume_builder = test_codex().with_config(|config| {
-        let _ = config.features.enable(Feature::ImageResizeNotice);
-        let _ = config
-            .features
-            .enable(Feature::RetainClientDeveloperMessages);
-    });
+    let resume_image_store = Arc::new(RecordingFileAttachmentStore::default());
+    let mut resume_builder = test_codex()
+        .with_image_store(resume_image_store.clone())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::ImageResizeNotice);
+            let _ = config
+                .features
+                .enable(Feature::RetainClientDeveloperMessages);
+        });
     let resumed = resume_builder
         .resume(&server, initial.home.clone(), rollout_path.clone())
         .await?;
@@ -468,6 +509,16 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    {
+        let uploads = resume_image_store.uploads.lock().expect("uploads lock");
+        let [upload] = uploads.as_slice() else {
+            panic!("only the new image should be uploaded");
+        };
+        assert_eq!(
+            image::load_from_memory(&upload.data)?.dimensions(),
+            (2048, 768)
+        );
+    }
 
     let request = resumed_mock.single_request();
     assert!(request.has_content_kinds(&["images.resize_notice"]));
@@ -507,6 +558,15 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
         .context("historical image data URL")?;
     let historical_image = image::load_from_memory(&BASE64_STANDARD.decode(encoded_image)?)?;
     assert_eq!(historical_image.dimensions(), (2048, 768));
+    assert_eq!(
+        input[image_message_indices[1]]
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|content| content.first())
+            .and_then(|item| item.get("file_id"))
+            .and_then(Value::as_str),
+        Some(UPLOADED_FILE_ID)
+    );
 
     let expected_notice = concat!(
         "<image_resize_notice>\n",
@@ -543,8 +603,17 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
     )
     .await;
     replayed.submit_turn("preserve recorded notices").await?;
-    let replayed_notices = replayed_mock
-        .single_request()
+    let replayed_request = replayed_mock.single_request();
+    assert!(replayed_request.input().iter().any(|item| {
+        item.get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| {
+                content.iter().any(|item| {
+                    item.get("file_id").and_then(Value::as_str) == Some(UPLOADED_FILE_ID)
+                })
+            })
+    }));
+    let replayed_notices = replayed_request
         .message_input_texts("developer")
         .into_iter()
         .filter(|text| text.starts_with("<image_resize_notice>"))

@@ -2489,6 +2489,7 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -351,11 +351,13 @@ async fn default_turn_context_assigns_missing_response_item_ids() {
     let (session, turn_context) = make_session_and_context().await;
     let response_item = user_message("hello");
 
-    let (items, _) = session.prepare_conversation_items_for_history(
-        &turn_context,
-        turn_context.model_info(),
-        std::slice::from_ref(&response_item),
-    );
+    let (items, _) = session
+        .prepare_conversation_items_for_history(
+            &turn_context,
+            turn_context.model_info(),
+            std::slice::from_ref(&response_item),
+        )
+        .await;
 
     assert!(
         items[0]
