@@ -1,5 +1,6 @@
 //! Daemon-wide overview of recent and locally retained sessions and their subagents.
 //! Tasks owned by another app server open as frozen, read-only history snapshots.
+//! Only the immediate attachment of a dashboard-created task is treated as fresh.
 
 #[path = "agents_overview_new.rs"]
 mod new;
@@ -14,6 +15,7 @@ mod loading;
 use super::agents_overview_view::AgentsOverviewGroup;
 use super::agents_overview_view::AgentsOverviewRow;
 use super::agents_overview_view::AgentsOverviewView;
+use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::bottom_pane::SelectionDescriptionLayout;
@@ -511,6 +513,11 @@ impl App {
                 }
             };
             let mut history_notice = None;
+            let presentation = if started.is_some() {
+                ThreadAttachPresentation::Fresh
+            } else {
+                ThreadAttachPresentation::SessionLineage
+            };
             let (resumed, read_only) = if let Some((_, started)) = started {
                 (started, false)
             } else if !unloaded
@@ -637,7 +644,7 @@ impl App {
                 .replace_chat_widget_with_app_server_thread(
                     tui,
                     resumed,
-                    super::session_lifecycle::ThreadAttachPresentation::SessionLineage,
+                    presentation,
                     /*initial_user_message*/ None,
                 )
                 .await

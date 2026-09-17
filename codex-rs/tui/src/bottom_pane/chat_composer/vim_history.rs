@@ -64,21 +64,21 @@ impl VimHistory {
 }
 
 impl ChatComposer {
+    pub(super) fn wants_vim_history_key(&self, event: KeyEvent) -> bool {
+        self.draft.textarea.is_vim_normal_mode()
+            && !self.draft.textarea.is_vim_operator_pending()
+            && !self.popups.active()
+            && (self.vim_normal_keymap.redo.is_pressed(event)
+                || self.vim_normal_keymap.undo.is_pressed(event))
+    }
+
     /// Consume undo and redo before normal-mode commands, even when their history is empty.
     pub(super) fn handle_vim_history_key(&mut self, event: KeyEvent) -> bool {
-        if !self.draft.textarea.is_vim_normal_mode()
-            || self.draft.textarea.is_vim_operator_pending()
-            || self.popups.active()
-        {
+        if !self.wants_vim_history_key(event) {
             return false;
         }
 
         let redo = self.vim_normal_keymap.redo.is_pressed(event);
-        let undo = self.vim_normal_keymap.undo.is_pressed(event);
-        if !undo && !redo {
-            return false;
-        }
-
         let snapshot = if redo {
             self.vim_history.redo.pop_back()
         } else {

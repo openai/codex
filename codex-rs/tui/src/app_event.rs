@@ -51,6 +51,7 @@ use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
+use crate::chatwidget::AstraModelPickerAction;
 use crate::chatwidget::ConnectorScopeGeneration;
 use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
@@ -1117,6 +1118,14 @@ pub(crate) enum AppEvent {
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
+
+    /// Apply a final Astra picker action and offer the flourish only if it changed the model on
+    /// its original task. Automatic model updates do not use this event.
+    AstraSelectedFromModelPicker {
+        thread_id: ThreadId,
+        model: String,
+        action: AstraModelPickerAction,
+    },
 
     /// Result of creating a TUI-owned WebRTC offer for an active thread.
     RealtimeWebrtcOfferCreated {

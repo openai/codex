@@ -4,7 +4,7 @@
 //! completed slash commands to atomic elements, and handles Enter submission/newlines.
 //! It also shows Luna Reserve's yellow prompt arrow and detects unbracketed paste bursts
 //! from raw key streams, particularly on Windows.
-//! The live voice strip renders after effort ignition.
+//! The live voice strip renders after effort ignition, followed by the Astra sparkle when eligible.
 //!
 //! The plain-text preset keeps command prefixes literal, including `!`, so Enter and Tab
 //! submit ordinary text without enabling shell mode.
@@ -120,8 +120,9 @@
 //! navigation slash commands remain available so users can leave or manage the view. Transcript
 //! exports also remain available, including an explicit destination filename.
 //!
-//! During reconnection, `handle_disconnected_key` edits the draft directly without
-//! popup dispatch or submission. Enter and Tab leave the draft intact until reconnection succeeds.
+//! During reconnection, `handle_disconnected_key` edits the draft directly without popup dispatch,
+//! composer shortcuts, or submission; `?` becomes literal input. Enter and Tab leave the draft
+//! intact until reconnection succeeds.
 //! Collapsed pastes expand into editable text so the full draft can be copied before quitting.
 //!
 //! # Reasoning Effort Animations
@@ -133,6 +134,36 @@
 //! Repeated selections do not restart either effect, dropping below Max clears them, and
 //! restoration clears any transition queued while replaying the saved session. Rendering advances
 //! active transitions through the frame requester until they finish.
+//!
+//! # Astra Sparkle Eligibility
+//!
+//! A confirmed new task can offer one flourish when it starts with Astra or the user switches to
+//! Astra through `/model` before entering ordinary prompt content. The draft tracks whether it is
+//! untouched, contains a recognized slash command, or is permanently dismissed. An eligible slash
+//! command keeps the opportunity while being typed, dispatched, or erased; a fresh Astra response
+//! can arm the effect while the command is still pending. Stars stay hidden until the composer is
+//! empty. Commands that insert draft content, ordinary typed, pasted, or restored drafts,
+//! attachments, and real work dismiss the opportunity even if that content is later cleared.
+//! Ordinary disconnected edits also dismiss it immediately, even when erased before rendering;
+//! a recognized command typed and erased offline still preserves the opportunity.
+//! Opening history search, typing or pasting its query, and canceling it with `Esc` or `Ctrl+C`
+//! temporarily hide an active field without restarting its deadline. Any buffered keys are
+//! integrated into the original draft without being classified again. A preview does not count
+//! as a draft until the user accepts a nonempty match.
+//! Toggling shortcut help on an empty composer also hides an active field until help closes,
+//! without restarting its deadline, and leaves an unused opportunity intact. A literal `?` is
+//! ordinary prompt content.
+//! Startup draft snapshots carry this distinction so erased ordinary input does not become
+//! untouched on handoff.
+//!
+//! Sparkle key and paste handling runs only for input routed to the composer; ordinary characters
+//! are observed before the paste-burst buffer can hide the first edit. An edit that flushes and
+//! erases a held slash also clears the tracked command. An empty main-composer `Esc`
+//! can stop the active flourish. Once shown, it fades out by 15 seconds; command entry, popups, and
+//! focus loss hide the field without restarting that deadline. Rendering runs after the textarea,
+//! placeholder, effort ignition, and voice strip, and draws only in eligible blank cells without
+//! overwriting the placeholder or normal cursor. Hidden frames do not schedule animation redraws;
+//! motion settings, whimsy settings, and true-color support also gate the effect.
 //!
 //! # Large Paste Placeholders
 //!
@@ -201,8 +232,9 @@
 //! - Unmodified Tab joins detected bursts, including short Unicode prefixes, before popup dispatch.
 //!   Expired bursts are flushed first so manual Tab keeps its normal shortcut behavior.
 //! - [`ChatComposer::flush_paste_burst_if_due`]/[`ChatComposer::handle_paste_burst_flush`]: called
-//!   from UI ticks to turn a pending burst into either an explicit paste (`handle_paste`) or a
-//!   normal typed character.
+//!   from UI ticks to integrate a pending burst via [`ChatComposer::apply_paste`] or insert a
+//!   held single character. Explicit terminal paste events use [`ChatComposer::handle_paste`] to
+//!   classify input first; buffered keys have already been classified.
 //!
 //! # Input Disabled Mode
 //!
@@ -287,7 +319,6 @@ use super::skill_popup::SkillPopup;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use super::voice_strip::VoiceStrip;
-use crate::bottom_pane::paste_burst::FlushResult;
 use crate::history_cell::sanitize_user_text;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::EditorKeymap;
@@ -319,6 +350,7 @@ mod paste_input;
 mod popup_state;
 mod reconnect;
 mod slash_input;
+mod sparkle;
 mod vim_history;
 mod vim_search;
 
@@ -531,6 +563,7 @@ pub(crate) struct ChatComposer {
     footer: FooterState,
     has_focus: bool,
     frame_requester: Option<FrameRequester>,
+    sparkle: sparkle::Sparkle,
     effort_tier: Option<EffortTier>,
     effort_animation_style: Option<IgnitionStyle>,
     effort_ignition: Option<EffortIgnition>,
@@ -605,6 +638,7 @@ pub(crate) struct ComposerDraftSnapshot {
     pub(crate) pending_pastes: Vec<(String, String)>,
     pub(crate) startup_local_history: Vec<HistoryEntry>,
     pub(crate) last_composer_activity_at: Option<Instant>,
+    pub(crate) sparkle_draft: sparkle::SparkleDraft,
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -699,6 +733,7 @@ impl ChatComposer {
             },
             has_focus: has_input_focus,
             frame_requester: None,
+            sparkle: sparkle::Sparkle::default(),
             effort_tier: None,
             effort_animation_style: None,
             effort_ignition: None,
@@ -1203,64 +1238,6 @@ impl ChatComposer {
         self.history.record_replayed_submission(entry);
     }
 
-    /// Integrate pasted text into the composer.
-    ///
-    /// Acts as the only place where paste text is integrated, both for:
-    ///
-    /// - Real/explicit paste events surfaced by the terminal, and
-    /// - Non-bracketed "paste bursts" that [`PasteBurst`](super::paste_burst::PasteBurst) buffers
-    ///   and later flushes here.
-    ///
-    /// Behavior:
-    ///
-    /// - If history search is active, inserts nonempty text into its query and ignores empty pastes.
-    /// - If Vim search is active, inserts text into its query.
-    /// - Otherwise, if the paste is larger than `LARGE_PASTE_CHAR_THRESHOLD` chars, inserts a
-    ///   placeholder element (expanded on submit) and stores the full text in `pending_pastes`.
-    /// - Otherwise, if the paste looks like an image path, attaches the image and inserts a
-    ///   trailing space so the user can keep typing naturally.
-    /// - Otherwise, inserts the pasted text directly into the textarea.
-    ///
-    /// For composer edits, clears any paste-burst Enter suppression state so a real paste cannot
-    /// affect the next user Enter key, then syncs popup state.
-    pub fn handle_paste(&mut self, pasted: String) -> bool {
-        let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
-        let pasted = sanitize_user_text(pasted.into());
-        if self.history_search.is_some() {
-            if !pasted.is_empty() {
-                self.update_history_search_query(|query| query.push_str(&pasted));
-            }
-            return true;
-        }
-        if let Some(query) = self.draft.textarea.vim_query_mut() {
-            query.editor.insert_str(&pasted);
-            return true;
-        }
-        let started_vim_edit = self.begin_direct_vim_edit();
-        let char_count = pasted.chars().count();
-        if char_count > LARGE_PASTE_CHAR_THRESHOLD {
-            let placeholder = self.next_large_paste_placeholder(char_count);
-            self.draft.textarea.insert_element(&placeholder);
-            self.draft
-                .pending_pastes
-                .push((placeholder, pasted.into_owned()));
-        } else if char_count > 1
-            && self.image_paste_enabled()
-            && self.handle_paste_image_path(&pasted)
-        {
-            let cursor = self.draft.textarea.cursor();
-            self.draft.textarea.insert_str_at(cursor, " ");
-        } else {
-            self.insert_str(&pasted);
-        }
-        self.draft.paste_burst.clear_after_explicit_paste();
-        self.sync_popups();
-        if started_vim_edit {
-            self.finish_vim_edit();
-        }
-        true
-    }
-
     pub fn handle_paste_image_path(&mut self, pasted: &str) -> bool {
         let Some(path_buf) = normalize_pasted_path(pasted) else {
             return false;
@@ -1284,41 +1261,13 @@ impl ChatComposer {
         }
     }
 
-    /// Enable or disable paste-burst handling.
-    ///
-    /// `disable_paste_burst` is an escape hatch for terminals/platforms where the burst heuristic
-    /// is unwanted or has already been handled elsewhere.
-    ///
-    /// When transitioning from enabled → disabled, we "defuse" any in-flight burst state so it
-    /// cannot affect subsequent normal typing:
-    ///
-    /// - First, flush any held/buffered text immediately via
-    ///   [`PasteBurst::flush_before_modified_input`], and feed it through `handle_paste(String)`.
-    ///   This preserves user input and routes it through the same integration path as explicit
-    ///   pastes (large-paste placeholders, image-path detection, and popup sync).
-    /// - Then clear the burst timing and Enter-suppression window via
-    ///   [`PasteBurst::clear_after_explicit_paste`].
-    ///
-    /// We intentionally do not use `clear_window_after_non_char()` here: it clears timing state
-    /// without emitting any buffered text, which can leave a non-empty buffer unable to flush
-    /// later (because `flush_if_due()` relies on `last_plain_char_time` to time out).
-    pub(crate) fn set_disable_paste_burst(&mut self, disabled: bool) {
-        let was_disabled = self.draft.disable_paste_burst;
-        self.draft.disable_paste_burst = disabled;
-        if disabled && !was_disabled {
-            if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
-            }
-            self.draft.paste_burst.clear_after_explicit_paste();
-        }
-    }
-
     /// Replace the composer content with text from an external editor.
     /// Clears pending paste placeholders and keeps only attachments whose
     /// placeholder labels still appear in the new text. Image placeholders
     /// are renumbered to `[Image #M+1]..[Image #N]` (where `M` is the number of
     /// remote images). Cursor is placed at the end after rebuilding elements.
     pub(crate) fn apply_external_edit(&mut self, text: String) {
+        self.note_sparkle_replaced_text(&text);
         self.vim_history = VimHistory::default();
         self.draft.pending_pastes.clear();
         let (text, _) = self.imported_text_for_textarea(text, Vec::new());
@@ -1404,7 +1353,7 @@ impl ChatComposer {
     /// footer mode so the visible hints match the new editing surface.
     pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-            self.handle_paste(pasted);
+            self.apply_paste(pasted);
         }
         self.draft.textarea.enable_vim_search();
         self.draft.textarea.set_vim_enabled(enabled);
@@ -1550,6 +1499,9 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
+        if !self.sparkle.history_preview && !urls.is_empty() {
+            self.dismiss_sparkle();
+        }
         self.attachments
             .set_remote_image_urls(urls, &mut self.draft.textarea);
         self.sync_popups();
@@ -1595,6 +1547,13 @@ impl ChatComposer {
         local_image_paths: Vec<PathBuf>,
         mention_bindings: Vec<MentionBinding>,
     ) {
+        if !self.sparkle.history_preview {
+            if local_image_paths.is_empty() {
+                self.note_sparkle_replaced_text(&text);
+            } else {
+                self.dismiss_sparkle();
+            }
+        }
         // Clear any existing content, placeholders, and attachments first.
         self.footer.flash = None;
         self.vim_history = VimHistory::default();
@@ -1759,7 +1718,7 @@ impl ChatComposer {
     /// Flush buffered typing before clearing so cancellation preserves the complete draft in history.
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-            self.handle_paste(pasted);
+            self.apply_paste(pasted);
         }
         if self.is_empty() {
             return None;
@@ -1844,6 +1803,7 @@ impl ChatComposer {
             pending_pastes: self.pending_pastes(),
             startup_local_history: self.history.startup_local_history().to_vec(),
             last_composer_activity_at: None,
+            sparkle_draft: self.sparkle.draft.get(),
         }
     }
 
@@ -1881,6 +1841,7 @@ impl ChatComposer {
 
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
+        self.dismiss_sparkle();
         let started_vim_edit = self.begin_direct_vim_edit();
         self.attachments
             .attach_image(&mut self.draft.textarea, path);
@@ -1903,7 +1864,8 @@ impl ChatComposer {
     ///
     /// Call this from a UI tick to turn paste-burst transient state into explicit textarea edits:
     ///
-    /// - If a burst times out, flush it via `handle_paste(String)`.
+    /// - If a burst times out, integrate it via [`Self::apply_paste`]. Its key events have already
+    ///   been classified; [`Self::handle_paste`] classifies explicit terminal pastes instead.
     /// - If only the first ASCII char was held (flicker suppression) and no burst followed, emit it
     ///   as normal typed input.
     ///
@@ -2012,6 +1974,9 @@ impl ChatComposer {
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
+        if !text.is_empty() && self.sparkle.draft.get() == sparkle::SparkleDraft::Untouched {
+            self.dismiss_sparkle();
+        }
         let started_vim_edit = self.begin_direct_vim_edit();
         self.draft.textarea.insert_str(text);
         self.sync_bash_mode_from_text();
@@ -2031,6 +1996,13 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        let before = self.before_sparkle_key(key_event);
+        let result = self.handle_key_event_inner(key_event);
+        self.after_sparkle_key(before, &result.0);
+        result
+    }
+
+    fn handle_key_event_inner(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.history_search.is_none()
             && !self.popups.active()
             && self.draft.textarea.wants_vim_search_key(key_event)
@@ -2128,7 +2100,7 @@ impl ChatComposer {
             // any existing burst buffer (including a pending first char from the ASCII path) so
             // we don't carry that transient state forward.
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
+                self.apply_paste(pasted);
             }
             if let Some(decision) = self.draft.paste_burst.on_plain_char_no_hold(now) {
                 match decision {
@@ -2165,7 +2137,7 @@ impl ChatComposer {
             }
         }
         if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-            self.handle_paste(pasted);
+            self.apply_paste(pasted);
         }
         self.draft.textarea.input(input);
 
@@ -3232,7 +3204,7 @@ impl ChatComposer {
         }
         if should_queue {
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
+                self.apply_paste(pasted);
             }
             let visible_shell_command = self.is_bang_shell_command();
             let original_input = self.current_text();
@@ -3532,7 +3504,7 @@ impl ChatComposer {
         }
         if self.draft.is_bash_mode && key_event.code == KeyCode::Esc {
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
+                self.apply_paste(pasted);
             }
             if self.draft.textarea.is_empty() {
                 self.draft.is_bash_mode = false;
@@ -3641,28 +3613,6 @@ impl ChatComposer {
         self.is_bang_shell_command()
             .then_some(())
             .map(|_| Line::from(vec![Span::from("Shell mode").light_red()]))
-    }
-
-    /// Applies any due `PasteBurst` flush at time `now`.
-    ///
-    /// Converts [`PasteBurst::flush_if_due`] results into concrete textarea mutations.
-    ///
-    /// Callers:
-    ///
-    /// - UI ticks via [`ChatComposer::flush_paste_burst_if_due`], so held first-chars can render.
-    /// - Input handling via [`ChatComposer::handle_input_basic`], so a due burst does not lag.
-    fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
-        match self.draft.paste_burst.flush_if_due(now) {
-            FlushResult::Paste(pasted) => {
-                self.handle_paste(pasted);
-                true
-            }
-            FlushResult::Typed(ch) => {
-                self.insert_str(ch.to_string().as_str());
-                true
-            }
-            FlushResult::None => false,
-        }
     }
 
     /// Handles keys that mutate the textarea, including paste-burst detection.
@@ -3779,7 +3729,7 @@ impl ChatComposer {
                 }
             }
             if let Some(pasted) = self.draft.paste_burst.flush_before_modified_input() {
-                self.handle_paste(pasted);
+                self.apply_paste(pasted);
             }
         }
 
@@ -3792,7 +3742,7 @@ impl ChatComposer {
         if !matches!(input.code, KeyCode::Char(_) | KeyCode::Enter)
             && let Some(pasted) = self.draft.paste_burst.flush_before_modified_input()
         {
-            self.handle_paste(pasted);
+            self.apply_paste(pasted);
         }
         // For non-char inputs (or after flushing), handle normally.
         // Track element removals so we can drop any corresponding placeholders without scanning
@@ -3887,23 +3837,29 @@ impl ChatComposer {
             return true;
         }
 
-        let toggles = self.footer.hint_override.is_none()
+        let Some(next) = self.empty_prompt_shortcut_toggle(key_event) else {
+            return false;
+        };
+        self.footer.mode = next;
+        true
+    }
+
+    fn empty_prompt_shortcut_toggle(&self, key_event: &KeyEvent) -> Option<FooterMode> {
+        if key_event.kind == KeyEventKind::Press
+            && self.footer.hint_override.is_none()
             && self.toggle_shortcuts_keys.is_pressed(*key_event)
             && self.is_empty()
-            && !self.is_in_paste_burst();
-
-        if !toggles {
-            return false;
+            && !self.is_in_paste_burst()
+        {
+            let next = toggle_shortcut_mode(
+                self.footer.mode,
+                self.quit_shortcut_hint_visible(),
+                self.is_empty(),
+            );
+            (next != self.footer.mode).then_some(next)
+        } else {
+            None
         }
-
-        let next = toggle_shortcut_mode(
-            self.footer.mode,
-            self.quit_shortcut_hint_visible(),
-            self.is_empty(),
-        );
-        let changed = next != self.footer.mode;
-        self.footer.mode = next;
-        changed
     }
 
     fn footer_props(&self) -> FooterProps {
@@ -5075,6 +5031,12 @@ impl ChatComposer {
         }
         drop(state);
         self.render_voice_strip(composer_rect, buf);
+        self.render_sparkle(
+            composer_rect,
+            textarea_rect,
+            self.cursor_pos_with_textarea_right_reserve(area, textarea_right_reserve),
+            buf,
+        );
     }
 }
 

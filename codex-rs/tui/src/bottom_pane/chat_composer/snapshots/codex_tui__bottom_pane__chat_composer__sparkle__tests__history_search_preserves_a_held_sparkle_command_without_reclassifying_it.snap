@@ -1,0 +1,37 @@
+---
+source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+gpt-6-astra
+searching with an explicit pasted query:
+
+› history prompt
+
+  reverse-i-search: history  enter accept · esc cancel
+after canceling and erasing the slash:
+                                        ⠁               ⡀   ⠄           ⠄   ⠄
+› Ask Codex to do anything                                   ⠈
+      ⠠                             ⠠        ⢀ ⢀     ⡀                         ⠄
+  ? for shortcuts                                            100% context left
+after /model selects Astra:
+                                        ⠁               ⡀   ⠄           ⠄   ⠄
+› Ask Codex to do anything                                   ⠈
+      ⠠                             ⠠        ⢀ ⢀     ⡀                         ⠄
+  ? for shortcuts                                            100% context left
+
+gpt-5.5
+searching with an explicit pasted query:
+
+› history prompt
+
+  reverse-i-search: history  enter accept · esc cancel
+after canceling and erasing the slash:
+
+› Ask Codex to do anything
+
+  ? for shortcuts                                            100% context left
+after /model selects Astra:
+                            ⠈     ⢀     ⠁                 ⠂
+›⠁Ask Codex to do anything         ⠈      ⠁
+       ⢀            ⠠     ⠄         ⠠          ⢀    ⠠     ⡀
+  ? for shortcuts                                            100% context left

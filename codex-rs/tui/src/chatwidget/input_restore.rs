@@ -19,6 +19,8 @@ impl ChatWidget {
 
     /// Restore the exact draft entered before the fully initialized composer became available.
     pub(crate) fn restore_startup_draft(&mut self, draft: ComposerDraftSnapshot) {
+        self.bottom_pane
+            .inherit_startup_sparkle(draft.sparkle_draft);
         let existing_draft = self.bottom_pane.composer_draft_snapshot();
         let existing_cursor = existing_draft.cursor;
         let existing_message = UserMessage {
@@ -106,6 +108,10 @@ impl ChatWidget {
         &mut self,
         pending_draft: &mut Option<ComposerDraftSnapshot>,
     ) {
+        if let Some(draft) = pending_draft.as_ref() {
+            self.bottom_pane
+                .inherit_startup_sparkle(draft.sparkle_draft);
+        }
         if self.has_active_view()
             || self
                 .bottom_pane

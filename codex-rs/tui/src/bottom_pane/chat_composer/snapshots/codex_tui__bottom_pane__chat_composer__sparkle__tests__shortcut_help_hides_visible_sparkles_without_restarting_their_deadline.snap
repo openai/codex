@@ -1,0 +1,53 @@
+---
+source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+expires during help: false
+initial:
+                            ⠈     ⢀     ⠁                 ⠂
+›⠁Ask Codex to do anything         ⠈      ⠁
+       ⢀            ⠠     ⠄         ⠠          ⢀    ⠠     ⡀
+  ? for shortcuts                                            100% context left
+shortcut help:
+
+› Ask Codex to do anything
+
+  / for commands                             ! for shell commands
+  ctrl + j for newline                       tab to submit message
+  @ for file paths                           ctrl + v to paste images
+  ctrl + g to edit in external editor        esc esc to edit previous message
+  ctrl + r search history                    ctrl + c to exit
+  ⌥ + , reasoning down                       ⌥ + . reasoning up
+  ctrl + t to view transcript
+
+  customize shortcuts with /keymap
+after closing:
+                                        ⠁               ⡀   ⠄           ⠄   ⠄
+› Ask Codex to do anything                                   ⠈
+      ⠠                             ⠠        ⢀ ⢀     ⡀                         ⠄
+  ? for shortcuts                                            100% context left
+
+expires during help: true
+initial:
+                            ⠈     ⢀     ⠁                 ⠂
+›⠁Ask Codex to do anything         ⠈      ⠁
+       ⢀            ⠠     ⠄         ⠠          ⢀    ⠠     ⡀
+  ? for shortcuts                                            100% context left
+shortcut help:
+
+› Ask Codex to do anything
+
+  / for commands                             ! for shell commands
+  ctrl + j for newline                       tab to submit message
+  @ for file paths                           ctrl + v to paste images
+  ctrl + g to edit in external editor        esc esc to edit previous message
+  ctrl + r search history                    ctrl + c to exit
+  ⌥ + , reasoning down                       ⌥ + . reasoning up
+  ctrl + t to view transcript
+
+  customize shortcuts with /keymap
+after closing:
+
+› Ask Codex to do anything
+
+  ? for shortcuts                                            100% context left

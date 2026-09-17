@@ -18,6 +18,8 @@ use std::collections::HashSet;
 
 #[derive(Clone, Copy)]
 pub(super) enum ThreadAttachPresentation {
+    /// A primary thread created by thread/start, without inherited history.
+    Fresh,
     SessionLineage,
 }
 
@@ -834,6 +836,7 @@ impl App {
             .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
             Ok(started) => {
+                self.chat_widget.mark_fresh_task_for_sparkle(&started);
                 let thread_id = started.session.thread_id;
                 if started.task_tools_available {
                     app_server.remember_task_tool_thread(thread_id);
@@ -997,7 +1000,7 @@ impl App {
                     .replace_chat_widget_with_app_server_thread(
                         tui,
                         started,
-                        ThreadAttachPresentation::SessionLineage,
+                        ThreadAttachPresentation::Fresh,
                         initial_user_message,
                     )
                     .await
@@ -1056,6 +1059,9 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
+        if matches!(presentation, ThreadAttachPresentation::Fresh) {
+            self.chat_widget.mark_fresh_task_for_sparkle(&started);
+        }
         self.chat_widget
             .set_task_mentions_enabled(started.task_tools_available);
         self.chat_widget

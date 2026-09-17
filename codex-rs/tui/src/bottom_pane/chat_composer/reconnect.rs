@@ -1,5 +1,6 @@
 //! Offline editing retains the draft in place.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
+//! Offline draft edits also consume the Astra sparkle opportunity before rendering.
 
 use super::*;
 
@@ -66,7 +67,14 @@ impl ChatComposer {
         if !matches!(key.code, KeyCode::Enter | KeyCode::Tab)
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
         {
-            self.handle_input_basic(key);
+            // Null is sent internally to clean up on disconnect or expand a paste; it isn't an edit.
+            let before = if key.code == KeyCode::Null {
+                None
+            } else {
+                self.before_sparkle_editor_key(key)
+            };
+            let (result, _) = self.handle_input_basic(key);
+            self.after_sparkle_key(before, &result);
         }
     }
 }

@@ -1,8 +1,48 @@
 //! Session configuration and thread-header orchestration for `ChatWidget`.
+//! Confirmed model-picker changes can offer the flourish only on their original task; the app
+//! checks the previous model when it applies the final selection.
 
 use super::*;
 
 impl ChatWidget {
+    /// Offer the flourish only for a successful primary thread/start without initial work.
+    pub(crate) fn mark_fresh_task_for_sparkle(
+        &mut self,
+        started: &crate::app_server_session::AppServerStartedThread,
+    ) {
+        if started.turns.is_empty()
+            && started.session.forked_from_id.is_none()
+            && !started.blocks_direct_input
+            && self.initial_user_message.is_none()
+            && !self.is_user_turn_pending_or_running()
+        {
+            self.bottom_pane
+                .mark_fresh_task_for_sparkle(&started.session.model, &self.local_settings.tui);
+        } else {
+            self.bottom_pane.dismiss_composer_sparkle();
+        }
+    }
+
+    pub(crate) fn set_sparkle_terminal_focus(&mut self, focused: bool) {
+        self.bottom_pane.set_sparkle_terminal_focus(focused);
+    }
+
+    pub(crate) fn prepare_composer_sparkle_key(&self, key: KeyEvent) {
+        self.bottom_pane.prepare_composer_sparkle_key(key);
+    }
+
+    pub(crate) fn sparkle_thread_for_picker_action(&self, model: &str) -> Option<ThreadId> {
+        self.thread_id()
+            .filter(|_| BottomPane::is_sparkle_model(model))
+    }
+
+    pub(crate) fn on_sparkle_model_selected_from_picker(&mut self, model: &str) {
+        if self.current_model() == model {
+            self.bottom_pane
+                .select_sparkle_model(model, &self.local_settings.tui);
+        }
+    }
+
     fn on_session_configured_with_display_and_fork_parent_title(
         &mut self,
         session: ThreadSessionState,

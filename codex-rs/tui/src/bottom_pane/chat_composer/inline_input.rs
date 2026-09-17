@@ -66,10 +66,10 @@ impl ChatComposer {
                     || self.vim_normal_keymap.move_down.is_pressed(key)))
     }
 
-    /// Finish buffered typing before another answer takes over this editor.
+    /// Integrate already-classified buffered typing before another answer takes over this editor.
     pub(crate) fn flush_pending_input(&mut self) {
         if let Some(text) = self.draft.paste_burst.flush_before_modified_input() {
-            self.handle_paste(text);
+            self.apply_paste(text);
         }
         self.draft.paste_burst.clear_after_explicit_paste();
     }

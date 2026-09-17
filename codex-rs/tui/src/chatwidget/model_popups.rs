@@ -292,6 +292,7 @@ impl ChatWidget {
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
         let thread_id = self.thread_id();
+        let sparkle_thread = self.sparkle_thread_for_picker_action(&model_for_action);
         vec![Box::new(move |tx| {
             if model_for_action == LUNA_RESERVE_MODEL {
                 // Reserve is temporary: update the active task without persisting a model default.
@@ -302,17 +303,22 @@ impl ChatWidget {
                     });
                 }
             } else if effort_for_action == Some(ReasoningEffortConfig::Ultra) {
-                tx.send(AppEvent::ApplyAdvancedReasoning {
-                    model: model_for_action.clone(),
-                    effort: ReasoningEffortConfig::Ultra,
-                });
+                tx.send(
+                    AstraModelPickerAction::ApplyAdvancedReasoning {
+                        effort: ReasoningEffortConfig::Ultra,
+                    }
+                    .into_picker_event(sparkle_thread, model_for_action.clone()),
+                );
             } else if should_prompt_plan_mode_scope {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
                     effort: effort_for_action.clone(),
                 });
             } else {
-                tx.send(AppEvent::UpdateModel(model_for_action.clone()));
+                tx.send(
+                    AstraModelPickerAction::UpdateModel
+                        .into_picker_event(sparkle_thread, model_for_action.clone()),
+                );
                 tx.send(AppEvent::UpdateReasoningEffort(effort_for_action.clone()));
                 tx.send(AppEvent::PersistModelSelection {
                     model: model_for_action.clone(),
@@ -394,13 +400,17 @@ impl ChatWidget {
         let warning = effort
             .as_ref()
             .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
+        let sparkle_thread = self.sparkle_thread_for_picker_action(&model);
 
         let plan_only_actions: Vec<SelectionAction> = vec![Box::new({
             let model = model.clone();
             let effort = effort.clone();
             let warning = warning.clone();
             move |tx| {
-                tx.send(AppEvent::UpdateModel(model.clone()));
+                tx.send(
+                    AstraModelPickerAction::UpdateModel
+                        .into_picker_event(sparkle_thread, model.clone()),
+                );
                 tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
                 tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
                 if let Some(warning) = warning.clone() {
@@ -411,7 +421,10 @@ impl ChatWidget {
             }
         })];
         let all_modes_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-            tx.send(AppEvent::UpdateModel(model.clone()));
+            tx.send(
+                AstraModelPickerAction::UpdateModel
+                    .into_picker_event(sparkle_thread, model.clone()),
+            );
             tx.send(AppEvent::UpdateReasoningEffort(effort.clone()));
             tx.send(AppEvent::UpdatePlanModeReasoningEffort(effort.clone()));
             tx.send(AppEvent::PersistPlanModeReasoningEffort(effort.clone()));
