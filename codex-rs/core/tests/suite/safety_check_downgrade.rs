@@ -38,6 +38,7 @@ const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 
 const CYBER_POLICY_MESSAGE: &str =
     "This request has been flagged for potentially high-risk cyber activity.";
+const BIO_POLICY_MESSAGE: &str = "This request has been flagged for possible biological risk.";
 
 fn disabled_text_turn(test: &TestCodex, text: &str) -> TurnInputRequest {
     let (sandbox_policy, permission_profile) =
@@ -105,34 +106,48 @@ async fn openai_model_header_mismatch_emits_warning_event() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case("cyber_policy", CYBER_POLICY_MESSAGE, CodexErrorInfo::CyberPolicy; "cyber")]
+#[test_case::test_case("bio_policy", BIO_POLICY_MESSAGE, CodexErrorInfo::BioPolicy; "bio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cyber_policy_response_emits_typed_error_without_retry() -> Result<()> {
+async fn policy_response_emits_typed_error_without_retry(
+    code: &str,
+    message: &str,
+    error_info: CodexErrorInfo,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let response = ResponseTemplate::new(400).set_body_json(serde_json::json!({
         "error": {
-            "message": CYBER_POLICY_MESSAGE,
+            "message": message,
             "type": "invalid_request",
             "param": null,
-            "code": "cyber_policy"
+            "code": code
         }
     }));
     let mock = mount_response_once(&server, response).await;
 
     let mut builder = test_codex().with_model(REQUESTED_MODEL);
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.codex
-        .start_or_steer_turn(disabled_text_turn(&test, "trigger cyber policy error"))
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "trigger policy error".to_string(),
+            text_elements: Vec::new(),
+        }]))
         .await?;
 
     let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
     let EventMsg::Error(error) = error else {
         panic!("expected error event");
     };
-    assert_eq!(error.message, CYBER_POLICY_MESSAGE);
-    assert_eq!(error.codex_error_info, Some(CodexErrorInfo::CyberPolicy));
+    assert_eq!(error.message, message);
+    assert_eq!(error.codex_error_info, Some(error_info));
+
+    let _ = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     mock.single_request();
 

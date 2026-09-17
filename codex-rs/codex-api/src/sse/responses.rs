@@ -429,6 +429,14 @@ pub fn process_responses_event(
                     } else if is_cyber_policy_error(&error) {
                         let message = cyber_policy_message(error.message);
                         response_error = ApiError::CyberPolicy { message };
+                    } else if error.code.as_deref() == Some("bio_policy") {
+                        let message = error
+                            .message
+                            .filter(|message| !message.trim().is_empty())
+                            .unwrap_or_else(|| {
+                                "This content was flagged for possible biological risk.".to_string()
+                            });
+                        response_error = ApiError::BioPolicy { message };
                     } else if error.code.as_deref() == Some("misalignment_policy_violation") {
                         let message = error
                             .message
@@ -443,8 +451,7 @@ pub fn process_responses_event(
                                 serde_json::from_value::<MisalignmentErrorDetails>(details).ok()
                             }),
                         };
-                    } else if matches!(error.code.as_deref(), Some("invalid_prompt" | "bio_policy"))
-                    {
+                    } else if error.code.as_deref() == Some("invalid_prompt") {
                         let message = error
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
@@ -1366,7 +1373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn content_policy_errors_without_type_are_invalid_requests() {
+    async fn content_policy_errors_without_type_preserve_their_classification() {
         for (code, expected_message) in [
             (
                 "invalid_prompt",
@@ -1396,11 +1403,34 @@ mod tests {
             let events = collect_events(&[sse1.as_bytes()]).await;
 
             assert_eq!(events.len(), 1);
-            match &events[0] {
-                Err(ApiError::InvalidRequest { message }) => {
+            match (code, &events[0]) {
+                ("invalid_prompt", Err(ApiError::InvalidRequest { message }))
+                | ("bio_policy", Err(ApiError::BioPolicy { message })) => {
                     assert_eq!(message, expected_message);
                 }
                 other => panic!("unexpected event for {code}: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn bio_policy_error_uses_fallback_for_missing_or_blank_message() {
+        for message in [None, Some(""), Some("  ")] {
+            let mut event = json!({
+                "type": "response.failed",
+                "response": { "error": { "code": "bio_policy" } },
+            });
+            if let Some(message) = message {
+                event["response"]["error"]["message"] = json!(message);
+            }
+            let sse = format!("event: response.failed\ndata: {event}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+            match events.as_slice() {
+                [Err(ApiError::BioPolicy { message })] => assert_eq!(
+                    message,
+                    "This content was flagged for possible biological risk."
+                ),
+                other => panic!("unexpected events: {other:?}"),
             }
         }
     }

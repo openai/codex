@@ -91,7 +91,8 @@ impl SamplingExecution {
                 | ApiError::RateLimit(_)
                 | ApiError::InvalidRequest { .. }
                 | ApiError::MisalignmentPolicyViolation { .. }
-                | ApiError::CyberPolicy { .. },
+                | ApiError::CyberPolicy { .. }
+                | ApiError::BioPolicy { .. },
             ) => false,
         };
         if retryable && *retries < MAX_SAMPLING_RETRIES {

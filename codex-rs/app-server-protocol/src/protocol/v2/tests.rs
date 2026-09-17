@@ -4671,6 +4671,7 @@ fn codex_error_info_serializes_http_status_code_in_camel_case() {
 fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
         (CoreCodexErrorInfo::CyberPolicy, json!("cyberPolicy")),
+        (CoreCodexErrorInfo::BioPolicy, json!("other")),
         (
             CoreCodexErrorInfo::RateLimitExceeded,
             json!("rateLimitExceeded"),

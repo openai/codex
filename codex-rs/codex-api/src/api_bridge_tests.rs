@@ -182,6 +182,53 @@ fn map_api_error_uses_cyber_policy_fallback_for_missing_message() {
 }
 
 #[test]
+fn map_api_error_preserves_bio_policy() {
+    let err = map_api_error(ApiError::BioPolicy {
+        message: "This request was blocked by bio policy.".to_string(),
+    });
+    assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BioPolicy);
+    assert_eq!(err.to_string(), "This request was blocked by bio policy.");
+    assert!(!err.is_retryable());
+}
+
+#[test]
+fn map_api_error_maps_http_and_wrapped_websocket_bio_policy() {
+    for wrapped in [false, true] {
+        for message in [
+            Some("This request was blocked by bio policy."),
+            None,
+            Some(""),
+            Some("  "),
+        ] {
+            let mut body = serde_json::json!({"error": {"code": "bio_policy"}});
+            if let Some(message) = message {
+                body["error"]["message"] = serde_json::json!(message);
+            }
+            if wrapped {
+                body["type"] = serde_json::json!("error");
+                body["status"] = serde_json::json!(400);
+            }
+            let err = map_api_error(ApiError::Transport(TransportError::Http {
+                status: http::StatusCode::BAD_REQUEST,
+                url: None,
+                headers: None,
+                body: Some(body.to_string()),
+            }));
+
+            let expected = message
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or("This content was flagged for possible biological risk.");
+            let CodexErrorDetails::BioPolicy { message } = err.details() else {
+                panic!("expected CodexErrorDetails::BioPolicy, got {err:?}");
+            };
+            assert_eq!(message, expected);
+            assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BioPolicy);
+            assert!(!err.is_retryable());
+        }
+    }
+}
+
+#[test]
 fn map_api_error_maps_misalignment_policy_violation_from_400_body() {
     assert_misalignment_policy_violation_from_http_body(http::StatusCode::BAD_REQUEST);
 }

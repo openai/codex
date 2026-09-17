@@ -49,9 +49,9 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             ApiError::Retryable { .. } => "retryable_api_error",
             ApiError::RateLimitExceeded { .. } | ApiError::RateLimit(_) => "rate_limit",
             ApiError::InvalidRequest { .. } => "invalid_request",
-            ApiError::CyberPolicy { .. } | ApiError::MisalignmentPolicyViolation { .. } => {
-                "policy_error"
-            }
+            ApiError::CyberPolicy { .. }
+            | ApiError::BioPolicy { .. }
+            | ApiError::MisalignmentPolicyViolation { .. } => "policy_error",
             ApiError::ServerOverloaded => "server_overloaded",
         },
     }

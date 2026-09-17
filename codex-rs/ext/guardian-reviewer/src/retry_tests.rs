@@ -93,6 +93,13 @@ fn guardian_review_retry_only_retries_transient_session_and_parse_errors() {
             false,
         ),
         (
+            GuardianReviewOutcome::Error(GuardianReviewError::session_with_error_info(
+                anyhow::anyhow!("bio policy"),
+                CodexErrorInfo::BioPolicy,
+            )),
+            false,
+        ),
+        (
             GuardianReviewOutcome::Error(GuardianReviewError::parse(anyhow::anyhow!("parse"))),
             true,
         ),

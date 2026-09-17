@@ -138,6 +138,8 @@ pub enum CodexErrorDetails {
     #[error("{message}")]
     CyberPolicy { message: String },
     #[error("{message}")]
+    BioPolicy { message: String },
+    #[error("{message}")]
     MisalignmentPolicyViolation {
         message: String,
         misalignment: Option<MisalignmentErrorDetails>,
@@ -394,6 +396,7 @@ impl CodexErr {
             | CodexErrorDetails::UsageLimitReached(_)
             | CodexErrorDetails::ServerOverloaded
             | CodexErrorDetails::CyberPolicy { .. }
+            | CodexErrorDetails::BioPolicy { .. }
             | CodexErrorDetails::MisalignmentPolicyViolation { .. } => false,
             CodexErrorDetails::Stream(..)
             | CodexErrorDetails::RateLimitExceeded(_)
@@ -439,6 +442,7 @@ impl CodexErr {
             | CodexErrorDetails::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
             CodexErrorDetails::ServerOverloaded => CodexErrorInfo::ServerOverloaded,
             CodexErrorDetails::CyberPolicy { .. } => CodexErrorInfo::CyberPolicy,
+            CodexErrorDetails::BioPolicy { .. } => CodexErrorInfo::BioPolicy,
             CodexErrorDetails::MisalignmentPolicyViolation { .. } => {
                 CodexErrorInfo::MisalignmentPolicyViolation
             }
