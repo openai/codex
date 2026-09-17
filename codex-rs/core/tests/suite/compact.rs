@@ -2966,6 +2966,105 @@ async fn pre_sampling_compact_falls_back_after_previous_model_invalid_request_on
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_sampling_compact_falls_back_after_previous_model_stream_retries_are_exhausted() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let previous_model = "gpt-5.4";
+    let selected_model = "gpt-5.2";
+    let _models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![
+                model_info_with_context_window(previous_model, /*context_window*/ 273_000),
+                model_info_with_context_window(selected_model, /*context_window*/ 125_000),
+            ],
+        },
+    )
+    .await;
+
+    let compaction_failure = sse_failed(
+        "compact-failure",
+        "server_error",
+        "previous-model compaction failed",
+    );
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", "before switch"),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 120_000),
+            ]),
+            compaction_failure.clone(),
+            compaction_failure.clone(),
+            compaction_failure,
+            remote_v2_compaction_response(),
+            sse(vec![
+                ev_assistant_message("m3", "after switch"),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut model_provider = openai_model_provider(&server);
+    model_provider.stream_max_retries = Some(2);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+        });
+    let test = builder.build(&server).await.expect("build test codex");
+
+    test.codex
+        .start_or_steer_turn(disabled_permission_user_turn(
+            "before switch",
+            test.cwd.path().to_path_buf(),
+            previous_model.to_string(),
+        ))
+        .await
+        .expect("submit first user turn");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .start_or_steer_turn(disabled_permission_user_turn(
+            "after switch",
+            test.cwd.path().to_path_buf(),
+            selected_model.to_string(),
+        ))
+        .await
+        .expect("submit selected-model turn");
+    assert_compaction_uses_turn_lifecycle_id(&test.codex).await;
+
+    let actual_models = request_log
+        .requests()
+        .iter()
+        .map(|request| {
+            request.body_json()["model"]
+                .as_str()
+                .expect("request model")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_models,
+        vec![
+            previous_model, // Initial turn.
+            previous_model, // Compaction attempt.
+            previous_model, // First retry.
+            previous_model, // Second retry.
+            selected_model, // Fallback compaction.
+            selected_model, // Turn sampling.
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_sampling_compact_keeps_unknown_previous_model_for_api_key_auth_and_custom_provider() {
     skip_if_no_network!();
 
