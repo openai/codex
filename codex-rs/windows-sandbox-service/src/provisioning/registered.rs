@@ -117,7 +117,7 @@ pub(super) fn run(
         .inspect_err(|error| {
             crate::service::log_error(
                 crate::service::EVENT_PROVISIONING_FAILED,
-                &format!("Codex sandbox provisioning failed: {error}"),
+                &format!("Codex sandbox provisioning failed: {error:#}"),
             );
         })
         .context("registered sandbox provisioning failed")?;
