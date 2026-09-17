@@ -3,6 +3,8 @@
 //! framing, message boundaries and section placement, without retaining history.
 //! Each content item keeps its selection policy until transport conversion.
 //! Long text splits losslessly only after admission, preserving whole-entry selection.
+//! Action-specific attestations follow the transcript so they do not invalidate
+//! the reusable history prefix when previous decisions or tool evidence change.
 
 use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
@@ -119,31 +121,31 @@ impl CollectedContext {
         for section in self.sections {
             let (position, id, delivery) = match section {
                 ContextSection::PreviousReviews(reviews) => (
-                    1,
+                    6,
                     "previous_reviews",
                     SectionDelivery::Message(Box::new(reviews.into_message())),
                 ),
                 ContextSection::TrustedTool(tool) => (
-                    2,
+                    7,
                     "trusted_tool",
                     SectionDelivery::Message(Box::new(ContextualUserFragment::into(tool))),
                 ),
                 ContextSection::TrustedSkills(skills) => (
-                    3,
+                    8,
                     "trusted_skills",
                     SectionDelivery::Message(Box::new(ContextualUserFragment::into(skills))),
                 ),
                 ContextSection::RootConversation { items } => {
-                    (4, "root_conversation", text_content(items))
+                    (1, "root_conversation", text_content(items))
                 }
                 ContextSection::SenderUserMessages { items } => {
-                    (4, "sender_user_messages", text_content(items))
+                    (1, "sender_user_messages", text_content(items))
                 }
                 ContextSection::RetainedUserInstructions { items } => {
-                    (5, "retained_user_instructions", text_content(items))
+                    (2, "retained_user_instructions", text_content(items))
                 }
                 ContextSection::TrustedUserAnswers { items } => {
-                    (6, "trusted_user_answers", text_content(items))
+                    (3, "trusted_user_answers", text_content(items))
                 }
                 ContextSection::ConversationTranscript { .. } => {
                     let transcript =
@@ -173,7 +175,7 @@ impl CollectedContext {
                         items.push(Budgeted::required(format!("\n{note}\n")));
                     }
                     (
-                        7,
+                        4,
                         "conversation_transcript",
                         SectionDelivery::UserContent(
                             items
@@ -187,7 +189,7 @@ impl CollectedContext {
                     )
                 }
                 ContextSection::PermissionContext { items } => {
-                    (8, "permissions", text_content(items))
+                    (5, "permissions", text_content(items))
                 }
                 ContextSection::TranscriptImages(images) => {
                     if images.omitted_bytes > 0 {
