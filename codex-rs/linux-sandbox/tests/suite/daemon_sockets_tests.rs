@@ -5,6 +5,129 @@ use std::os::unix::net::UnixListener;
 use std::os::unix::net::UnixStream;
 
 #[tokio::test]
+async fn private_tmp_mount_preserves_daemon_socket_isolation() {
+    if should_skip_bwrap_tests().await {
+        return;
+    }
+    // The parent owns cleanup after the child's disposable mount namespace exits.
+    let private = tempfile::tempdir_in("/tmp").unwrap();
+    let test_executable = std::env::current_exe().unwrap();
+    // Keep both executables available after the original /tmp is hidden.
+    std::fs::copy(&test_executable, private.path().join("test")).unwrap();
+    std::fs::copy(codex_linux_sandbox_exe(), private.path().join("sandbox")).unwrap();
+    let (_, test_module) = module_path!().split_once("::").unwrap();
+    let fixture_test = format!("{test_module}::private_tmp_fixture");
+    // Mount setup needs capabilities, which bubblewrap only accepts as namespace root.
+    let output = tokio::process::Command::new("unshare")
+        .args([
+            "--user",
+            "--map-root-user",
+            "--mount",
+            "--propagation",
+            "private",
+            "--",
+        ])
+        .arg(test_executable)
+        .args([
+            "--exact",
+            &fixture_test,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CODEX_TEST_PRIVATE_TMP", private.path())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .unwrap();
+    if output.status.code() == Some(77)
+        || String::from_utf8_lossy(&output.stderr).starts_with("unshare:")
+    {
+        eprintln!("skipping private tmp test: user/mount namespaces are unavailable");
+        return;
+    }
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("private-tmp-validated"));
+}
+
+#[test]
+#[ignore = "invoked inside a disposable mount namespace"]
+fn private_tmp_fixture() {
+    let Some(private) = std::env::var_os("CODEX_TEST_PRIVATE_TMP") else {
+        return;
+    };
+    let mount = std::process::Command::new("mount")
+        .arg("--bind")
+        .arg(private)
+        .arg("/tmp")
+        .output()
+        .unwrap();
+    if !mount.status.success() {
+        std::process::exit(/*code*/ 77);
+    }
+    let root = codex_uds::prepare_shared_daemon_socket_directory().unwrap();
+    let endpoint = root.join("rpc.sock");
+    let _daemon = UnixListener::bind(&endpoint).unwrap();
+    let _other = UnixListener::bind("/tmp/other.sock").unwrap();
+    UnixStream::connect(&endpoint).expect("host can reach daemon");
+    let profile = PermissionProfile::workspace_write_with(
+        &[AbsolutePathBuf::from_absolute_path("/tmp").unwrap()],
+        NetworkSandboxPolicy::Enabled,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ false,
+    );
+    let mut command = std::process::Command::new("/tmp/sandbox");
+    command
+        .args(["--sandbox-policy-cwd", "/tmp", "--permission-profile"])
+        .arg(serde_json::to_string(&profile).unwrap())
+        .arg("--")
+        .current_dir("/tmp");
+    let (_, test_module) = module_path!().split_once("::").unwrap();
+    let client_test = format!("{test_module}::private_tmp_client");
+    command
+        .args([
+            "/tmp/test",
+            "--exact",
+            &client_test,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CODEX_TEST_DAEMON_SOCKET", &endpoint);
+    let output = command.output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("private-tmp-isolated"));
+
+    // A real alias below the private mount must still prevent startup.
+    std::fs::create_dir("/tmp/alias").unwrap();
+    let mount = std::process::Command::new("mount")
+        .arg("--bind")
+        .arg(&root)
+        .arg("/tmp/alias")
+        .output()
+        .unwrap();
+    assert!(mount.status.success(), "{mount:?}");
+    UnixStream::connect("/tmp/alias/rpc.sock").expect("host can reach alias");
+    let output = command.output().unwrap();
+    assert!(!output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported host mount"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private-tmp-client-started"));
+    println!("private-tmp-validated");
+}
+
+#[test]
+#[ignore = "invoked inside the private tmp sandbox"]
+fn private_tmp_client() {
+    let Some(endpoint) = std::env::var_os("CODEX_TEST_DAEMON_SOCKET") else {
+        return;
+    };
+    println!("private-tmp-client-started");
+    assert!(UnixStream::connect(endpoint).is_err(), "daemon reachable");
+    UnixStream::connect("/tmp/other.sock").expect("unrelated socket reachable");
+    println!("private-tmp-isolated");
+}
+
+#[tokio::test]
 async fn daemon_socket_bind_mount_alias_rejects_sandbox_startup() {
     if should_skip_bwrap_tests().await {
         return;

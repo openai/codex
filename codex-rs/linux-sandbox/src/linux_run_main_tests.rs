@@ -326,16 +326,19 @@ fn managed_proxy_preflight_argv_unshares_network() {
         NetworkSandboxPolicy::Enabled,
         /*allow_network_for_proxy*/ true,
     );
-    let argv = build_preflight_bwrap_argv(mode)
-        .expect("build preflight argv")
-        .args;
+    let argv = build_preflight_bwrap_argv(BwrapOptions {
+        network_mode: mode,
+        ..Default::default()
+    })
+    .expect("build preflight argv")
+    .args;
     assert!(argv.iter().any(|arg| arg == "--"));
     assert!(argv.iter().any(|arg| arg == "--unshare-net"));
 }
 
 #[test]
 fn proc_mount_preflight_does_not_bind_the_full_filesystem() {
-    let argv = build_preflight_bwrap_argv(BwrapNetworkMode::FullAccess)
+    let argv = build_preflight_bwrap_argv(BwrapOptions::default())
         .expect("build preflight argv")
         .args;
 
@@ -347,6 +350,34 @@ fn proc_mount_preflight_does_not_bind_the_full_filesystem() {
             .any(|window| window == ["--ro-bind", "/", "/"])
     );
     assert!(!argv.windows(3).any(|window| window == ["--bind", "/", "/"]));
+}
+
+#[test]
+fn proc_mount_preflight_preserves_wsl_masks() {
+    let argv = build_preflight_bwrap_argv(BwrapOptions {
+        mask_wsl_interop: true,
+        mask_wslg_distro: true,
+        ..Default::default()
+    })
+    .expect("build WSL preflight argv")
+    .args;
+
+    assert!(argv.windows(2).any(|window| window == ["--proc", "/proc"]));
+    assert!(
+        argv.windows(2)
+            .any(|window| window == ["--tmpfs", WSL_INTEROP_DIR])
+    );
+    assert!(argv.windows(6).any(|window| {
+        window
+            == [
+                "--perms",
+                "000",
+                "--tmpfs",
+                WSLG_DISTRO_ROOT,
+                "--remount-ro",
+                WSLG_DISTRO_ROOT,
+            ]
+    }));
 }
 
 #[test]

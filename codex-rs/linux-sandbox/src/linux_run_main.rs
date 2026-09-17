@@ -422,7 +422,7 @@ fn run_bwrap_with_proc_fallback(
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
     if options.mount_proc
-        && !preflight_proc_mount_support(options.network_mode)
+        && !preflight_proc_mount_support(options)
             .unwrap_or_else(|err| exit_with_bwrap_build_error(err))
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
@@ -526,15 +526,13 @@ fn current_process_argv0() -> String {
     }
 }
 
-fn preflight_proc_mount_support(network_mode: BwrapNetworkMode) -> CodexResult<bool> {
-    let preflight_argv = build_preflight_bwrap_argv(network_mode)?;
+fn preflight_proc_mount_support(options: BwrapOptions) -> CodexResult<bool> {
+    let preflight_argv = build_preflight_bwrap_argv(options)?;
     let stderr = run_bwrap_in_child_capture_stderr(preflight_argv);
     Ok(!is_proc_mount_failure(stderr.as_str()))
 }
 
-fn build_preflight_bwrap_argv(
-    network_mode: BwrapNetworkMode,
-) -> CodexResult<crate::bwrap::BwrapArgs> {
+fn build_preflight_bwrap_argv(options: BwrapOptions) -> CodexResult<crate::bwrap::BwrapArgs> {
     let file_system_sandbox_policy =
         FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -551,8 +549,8 @@ fn build_preflight_bwrap_argv(
         Path::new("/"),
         BwrapOptions {
             mount_proc: true,
-            network_mode,
-            ..Default::default()
+            // The alias check must see the same WSL masks as the main sandbox.
+            ..options
         },
     )
 }
