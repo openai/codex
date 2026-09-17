@@ -444,7 +444,7 @@ fn require_platform_sandbox(
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> FileSystemResult<&FileSystemSandboxContext> {
     sandbox
-        .filter(|sandbox| sandbox.should_run_in_sandbox())
+        .filter(|sandbox| sandbox.should_read_from_sandbox() || sandbox.should_write_into_sandbox())
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

@@ -68,7 +68,7 @@ impl RemoteFileSystem {
         let response = client
             .fs_canonicalize(FsCanonicalizeParams {
                 path: path.clone(),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -87,7 +87,7 @@ impl RemoteFileSystem {
             .fs_read_file(FsReadFileParams {
                 path: path.clone(),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -123,7 +123,7 @@ impl RemoteFileSystem {
                 path: path.clone(),
                 data_base64: STANDARD.encode(contents),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await;
         self.metadata_requests.lock().await.clear();
@@ -144,7 +144,7 @@ impl RemoteFileSystem {
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await;
         self.metadata_requests.lock().await.clear();
@@ -204,7 +204,7 @@ impl RemoteFileSystem {
             .fs_get_metadata(FsGetMetadataParams {
                 path: path.clone(),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -228,7 +228,7 @@ impl RemoteFileSystem {
         let response = client
             .fs_read_directory(FsReadDirectoryParams {
                 path: path.clone(),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)?;
@@ -255,7 +255,7 @@ impl RemoteFileSystem {
             .fs_walk(FsWalkParams {
                 path: path.clone(),
                 options,
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await
             .map_err(map_remote_error)
@@ -275,7 +275,7 @@ impl RemoteFileSystem {
                 recursive: Some(options.recursive),
                 force: Some(options.force),
                 follow_symlinks: (!options.follow_symlinks).then_some(false),
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await;
         self.metadata_requests.lock().await.clear();
@@ -297,7 +297,7 @@ impl RemoteFileSystem {
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,
-                sandbox: remote_sandbox_context(sandbox),
+                sandbox: sandbox.cloned(),
             })
             .await;
         self.metadata_requests.lock().await.clear();
@@ -407,12 +407,6 @@ impl ExecutorFileSystem for RemoteFileSystem {
     }
 }
 
-fn remote_sandbox_context(
-    sandbox: Option<&FileSystemSandboxContext>,
-) -> Option<FileSystemSandboxContext> {
-    sandbox.cloned()
-}
-
 fn map_remote_error(error: ExecServerError) -> io::Error {
     match error {
         ExecServerError::Server { code, message } if code == NOT_FOUND_ERROR_CODE => {
@@ -435,60 +429,9 @@ mod path_uri_tests;
 
 #[cfg(test)]
 mod tests {
-    use codex_protocol::models::PermissionProfile;
-    use codex_protocol::permissions::FileSystemAccessMode;
-    use codex_protocol::permissions::FileSystemPath;
-    use codex_protocol::permissions::FileSystemSandboxEntry;
-    use codex_protocol::permissions::FileSystemSandboxPolicy;
-    use codex_protocol::permissions::FileSystemSpecialPath;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
-    use codex_utils_path_uri::PathUri;
     use pretty_assertions::assert_eq;
 
     use super::*;
-
-    #[test]
-    fn remote_sandbox_context_preserves_cwd_for_absolute_permissions() {
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: absolute_test_path("remote-root").into(),
-            },
-            access: FileSystemAccessMode::Read,
-            missing_path_behavior: None,
-        }]);
-        let permissions =
-            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        let cwd = path_uri("executor-checkout");
-        let sandbox_context =
-            FileSystemSandboxContext::from_permission_profile(permissions, cwd.clone());
-
-        let remote_context =
-            remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
-
-        assert_eq!(remote_context.cwd, cwd);
-    }
-
-    #[test]
-    fn remote_sandbox_context_preserves_required_cwd() {
-        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
-            },
-            access: FileSystemAccessMode::Write,
-            missing_path_behavior: None,
-        }]);
-        let permissions =
-            PermissionProfile::from_runtime_permissions(&policy, NetworkSandboxPolicy::Restricted);
-        let cwd = path_uri("host-checkout");
-        let sandbox_context =
-            FileSystemSandboxContext::from_permission_profile(permissions, cwd.clone());
-
-        let remote_context =
-            remote_sandbox_context(Some(&sandbox_context)).expect("remote sandbox context");
-
-        assert_eq!(remote_context.cwd, cwd);
-    }
 
     #[test]
     fn transport_errors_map_to_broken_pipe() {
@@ -518,14 +461,5 @@ mod tests {
                 ),
             ]
         );
-    }
-
-    fn absolute_test_path(name: &str) -> AbsolutePathBuf {
-        let path = std::env::temp_dir().join(name);
-        AbsolutePathBuf::from_absolute_path(&path).expect("absolute path")
-    }
-
-    fn path_uri(name: &str) -> PathUri {
-        PathUri::from_abs_path(&absolute_test_path(name))
     }
 }

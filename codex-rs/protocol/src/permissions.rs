@@ -674,6 +674,14 @@ impl FileSystemSandboxPolicy {
     }
 
     pub fn has_denied_read_restrictions(&self) -> bool {
+        // TODO(anp) Migrate callers to select the executor's path convention explicitly.
+        self.has_denied_read_restrictions_for_convention(Some(PathConvention::native()))
+    }
+
+    fn has_denied_read_restrictions_for_convention(
+        &self,
+        convention: Option<PathConvention>,
+    ) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
             && self.entries.iter().any(|entry| {
                 entry.access == FileSystemAccessMode::Deny
@@ -681,7 +689,7 @@ impl FileSystemSandboxPolicy {
                         &entry.path,
                         FileSystemPath::Special {
                             value: FileSystemSpecialPath::SlashTmp,
-                        } if !cfg!(unix)
+                        } if convention == Some(PathConvention::Windows)
                     )
             })
     }
@@ -888,19 +896,30 @@ impl FileSystemSandboxPolicy {
         file_system_policy
     }
 
-    /// Returns true when filesystem reads are unrestricted.
+    /// Returns true when filesystem reads are unrestricted on this host.
     pub fn has_full_disk_read_access(&self) -> bool {
+        // TODO(anp) Migrate callers to select the executor's path convention explicitly.
+        self.has_full_disk_read_access_for_convention(Some(PathConvention::native()))
+    }
+
+    /// Returns true when filesystem reads are unrestricted on the selected executor.
+    /// If the convention is unknown, a `:slash_tmp` denial is still treated as a restriction.
+    pub fn has_full_disk_read_access_for_convention(
+        &self,
+        convention: Option<PathConvention>,
+    ) -> bool {
         match self.kind {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
             FileSystemSandboxKind::Restricted => {
                 self.has_root_access(FileSystemAccessMode::can_read)
-                    && !self.has_denied_read_restrictions()
+                    && !self.has_denied_read_restrictions_for_convention(convention)
             }
         }
     }
 
     /// Returns true when filesystem writes are unrestricted on this host.
     pub fn has_full_disk_write_access(&self) -> bool {
+        // TODO(anp) Migrate callers to select the executor's path convention explicitly.
         self.has_full_disk_write_access_for_convention(Some(PathConvention::native()))
     }
 
@@ -912,7 +931,8 @@ impl FileSystemSandboxPolicy {
         self.has_full_disk_write_access_for_convention(context.cwd.infer_path_convention())
     }
 
-    fn has_full_disk_write_access_for_convention(
+    /// Returns true when filesystem writes are unrestricted for the selected path convention.
+    pub fn has_full_disk_write_access_for_convention(
         &self,
         convention: Option<PathConvention>,
     ) -> bool {

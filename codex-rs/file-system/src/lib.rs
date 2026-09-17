@@ -11,7 +11,6 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxEntryMissingPathBehavior;
-use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::FileSystemSpecialPath;
@@ -401,14 +400,20 @@ impl FileSystemSandboxContext {
         }
     }
 
-    pub fn should_run_in_sandbox(&self) -> bool {
-        if self.validate_file_system_paths_for_current_host().is_err() {
-            // A sandbox context for another host must not select the unsandboxed filesystem.
-            return true;
-        }
-        let file_system_policy = self.permissions.file_system_sandbox_policy();
-        matches!(file_system_policy.kind, FileSystemSandboxKind::Restricted)
-            && !file_system_policy.has_full_disk_write_access()
+    /// Whether filesystem reads need a platform sandbox on the selected executor.
+    pub fn should_read_from_sandbox(&self) -> bool {
+        !self
+            .permissions
+            .file_system_sandbox_policy()
+            .has_full_disk_read_access_for_convention(self.cwd.infer_path_convention())
+    }
+
+    /// Whether filesystem writes need a platform sandbox on the selected executor.
+    pub fn should_write_into_sandbox(&self) -> bool {
+        !self
+            .permissions
+            .file_system_sandbox_policy()
+            .has_full_disk_write_access_for_convention(self.cwd.infer_path_convention())
     }
 
     /// Whether this context selects either supported Windows sandbox implementation.

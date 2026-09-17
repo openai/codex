@@ -989,7 +989,7 @@ impl Environment {
                     if params.roots.iter().any(|root| {
                         root.sandbox
                             .as_ref()
-                            .is_some_and(crate::FileSystemSandboxContext::should_run_in_sandbox)
+                            .is_some_and(crate::FileSystemSandboxContext::should_read_from_sandbox)
                     }) && !client
                         .environment_info()
                         .await?

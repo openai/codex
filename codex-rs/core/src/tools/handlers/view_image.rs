@@ -279,6 +279,10 @@ mod tests {
     use crate::tools::context::ToolInvocation;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_path_uri::PathUri;
     use core_test_support::TempDirExt;
@@ -373,7 +377,13 @@ mod tests {
             panic!("primary environment should be ready");
         };
         environment.config_mut().permission_profile =
-            PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
+            PermissionProfileSnapshot::legacy(PermissionProfile::from_runtime_permissions(
+                &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry::new(
+                    image_cwd.into(),
+                    FileSystemAccessMode::Read,
+                )]),
+                NetworkSandboxPolicy::Restricted,
+            ));
         let turn = Arc::new(turn);
 
         let result = ViewImageHandler::default()

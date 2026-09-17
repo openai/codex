@@ -92,7 +92,7 @@ impl LocalFileSystem {
         })
     }
 
-    fn file_system_for<'a>(
+    fn file_system_for_reads<'a>(
         &'a self,
         sandbox: Option<&'a FileSystemSandboxContext>,
     ) -> io::Result<(
@@ -102,10 +102,27 @@ impl LocalFileSystem {
         if let Some(sandbox) = sandbox {
             sandbox.validate_file_system_paths_for_current_host()?;
         }
-        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox) {
             Ok((self.sandboxed()?, sandbox))
         } else {
-            Ok((&self.unsandboxed, sandbox))
+            Ok((&self.unsandboxed, None))
+        }
+    }
+
+    fn file_system_for_writes<'a>(
+        &'a self,
+        sandbox: Option<&'a FileSystemSandboxContext>,
+    ) -> io::Result<(
+        &'a dyn ExecutorFileSystem,
+        Option<&'a FileSystemSandboxContext>,
+    )> {
+        if let Some(sandbox) = sandbox {
+            sandbox.validate_file_system_paths_for_current_host()?;
+        }
+        if sandbox.is_some_and(FileSystemSandboxContext::should_write_into_sandbox) {
+            Ok((self.sandboxed()?, sandbox))
+        } else {
+            Ok((&self.unsandboxed, None))
         }
     }
 }
@@ -119,10 +136,12 @@ impl LocalFileSystem {
         if let Some(sandbox) = sandbox {
             sandbox.validate_file_system_paths_for_current_host()?;
         }
-        if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+        if sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox) {
             return self.sandboxed()?.open_file_for_read(path, sandbox).await;
         }
-        self.unsandboxed.open_file_for_read(path, sandbox).await
+        self.unsandboxed
+            .open_file_for_read(path, /*sandbox*/ None)
+            .await
     }
 
     async fn canonicalize(
@@ -130,14 +149,14 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<PathUri> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
         file_system.canonicalize(path, sandbox).await
     }
 
     #[tracing::instrument(
         name = "fs.read_file",
         skip_all,
-        fields(sandboxed = sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox))
+        fields(sandboxed = sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox))
     )]
     async fn read_file(
         &self,
@@ -145,7 +164,7 @@ impl LocalFileSystem {
         options: ReadFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
         file_system.read_file(path, options, sandbox).await
     }
 
@@ -154,7 +173,7 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileSystemReadStream> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
         file_system.read_file_stream(path, sandbox).await
     }
 
@@ -165,7 +184,7 @@ impl LocalFileSystem {
         options: WriteFileOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system
             .write_file(path, contents, options, sandbox)
             .await
@@ -177,14 +196,14 @@ impl LocalFileSystem {
         options: CreateDirectoryOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system.create_directory(path, options, sandbox).await
     }
 
     #[tracing::instrument(
         name = "fs.get_metadata",
         skip_all,
-        fields(sandboxed = sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox))
+        fields(sandboxed = sandbox.is_some_and(FileSystemSandboxContext::should_read_from_sandbox))
     )]
     async fn get_metadata(
         &self,
@@ -192,7 +211,7 @@ impl LocalFileSystem {
         options: GetMetadataOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<FileMetadata> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
         file_system.get_metadata(path, options, sandbox).await
     }
 
@@ -201,7 +220,7 @@ impl LocalFileSystem {
         path: &PathUri,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
         file_system.read_directory(path, sandbox).await
     }
 
@@ -211,7 +230,7 @@ impl LocalFileSystem {
         options: WalkOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<WalkOutcome> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_reads(sandbox)?;
         file_system.walk(path, options, sandbox).await
     }
 
@@ -221,7 +240,7 @@ impl LocalFileSystem {
         options: RemoveOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system.remove(path, options, sandbox).await
     }
 
@@ -232,7 +251,7 @@ impl LocalFileSystem {
         options: CopyOptions,
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<()> {
-        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        let (file_system, sandbox) = self.file_system_for_writes(sandbox)?;
         file_system
             .copy(source_path, destination_path, options, sandbox)
             .await
@@ -1173,7 +1192,9 @@ fn file_metadata(metadata: std::fs::Metadata, is_symlink: bool) -> FileMetadata 
 }
 
 fn reject_platform_sandbox_context(sandbox: Option<&FileSystemSandboxContext>) -> io::Result<()> {
-    if sandbox.is_some_and(FileSystemSandboxContext::should_run_in_sandbox) {
+    if sandbox.is_some_and(|context| {
+        context.should_read_from_sandbox() || context.should_write_into_sandbox()
+    }) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "sandboxed filesystem operations require configured runtime paths",
