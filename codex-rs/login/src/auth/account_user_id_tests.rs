@@ -3,6 +3,7 @@
 use super::*;
 use base64::Engine;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 
 fn access_token(auth_claims: Value) -> String {

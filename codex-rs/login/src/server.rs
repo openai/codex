@@ -27,10 +27,23 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::callback_params::LIFE_SCIENCES_OAUTH_STATE_SUFFIX;
 use crate::callback_params::LoginCallbackResult;
-use crate::callback_params::login_callback_result_from_state;
+use crate::callback_params::LoginOnboardingEntrypoint;
 use crate::default_client::create_raw_auth_client;
 use crate::default_client::originator;
+use crate::oauth::AuthorizationCodeGrant;
+use crate::oauth::AuthorizationRequest;
+use crate::oauth::CallbackError;
+use crate::oauth::CallbackParameters;
+use crate::oauth::ErrorBodyLimit;
+use crate::oauth::OAuthClient;
+use crate::oauth::OAuthError;
+use crate::oauth::TokenEncoding;
+use crate::oauth::TokenEndpoint;
+use crate::oauth::build_authorization_url;
+use crate::oauth::generate_state;
+use crate::oauth::sanitize_url_for_logging;
 use crate::outbound_proxy::AuthRouteConfig;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
@@ -40,12 +53,10 @@ use crate::success_page::compose_success_url;
 use crate::success_page::jwt_auth_claims;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
-use base64::Engine;
 use chrono::Utc;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_protocol::auth::AuthMode;
 use codex_utils_template::Template;
-use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
 use tiny_http::Request;
@@ -181,7 +192,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &pkce,
         &state,
         opts.forced_chatgpt_workspace_id.as_deref(),
-    );
+    )?;
 
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
@@ -344,54 +355,50 @@ async fn process_request(
 
     match path.as_str() {
         "/auth/callback" => {
-            let params: std::collections::HashMap<String, String> =
-                parsed_url.query_pairs().into_owned().collect();
-            let has_code = params.get("code").is_some_and(|code| !code.is_empty());
-            let has_state = params.get("state").is_some_and(|state| !state.is_empty());
-            let has_error = params.get("error").is_some_and(|error| !error.is_empty());
-            let callback_result = params
-                .get("state")
-                .and_then(|callback_state| login_callback_result_from_state(callback_state, state));
-            let state_valid = callback_result.is_some();
-            info!(
-                path = %path,
-                has_code,
-                has_state,
-                has_error,
-                state_valid,
-                "received login callback"
-            );
-            if !state_valid {
-                warn!(
-                    path = %path,
-                    has_code,
-                    has_state,
-                    has_error,
-                    "login callback state mismatch"
-                );
-                return HandledRequest::Response(
-                    Response::from_string("State mismatch").with_status_code(400),
-                );
+            let mut params = CallbackParameters::from_url(&parsed_url);
+            let mut callback_result = LoginCallbackResult::default();
+            // ChatGPT may append onboarding metadata to the otherwise exact callback state.
+            if let Some(callback_state) = params.state.as_mut()
+                && callback_state.strip_suffix(LIFE_SCIENCES_OAUTH_STATE_SUFFIX) == Some(state)
+            {
+                callback_state.truncate(state.len());
+                callback_result.onboarding_entrypoint =
+                    Some(LoginOnboardingEntrypoint::LifeSciences);
             }
-            if let Some(error_code) = params.get("error") {
-                let error_description = params.get("error_description").map(String::as_str);
-                let message = oauth_callback_error_message(error_code, error_description);
-                eprintln!("OAuth callback error: {message}");
-                warn!(
-                    error_code,
-                    has_error_description = error_description.is_some_and(|s| !s.trim().is_empty()),
-                    "oauth callback returned error"
-                );
-                return login_error_response(
-                    &message,
-                    io::ErrorKind::PermissionDenied,
-                    Some(error_code),
-                    error_description,
-                );
-            }
-            let code = match params.get("code") {
-                Some(c) if !c.is_empty() => c.clone(),
-                _ => {
+            let validation = params.validate(state);
+            let has_code = params.code.as_ref().is_some_and(|code| !code.is_empty());
+            let has_state = params.state.as_ref().is_some_and(|state| !state.is_empty());
+            let has_error = params.error.as_ref().is_some_and(|error| !error.is_empty());
+            let state_valid = !matches!(validation, Err(CallbackError::StateMismatch));
+            info!(%path, has_code, has_state, has_error, state_valid, "received login callback");
+            let code = match validation {
+                Ok(code) => code,
+                Err(CallbackError::StateMismatch) => {
+                    warn!(%path, has_code, has_state, has_error, "login callback state mismatch");
+                    return HandledRequest::Response(
+                        Response::from_string("State mismatch").with_status_code(400),
+                    );
+                }
+                Err(CallbackError::Provider {
+                    code: error_code,
+                    description: error_description,
+                }) => {
+                    let message = oauth_callback_error_message(error_code, error_description);
+                    eprintln!("OAuth callback error: {message}");
+                    warn!(
+                        error_code,
+                        has_error_description =
+                            error_description.is_some_and(|s| !s.trim().is_empty()),
+                        "oauth callback returned error"
+                    );
+                    return login_error_response(
+                        &message,
+                        io::ErrorKind::PermissionDenied,
+                        Some(error_code),
+                        error_description,
+                    );
+                }
+                Err(CallbackError::MissingCode) => {
                     return login_error_response(
                         "Missing authorization code. Sign-in could not be completed.",
                         io::ErrorKind::InvalidData,
@@ -400,14 +407,13 @@ async fn process_request(
                     );
                 }
             };
-            let callback_result = callback_result.unwrap_or_default();
 
             match exchange_code_for_tokens(
                 &opts.issuer,
                 &opts.client_id,
                 redirect_uri,
                 pkce,
-                &code,
+                code,
                 &opts.auth_route_config,
             )
             .await
@@ -580,41 +586,31 @@ fn build_authorize_url(
     pkce: &PkceCodes,
     state: &str,
     forced_chatgpt_workspace_ids: Option<&[String]>,
-) -> String {
-    let mut query = vec![
-        ("response_type".to_string(), "code".to_string()),
-        ("client_id".to_string(), client_id.to_string()),
-        ("redirect_uri".to_string(), redirect_uri.to_string()),
-        (
-            "scope".to_string(),
-            "openid profile email offline_access api.connectors.read api.connectors.invoke"
-                .to_string(),
-        ),
-        (
-            "code_challenge".to_string(),
-            pkce.code_challenge.to_string(),
-        ),
-        ("code_challenge_method".to_string(), "S256".to_string()),
-        ("id_token_add_organizations".to_string(), "true".to_string()),
-        ("codex_cli_simplified_flow".to_string(), "true".to_string()),
-        ("state".to_string(), state.to_string()),
-        ("originator".to_string(), originator().value),
+) -> io::Result<String> {
+    let originator = originator().value;
+    let workspace_ids = forced_chatgpt_workspace_ids.map(|ids| ids.join(","));
+    let mut extra_parameters = vec![
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("originator", originator.as_str()),
     ];
-    if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
-        query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
+    if let Some(workspace_ids) = workspace_ids.as_deref() {
+        extra_parameters.push(("allowed_workspace_id", workspace_ids));
     }
-    let qs = query
-        .into_iter()
-        .map(|(k, v)| format!("{k}={}", urlencoding::encode(&v)))
-        .collect::<Vec<_>>()
-        .join("&");
-    format!("{issuer}/oauth/authorize?{qs}")
-}
-
-fn generate_state() -> String {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    build_authorization_url(AuthorizationRequest {
+        endpoint: &format!("{issuer}/oauth/authorize"),
+        client_id,
+        redirect_uri,
+        scope: Some(
+            "openid profile email offline_access api.connectors.read api.connectors.invoke",
+        ),
+        resource: None,
+        pkce,
+        state,
+        extra_parameters: &extra_parameters,
+    })
+    .map(String::from)
+    .map_err(io::Error::other)
 }
 
 fn send_cancel_request(port: u16) -> io::Result<()> {
@@ -695,111 +691,13 @@ fn bind_server(port: u16) -> io::Result<Server> {
 }
 
 /// Tokens returned by the OAuth authorization-code exchange.
+#[derive(serde::Deserialize)]
 pub(crate) struct ExchangedTokens {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TokenEndpointErrorDetail {
-    error_code: Option<String>,
-    error_message: Option<String>,
-    display_message: String,
-}
-
-impl std::fmt::Display for TokenEndpointErrorDetail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display_message.fmt(f)
-    }
-}
-
-const REDACTED_URL_VALUE: &str = "<redacted>";
-const SENSITIVE_URL_QUERY_KEYS: &[&str] = &[
-    "access_token",
-    "api_key",
-    "client_secret",
-    "code",
-    "code_verifier",
-    "id_token",
-    "key",
-    "refresh_token",
-    "requested_token",
-    "state",
-    "subject_token",
-    "token",
-];
-
-fn redact_sensitive_query_value(key: &str, value: &str) -> String {
-    if SENSITIVE_URL_QUERY_KEYS
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(key))
-    {
-        REDACTED_URL_VALUE.to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-/// Redacts URL components that commonly carry auth secrets while preserving the host/path shape.
-///
-/// This keeps developer-facing logs useful for debugging transport failures without persisting
-/// tokens, callback codes, fragments, or embedded credentials.
-fn redact_sensitive_url_parts(url: &mut url::Url) {
-    let _ = url.set_username("");
-    let _ = url.set_password(None);
-    url.set_fragment(None);
-
-    let query_pairs = url
-        .query_pairs()
-        .map(|(key, value)| {
-            let key = key.into_owned();
-            let value = value.into_owned();
-            (key.clone(), redact_sensitive_query_value(&key, &value))
-        })
-        .collect::<Vec<_>>();
-
-    if query_pairs.is_empty() {
-        url.set_query(None);
-        return;
-    }
-
-    let redacted_query = query_pairs
-        .into_iter()
-        .fold(
-            url::form_urlencoded::Serializer::new(String::new()),
-            |mut serializer, (key, value)| {
-                serializer.append_pair(&key, &value);
-                serializer
-            },
-        )
-        .finish();
-    url.set_query(Some(&redacted_query));
-}
-
-/// Redacts any URL attached to an HTTP transport error before it is logged or returned.
-fn redact_sensitive_error_url(
-    mut err: codex_http_client::HttpError,
-) -> codex_http_client::HttpError {
-    if let Some(url) = err.url_mut() {
-        redact_sensitive_url_parts(url);
-    }
-    err
-}
-
-/// Sanitizes a free-form URL string for structured logging.
-///
-/// This is used for caller-supplied issuer values, which may contain credentials or query
-/// parameters on non-default deployments.
-fn sanitize_url_for_logging(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(mut url) => {
-            redact_sensitive_url_parts(&mut url);
-            url.to_string()
-        }
-        Err(_) => "<invalid-url>".to_string(),
-    }
-}
 /// Exchanges an authorization code for tokens.
 ///
 /// The returned error remains suitable for user-facing CLI/browser surfaces, so backend-provided
@@ -814,72 +712,61 @@ pub(crate) async fn exchange_code_for_tokens(
     code: &str,
     auth_route_config: &AuthRouteConfig,
 ) -> io::Result<ExchangedTokens> {
-    #[derive(serde::Deserialize)]
-    struct TokenResponse {
-        id_token: String,
-        access_token: String,
-        refresh_token: String,
-    }
-
-    // The route selected for the issuer is reused for token exchange; the token endpoint path is
-    // not resolved separately.
+    // Reuse the route selected for the issuer, rather than resolving the token path again.
     let client = create_raw_auth_client(issuer.trim_end_matches('/'), auth_route_config)?;
-    let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    let endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    let oauth = OAuthClient::new(
+        &client,
+        TokenEndpoint {
+            url: &endpoint,
+            client_id,
+            encoding: TokenEncoding::Form,
+            timeout: None,
+            error_body_limit: ErrorBodyLimit::Unlimited,
+        },
+    );
     info!(
         issuer = %sanitize_url_for_logging(issuer),
-        token_endpoint = %sanitize_url_for_logging(&token_endpoint),
-        redirect_uri = %redirect_uri,
+        token_endpoint = %sanitize_url_for_logging(&endpoint),
+        %redirect_uri,
         "starting oauth token exchange"
     );
-    let resp = client
-        .post(token_endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-            urlencoding::encode(code),
-            urlencoding::encode(redirect_uri),
-            urlencoding::encode(client_id),
-            urlencoding::encode(&pkce.code_verifier)
-        ))
-        .send()
-        .await;
-    let resp = match resp {
-        Ok(resp) => resp,
-        Err(error) => {
-            let error = redact_sensitive_error_url(error);
+    match oauth
+        .exchange_code(AuthorizationCodeGrant {
+            code,
+            redirect_uri,
+            pkce,
+            resource: None,
+        })
+        .await
+    {
+        Ok(tokens) => {
+            info!("oauth token exchange succeeded");
+            Ok(tokens)
+        }
+        Err(OAuthError::Rejected(rejection)) => {
+            if let Some(error) = rejection.body_read_error {
+                return Err(io::Error::other(error));
+            }
+            warn!(
+                status = %rejection.status,
+                detail = ?rejection.detail,
+                "oauth token exchange returned non-success status"
+            );
+            Err(io::Error::other(rejection.to_string()))
+        }
+        Err(OAuthError::Transport(error)) => {
             error!(
                 is_timeout = error.is_timeout(),
                 is_connect = error.is_connect(),
                 is_request = error.is_request(),
-                error = %error,
+                %error,
                 "oauth token exchange transport failure"
             );
-            return Err(io::Error::other(error));
+            Err(io::Error::other(error))
         }
-    };
-
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.map_err(io::Error::other)?;
-        let detail = parse_token_endpoint_error(&body);
-        warn!(
-            %status,
-            error_code = detail.error_code.as_deref().unwrap_or("unknown"),
-            error_message = detail.error_message.as_deref().unwrap_or("unknown"),
-            "oauth token exchange returned non-success status"
-        );
-        return Err(io::Error::other(format!(
-            "token endpoint returned status {status}: {detail}"
-        )));
+        Err(error @ OAuthError::InvalidResponse) => Err(io::Error::other(error)),
     }
-
-    let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
-    info!(%status, "oauth token exchange succeeded");
-    Ok(ExchangedTokens {
-        id_token: tokens.id_token,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-    })
 }
 
 /// Persists exchanged credentials using the configured local auth store.
@@ -1010,75 +897,6 @@ fn oauth_callback_error_message(error_code: &str, error_description: Option<&str
     format!("Sign-in failed: {error_code}")
 }
 
-/// Extracts token endpoint error detail for both structured logging and caller-visible errors.
-///
-/// Parsed JSON fields are safe to log individually. If the response is not JSON, the raw body is
-/// preserved only for the returned error path so the CLI/browser can still surface the backend
-/// detail, while the structured log path continues to use the explicitly parsed safe fields above.
-fn parse_token_endpoint_error(body: &str) -> TokenEndpointErrorDetail {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return TokenEndpointErrorDetail {
-            error_code: None,
-            error_message: None,
-            display_message: "unknown error".to_string(),
-        };
-    }
-
-    let parsed = serde_json::from_str::<JsonValue>(trimmed).ok();
-    if let Some(json) = parsed {
-        let error_code = json
-            .get("error")
-            .and_then(JsonValue::as_str)
-            .filter(|error_code| !error_code.trim().is_empty())
-            .map(ToString::to_string)
-            .or_else(|| {
-                json.get("error")
-                    .and_then(JsonValue::as_object)
-                    .and_then(|error_obj| error_obj.get("code"))
-                    .and_then(JsonValue::as_str)
-                    .filter(|code| !code.trim().is_empty())
-                    .map(ToString::to_string)
-            });
-        if let Some(description) = json.get("error_description").and_then(JsonValue::as_str)
-            && !description.trim().is_empty()
-        {
-            return TokenEndpointErrorDetail {
-                error_code,
-                error_message: Some(description.to_string()),
-                display_message: description.to_string(),
-            };
-        }
-        if let Some(error_obj) = json.get("error")
-            && let Some(message) = error_obj.get("message").and_then(JsonValue::as_str)
-            && !message.trim().is_empty()
-        {
-            return TokenEndpointErrorDetail {
-                error_code,
-                error_message: Some(message.to_string()),
-                display_message: message.to_string(),
-            };
-        }
-        if let Some(error_code) = error_code {
-            return TokenEndpointErrorDetail {
-                display_message: error_code.clone(),
-                error_code: Some(error_code),
-                error_message: None,
-            };
-        }
-    }
-
-    // Preserve non-JSON token-endpoint bodies for the returned error so CLI/browser flows still
-    // surface the backend detail users and admins need, but keep that text out of structured logs
-    // by only logging explicitly parsed fields above and avoiding `%err` logging at the callback
-    // layer.
-    TokenEndpointErrorDetail {
-        error_code: None,
-        error_message: None,
-        display_message: trimmed.to_string(),
-    }
-}
-
 /// Renders the branded error page used by callback failures.
 fn render_login_error_page(
     message: &str,
@@ -1172,114 +990,9 @@ pub(crate) async fn obtain_api_key(
 }
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::TokenEndpointErrorDetail;
     use super::html_escape;
     use super::is_missing_codex_entitlement_error;
-    use super::parse_token_endpoint_error;
-    use super::redact_sensitive_query_value;
-    use super::redact_sensitive_url_parts;
     use super::render_login_error_page;
-    use super::sanitize_url_for_logging;
-
-    #[test]
-    fn parse_token_endpoint_error_prefers_error_description() {
-        let detail = parse_token_endpoint_error(
-            r#"{"error":"invalid_grant","error_description":"refresh token expired"}"#,
-        );
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: Some("invalid_grant".to_string()),
-                error_message: Some("refresh token expired".to_string()),
-                display_message: "refresh token expired".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_token_endpoint_error_reads_nested_error_message_and_code() {
-        let detail = parse_token_endpoint_error(
-            r#"{"error":{"code":"proxy_auth_required","message":"proxy authentication required"}}"#,
-        );
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: Some("proxy_auth_required".to_string()),
-                error_message: Some("proxy authentication required".to_string()),
-                display_message: "proxy authentication required".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_token_endpoint_error_falls_back_to_error_code() {
-        let detail = parse_token_endpoint_error(r#"{"error":"temporarily_unavailable"}"#);
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: Some("temporarily_unavailable".to_string()),
-                error_message: None,
-                display_message: "temporarily_unavailable".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_token_endpoint_error_preserves_plain_text_for_display() {
-        let detail = parse_token_endpoint_error("service unavailable");
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: None,
-                error_message: None,
-                display_message: "service unavailable".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn redact_sensitive_query_value_only_scrubs_known_keys() {
-        assert_eq!(
-            redact_sensitive_query_value("code", "abc123"),
-            "<redacted>".to_string()
-        );
-        assert_eq!(
-            redact_sensitive_query_value("redirect_uri", "http://localhost:1455/auth/callback"),
-            "http://localhost:1455/auth/callback".to_string()
-        );
-    }
-
-    #[test]
-    fn redact_sensitive_url_parts_preserves_safe_url_shape() {
-        let mut url = url::Url::parse(
-            "https://user:pass@auth.openai.com/oauth/token?code=abc123&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback#frag",
-        )
-        .expect("valid url");
-
-        redact_sensitive_url_parts(&mut url);
-
-        assert_eq!(
-            url.as_str(),
-            "https://auth.openai.com/oauth/token?code=%3Credacted%3E&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"
-        );
-    }
-
-    #[test]
-    fn sanitize_url_for_logging_redacts_sensitive_issuer_parts() {
-        let redacted =
-            sanitize_url_for_logging("https://user:pass@example.com/base?token=abc123&env=prod");
-
-        assert_eq!(
-            redacted,
-            "https://example.com/base?token=%3Credacted%3E&env=prod".to_string()
-        );
-    }
 
     #[test]
     fn render_login_error_page_escapes_dynamic_fields() {

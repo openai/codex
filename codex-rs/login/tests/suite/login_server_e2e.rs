@@ -151,6 +151,31 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let client = HttpClientBuilder::new()
         .without_redirects()
         .build_direct()?;
+    // Reject unrecognized metadata before processing codes or provider errors.
+    for state in [
+        "wrong_state.onboarding_entrypoint=life_sciences",
+        "test_state_123.onboarding_entrypoint=unknown",
+        "test_state_123.onboarding_entrypoint=life_sciences.onboarding_entrypoint=life_sciences",
+        "test_state_123.extra=value.onboarding_entrypoint=life_sciences",
+    ] {
+        let response = client
+            .get(format!("http://127.0.0.1:{login_port}/auth/callback"))
+            .query(&[
+                ("state", state),
+                ("code", "untrusted"),
+                ("error", "access_denied"),
+            ])
+            .send()
+            .await?;
+        assert_eq!(response.status(), 400);
+        assert_eq!(response.text().await?, "State mismatch");
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(
+            codex_home.join("auth.json")
+        )?)?,
+        stale_auth
+    );
     let url = format!(
         "http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123.onboarding_entrypoint=life_sciences"
     );

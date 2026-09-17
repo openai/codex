@@ -3,7 +3,6 @@ mod workspace_routing;
 use chrono::Utc;
 use http::StatusCode;
 use serde::Deserialize;
-use serde::Serialize;
 #[cfg(test)]
 use serial_test::serial;
 use std::env;
@@ -58,9 +57,15 @@ pub use crate::auth::storage::AuthDotJson;
 pub use crate::auth::storage::AuthKeyringBackendKind;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
-use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
 use crate::default_client::create_default_auth_client;
+use crate::oauth::ErrorBodyLimit;
+use crate::oauth::OAuthClient;
+use crate::oauth::OAuthError;
+use crate::oauth::RefreshTokenGrant;
+use crate::oauth::TokenEncoding;
+use crate::oauth::TokenEndpoint;
+use crate::oauth::TokenErrorDetail;
 use crate::outbound_proxy::AuthRouteConfig;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_account_user_id;
@@ -76,7 +81,6 @@ use codex_protocol::auth::PlanType as InternalPlanType;
 use codex_protocol::auth::RefreshTokenFailedError;
 use codex_protocol::auth::RefreshTokenFailedReason;
 use codex_protocol::protocol::SessionSource;
-use serde_json::Value;
 use thiserror::Error;
 pub use workspace_routing::WorkspaceRouting;
 pub use workspace_routing::WorkspaceRoutingRequest;
@@ -1608,58 +1612,54 @@ async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &HttpClient,
 ) -> Result<RefreshResponse, RefreshTokenError> {
-    let refresh_request = RefreshRequest {
-        client_id: oauth_client_id(),
-        grant_type: "refresh_token",
-        refresh_token,
-    };
+    let client_id = oauth_client_id();
     let endpoint = refresh_token_endpoint();
-
-    // Use shared client factory to include standard headers
-    let response = client
-        .post(endpoint.as_str())
-        .header("Content-Type", "application/json")
-        .json(&refresh_request)
-        .send()
+    let oauth = OAuthClient::new(
+        client,
+        TokenEndpoint {
+            url: &endpoint,
+            client_id: &client_id,
+            encoding: TokenEncoding::Json,
+            timeout: None,
+            error_body_limit: ErrorBodyLimit::Unlimited,
+        },
+    );
+    match oauth
+        .refresh(RefreshTokenGrant {
+            refresh_token: &refresh_token,
+            resource: None,
+        })
         .await
-        .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
-
-    let status = response.status();
-    if status.is_success() {
-        let refresh_response = response
-            .json::<RefreshResponse>()
-            .await
-            .map_err(|err| RefreshTokenError::Transient(std::io::Error::other(err)))?;
-        Ok(refresh_response)
-    } else {
-        let body = response.text().await.unwrap_or_default();
-        tracing::error!("Failed to refresh token: {status}: {body}");
-        let code = extract_refresh_token_error_code(&body);
-        // RFC 6749 reports an unusable refresh token as invalid_grant without preserving
-        // the legacy expired/reused/revoked subtype. Keep it terminal with the generic reason.
-        let is_invalid_grant_bad_request = status == StatusCode::BAD_REQUEST
-            && code
-                .as_deref()
-                .is_some_and(|code| code.eq_ignore_ascii_case("invalid_grant"));
-        let failed =
-            classify_refresh_token_failure(code.as_deref(), &body, is_invalid_grant_bad_request);
-        if status == StatusCode::UNAUTHORIZED
-            || failed.reason != RefreshTokenFailedReason::Other
-            || is_invalid_grant_bad_request
-        {
-            Err(RefreshTokenError::Permanent(failed))
-        } else {
-            let message = try_parse_error_message(&body);
-            Err(RefreshTokenError::Transient(std::io::Error::other(
-                format!("Failed to refresh token: {status}: {message}"),
-            )))
+    {
+        Ok(response) => Ok(response),
+        Err(OAuthError::Rejected(rejection)) => {
+            let status = rejection.status;
+            let detail = &rejection.detail;
+            tracing::error!(%status, ?detail, "Failed to refresh token");
+            let code = detail.error_code();
+            let is_invalid_grant_bad_request = status == StatusCode::BAD_REQUEST
+                && code.is_some_and(|code| code.eq_ignore_ascii_case("invalid_grant"));
+            let failed = classify_refresh_token_failure(code, detail, is_invalid_grant_bad_request);
+            if status == StatusCode::UNAUTHORIZED
+                || failed.reason != RefreshTokenFailedReason::Other
+                || is_invalid_grant_bad_request
+            {
+                Err(RefreshTokenError::Permanent(failed))
+            } else {
+                Err(RefreshTokenError::Transient(std::io::Error::other(
+                    format!("Failed to refresh token: {status}: {detail}"),
+                )))
+            }
+        }
+        Err(error @ (OAuthError::Transport(_) | OAuthError::InvalidResponse)) => {
+            Err(RefreshTokenError::Transient(std::io::Error::other(error)))
         }
     }
 }
 
 fn classify_refresh_token_failure(
     code: Option<&str>,
-    body: &str,
+    detail: &TokenErrorDetail,
     is_invalid_grant_bad_request: bool,
 ) -> RefreshTokenFailedError {
     let normalized_code = code.map(str::to_ascii_lowercase);
@@ -1672,8 +1672,7 @@ fn classify_refresh_token_failure(
 
     if reason == RefreshTokenFailedReason::Other && !is_invalid_grant_bad_request {
         tracing::warn!(
-            backend_code = normalized_code.as_deref(),
-            backend_body = body,
+            backend_detail = ?detail,
             "Encountered unknown response while refreshing token"
         );
     }
@@ -1686,39 +1685,6 @@ fn classify_refresh_token_failure(
     };
 
     RefreshTokenFailedError::new(reason, message)
-}
-
-fn extract_refresh_token_error_code(body: &str) -> Option<String> {
-    if body.trim().is_empty() {
-        return None;
-    }
-
-    let Value::Object(map) = serde_json::from_str::<Value>(body).ok()? else {
-        return None;
-    };
-
-    if let Some(error_value) = map.get("error") {
-        match error_value {
-            Value::Object(obj) => {
-                if let Some(code) = obj.get("code").and_then(Value::as_str) {
-                    return Some(code.to_string());
-                }
-            }
-            Value::String(code) => {
-                return Some(code.to_string());
-            }
-            _ => {}
-        }
-    }
-
-    map.get("code").and_then(Value::as_str).map(str::to_string)
-}
-
-#[derive(Serialize)]
-struct RefreshRequest {
-    client_id: String,
-    grant_type: &'static str,
-    refresh_token: String,
 }
 
 #[derive(Deserialize, Clone)]
