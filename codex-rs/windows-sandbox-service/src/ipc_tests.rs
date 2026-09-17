@@ -1,3 +1,4 @@
+use super::MAX_RESPONSE_MESSAGE_BYTES;
 use super::OwnedHandle;
 use super::PipeConnection;
 use super::ServiceRequest;
@@ -8,6 +9,7 @@ use super::pin_existing_ancestors;
 use super::pipe_security_descriptor;
 use super::refresh_session;
 use super::request::ProvisioningRequest;
+use super::response_error_message;
 use super::validate_request;
 use super::wake;
 use codex_windows_sandbox::DirectoryOpenDisposition;
@@ -36,6 +38,22 @@ use windows_sys::Win32::Foundation as foundation;
 use windows_sys::Win32::Storage::FileSystem as filesystem;
 use windows_sys::Win32::Storage::Packaging::Appx;
 use windows_sys::Win32::System::Pipes as pipes;
+
+#[test]
+fn provisioning_error_response_preserves_causes_within_message_limits() {
+    let error = anyhow::anyhow!("Windows error\t5\n")
+        .context("load profile")
+        .context("registered sandbox provisioning failed");
+    assert_eq!(
+        response_error_message(&error),
+        "registered sandbox provisioning failed: load profile: Windows error 5 "
+    );
+
+    let error = anyhow::anyhow!("é".repeat(MAX_RESPONSE_MESSAGE_BYTES)).context("setup");
+    let message = response_error_message(&error);
+    assert!(message.starts_with("setup: é"));
+    assert_eq!(message.len(), MAX_RESPONSE_MESSAGE_BYTES - 1);
+}
 
 #[test]
 fn session_refresh_observes_cleanup_completion_before_dispatch() {
