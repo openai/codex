@@ -269,6 +269,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_mcp_manager(
         client_mcp_extensions: ClientMcpExtensions::default(),
         auth: auth.clone(),
         auth_manager: codex_apps_auth_manager,
+        allow_user_interaction: true,
         elicitation_reviewer: None,
         elicitation_lifecycle: None,
     })

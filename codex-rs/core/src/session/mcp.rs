@@ -556,16 +556,20 @@ impl Session {
         server_name: String,
         request_id: RequestId,
         request: ElicitationRequest,
-    ) -> McpServerElicitationOutcome {
+    ) -> anyhow::Result<McpServerElicitationOutcome> {
+        anyhow::ensure!(
+            !turn_context.session_source.is_non_root_agent(),
+            codex_mcp::MCP_ELICITATION_HANDOFF_MESSAGE
+        );
         if self.services.mcp_runtime.elicitations_auto_deny() {
-            return McpServerElicitationOutcome {
+            return Ok(McpServerElicitationOutcome {
                 response: Some(ElicitationResponse {
                     action: codex_rmcp_client::ElicitationAction::Accept,
                     content: Some(serde_json::json!({})),
                     meta: None,
                 }),
                 sent: false,
-            };
+            });
         }
 
         let _elicitation = self.services.elicitations.register();
@@ -617,10 +621,10 @@ impl Session {
                     plugin_install_telemetry.tool_name.as_str(),
                 );
         }
-        McpServerElicitationOutcome {
+        Ok(McpServerElicitationOutcome {
             response: rx_response.await.ok(),
             sent: true,
-        }
+        })
     }
 
     #[expect(

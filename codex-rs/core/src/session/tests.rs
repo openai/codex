@@ -87,6 +87,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::EnvironmentConfigState;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::request_permissions::PermissionGrantScope;
@@ -652,7 +653,8 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
                 }),
             },
         )
-        .await;
+        .await
+        .expect("root thread elicitation should be accepted");
 
     assert_eq!(
         response.response,
@@ -664,6 +666,58 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     );
     assert!(!response.sent);
     assert!(rx.try_recv().is_err());
+}
+
+#[test_case(false; "interactive")]
+#[test_case(true; "auto_accept")]
+#[tokio::test]
+async fn request_mcp_server_elicitation_rejects_non_root_threads(auto_deny: bool) {
+    for source in [
+        SessionSource::SubAgent(SubAgentSource::Review),
+        SessionSource::Internal(InternalSessionSource::Guardian),
+    ] {
+        let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+        Arc::get_mut(&mut turn_context)
+            .expect("turn context should not be shared")
+            .session_source = source;
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        session
+            .services
+            .mcp_runtime
+            .set_elicitations_auto_deny(auto_deny);
+        let paused = session.subscribe_elicitation_pause_state();
+
+        let Err(error) = tokio::time::timeout(
+            Duration::from_secs(1),
+            session.request_mcp_server_elicitation(
+                turn_context.as_ref(),
+                "codex_apps".to_string(),
+                RequestId::String("request-1".into()),
+                ElicitationRequest::Url {
+                    meta: None,
+                    message: "Connect this app to continue.".to_string(),
+                    url: "https://example.com/connect".to_string(),
+                    elicitation_id: "connect-1".to_string(),
+                },
+            ),
+        )
+        .await
+        .expect("non-root elicitation must not wait for user input") else {
+            panic!("non-root elicitation must be rejected");
+        };
+
+        assert_eq!(
+            error.to_string(),
+            codex_mcp::MCP_ELICITATION_HANDOFF_MESSAGE
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(!*paused.borrow());
+        assert!(
+            !paused
+                .has_changed()
+                .expect("elicitation service should remain available")
+        );
+    }
 }
 
 #[tokio::test]

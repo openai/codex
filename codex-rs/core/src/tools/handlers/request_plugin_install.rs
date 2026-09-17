@@ -254,7 +254,8 @@ impl RequestPluginInstallHandler {
                 request_id,
                 request,
             )
-            .await;
+            .await
+            .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
         let response = elicitation.response;
         if let Some(response) = response.as_ref() {
             maybe_persist_disabled_install_request(&session, &turn, &tool, response).await;

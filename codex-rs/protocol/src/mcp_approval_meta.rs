@@ -3,7 +3,10 @@
 /// form-forwarding safeguards.
 pub const APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 pub const APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
+pub const APPROVAL_KIND_BROWSER_AUTH: &str = "browser_auth";
 pub const APPROVAL_KIND_TOOL_SUGGESTION: &str = "tool_suggestion";
+/// Marks requests that need user input even when their form schema is empty.
+pub const REQUIRES_USER_INPUT_KEY: &str = "codex_requires_user_input";
 pub const REQUEST_TYPE_KEY: &str = "codex_request_type";
 pub const REQUEST_TYPE_APPROVAL_REQUEST: &str = "approval_request";
 pub const STRICT_AUTO_REVIEW_KEY: &str = "codex_strict_auto_review";
