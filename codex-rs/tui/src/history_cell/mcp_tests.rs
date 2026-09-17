@@ -134,6 +134,141 @@ fn result(content: Vec<Value>) -> CallToolResult {
 }
 
 #[test]
+fn code_mode_output_shares_a_row_budget_across_blocks() {
+    let mut cell = new_active_mcp_tool_call(
+        "browser-call".to_string(),
+        McpInvocation {
+            server: "node_repl".to_string(),
+            tool: "js".to_string(),
+            arguments: Some(json!({"title": "Inspect page", "code": "await tab.snapshot()"})),
+        },
+        /*animations_enabled*/ false,
+    );
+    cell.complete(
+        Duration::ZERO,
+        Ok(result(vec![
+            json!({"type": "text", "text": "Script completed\nOutput:\n"}),
+            json!({"type": "text", "text": "Page title\nNavigation\nMain content"}),
+            json!({"type": "text", "text": "Button\nLink\nFooter"}),
+        ])),
+    );
+
+    let display = cell
+        .display_lines(/*width*/ 40)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(display, @"
+    • Called Inspect page
+      └ Page title
+        Navigation
+        … more · ctrl+t
+        Link
+        Footer
+    ");
+    let transcript = cell
+        .transcript_lines(/*width*/ 100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(transcript.contains("await tab.snapshot()"));
+    assert!(transcript.ends_with("    Button\n    Link\n    Footer"));
+}
+
+#[test]
+fn code_mode_output_keeps_trailing_failure_diagnostics() {
+    let mut cell = new_active_mcp_tool_call(
+        "browser-error".to_string(),
+        McpInvocation {
+            server: "node_repl".to_string(),
+            tool: "js".to_string(),
+            arguments: Some(json!({"title": "Inspect page"})),
+        },
+        /*animations_enabled*/ false,
+    );
+    cell.complete(
+        Duration::ZERO,
+        Ok(CallToolResult {
+            is_error: Some(true),
+            ..result(vec![
+                json!({"type": "text", "text": "Script failed"}),
+                json!({"type": "text", "text": "Page title\nNavigation\nMain content\nButton\nLink\nFooter"}),
+                json!({"type": "text", "text": "Script error:\npermission denied"}),
+            ])
+        }),
+    );
+    let display = cell
+        .display_lines(/*width*/ 40)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(display, @"
+    • Called Inspect page
+      └ Script failed
+        Page title
+        … more · ctrl+t
+        Script error:
+        permission denied
+    ");
+}
+
+#[test]
+fn code_mode_output_row_budget_applies_after_wrapping_and_to_errors() {
+    let output = format!("{}\ntranscript tail", "Browser 页面 👩‍💻\n".repeat(40));
+    for server in ["node_repl", "cua_repl"] {
+        for completion in [
+            Ok(result(vec![json!({"type": "text", "text": output})])),
+            Ok(result(vec![json!({
+                "type": "text",
+                "text": format!("https://example.com/{}\ntranscript tail", "页面".repeat(100)),
+            })])),
+            Ok(CallToolResult {
+                is_error: Some(true),
+                ..result(vec![json!({"type": "text", "text": output})])
+            }),
+            Err(output.clone()),
+        ] {
+            let mut cell = new_active_mcp_tool_call(
+                "browser-call".to_string(),
+                McpInvocation {
+                    server: server.to_string(),
+                    tool: "js".to_string(),
+                    arguments: Some(json!({"title": "Inspect"})),
+                },
+                /*animations_enabled*/ false,
+            );
+            cell.complete(Duration::ZERO, completion);
+            for width in [20, 40, 80] {
+                let display = cell.display_lines(width);
+                assert_eq!(display.len(), 1 + TOOL_CALL_MAX_LINES);
+                assert!(
+                    display
+                        .iter()
+                        .all(|line| line.width() <= usize::from(width))
+                );
+                assert_eq!(display[3].to_string(), "    … more · ctrl+t");
+                let transcript = cell
+                    .transcript_lines(width)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    transcript
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .contains("transcript tail")
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn projected_content_preserves_width_dependent_rendering() {
     let text = "{\"result\": [1, 2, 3], \"text\": \"long output 🦀\"}";
     let malformed = json!({"type": "image", "data": PNG});

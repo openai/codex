@@ -1,4 +1,6 @@
 //! MCP tool-call, inventory, and output history cells.
+//! Code-mode output previews share a rendered-row budget across all result blocks;
+//! the expanded transcript retains the full text.
 
 use super::*;
 
@@ -273,6 +275,22 @@ impl McpToolCallCell {
                     );
                     detail_lines.extend(wrapped.iter().map(line_to_static));
                 }
+            }
+        }
+
+        if compact {
+            // Adaptive wrapping keeps URLs intact; split overlong preview rows before counting
+            // them so a URL cannot exceed the budget. The transcript keeps the original URL.
+            detail_lines = crate::wrapping::word_wrap_lines(detail_lines, detail_wrap_width);
+            if detail_lines.len() > TOOL_CALL_MAX_LINES {
+                // Retain the tail so stdout cannot crowd out a trailing failure diagnostic.
+                let tail = detail_lines.split_off(detail_lines.len() - TOOL_CALL_MAX_LINES / 2);
+                detail_lines.truncate((TOOL_CALL_MAX_LINES - 1) / 2);
+                detail_lines.push(crate::line_truncation::truncate_line_to_width(
+                    "… more · ctrl+t".dim().into(),
+                    detail_wrap_width,
+                ));
+                detail_lines.extend(tail);
             }
         }
 
