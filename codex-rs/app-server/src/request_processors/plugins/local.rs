@@ -12,30 +12,14 @@ impl PluginRequestProcessor {
         &self,
         cwds: &[AbsolutePathBuf],
     ) -> Result<Config, JSONRPCErrorError> {
-        let config = if cwds.is_empty() {
+        if cwds.is_empty() {
             self.config_manager
                 .load_non_project_config()
                 .await
                 .map_err(|err| internal_error(format!("failed to reload config: {err}")))
         } else {
             self.load_latest_config(/*fallback_cwd*/ None).await
-        }?;
-        // TODO(sites-migration): Remove this initial migration wait after bundled Sites is retired.
-        let auth = self.auth_manager.auth().await;
-        match Box::pin(
-            self.thread_manager
-                .plugins_manager()
-                .ensure_sites_migration_ready(&config.plugins_config_input(), auth.as_ref()),
-        )
-        .await
-        {
-            Ok(Some(change)) => (self.effective_plugins_changed_callback())(change),
-            Ok(None) => {}
-            Err(err) => {
-                warn!(error = %err, "Sites migration refresh failed; preserving local plugins")
-            }
         }
-        Ok(config)
     }
 
     pub(super) async fn load_marketplace_context(

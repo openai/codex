@@ -838,8 +838,15 @@ async fn legacy_plugin_skill_prompt_remains_complete() -> Result<()> {
     Ok(())
 }
 
+#[test_case(true, true, (true, false); "enabled remote supersedes bundled")]
+#[test_case(false, true, (false, false); "disabled remote does not reactivate bundled")]
+#[test_case(true, false, (false, true); "missing remote bundle preserves bundled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sites_migration_agent_turn_prefers_loadable_remote_sites() -> Result<()> {
+async fn sites_compatibility_guard_in_agent_turn(
+    remote_enabled: bool,
+    cache_remote_sites: bool,
+    expected_skills: (bool, bool),
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let response = mount_sse_once(
@@ -863,7 +870,7 @@ async fn sites_migration_agent_turn_prefers_loadable_remote_sites() -> Result<()
                     "description": "Sites",
                     "interface": {},
                 },
-                "enabled": true,
+                "enabled": remote_enabled,
             }],
             "pagination": {"next_page_token": null},
         })))
@@ -885,6 +892,9 @@ enabled = true
         ("openai-bundled", "bundled-sites"),
         ("openai-curated-remote", "remote-sites"),
     ] {
+        if marketplace == "openai-curated-remote" && !cache_remote_sites {
+            continue;
+        }
         let root = codex_home
             .path()
             .join(format!("plugins/cache/{marketplace}/sites/local"));
@@ -933,7 +943,7 @@ enabled = true
             developer_text.contains("sites:remote-sites"),
             developer_text.contains("sites:bundled-sites"),
         ),
-        (true, false),
+        expected_skills,
         "unexpected Sites skills in developer prompt: {developer_text:?}"
     );
     Ok(())

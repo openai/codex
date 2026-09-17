@@ -77,7 +77,7 @@ host_pattern = '^github[.]com$'
             assert_eq!(
                 manager
                     .install_plugin(
-                        config,
+                        &config.config_layer_stack,
                         PluginInstallRequest {
                             plugin_name: "sample".to_string(),
                             marketplace_path: AbsolutePathBuf::try_from(manifest.clone()).unwrap(),

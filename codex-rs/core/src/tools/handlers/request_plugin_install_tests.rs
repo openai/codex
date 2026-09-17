@@ -113,7 +113,7 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
 
     plugins_manager
         .install_plugin(
-            &config.plugins_config_input(),
+            &config.config_layer_stack,
             PluginInstallRequest {
                 plugin_name: "sample".to_string(),
                 marketplace_path: AbsolutePathBuf::try_from(

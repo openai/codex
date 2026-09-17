@@ -1081,7 +1081,7 @@ async fn install_marketplace_plugin(codex_home: &Path, marketplace_root: &Path, 
     let config = load_plugins_config(codex_home, marketplace_root).await;
     test_plugins_manager(codex_home.to_path_buf())
         .install_plugin(
-            &config,
+            &config.config_layer_stack,
             PluginInstallRequest {
                 plugin_name: plugin_name.to_string(),
                 marketplace_path: AbsolutePathBuf::try_from(

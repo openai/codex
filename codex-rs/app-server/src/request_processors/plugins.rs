@@ -1492,7 +1492,7 @@ impl PluginRequestProcessor {
         };
 
         let result = match plugins_manager
-            .install_plugin(&config.plugins_config_input(), request)
+            .install_plugin(&config.config_layer_stack, request)
             .await
         {
             Ok(result) => result,

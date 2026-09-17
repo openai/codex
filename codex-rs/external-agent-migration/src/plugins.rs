@@ -223,7 +223,7 @@ impl ExternalAgentConfigService {
             for plugin_name in plugin_names {
                 match plugins_manager
                     .install_plugin(
-                        &install_config.plugins_config_input(),
+                        &install_config.config_layer_stack,
                         PluginInstallRequest {
                             plugin_name: plugin_name.clone(),
                             marketplace_path: marketplace_path.clone(),
