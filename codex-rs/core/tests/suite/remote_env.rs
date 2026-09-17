@@ -2021,6 +2021,7 @@ async fn future_pending_environment_can_finish_without_retargeting_the_active_tu
         permission_profile: PermissionProfileSnapshot::legacy(PermissionProfile::read_only()),
         shell_environment_policy: Default::default(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+        windows_sandbox_type: test.config.permissions.windows_sandbox_type,
         windows_sandbox_private_desktop: test.config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: test.config.features.use_legacy_landlock(),
         exec_policy: None,
