@@ -39,5 +39,5 @@ expression: messages
   Run /import again to check for additional items.
 No compatible setup was found to import.
 Import from other apps is unavailable in remote sessions. Start Codex locally and run /import.
-Import from other apps is unavailable while Codex is connected to the local app-server daemon. Stop the daemon, restart Codex, and run /import.
+Import from other apps is unavailable while Codex is connected to the local app-server daemon. Restart with `codex --no-daemon` and run /import.
 A previous external agent import is still running. Wait for it to finish before importing again.

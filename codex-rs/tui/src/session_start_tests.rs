@@ -67,6 +67,7 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
         let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
         for server_target in [
             crate::AppServerTarget::LocalDaemon {
+                allow_embedded_fallback: true,
                 endpoint: endpoint.clone(),
             },
             crate::AppServerTarget::Remote { endpoint },

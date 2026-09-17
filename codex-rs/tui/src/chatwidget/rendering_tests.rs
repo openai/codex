@@ -373,6 +373,7 @@ async fn external_writer_notice_offers_command_center_on_shared_servers() {
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500").unwrap();
     for target in [
         crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         },
         crate::AppServerTarget::Remote { endpoint },

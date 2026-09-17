@@ -33,6 +33,7 @@ async fn run_startup_for_test(
         Duration::ZERO,
         Some(bootstrap),
         /*startup_hooks_browser*/ None,
+        /*daemon_startup_warning*/ None,
         crate::startup_draft::tests::quiet_startup_test_pump(),
         /*managed_worktree*/ None,
         /*daemon_cli_executable*/ None,

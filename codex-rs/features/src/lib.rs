@@ -110,6 +110,8 @@ pub enum Feature {
     SecretAuthStorage,
 
     // Experimental
+    /// Automatically start the shared local daemon for eligible interactive launches.
+    DaemonAutoStart,
     /// Send per-content-entry classifications in internal Responses metadata.
     ContentItemKinds,
     /// Record model-attempted tool calls in internal Responses metadata.
@@ -917,6 +919,16 @@ pub const FEATURES: &[FeatureSpec] = &[
             name: "Analytics plan history",
             menu_description: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
             announcement: "",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DaemonAutoStart,
+        key: "daemon_auto_start",
+        stage: Stage::Experimental {
+            name: "Automatically start the background server",
+            menu_description: "Use the shared local server for new, resumed, and forked sessions. Takes effect next launch.",
+            announcement: "Automatic background server startup can now be enabled from /experimental.",
         },
         default_enabled: false,
     },

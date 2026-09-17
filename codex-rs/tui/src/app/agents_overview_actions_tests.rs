@@ -510,6 +510,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             )),
         );
         app.app_server_target = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
                 socket_path: test_path_buf("/tmp/unused.sock").abs(),
             },

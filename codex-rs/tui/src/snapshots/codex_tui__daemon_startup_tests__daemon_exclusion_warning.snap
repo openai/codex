@@ -1,0 +1,6 @@
+---
+source: tui/src/daemon_startup_tests.rs
+expression: text
+---
+⚠ Running without the shared background server: --strict-config requires
+  embedded mode.

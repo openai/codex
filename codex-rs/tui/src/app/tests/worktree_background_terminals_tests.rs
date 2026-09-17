@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn old_local_daemon_worktree_error_suggests_update() -> Result<()> {
     let target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
             socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
         },

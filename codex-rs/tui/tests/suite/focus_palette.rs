@@ -402,6 +402,12 @@ fn no_daemon_skips_startup_and_discovery() -> Result<()> {
         let workspace = tempfile::tempdir()?;
         let home = tempfile::tempdir()?;
         write_test_config(home.path(), workspace.path())?;
+        let config = home.path().join("config.toml");
+        let contents = std::fs::read_to_string(&config)?;
+        std::fs::write(
+            config,
+            format!("features.daemon_auto_start = true\n{contents}"),
+        )?;
         let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
         let listener = if running {
@@ -431,6 +437,55 @@ fn no_daemon_skips_startup_and_discovery() -> Result<()> {
                 std::io::ErrorKind::WouldBlock
             );
         }
+        ensure!(
+            !String::from_utf8_lossy(&terminal.output)
+                .contains("Running without the shared background server")
+        );
     }
     Ok(())
+}
+
+#[test]
+fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
+    let workspace = tempfile::tempdir()?;
+    let home = tempfile::tempdir()?;
+    write_test_config(home.path(), workspace.path())?;
+    let config = home.path().join("config.toml");
+    let contents = std::fs::read_to_string(&config)?;
+    std::fs::write(
+        config,
+        format!("features.daemon_auto_start = true\n{contents}"),
+    )?;
+    // An incomplete selected package must fail without installing a replacement.
+    std::fs::create_dir_all(home.path().join("packages/app-server-daemon/current"))?;
+    let mut terminal = PtyCodex::start(workspace.path(), home, &[])?;
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while Instant::now() < deadline {
+        terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+        terminal.answer_startup_queries()?;
+        if let Some(status) = terminal.child.try_wait()? {
+            ensure!(!status.success());
+            let output = String::from_utf8_lossy(&terminal.output);
+            let failure = &output[output.find("Error:").context("missing fatal error")?..];
+            let failure = codex_ansi_escape::ansi_escape(failure)
+                .to_string()
+                .replace(
+                    terminal
+                        ._codex_home
+                        .path()
+                        .canonicalize()?
+                        .to_string_lossy()
+                        .as_ref(),
+                    "[CODEX_HOME]",
+                )
+                .replace(
+                    terminal._codex_home.path().to_string_lossy().as_ref(),
+                    "[CODEX_HOME]",
+                )
+                .replace('\r', "");
+            insta::assert_snapshot!("daemon_auto_start_failure", failure.trim());
+            return Ok(());
+        }
+    }
+    bail!("auto-start did not fail: {}", terminal.screen_contents())
 }

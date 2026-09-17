@@ -22,7 +22,7 @@ pub(crate) fn remote_connection_status_value(
 ) -> Option<RemoteConnectionStatus> {
     let endpoint = match app_server_target {
         AppServerTarget::Embedded => return None,
-        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
+        AppServerTarget::LocalDaemon { endpoint, .. } | AppServerTarget::Remote { endpoint } => {
             endpoint
         }
     };
@@ -80,7 +80,7 @@ pub(crate) fn server_version_notice_key(
     let mut hasher = Sha256::new();
     let endpoint = match target {
         AppServerTarget::Embedded => None,
-        AppServerTarget::LocalDaemon { endpoint } | AppServerTarget::Remote { endpoint } => {
+        AppServerTarget::LocalDaemon { endpoint, .. } | AppServerTarget::Remote { endpoint } => {
             Some(endpoint)
         }
     };
@@ -189,6 +189,7 @@ mod tests {
 
         let socket_path = AbsolutePathBuf::relative_to_current_dir("codex.sock")?;
         let daemon_target = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: RemoteAppServerEndpoint::UnixSocket {
                 socket_path: socket_path.clone(),
             },
@@ -220,6 +221,7 @@ mod tests {
             socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
         };
         let local = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         };
         let remote = AppServerTarget::Remote { endpoint };
@@ -265,6 +267,7 @@ mod tests {
             })
         };
         let local = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: socket("/c")?,
         };
         let remote = AppServerTarget::Remote {

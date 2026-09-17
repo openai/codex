@@ -1,4 +1,4 @@
-//! Implicit daemon discovery is opportunistic; explicit endpoints remain authoritative.
+//! Opportunistic attachment may fall back; automatic startup requires a shared server.
 
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
@@ -14,6 +14,7 @@ async fn daemon_connection_rejects_unprotected_socket_before_handshake() -> colo
     let socket_path = AbsolutePathBuf::from_absolute_path_checked(parent.join("server.sock"))?;
     let mut listener = codex_uds::UnixListener::bind(socket_path.as_path()).await?;
     let target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: RemoteAppServerEndpoint::UnixSocket { socket_path },
     };
     tokio::select! {
@@ -25,7 +26,12 @@ async fn daemon_connection_rejects_unprotected_socket_before_handshake() -> colo
 
 #[tokio::test]
 async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::Result<()> {
-    for scenario in ["missing socket", "failed handshake", "explicit endpoint"] {
+    for scenario in [
+        "missing socket",
+        "failed handshake",
+        "explicit endpoint",
+        "required daemon",
+    ] {
         let home = TempDir::new()?;
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
@@ -50,7 +56,10 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
         let mut target = if scenario == "explicit endpoint" {
             AppServerTarget::Remote { endpoint }
         } else {
-            AppServerTarget::LocalDaemon { endpoint }
+            AppServerTarget::LocalDaemon {
+                endpoint,
+                allow_embedded_fallback: scenario != "required daemon",
+            }
         };
         let original_target = target.clone();
         let mut state_db = None;
@@ -69,8 +78,13 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
         )
         .await;
         reject_handshake.abort();
-        if scenario == "explicit endpoint" {
+        if scenario == "explicit endpoint" || scenario == "required daemon" {
             assert!(result.is_err());
+            if scenario == "required daemon" {
+                let message = result.err().unwrap().to_string();
+                assert!(message.contains("rerun the same command with --no-daemon"));
+                assert!(message.contains("failed to connect to remote app server"));
+            }
             assert_eq!(target, original_target);
             assert!(state_db.is_none());
         } else {
@@ -161,4 +175,20 @@ fn daemon_eligibility_preserves_launch_options_and_explains_exclusions() {
         ),
         None
     );
+}
+
+#[test]
+fn daemon_exclusion_warning_snapshot() {
+    use crate::history_cell::HistoryCell;
+    let cell = crate::history_cell::StartupWarningsCell::new(vec![
+        "Running without the shared background server: --strict-config requires embedded mode."
+            .into(),
+    ]);
+    let text = cell
+        .transcript_lines(/*width*/ 80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("daemon_exclusion_warning", text);
 }

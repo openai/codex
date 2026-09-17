@@ -495,6 +495,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     )
     .expect("materialize unindexed session");
     app.app_server_target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
             socket_path: test_path_buf("/tmp/unused.sock").abs(),
         },
@@ -2335,6 +2336,7 @@ async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<
         .await?;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     app.app_server_target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
     };
     app.chat_widget.remote_connection =

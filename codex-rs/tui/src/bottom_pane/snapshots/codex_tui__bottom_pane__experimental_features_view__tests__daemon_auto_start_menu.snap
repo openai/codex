@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/experimental_features_view_tests.rs
+expression: buffer_text(&buffer)
+---
+  Experimental features
+  Checked features are configured on. Some experimental features take effect
+  only in new tasks or after restarting the Codex server.
+
+› [ ] Automatically start the background server  Use the shared local server
+                                                 for new, resumed, and forked
+                                                 sessions. Takes effect next
+                                                 launch.
+
+  Press space to select or enter to save

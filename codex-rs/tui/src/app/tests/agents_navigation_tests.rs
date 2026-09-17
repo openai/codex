@@ -14,7 +14,10 @@ async fn agents_navigation_requires_local_daemon() -> Result<()> {
         AppServerTarget::Remote {
             endpoint: endpoint.clone(),
         },
-        AppServerTarget::LocalDaemon { endpoint },
+        AppServerTarget::LocalDaemon {
+            endpoint,
+            allow_embedded_fallback: true,
+        },
     ] {
         let enabled = matches!(target, AppServerTarget::LocalDaemon { .. });
         app.app_server_target = target;

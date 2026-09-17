@@ -257,3 +257,24 @@ fn voice_discovery_requires_the_client_runtime() {
         );
     }
 }
+
+#[test]
+fn daemon_auto_start_menu_snapshot() {
+    let feature = Feature::DaemonAutoStart;
+    let stage = feature.stage();
+    let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();
+    let view = ExperimentalFeaturesView::new(
+        vec![ExperimentalFeatureItem {
+            key: feature.key().to_string(),
+            name: stage.experimental_menu_name().unwrap().to_string(),
+            description: stage.experimental_menu_description().unwrap().to_string(),
+            enabled: feature.default_enabled(),
+            writable: true,
+        }],
+        ThreadId::new(),
+        /*catalog_rx*/ None,
+        AppEventSender::new(app_tx),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
+    snapshot_view("daemon_auto_start_menu", &view);
+}

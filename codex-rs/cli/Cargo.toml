@@ -129,6 +129,7 @@ pretty_assertions = { workspace = true }
 sqlx = { workspace = true }
 tar = { workspace = true }
 tokio-tungstenite = { workspace = true }
+vt100 = { workspace = true }
 wiremock = { workspace = true }
 zstd = { workspace = true }
 

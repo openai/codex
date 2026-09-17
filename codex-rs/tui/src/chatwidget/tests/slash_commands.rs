@@ -2832,6 +2832,7 @@ async fn slash_delete_confirmation_requests_current_thread_delete() {
     for target in [
         crate::AppServerTarget::Embedded,
         crate::AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         },
         crate::AppServerTarget::Remote { endpoint },

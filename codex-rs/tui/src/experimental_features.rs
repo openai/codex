@@ -108,7 +108,8 @@ pub(crate) async fn write(
             let key = format!("features.{}", serde_json::json!(name));
             Ok(crate::config_update::replace_config_value(
                 key,
-                if *enabled || feature.default_enabled {
+                // Keep the daemon opt-out explicit even before rollout defaults enable it.
+                if *enabled || feature.default_enabled || name == "daemon_auto_start" {
                     serde_json::json!(enabled)
                 } else {
                     serde_json::Value::Null

@@ -678,6 +678,7 @@ async fn delete_current_thread_navigates_only_after_success() -> Result<()> {
     for target in [
         AppServerTarget::Embedded,
         AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         },
         AppServerTarget::Remote { endpoint },
@@ -984,6 +985,7 @@ async fn archive_current_thread_returns_shared_servers_to_agents() -> Result<()>
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
     for target in [
         AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         },
         AppServerTarget::Remote { endpoint },
@@ -2898,6 +2900,7 @@ async fn agents_overview_seeds_loaded_threads_when_recent_listing_is_unavailable
         .await?;
         let started = app_server.start_thread(&app.config).await?;
         app.app_server_target = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
                 socket_path: test_path_buf("/tmp/unused.sock").abs(),
             },
@@ -4433,6 +4436,7 @@ async fn external_writer_escape_preserves_snapshot_and_explicit_quits() -> Resul
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
     for target in [
         AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         },
         AppServerTarget::Remote { endpoint },
@@ -4616,6 +4620,7 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
         )
         .await?;
         app.app_server_target = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
         };
         let current = Box::pin(server.start_thread(&app.config)).await?;

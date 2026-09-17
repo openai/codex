@@ -28,6 +28,7 @@ async fn windows_sandbox_setup_uses_local_app_server_connection() {
         auth_token: None,
     };
     app.app_server_target = crate::AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: endpoint.clone(),
     };
     assert!(app.windows_sandbox_setup_is_local());

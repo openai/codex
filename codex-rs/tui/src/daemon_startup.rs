@@ -1,6 +1,9 @@
-//! Local daemon discovery policy. Explicit embedded launches never probe the shared server.
+//! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
+//! automatic launches require a successful shared-server connection.
 
 use super::*;
+
+pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
 
 pub(super) fn exclusion(
     cli: &Cli,

@@ -180,6 +180,7 @@ async fn experimental_feature_writes_use_server_defaults_and_refresh_configured_
                     "initialize" => json!({"userAgent": "experimental-test"}),
                     "experimentalFeature/list" => {
                         json!({"data": [
+                            {"name": "daemon_auto_start", "stage": "beta", "displayName": null, "description": null, "announcement": null, "enabled": !wrote || scenario == "overridden", "defaultEnabled": false},
                             {"name": "default_off", "stage": "beta", "displayName": null, "description": null, "announcement": null, "enabled": !wrote || scenario == "overridden", "defaultEnabled": false},
                             {"name": "default_on", "stage": "beta", "displayName": null, "description": null, "announcement": null, "enabled": !wrote, "defaultEnabled": true},
                             {"name": "new_server_feature", "stage": "beta", "displayName": null, "description": null, "announcement": null, "enabled": wrote, "defaultEnabled": false}
@@ -190,6 +191,7 @@ async fn experimental_feature_writes_use_server_defaults_and_refresh_configured_
                             request.params,
                             Some(json!({
                                 "edits": [
+                                    {"keyPath": "features.\"daemon_auto_start\"", "value": false, "mergeStrategy": "replace"},
                                     {"keyPath": "features.\"default_off\"", "value": null, "mergeStrategy": "replace"},
                                     {"keyPath": "features.\"default_on\"", "value": false, "mergeStrategy": "replace"},
                                     {"keyPath": "features.\"new_server_feature\"", "value": true, "mergeStrategy": "replace"}
@@ -226,6 +228,7 @@ async fn experimental_feature_writes_use_server_defaults_and_refresh_configured_
             handle,
             thread_id,
             vec![
+                ("daemon_auto_start".to_string(), false),
                 ("default_off".to_string(), false),
                 ("default_on".to_string(), false),
                 ("new_server_feature".to_string(), true),

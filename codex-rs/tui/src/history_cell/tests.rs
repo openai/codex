@@ -66,6 +66,7 @@ fn connected_server_version_notice_snapshot() {
 #[test]
 fn local_daemon_version_notice_snapshot() {
     let target = crate::AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
             socket_path: AbsolutePathBuf::from_absolute_path(
                 std::env::temp_dir().join("codex.sock"),

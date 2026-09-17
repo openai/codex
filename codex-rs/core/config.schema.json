@@ -757,6 +757,9 @@
             "cwd_relative_turn_diffs": {
               "type": "boolean"
             },
+            "daemon_auto_start": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -6409,6 +6412,9 @@
           "$ref": "#/definitions/FeatureToml_for_CurrentTimeReminderConfigToml"
         },
         "cwd_relative_turn_diffs": {
+          "type": "boolean"
+        },
+        "daemon_auto_start": {
           "type": "boolean"
         },
         "default_mode_request_user_input": {

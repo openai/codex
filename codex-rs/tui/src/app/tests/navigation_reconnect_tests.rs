@@ -158,6 +158,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             socket_path: codex_utils_absolute_path::AbsolutePathBuf::try_from(socket_path.clone())?,
         };
         app.app_server_target = AppServerTarget::LocalDaemon {
+            allow_embedded_fallback: true,
             endpoint: endpoint.clone(),
         };
         let interrupted_setup = previous_thread.is_none() && !overview_initialized;

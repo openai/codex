@@ -18,6 +18,7 @@ async fn daemon_menu_is_read_only_and_confirmation_can_cancel_or_handoff() {
     app.daemon_cli_executable =
         Some(AbsolutePathBuf::from_absolute_path(package.path().join("bin/codex")).unwrap());
     app.app_server_target = AppServerTarget::LocalDaemon {
+        allow_embedded_fallback: true,
         endpoint: crate::RemoteAppServerEndpoint::UnixSocket {
             socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock").unwrap(),
         },
