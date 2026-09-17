@@ -1473,7 +1473,7 @@ impl TurnRequestProcessor {
         } = self
             .agent_runner
             .start(
-                parent_thread.session_configured().thread_id,
+                parent_thread.startup_metadata().thread_id,
                 AgentInvocation {
                     config,
                     prompt: prompt.to_string(),
@@ -1504,7 +1504,7 @@ impl TurnRequestProcessor {
         if let Some(mut thread) = stored_thread {
             let config_snapshot = review_thread.config_snapshot().await;
             apply_live_thread_settings(&mut thread, &config_snapshot);
-            thread.session_id = review_thread.session_configured().session_id.to_string();
+            thread.session_id = review_thread.startup_metadata().session_id.to_string();
             self.thread_watch_manager
                 .upsert_thread_silently(&thread.id)
                 .await;

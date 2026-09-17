@@ -185,7 +185,7 @@ async fn load_context(test: &TestCodex, thread: &CodexThread) -> Result<Vec<Roll
     Ok(test
         .thread_store
         .load_latest_model_context(LoadThreadHistoryParams {
-            thread_id: thread.session_configured().thread_id,
+            thread_id: thread.startup_metadata().thread_id,
             include_archived: false,
         })
         .await?
@@ -193,7 +193,7 @@ async fn load_context(test: &TestCodex, thread: &CodexThread) -> Result<Vec<Roll
 }
 
 async fn resume(test: &TestCodex, thread: &CodexThread) -> Result<Arc<CodexThread>> {
-    let thread_id = thread.session_configured().thread_id;
+    let thread_id = thread.startup_metadata().thread_id;
     thread.shutdown_and_wait().await?;
     test.thread_manager.remove_thread(&thread_id).await;
     let saved = load_context(test, thread).await?;
@@ -729,7 +729,7 @@ async fn disabled_capture_stays_incomplete_after_compaction_and_enabled_resume()
     assert!(!checkpoint.user_messages_complete());
     assert_eq!(checkpoint.ordered_entries().count(), 0);
 
-    let thread_id = test.codex.session_configured().thread_id;
+    let thread_id = test.codex.startup_metadata().thread_id;
     test.codex.shutdown_and_wait().await?;
     test.thread_manager.remove_thread(&thread_id).await;
     let items: Vec<RolloutItem> = serde_json::from_value(serde_json::to_value(
@@ -1057,7 +1057,7 @@ async fn standalone_fork_retains_inherited_user_instructions(
         let prepared = test
             .thread_store
             .prepare_fork(PrepareForkParams {
-                thread_id: worker.session_configured().thread_id,
+                thread_id: worker.startup_metadata().thread_id,
                 boundary: ForkBoundary::Latest,
             })
             .await?;
@@ -1073,7 +1073,7 @@ async fn standalone_fork_retains_inherited_user_instructions(
                 ForkSnapshot::Interrupted,
                 codex_core::StartThreadOptions::new(test.config.clone()),
                 InitialHistory::Resumed(ResumedHistory {
-                    conversation_id: worker.session_configured().thread_id,
+                    conversation_id: worker.startup_metadata().thread_id,
                     history: Arc::new(load_context(&test, &worker).await?),
                     rollout_path: None,
                 }),
@@ -1260,7 +1260,7 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
     tokio::time::timeout(Duration::from_secs(30), child_gate.entered.notified())
         .await
         .context("child did not reach the paused tool call")?;
-    let child_id = child.session_configured().thread_id.to_string();
+    let child_id = child.startup_metadata().thread_id.to_string();
     let requests = child_requests.requests();
     let child_request = requests
         .iter()

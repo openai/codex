@@ -739,7 +739,7 @@ pub(super) async fn handle_pending_thread_resume_request(
     let instruction_sources = pending.instruction_sources;
     let active_permission_profile =
         thread_response_active_permission_profile(active_permission_profile);
-    let session_id = conversation.session_configured().session_id.to_string();
+    let session_id = conversation.startup_metadata().session_id.to_string();
     thread.session_id = session_id;
 
     let response = ThreadResumeResponse {

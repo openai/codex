@@ -8,6 +8,7 @@ use crate::session::SessionSettingsUpdate;
 use crate::session::new_submission_id;
 use crate::session::session::Session;
 use crate::session::step_settings::StepSettingsUpdate;
+use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
 use codex_exec_server::SelectedCapabilityRootsStatus;
@@ -39,7 +40,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadHistoryMode;
@@ -184,7 +184,7 @@ pub struct CodexThread {
     // Registration source controls live access and lifecycle hooks. Managed Guardian
     // reviewers keep their existing subagent identity inside the session.
     pub(crate) session_source: SessionSource,
-    session_configured: SessionConfiguredEvent,
+    startup_metadata: ThreadStartupMetadata,
     rollout_path: Option<PathBuf>,
     out_of_band_elicitations: Mutex<OutOfBandElicitations>,
     _diagnostics_guard: GaugeGuard,
@@ -210,7 +210,7 @@ impl CodexThread {
     pub(crate) fn new(
         session: Arc<Session>,
         io: SessionIo,
-        session_configured: SessionConfiguredEvent,
+        startup_metadata: ThreadStartupMetadata,
         rollout_path: Option<PathBuf>,
         session_source: SessionSource,
     ) -> Self {
@@ -218,7 +218,7 @@ impl CodexThread {
             session,
             io,
             session_source,
-            session_configured,
+            startup_metadata,
             rollout_path,
             out_of_band_elicitations: Mutex::new(OutOfBandElicitations::default()),
             _diagnostics_guard: LIVE_THREADS.track(),
@@ -707,8 +707,9 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
-    pub fn session_configured(&self) -> SessionConfiguredEvent {
-        self.session_configured.clone()
+    /// Returns startup metadata without the one-time initial message replay.
+    pub fn startup_metadata(&self) -> &ThreadStartupMetadata {
+        &self.startup_metadata
     }
 
     pub(crate) fn is_running(&self) -> bool {

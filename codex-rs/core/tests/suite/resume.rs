@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::ByteRange;
@@ -81,10 +82,11 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         .await?;
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
-    let resumed = builder.restart(&server, &initial).await?;
+    let mut resumed = builder.restart(&server, &initial).await?;
     let initial_messages = resumed
         .session_configured
         .initial_messages
+        .take()
         .expect("expected initial messages to be present for resumed session");
     match initial_messages.as_slice() {
         [
@@ -105,6 +107,32 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
         }
         other => panic!("unexpected initial messages after resume: {other:#?}"),
     }
+
+    resumed.codex.flush_rollout().await?;
+    let mut rejoined = resumed
+        .thread_manager
+        .resume_thread_from_rollout(
+            resumed.config.clone(),
+            resumed.codex.rollout_path().expect("resumed rollout path"),
+            resumed.thread_manager.auth_manager(),
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await?;
+    assert!(Arc::ptr_eq(&rejoined.thread, &resumed.codex));
+    let rejoined_messages = rejoined
+        .session_configured
+        .initial_messages
+        .take()
+        .expect("rejoining a loaded thread must still provide replay messages");
+    assert_eq!(
+        serde_json::to_value(&rejoined.session_configured)?,
+        serde_json::to_value(&resumed.session_configured)?,
+    );
+    assert_eq!(
+        serde_json::to_value(&rejoined_messages[..initial_messages.len()])?,
+        serde_json::to_value(&initial_messages)?,
+    );
 
     Ok(())
 }

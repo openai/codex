@@ -44,7 +44,7 @@ async fn saved_history(test: &TestCodex, thread: &CodexThread) -> Result<Vec<Rol
     Ok(test
         .thread_store
         .load_latest_model_context(LoadThreadHistoryParams {
-            thread_id: thread.session_configured().thread_id,
+            thread_id: thread.startup_metadata().thread_id,
             include_archived: false,
         })
         .await?
@@ -56,7 +56,7 @@ pub(super) async fn resume(
     thread: &CodexThread,
     history: Vec<RolloutItem>,
 ) -> Result<Arc<CodexThread>> {
-    let thread_id = thread.session_configured().thread_id;
+    let thread_id = thread.startup_metadata().thread_id;
     let environments = thread.environment_selections().await;
     let model = thread.config_snapshot().await.model;
     thread.shutdown_and_wait().await?;

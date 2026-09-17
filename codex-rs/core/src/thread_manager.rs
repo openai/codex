@@ -21,6 +21,7 @@ use crate::session::resolve_multi_agent_version;
 use crate::session::session::Session;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
+use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_analytics::AnalyticsEventsClient;
@@ -2061,9 +2062,13 @@ impl ThreadManagerState {
                             resumed.conversation_id
                         )));
                     }
+                    drop(threads);
+                    let session_configured = thread
+                        .startup_metadata()
+                        .to_session_configured_event(initial_history.get_event_msgs());
                     return Ok(NewThread {
                         thread_id: resumed.conversation_id,
-                        session_configured: thread.session_configured(),
+                        session_configured,
                         thread,
                     });
                 }
@@ -2278,7 +2283,7 @@ impl ThreadManagerState {
                 let thread = Arc::new(CodexThread::new(
                     session,
                     io,
-                    session_configured.clone(),
+                    ThreadStartupMetadata::from(&session_configured),
                     session_configured.rollout_path.clone(),
                     session_source,
                 ));
