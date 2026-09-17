@@ -64,6 +64,7 @@ async fn review_regression_agents_overview_creation_is_fresh_but_returning_is_no
         app.harness_overrides.model = Some(model.into());
         let mut server = start_config_write_test_app_server(&app).await?;
         let mut tui = make_test_tui()?;
+        tui.pause_events();
         app.new_agents_overview_session(&mut tui, &mut server, /*cwd*/ None)
             .await?;
         let original = app.chat_widget.thread_id().expect("new dashboard task");
