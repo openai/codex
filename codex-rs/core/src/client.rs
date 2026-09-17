@@ -494,6 +494,10 @@ impl ModelClient {
         let auth_env_telemetry =
             collect_auth_env_telemetry(model_provider.info(), codex_api_key_env_enabled);
         let include_attestation = model_provider.supports_attestation();
+        // Reviewers use their own request-level effort even when managed requirements
+        // pin the parent's feature on. Share this decision with update injection and pinning.
+        let reasoning_effort_override_enabled = reasoning_effort_override_enabled
+            && !crate::guardian::is_basic_session_source(&session_source);
         Self {
             state: Arc::new(ModelClientState {
                 thread_id,
@@ -522,6 +526,10 @@ impl ModelClient {
             http_client_factory,
             restored_history: false,
         }
+    }
+
+    pub(crate) fn reasoning_effort_override_enabled(&self) -> bool {
+        self.state.reasoning_effort_override_enabled
     }
 
     pub(crate) fn with_restored_history(mut self, restored_history: bool) -> Self {

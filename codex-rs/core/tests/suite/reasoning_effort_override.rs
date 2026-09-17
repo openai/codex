@@ -1,8 +1,10 @@
 //! Trusted reasoning-effort updates follow surviving history and the next turn's selected settings.
 
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::ForkSnapshot;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
+use codex_core::StartThreadOptions;
 use codex_core::SuspendTurnOutcome;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
@@ -16,8 +18,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
@@ -68,6 +74,126 @@ fn message(role: &str, text: &str) -> Value {
         "role": role,
         "content": [{"type": "input_text", "text": text}],
     })
+}
+
+#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "internal guardian")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())); "legacy guardian")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sync_guardian_ignores_managed_reasoning_override(
+    session_source: SessionSource,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let mut mocks = Vec::new();
+    for id in [
+        "parent-medium",
+        "parent-high",
+        "reviewer-low",
+        "reviewer-high",
+    ] {
+        mocks.push(
+            responses::mount_sse_once(&server, responses::sse(vec![responses::ev_completed(id)]))
+                .await,
+        );
+    }
+    let mut test = override_builder()
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                "[features]\nreasoning_effort_override = true\n",
+            ),
+        )
+        .with_config(|config| config.model_provider.supports_websockets = false)
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("first parent turn").await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.submit_text_turn("second parent turn").await?;
+    let parent = Arc::clone(&test.codex);
+    parent.shutdown_and_wait().await?;
+
+    // Fork real parent history, including its trusted effort updates, into a reviewer.
+    let config = test.config.clone();
+    assert!(config.features.enabled(Feature::ReasoningEffortOverride));
+    let mut options = StartThreadOptions::new(config);
+    options.session_source = Some(session_source);
+    options.thread_source = Some(ThreadSource::GuardianReview);
+    let forked = test
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            options,
+            parent.rollout_path().expect("parent rollout path"),
+        )
+        .await?;
+    test.codex = forked.thread;
+    test.session_configured = forked.session_configured;
+    for effort in [ReasoningEffort::Low, ReasoningEffort::High] {
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                effort: Some(Some(effort)),
+                ..Default::default()
+            },
+        )
+        .await?;
+        test.submit_text_turn("review an action").await?;
+    }
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = mocks
+        .iter()
+        .map(responses::ResponseMock::single_request)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.body_json()["reasoning"]["effort"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            Value::from("medium"),
+            Value::from("medium"),
+            Value::from("low"),
+            Value::from("high"),
+        ],
+    );
+    let inherited_updates = vec![
+        effort_update(ReasoningEffort::Medium),
+        effort_update(ReasoningEffort::High),
+    ];
+    assert_eq!(
+        requests.iter().map(effort_updates).collect::<Vec<_>>(),
+        vec![
+            vec![effort_update(ReasoningEffort::Medium)],
+            inherited_updates.clone(),
+            vec![],
+            vec![],
+        ],
+    );
+    // Reviewers neither append new updates nor erase inherited durable history.
+    for thread in [&parent, &test.codex] {
+        let saved_updates = thread
+            .load_history(/*include_archived*/ false)
+            .await?
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                RolloutItem::ResponseItem(ResponseItemEnvelope {
+                    item: item @ ResponseItem::ConfigurationUpdate { .. },
+                    ..
+                }) => Some(serde_json::to_value(item).expect("serialize saved update")),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(saved_updates, inherited_updates);
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

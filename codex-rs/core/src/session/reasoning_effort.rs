@@ -3,12 +3,12 @@
 //! Only trusted harness items establish overrides. Replay preserves startup prewarm's
 //! baseline while it is retained.
 //! Successful compaction retires the overrides and allows a fresh request baseline.
+//! Synchronous Guardian reviewers always use their selected request-level effort.
 
 use super::session::Session;
 use super::step_context::StepContext;
 use super::step_settings::ResolvedStepSettings;
 use crate::state::ReasoningEffortPin;
-use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ConfigurationReasoning;
@@ -96,7 +96,11 @@ impl Session {
         usage: RequestEffortUsage,
     ) -> Option<ReasoningEffort> {
         let selected_effort = settings.reasoning_effort().cloned();
-        if !self.enabled(Feature::ReasoningEffortOverride) {
+        if !self
+            .services
+            .model_client
+            .reasoning_effort_override_enabled()
+        {
             return selected_effort;
         }
         if usage == RequestEffortUsage::Compaction
@@ -130,7 +134,10 @@ impl Session {
         &self,
         settings: &ResolvedStepSettings,
     ) -> Option<ReasoningEffort> {
-        if !self.enabled(Feature::ReasoningEffortOverride)
+        if !self
+            .services
+            .model_client
+            .reasoning_effort_override_enabled()
             || !settings.model_info.use_responses_lite
             || !self.provider().await.is_openai()
         {
