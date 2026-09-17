@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/mcp_tests.rs
+expression: "lines.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\")"
+---
+• Inspect a very long screensho…
+  └ Screenshot partially failed
+    Returned image

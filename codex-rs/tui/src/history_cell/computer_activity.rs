@@ -31,9 +31,7 @@ impl ComputerActivityCell {
         let id = call.call_id.clone();
         self.start(call);
         if let Some(call) = self.calls.iter_mut().find(|call| call.call_id == id) {
-            // Images are represented in the action preview and full MCP transcript. Inserting a
-            // separate image-output history cell here would prematurely break adjacent grouping.
-            let _ = call.complete(duration, result);
+            call.complete(duration, result);
         }
     }
 

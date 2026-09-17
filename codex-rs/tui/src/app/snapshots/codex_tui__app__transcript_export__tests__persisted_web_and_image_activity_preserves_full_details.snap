@@ -1,0 +1,17 @@
+---
+source: tui/src/app/transcript_export_tests.rs
+expression: "render_markdown_transcript(&cells).expect(\"exported transcript\")"
+---
+# Codex conversation
+
+## Activity
+
+    Opened https://example.com/long/path?query=full#details
+
+## Activity
+
+    Searched for 'needle' in https://example.com/long/path
+
+## Activity
+
+    Viewed image C:\workspace\assets\screenshot.png

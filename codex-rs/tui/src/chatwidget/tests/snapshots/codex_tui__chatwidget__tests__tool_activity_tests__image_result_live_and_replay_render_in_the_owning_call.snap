@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/tool_activity_tests.rs
+expression: "outputs[0]"
+---
+• Inspect screenshot
+  └ Screenshot captured
+    Returned image

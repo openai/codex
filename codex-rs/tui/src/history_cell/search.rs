@@ -1,36 +1,26 @@
-//! Web-search activity history cells.
+//! Compact web activity summaries with complete details in the transcript and raw output.
 
 use super::*;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 
-fn web_search_header(completed: bool) -> &'static str {
-    if completed {
-        "Searched the web"
-    } else {
-        "Searching the web"
-    }
-}
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;
 
 fn web_search_action_detail(action: &WebSearchAction) -> String {
     match action {
-        WebSearchAction::Search { query, queries } => {
-            query.clone().filter(|q| !q.is_empty()).unwrap_or_else(|| {
-                let items = queries.as_ref();
-                let first = items
-                    .and_then(|queries| queries.first())
-                    .cloned()
-                    .unwrap_or_default();
-                if items.is_some_and(|queries| queries.len() > 1) && !first.is_empty() {
-                    format!("{first} ...")
-                } else {
-                    first
-                }
-            })
-        }
+        WebSearchAction::Search { query, queries } => query
+            .clone()
+            .filter(|q| !q.is_empty())
+            .unwrap_or_else(|| queries.as_deref().unwrap_or_default().join(", ")),
         WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
-        WebSearchAction::FindInPage { url, pattern } => match (pattern, url) {
+        WebSearchAction::FindInPage { url, pattern } => match (
+            pattern.as_deref().filter(|pattern| !pattern.is_empty()),
+            url.as_deref().filter(|url| !url.is_empty()),
+        ) {
             (Some(pattern), Some(url)) => format!("'{pattern}' in {url}"),
             (Some(pattern), None) => format!("'{pattern}'"),
-            (None, Some(url)) => url.clone(),
+            (None, Some(url)) => url.to_string(),
             (None, None) => String::new(),
         },
         WebSearchAction::Other => String::new(),
@@ -85,6 +75,49 @@ impl WebSearchCell {
     pub(crate) fn complete(&mut self) {
         self.completed = true;
     }
+
+    fn summary(&self) -> Line<'static> {
+        let detail = web_search_detail(self.action.as_ref(), &self.query);
+        let (header, separator) = match (&self.action, self.completed) {
+            (Some(WebSearchAction::OpenPage { .. }), completed) => (
+                match (completed, detail.is_empty()) {
+                    (true, true) => "Opened page",
+                    (true, false) => "Opened",
+                    (false, true) => "Opening page",
+                    (false, false) => "Opening",
+                },
+                " ",
+            ),
+            (Some(WebSearchAction::FindInPage { pattern, .. }), completed) => {
+                let has_pattern = pattern.as_ref().is_some_and(|pattern| !pattern.is_empty());
+                (
+                    match (completed, has_pattern) {
+                        (true, true) => "Searched for",
+                        (true, false) => "Searched page",
+                        (false, true) => "Searching for",
+                        (false, false) => "Searching page",
+                    },
+                    " ",
+                )
+            }
+            (None | Some(WebSearchAction::Other), false) if detail.is_empty() => {
+                ("Browsing the web", " ")
+            }
+            (Some(WebSearchAction::Search { .. } | WebSearchAction::Other) | None, completed) => (
+                if completed {
+                    "Searched the web"
+                } else {
+                    "Searching the web"
+                },
+                " for ",
+            ),
+        };
+        let mut line = Line::from(header.bold());
+        if !detail.is_empty() {
+            line.extend([separator.into(), detail.into()]);
+        }
+        line
+    }
 }
 
 impl HistoryCell for WebSearchCell {
@@ -99,26 +132,24 @@ impl HistoryCell for WebSearchCell {
             )
             .unwrap_or_else(|| "•".dim())
         };
-        let header = web_search_header(self.completed);
-        let detail = web_search_detail(self.action.as_ref(), &self.query);
-        let text: Text<'static> = if detail.is_empty() {
-            Line::from(vec![header.bold()]).into()
-        } else {
-            let separator = if self.completed { " for " } else { " " };
-            Line::from(vec![header.bold(), separator.into(), detail.into()]).into()
-        };
-        PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
+        let mut line = Line::from(vec![bullet, " ".into()]);
+        let mut summary = self.summary();
+        for span in &mut summary.spans {
+            span.content = span.content.replace(['\n', '\r', '\t'], " ").into();
+        }
+        line.extend(summary);
+        vec![truncate_line_with_ellipsis_if_overflow(
+            line,
+            width as usize,
+        )]
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        PrefixedWrappedHistoryCell::new(self.summary(), vec!["• ".dim()], "  ").display_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        let header = web_search_header(self.completed);
-        let detail = web_search_detail(self.action.as_ref(), &self.query);
-        if detail.is_empty() {
-            vec![Line::from(header)]
-        } else {
-            let separator = if self.completed { " for " } else { " " };
-            vec![Line::from(format!("{header}{separator}{detail}"))]
-        }
+        plain_lines(vec![self.summary()])
     }
 }
 

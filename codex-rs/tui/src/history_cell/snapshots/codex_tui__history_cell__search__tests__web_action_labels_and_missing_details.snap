@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/search_tests.rs
+expression: rendered
+---
+• Opened https://example.com/docs
+• Opened page
+• Searched for 'needle' in https://example.com/docs
+• Searched for 'needle'
+• Searched page https://example.com/docs
+• Searched page

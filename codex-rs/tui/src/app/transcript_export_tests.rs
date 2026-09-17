@@ -158,7 +158,7 @@ fn persisted_transcript_includes_file_and_mcp_details() {
         r#"{"query":"export"}"#,
         "matching docs",
         "next line",
-        "<image content>",
+        "Returned image",
         "<audio content>",
         "embedded resource: file:///report.md",
         "link: file:///linked.md",
@@ -196,4 +196,29 @@ fn transcript_file_resolves_relative_paths_and_refuses_to_overwrite() {
     let error = write_transcript(directory.path(), &requested, "# Export\n")
         .expect_err("missing home-relative parent directory");
     assert!(error.contains(&dirs::home_dir().expect("home").display().to_string()));
+}
+
+#[test]
+fn persisted_web_and_image_activity_preserves_full_details() {
+    let items = [
+        serde_json::json!({
+            "type": "webSearch", "id": "open", "query": "",
+            "action": {"type": "openPage", "url": "https://example.com/long/path?query=full#details"}
+        }),
+        serde_json::json!({
+            "type": "webSearch", "id": "find", "query": "",
+            "action": {"type": "findInPage", "url": "https://example.com/long/path", "pattern": "needle"}
+        }),
+        serde_json::json!({
+            "type": "imageView", "id": "image", "path": "C:\\workspace\\assets\\screenshot.png"
+        }),
+    ].into_iter().map(|item| serde_json::from_value::<ThreadItem>(item).expect("valid thread item"));
+    let cells = crate::thread_transcript::thread_items_to_transcript_cells(
+        /*thread_id*/ None,
+        &codex_utils_absolute_path::AbsolutePathBuf::current_dir().expect("cwd"),
+        items,
+        crate::thread_transcript::RawReasoningVisibility::Hidden,
+        /*config*/ None,
+    );
+    insta::assert_snapshot!(render_markdown_transcript(&cells).expect("exported transcript"));
 }

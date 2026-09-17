@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/patches_tests.rs
+expression: "cell.display_lines(32)[0].to_string()"
+---
+• Viewed image very-long-screen…

@@ -1,0 +1,5 @@
+---
+source: tui/src/history_cell/search_tests.rs
+expression: "display[0].to_string()"
+---
+• Searched for '日本語 🦀 needl…

@@ -3,6 +3,7 @@
 //! the expanded transcript retains the full text.
 
 use super::*;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 
 use codex_protocol::mcp::is_node_repl_backed_server;
 
@@ -24,18 +25,6 @@ use result::McpToolResult;
 #[path = "mcp_tests.rs"]
 mod tests;
 
-#[derive(Debug)]
-struct McpImageOutputCell;
-
-impl HistoryCell for McpImageOutputCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec!["tool result (image output)".into()]
-    }
-
-    fn raw_lines(&self) -> Vec<Line<'static>> {
-        vec![Line::from("tool result (image output)")]
-    }
-}
 fn mcp_auth_status_label(status: McpAuthStatus) -> &'static str {
     match status {
         McpAuthStatus::Unknown => "Unknown",
@@ -106,16 +95,10 @@ impl McpToolCallCell {
         &mut self,
         duration: Duration,
         result: Result<codex_protocol::mcp::CallToolResult, String>,
-    ) -> Option<Box<dyn HistoryCell>> {
+    ) {
         let result = result.map(|result| McpToolResult::new(result, self.result_kind()));
-        let image_cell = result
-            .as_ref()
-            .ok()
-            .filter(|result| result.has_image)
-            .map(|_| Box::new(McpImageOutputCell) as Box<dyn HistoryCell>);
         self.duration = Some(duration);
         self.result = Some(result);
-        image_cell
     }
 
     fn success(&self) -> Option<bool> {
@@ -167,31 +150,44 @@ impl McpToolCallCell {
             "Calling"
         };
 
+        let title = self
+            .invocation
+            .arguments
+            .as_ref()
+            .filter(|_| compact)
+            .and_then(|arguments| arguments.get("title"))
+            .and_then(serde_json::Value::as_str)
+            .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|title| !title.is_empty());
         let invocation_line = if compact {
-            let title = self
-                .invocation
-                .arguments
-                .as_ref()
-                .and_then(|arguments| arguments.get("title"))
-                .and_then(serde_json::Value::as_str)
-                .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
-                .filter(|title| !title.is_empty())
-                .map(|title| title.graphemes(true).take(80).collect::<String>())
-                .unwrap_or_else(|| format!("{}.{}", self.invocation.server, self.invocation.tool));
-            Line::from(title.cyan())
+            Line::from(
+                title
+                    .clone()
+                    .unwrap_or_else(|| {
+                        format!("{}.{}", self.invocation.server, self.invocation.tool)
+                    })
+                    .cyan(),
+            )
         } else {
             line_to_static(&format_mcp_invocation(&self.invocation))
         };
-        let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
+        let mut compact_spans = vec![bullet.clone(), " ".into()];
+        if title.is_none() {
+            compact_spans.extend([header_text.bold(), " ".into()]);
+        }
         let mut compact_header = Line::from(compact_spans.clone());
         let reserved = compact_header.width();
 
         let inline_invocation =
-            invocation_line.width() <= (width as usize).saturating_sub(reserved);
+            compact || invocation_line.width() <= (width as usize).saturating_sub(reserved);
 
         if inline_invocation {
             compact_header.extend(invocation_line.spans.clone());
-            lines.push(compact_header);
+            lines.push(if compact {
+                truncate_line_with_ellipsis_if_overflow(compact_header, width as usize)
+            } else {
+                compact_header
+            });
         } else {
             compact_spans.pop(); // drop trailing space for standalone header
             lines.push(Line::from(compact_spans));
@@ -213,6 +209,15 @@ impl McpToolCallCell {
                 Ok(McpToolResult { content, .. }) => {
                     if !content.is_empty() {
                         for block in content {
+                            // Code-mode image blocks can carry text as well. Preserve that text
+                            // without losing the image indication when it replaces the summary.
+                            if node_repl && block.is_image && block.text().is_some() {
+                                detail_lines.extend(
+                                    textwrap::wrap("Returned image", detail_wrap_width)
+                                        .into_iter()
+                                        .map(|line| Line::from(line.into_owned().dim())),
+                                );
+                            }
                             let text = if compact && status == Some(true) {
                                 let meaningful_output = block.text().and_then(|text| {
                                     if text.starts_with("Script completed\n") {
@@ -232,13 +237,27 @@ impl McpToolCallCell {
                                         TOOL_CALL_MAX_LINES,
                                         detail_wrap_width,
                                     ),
-                                    None => block.render(detail_wrap_width),
+                                    None => block.text().map_or_else(
+                                        || block.render(detail_wrap_width),
+                                        |text| {
+                                            format_and_truncate_tool_result(
+                                                text,
+                                                TOOL_CALL_MAX_LINES,
+                                                detail_wrap_width,
+                                            )
+                                        },
+                                    ),
                                 }
-                            } else if node_repl
-                                && mode == McpToolCallRenderMode::Transcript
-                                && let Some(output) = block.text()
-                            {
-                                output.trim_end_matches('\n').to_string()
+                            } else if node_repl && let Some(output) = block.text() {
+                                if mode == McpToolCallRenderMode::Transcript {
+                                    output.trim_end_matches('\n').to_string()
+                                } else {
+                                    format_and_truncate_tool_result(
+                                        output,
+                                        TOOL_CALL_MAX_LINES,
+                                        detail_wrap_width,
+                                    )
+                                }
                             } else {
                                 block.render(detail_wrap_width)
                             };

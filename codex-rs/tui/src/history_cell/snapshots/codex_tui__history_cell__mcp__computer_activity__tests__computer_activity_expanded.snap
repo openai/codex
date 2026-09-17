@@ -12,6 +12,6 @@ expression: transcript
   └ reproduced
 • Called cua_repl.js({"title":"Capture the reproduced bug","code":"await cua.getState()"})
   └ screenshot metadata
-    <image content>
+    Returned image
 • Called cua_repl.js({"title":"Check the final page","code":"await cua.getState()"})
   └ checked

@@ -32,6 +32,7 @@ pub(super) struct McpToolResult {
 #[derive(Debug)]
 pub(super) struct McpContentBlock {
     display: McpContentDisplay,
+    pub(super) is_image: bool,
     /// Code mode uses a top-level `text` field even on malformed or non-text blocks.
     original_text: Option<String>,
 }
@@ -58,6 +59,7 @@ impl McpToolResult {
                 // Deserialize by reference so malformed blocks remain available for the exact
                 // JSON fallback. Successful blocks no longer retain their wire representation.
                 let parsed = ContentBlock::deserialize(&block);
+                let is_image = matches!(&parsed, Ok(ContentBlock::Image(_)));
                 let original_text = match (&parsed, kind) {
                     (Ok(ContentBlock::Text(_)), _) | (_, McpResultKind::Standard) => None,
                     (_, McpResultKind::NodeRepl) => block
@@ -68,12 +70,12 @@ impl McpToolResult {
                 let display = match parsed {
                     Ok(ContentBlock::Text(text)) => McpContentDisplay::Text(text.text),
                     Ok(ContentBlock::Image(image)) => {
-                        // Keep the marker's existing full-decode validity check, and stop
-                        // decoding after the first valid image, just as the old search did.
+                        // Computer activity previews require a valid image. Stop decoding once
+                        // one has been found; the result text only retains a readable marker.
                         if !has_image {
                             has_image = decode_mcp_image(&image.data).is_some();
                         }
-                        McpContentDisplay::Summary("<image content>".into())
+                        McpContentDisplay::Summary("Returned image".into())
                     }
                     Ok(ContentBlock::Audio(_)) => {
                         McpContentDisplay::Summary("<audio content>".into())
@@ -95,6 +97,7 @@ impl McpToolResult {
                 };
                 McpContentBlock {
                     display,
+                    is_image,
                     original_text,
                 }
             })
@@ -136,7 +139,7 @@ impl McpContentBlock {
     }
 }
 
-/// Fully decodes an MCP image before exposing the separate image-output marker.
+/// Fully decodes an MCP image before exposing an image preview in computer activity.
 ///
 /// A header-only check would accept images whose decoder rejects their pixel data. Preserve the
 /// existing behavior for invalid base64, unknown formats, corrupt images, and data URLs.

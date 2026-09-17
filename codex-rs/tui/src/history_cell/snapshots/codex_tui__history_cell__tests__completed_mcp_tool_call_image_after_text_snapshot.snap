@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+• Called image.generate({"prompt":"tiny image"})
+  └ Here is the image:
+    Returned image

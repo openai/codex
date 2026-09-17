@@ -1357,7 +1357,7 @@ async fn failed_repl_mcp_tool_call_preserves_status_and_result() {
         }
         insta::allow_duplicates! {
             insta::assert_snapshot!(lines_to_single_string(lines), @r#"
-            • Called Inspect workspace
+            • Inspect workspace
               └ Script failed
                 {"exit_code": 0, "output": "ready", "chunk_id": "chunk-1"}
                 Script error:
@@ -1368,8 +1368,6 @@ async fn failed_repl_mcp_tool_call_preserves_status_and_result() {
             lines.first(),
             Some(&Line::from(vec![
                 "•".red().bold(),
-                " ".into(),
-                "Called".bold(),
                 " ".into(),
                 "Inspect workspace".cyan(),
             ])),
