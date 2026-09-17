@@ -1218,6 +1218,111 @@ async fn mcp_code_mode_exclusion_does_not_change_direct_mode_tool_exposure() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[test_case(true; "enabled")]
+#[test_case(false; "disabled")]
+async fn code_mode_finished_discovery_has_empty_tool_inventory(
+    metadata_enabled: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let (_test, follow_up) = run_code_mode_turn_with_config(
+        &server,
+        "Discover tools without calling any",
+        r#"text(ALL_TOOLS.filter(({ name }) => name === "test_sync_tool").map(({ name }) => name));"#,
+        move |config| {
+            if !metadata_enabled {
+                config.features.disable(Feature::ExecutedToolCallMetadata).unwrap();
+            }
+        },
+    )
+    .await?;
+    let request = follow_up.single_request();
+    let output = request.custom_tool_call_output("call-1");
+    let (body, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(success, Some(false), "Code Mode failed: {body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body)?,
+        serde_json::json!(["test_sync_tool"])
+    );
+    let metadata = &output["internal_chat_message_metadata_passthrough"];
+    let calls = serde_json::json!([]);
+    let complete = Value::Bool(true);
+    let cell_id = serde_json::json!("call-1");
+    assert_eq!(
+        (
+            metadata.get("executed_tool_calls"),
+            metadata.get("tool_calls_complete"),
+            metadata.get("cell_id"),
+        ),
+        (
+            metadata_enabled.then_some(&calls),
+            metadata_enabled.then_some(&complete),
+            metadata_enabled.then_some(&cell_id),
+        ),
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_empty_error_has_complete_tool_inventory() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let (_test, follow_up) = run_code_mode_turn_with_config(
+        &server,
+        "Fail without calling a tool",
+        r#"throw new Error("empty-cell-error");"#,
+        |_| {},
+    )
+    .await?;
+    let request = follow_up.single_request();
+    let (body, _) = custom_tool_output_body_and_success(&request, "call-1");
+    assert!(body.contains("Error: empty-cell-error"));
+    let output = request.custom_tool_call_output("call-1");
+    let metadata = &output["internal_chat_message_metadata_passthrough"];
+    assert_eq!(metadata["cell_id"], "call-1");
+    assert_eq!(metadata["executed_tool_calls"], serde_json::json!([]));
+    assert_eq!(metadata["tool_calls_complete"], true);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_terminated_empty_cell_has_complete_tool_inventory() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let (test, follow_up) = run_code_mode_turn_with_config(
+        &server,
+        "Yield without calling a tool",
+        r#"yield_control(); await new Promise(() => {});"#,
+        |_| {},
+    )
+    .await?;
+    let initial = follow_up.single_request();
+    let output = initial.custom_tool_call_output("call-1");
+    assert!(
+        output["internal_chat_message_metadata_passthrough"]
+            .get("tool_calls_complete")
+            .is_none()
+    );
+    let items = custom_tool_output_items(&initial, "call-1");
+    let cell_id = extract_running_cell_id(text_item(&items, /*index*/ 0));
+    let wait = responses::mount_function_call_agent_response(
+        &server,
+        "call-2",
+        &serde_json::json!({"cell_id": cell_id, "terminate": true}).to_string(),
+        "wait",
+    )
+    .await;
+    test.submit_turn("Terminate the empty cell").await?;
+    let request = wait.completion.single_request();
+    let output = request.function_call_output("call-2");
+    let metadata = &output["internal_chat_message_metadata_passthrough"];
+    assert_eq!(metadata["cell_id"], "call-1");
+    assert_eq!(metadata["executed_tool_calls"], serde_json::json!([]));
+    assert_eq!(metadata["tool_calls_complete"], true);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(false, false, false; "disabled")]
 #[test_case(true, false, false; "completed")]
 #[test_case(true, true, false; "yielded")]
@@ -1549,7 +1654,10 @@ async fn code_mode_wait_id_stays_known_after_compaction(
         metadata.get("tool_calls_complete").and_then(Value::as_bool),
         expected_complete,
     );
-    assert!(metadata.get("executed_tool_calls").is_none());
+    assert_eq!(
+        metadata.get("executed_tool_calls").cloned(),
+        expected_complete.map(|_| serde_json::json!([])),
+    );
     test.codex.shutdown_and_wait().await?;
     Ok(())
 }

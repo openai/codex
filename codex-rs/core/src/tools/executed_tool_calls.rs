@@ -107,7 +107,6 @@ struct RetainedToolCalls {
 enum CellCompletion {
     #[default]
     Unobserved,
-    Started,
     Recording,
     Incomplete,
     Complete,
@@ -422,10 +421,8 @@ impl ExecutedToolCalls {
         } else {
             ExecutedToolCall::truncated(call.name, original_bytes, max_bytes)
         };
-        cell.completion = if matches!(
-            cell.completion,
-            CellCompletion::Started | CellCompletion::Recording
-        ) && !duplicate_call_id
+        cell.completion = if cell.completion == CellCompletion::Recording
+            && !duplicate_call_id
             && !matches!(
                 call.arguments(),
                 ExecutedToolCallArguments::Truncated { .. }
@@ -502,7 +499,7 @@ impl ExecutedToolCalls {
         if let Some(cell) = state.cells.get_mut(cell_id) {
             // Failed indexing must not make a known historical ID look fresh.
             cell.completion = if unique_cell && unique_origin && history_ids_indexed {
-                CellCompletion::Started
+                CellCompletion::Recording
             } else {
                 CellCompletion::Incomplete
             };
@@ -515,10 +512,18 @@ impl ExecutedToolCalls {
             return;
         };
         if let Some(cell) = state.cells.get_mut(cell_id) {
-            if cell.completion == CellCompletion::Recording {
-                cell.completion = CellCompletion::Complete;
-            } else if cell.completion != CellCompletion::Complete && cell.pending_calls.is_empty() {
-                state.cells.remove(cell_id);
+            match cell.completion {
+                CellCompletion::Recording => {
+                    // The closed dispatch gate makes this lossless inventory final, even if empty.
+                    cell.completion = CellCompletion::Complete;
+                }
+                CellCompletion::Unobserved | CellCompletion::Incomplete => {
+                    // Drop unverified cells only after emitting any partial records.
+                    if cell.pending_calls.is_empty() {
+                        state.cells.remove(cell_id);
+                    }
+                }
+                CellCompletion::Complete => {}
             }
         }
     }

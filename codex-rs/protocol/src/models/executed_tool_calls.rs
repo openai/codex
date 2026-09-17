@@ -464,8 +464,10 @@ impl ResponseItem {
     }
 
     /// Marks a host-owned direct invocation or Code Mode cell's call inventory as complete.
+    /// Always includes this output's call list, which can be an empty delta for a terminal wait.
     pub fn mark_tool_calls_complete(&mut self) {
         if let Some(metadata) = self.ensure_tool_call_metadata() {
+            metadata.executed_tool_calls.get_or_insert_default();
             metadata.tool_calls_complete = Some(true);
         }
     }

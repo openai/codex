@@ -396,7 +396,9 @@ fn tool_call_completeness_is_host_only_and_fail_closed() -> Result<()> {
     bound_executed_tool_calls_for_prompt(std::slice::from_mut(&mut item));
     assert_eq!(
         serde_json::to_value(&item)?["internal_chat_message_metadata_passthrough"],
-        serde_json::json!({ "cell_id": "cell-1", "tool_calls_complete": true }),
+        serde_json::json!({
+            "cell_id": "cell-1", "executed_tool_calls": [], "tool_calls_complete": true
+        }),
     );
     item.append_executed_tool_calls(vec![call]);
     item.clear_executed_tool_calls();

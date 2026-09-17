@@ -631,7 +631,7 @@ fn executed_tool_call_recorder_bounds_retained_history_and_keeps_latest_calls() 
 
 #[test]
 fn tool_call_completeness_requires_finished_lossless_recording() {
-    for scenario in ["empty", "unobserved", "late_call"] {
+    for scenario in ["unfinished", "unobserved", "late_call"] {
         let recorder = new_recorder(InitialHistory::Forked(Vec::new()));
         let cell_id = CellId::new(scenario.to_string());
         if scenario == "unobserved" {
@@ -642,7 +642,7 @@ fn tool_call_completeness_requires_finished_lossless_recording() {
         if scenario == "late_call" {
             recorder.finish_cell_recording(&cell_id);
         }
-        if scenario != "empty" {
+        if scenario != "unfinished" {
             recorder.record_nested_tool_call(
                 cell_id.clone(),
                 "nested-call".to_string(),
@@ -650,7 +650,9 @@ fn tool_call_completeness_requires_finished_lossless_recording() {
                 /*original_bytes*/ 2,
             );
         }
-        recorder.finish_cell_recording(&cell_id);
+        if scenario != "unfinished" {
+            recorder.finish_cell_recording(&cell_id);
+        }
 
         let mut items = [exec_input("output"), exec_output("output")];
         recorder.attach_pending_to_prompt(&mut items, &mut HashMap::new());
@@ -661,6 +663,82 @@ fn tool_call_completeness_requires_finished_lossless_recording() {
             None,
             "{scenario} must not claim complete recording",
         );
+    }
+}
+
+#[test]
+fn finished_empty_tool_inventory_survives_request_retries() {
+    let recorder = new_recorder(InitialHistory::New);
+    let cell_id = CellId::new("empty-cell".to_string());
+    recorder.start_cell(&cell_id, "output");
+    recorder.finish_cell_recording(&cell_id);
+    let mut retry_cache = HashMap::new();
+    for _ in 0..2 {
+        let mut items = [exec_input("output"), exec_output("output")];
+        assert!(recorder.attach_pending_to_prompt(&mut items, &mut retry_cache));
+        assert!(!has_direct_call_metadata(&items[1]));
+        assert_eq!(
+            serde_json::to_value(items[1].executed_tool_call_metadata()).unwrap(),
+            json!({
+                "executed_tool_calls": [],
+                "tool_calls_complete": true,
+                "cell_id": "output",
+            }),
+        );
+    }
+}
+
+#[test]
+fn empty_inventory_revalidates_history_on_retry() {
+    for scenario in ["wrong_input", "duplicate_output", "late_call"] {
+        let recorder = new_recorder(InitialHistory::New);
+        let cell = CellId::new("empty-cell".to_string());
+        recorder.start_cell(&cell, "exec");
+        recorder.finish_cell_recording(&cell);
+        let mut retry_cache = HashMap::new();
+        let mut prompt = vec![exec_input("exec"), exec_output("exec")];
+        recorder.attach_to_prompt(&mut prompt, &mut retry_cache);
+        assert_eq!(tool_calls_complete(&prompt[1]), Some(true));
+        match scenario {
+            "wrong_input" => prompt[0] = wait_input("exec", &cell),
+            "duplicate_output" => prompt.push(prompt[1].clone()),
+            "late_call" => {
+                record_nested_call(&recorder, &cell, "late");
+            }
+            _ => unreachable!(),
+        }
+        recorder.attach_to_prompt(&mut prompt, &mut retry_cache);
+        assert_eq!(tool_calls_complete(&prompt[1]), None, "{scenario}");
+    }
+}
+
+#[test]
+fn empty_inventory_wait_requires_a_fresh_session() {
+    for fresh in [true, false] {
+        let history = if fresh {
+            InitialHistory::New
+        } else {
+            InitialHistory::Forked(Vec::new())
+        };
+        let recorder = new_recorder(history);
+        let cell = CellId::new("empty-cell".to_string());
+        recorder.start_cell(&cell, "exec");
+        let mut prompt = vec![exec_input("exec"), exec_output("exec")];
+        let mut retry_cache = HashMap::new();
+        recorder.attach_to_prompt(&mut prompt, &mut retry_cache);
+        assert!(prompt[1].executed_tool_call_metadata().is_none());
+        recorder.register_cell(&cell, "wait");
+        recorder.finish_cell_recording(&cell);
+        prompt.extend([wait_input("wait", &cell), output("wait")]);
+        recorder.attach_to_prompt(&mut prompt, &mut retry_cache);
+        assert!(!has_direct_call_metadata(&prompt[3]));
+        assert_eq!(tool_calls_complete(&prompt[3]), fresh.then_some(true));
+        if fresh {
+            assert_eq!(
+                serde_json::to_value(prompt[3].executed_tool_call_metadata()).unwrap(),
+                json!({"cell_id": "exec", "executed_tool_calls": [], "tool_calls_complete": true}),
+            );
+        }
     }
 }
 
