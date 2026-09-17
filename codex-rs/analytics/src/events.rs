@@ -1068,6 +1068,8 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
     pub(crate) session_id: String,
     pub(crate) turn_id: String,
+    /// First received active plugin inventory. Null is unknown; [] is observed empty.
+    pub(crate) active_plugin_ids_at_turn_start: Option<Vec<String>>,
     pub(crate) voice_session_id: Option<String>,
     pub(crate) root_turn_id: Option<String>,
     pub(crate) turn_trigger: Option<String>,

@@ -16,6 +16,7 @@ use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_exec_server::ExecutorFileSystem;
+use codex_extension_api::SelectedPluginSnapshot;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::SessionId;
@@ -37,6 +38,7 @@ use codex_sandboxing::policy_transforms::effective_permission_profile;
 use codex_skills_extension::HostSkillsSnapshot;
 use codex_skills_extension::SkillLoadOutcome;
 use codex_utils_path_uri::PathUri;
+use codex_utils_plugins::PluginIdentity;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;
@@ -318,6 +320,7 @@ pub struct TurnContext {
     pub(crate) initial_settings: Arc<ResolvedStepSettings>,
     /// Thread-owned plugin selection captured when this turn was admitted.
     pub(crate) disabled_plugin_ids: Vec<String>,
+    pub(super) active_host_plugin_identities: Option<Vec<PluginIdentity>>,
     /// Snapshot for the next step; request consumers use their captured StepContext.
     pub(super) current_settings: ArcSwap<ResolvedStepSettings>,
     /// Turn-wide telemetry; model-attributed step work should use `StepContext::session_telemetry`.
@@ -408,6 +411,46 @@ impl TurnContext {
     /// Step-scoped consumers should use their captured `StepContext::settings`.
     pub(crate) fn collaboration_mode(&self) -> CollaborationMode {
         self.initial_settings.effective_collaboration_mode()
+    }
+
+    /// Combines setup-time host identities with current ready selected packages.
+    /// Keeps the complete observation or marks it unknown; never truncates membership.
+    pub(super) fn active_plugin_ids_for_telemetry(&self) -> Option<Vec<String>> {
+        const MAX_TELEMETRY_PLUGIN_IDS: usize = 512;
+        const MAX_TELEMETRY_PLUGIN_ID_BYTES: usize = 128;
+
+        let mut identities = self.active_host_plugin_identities.clone()?;
+        // Selected roots provide a package key, not a remote identity for that object.
+        if let Some(selected) = self.extension_data.get::<SelectedPluginSnapshot>() {
+            identities.extend(selected.plugins.iter().map(|plugin| PluginIdentity {
+                plugin_id: plugin.plugin_id.clone(),
+                remote_plugin_id: None,
+            }));
+        }
+        let mut ids = Vec::with_capacity(identities.len());
+        for identity in identities {
+            let id = match identity.remote_plugin_id {
+                Some(remote_id) => {
+                    if !codex_core_plugins::remote::is_valid_remote_plugin_id(&remote_id) {
+                        return None;
+                    }
+                    remote_id
+                }
+                None => {
+                    if codex_plugin::PluginId::parse(&identity.plugin_id).is_err() {
+                        return None;
+                    }
+                    identity.plugin_id
+                }
+            };
+            if id.len() > MAX_TELEMETRY_PLUGIN_ID_BYTES {
+                return None;
+            }
+            ids.push(id);
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        (ids.len() <= MAX_TELEMETRY_PLUGIN_IDS).then_some(ids)
     }
 
     pub(crate) fn plugin_attribution_for_command(
@@ -618,6 +661,7 @@ impl TurnContext {
             auth_manager: self.auth_manager.clone(),
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: self.disabled_plugin_ids.clone(),
+            active_host_plugin_identities: self.active_host_plugin_identities.clone(),
             current_settings: ArcSwap::from(step_settings),
             session_telemetry,
             provider: self.provider.clone(),
@@ -933,6 +977,7 @@ impl Session {
             auth_manager,
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
+            active_host_plugin_identities: None,
             current_settings: ArcSwap::from(step_settings),
             session_telemetry: session_telemetry_for_context,
             provider,
@@ -1174,6 +1219,17 @@ impl Session {
         );
         turn_context.code_mode_available = self.services.code_mode_service.is_available();
         turn_context.extension_data.insert(trusted_plugin_roots);
+        turn_context.active_host_plugin_identities = Some(
+            plugin_outcome
+                .plugins()
+                .iter()
+                .filter(|plugin| plugin.is_active())
+                .map(|plugin| PluginIdentity {
+                    plugin_id: plugin.config_name.clone(),
+                    remote_plugin_id: plugin.remote_plugin_id.clone(),
+                })
+                .collect(),
+        );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 
         turn_context.final_output_json_schema = options.final_output_json_schema;
@@ -1272,3 +1328,7 @@ impl Session {
         state.session_configuration.clone()
     }
 }
+
+#[cfg(test)]
+#[path = "active_plugin_inventory_tests.rs"]
+mod tests;

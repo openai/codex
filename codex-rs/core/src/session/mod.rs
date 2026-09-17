@@ -3743,6 +3743,7 @@ impl Session {
         .await
     }
 
+    /// Captures and retains a step with the required MCP startup dependencies.
     pub(crate) async fn capture_step_context_with_required_mcp_servers(
         self: &Arc<Self>,
         turn_context: Arc<TurnContext>,

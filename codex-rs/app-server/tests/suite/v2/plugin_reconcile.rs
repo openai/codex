@@ -31,7 +31,10 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
+use super::analytics::wait_for_matching_analytics_event;
+
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_PLUGIN_ID: &str = "plugins~Plugin_00000000000000000000000000000000";
 
 #[test_case("WORKSPACE", "workspace-directory"; "workspace")]
 #[test_case("GLOBAL", "openai-curated-remote"; "global")]
@@ -139,6 +142,11 @@ async fn plugin_reconcile_syncs_bundles_and_reports_changes(
             failed_remote_plugin_ids: failures.clone(),
             failed_materialization_remote_plugin_ids: failures,
         };
+        let active_plugin_ids = if enabled {
+            vec![REMOTE_PLUGIN_ID.to_string()]
+        } else {
+            Vec::new()
+        };
         mount_installed_snapshot(&server, plugins).await;
         Mock::given(method("GET"))
             .and(path("/bundle"))
@@ -150,7 +158,13 @@ async fn plugin_reconcile_syncs_bundles_and_reports_changes(
         // A turn exercises the loaded registry, not fresh hooks/list discovery. Hooks run
         // on the app-server host even when the thread uses a remote executor.
         assert_eq!(
-            turn_hook_runs(&mut app_server, &server, thread.id.clone()).await?,
+            turn_hook_runs(
+                &mut app_server,
+                &server,
+                thread.id.clone(),
+                active_plugin_ids
+            )
+            .await?,
             usize::from(scope == "WORKSPACE" && enabled && capabilities.has_hooks),
         );
         server.verify().await;
@@ -167,7 +181,7 @@ async fn plugin_reconcile_syncs_bundles_and_reports_changes(
         }
     );
     assert_eq!(
-        turn_hook_runs(&mut app_server, &server, thread.id.clone()).await?,
+        turn_hook_runs(&mut app_server, &server, thread.id.clone(), Vec::new()).await?,
         0
     );
     server.verify().await;
@@ -196,7 +210,13 @@ async fn turn_hook_runs(
     app_server: &mut TestAppServer,
     server: &MockServer,
     thread_id: String,
+    active_plugin_ids: Vec<String>,
 ) -> Result<usize> {
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(server)
+        .await;
     let _response = responses::mount_sse_once(
         server,
         responses::sse(vec![
@@ -209,7 +229,7 @@ async fn turn_hook_runs(
     let completed = timeout(
         DEFAULT_TIMEOUT,
         app_server.start_turn_and_wait_for_completion(TurnStartParams {
-            thread_id,
+            thread_id: thread_id.clone(),
             input: vec![UserInput::Text {
                 text: "run hooks".to_string(),
                 text_elements: Vec::new(),
@@ -219,6 +239,16 @@ async fn turn_hook_runs(
     )
     .await??;
     assert_eq!(completed.turn.status, TurnStatus::Completed);
+    let event = wait_for_matching_analytics_event(server, DEFAULT_TIMEOUT, |event| {
+        event["event_type"] == "codex_turn_event"
+            && event["event_params"]["turn_id"] == completed.turn.id
+    })
+    .await?;
+    assert_eq!(event["event_params"]["thread_id"], thread_id);
+    assert_eq!(
+        event["event_params"]["active_plugin_ids_at_turn_start"],
+        json!(active_plugin_ids)
+    );
     Ok(app_server
         .pending_notification_methods()
         .iter()
@@ -284,7 +314,7 @@ async fn mount_installed_snapshot(server: &MockServer, plugins: Vec<Value>) {
 
 fn installed_plugin(version: &str, bundle_url: &str, scope: &str) -> Value {
     json!({
-        "id": "plugins~Plugin_00000000000000000000000000000000",
+        "id": REMOTE_PLUGIN_ID,
         "name": "linear",
         "scope": scope,
         "discoverability": (scope == "WORKSPACE").then_some("LISTED"),

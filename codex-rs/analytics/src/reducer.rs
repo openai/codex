@@ -1270,7 +1270,7 @@ impl AnalyticsReducer {
 
     async fn ingest_turn_resolved_config(
         &mut self,
-        input: TurnResolvedConfigFact,
+        mut input: TurnResolvedConfigFact,
         out: &mut Vec<TrackEventRequest>,
     ) {
         let turn_id = input.turn_id.clone();
@@ -1279,6 +1279,12 @@ impl AnalyticsReducer {
         let turn_state = self.turns.entry(turn_id.clone()).or_default();
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
+        // Keep the first received plugin inventory, including unknown or empty,
+        // while the remaining resolved config continues updating.
+        if let Some(initial_config) = &turn_state.resolved_config {
+            input.active_plugin_ids_at_turn_start =
+                initial_config.active_plugin_ids_at_turn_start.clone();
+        }
         turn_state.resolved_config = Some(input);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
@@ -3622,6 +3628,7 @@ fn codex_turn_event_params(
         turn_id: _resolved_turn_id,
         thread_id: _resolved_thread_id,
         turn_metadata,
+        active_plugin_ids_at_turn_start,
         num_input_images: _resolved_num_input_images,
         submission_type,
         ephemeral,
@@ -3658,6 +3665,7 @@ fn codex_turn_event_params(
         thread_id,
         session_id: thread_metadata.session_id.clone(),
         turn_id,
+        active_plugin_ids_at_turn_start,
         voice_session_id: turn_state.voice_session_id.clone(),
         root_turn_id: turn_metadata.root_turn_id(),
         turn_trigger: turn_metadata.turn_trigger(),

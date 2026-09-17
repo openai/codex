@@ -489,6 +489,7 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
         turn_id: turn_id.to_string(),
         thread_id: thread_id.to_string(),
         turn_metadata: test_turn_metadata(/*root_turn_id*/ None),
+        active_plugin_ids_at_turn_start: None,
         num_input_images: 1,
         submission_type: None,
         ephemeral: false,
@@ -5290,6 +5291,10 @@ fn turn_event_serializes_expected_shape() {
             thread_id: "thread-2".to_string(),
             session_id: "session-thread-2".to_string(),
             turn_id: "turn-2".to_string(),
+            active_plugin_ids_at_turn_start: Some(vec![
+                "plugins~Plugin_example".to_string(),
+                "test@marketplace".to_string(),
+            ]),
             voice_session_id: None,
             root_turn_id: Some("turn-2".to_string()),
             turn_trigger: Some("user".to_string()),
@@ -5368,6 +5373,7 @@ fn turn_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "session_id": "session-thread-2",
                 "turn_id": "turn-2",
+                "active_plugin_ids_at_turn_start": ["plugins~Plugin_example", "test@marketplace"],
                 "voice_session_id": null,
                 "root_turn_id": "turn-2",
                 "turn_trigger": "user",
@@ -5686,6 +5692,62 @@ async fn turn_start_error_response_discards_pending_start_request() {
         .await;
 
     assert!(out.is_empty());
+}
+
+#[tokio::test]
+async fn turn_event_preserves_first_received_plugin_inventory() {
+    for plugin_ids in [
+        None,
+        Some(vec![]),
+        Some(vec!["initial@marketplace".to_string()]),
+    ] {
+        let mut reducer = AnalyticsReducer::default();
+        let mut out = Vec::new();
+        ingest_turn_prerequisites(
+            &mut reducer,
+            &mut out,
+            /*include_initialize*/ true,
+            /*include_resolved_config*/ false,
+            /*include_started*/ true,
+            /*include_token_usage*/ false,
+        )
+        .await;
+
+        let config = TurnResolvedConfigFact {
+            active_plugin_ids_at_turn_start: plugin_ids.clone(),
+            ..sample_turn_resolved_config("thread-2", "turn-2")
+        };
+        let later_config = TurnResolvedConfigFact {
+            active_plugin_ids_at_turn_start: Some(vec!["later@marketplace".to_string()]),
+            is_first_turn: false,
+            ..config.clone()
+        };
+        for fact in [
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(config))),
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                later_config,
+            ))),
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+        ] {
+            reducer.ingest(fact, &mut out).await;
+        }
+
+        let [TrackEventRequest::TurnEvent(event)] = out.as_slice() else {
+            panic!("expected one turn event");
+        };
+        assert_eq!(
+            (
+                &event.event_params.active_plugin_ids_at_turn_start,
+                event.event_params.is_first_turn,
+            ),
+            (&plugin_ids, false),
+        );
+    }
 }
 
 #[tokio::test]

@@ -1194,6 +1194,7 @@ async fn track_turn_resolved_config_analytics(
             turn_id: turn_context.sub_id.clone(),
             thread_id: sess.thread_id.to_string(),
             turn_metadata: turn_context.turn_metadata_state.clone(),
+            active_plugin_ids_at_turn_start: turn_context.active_plugin_ids_for_telemetry(),
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {
@@ -1675,7 +1676,6 @@ pub(crate) async fn prepare_tool_recommendations(
         .services
         .plugins_manager
         .plugins_for_config(&turn_context.config.plugins_config_input())
-        .instrument(trace_span!("built_tools.load_plugins"))
         .await
         .without_plugins(&turn_context.disabled_plugin_ids);
     let tool_suggest_is_enabled = tool_suggest_enabled(turn_context);

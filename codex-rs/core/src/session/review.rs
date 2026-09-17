@@ -160,6 +160,7 @@ pub(super) async fn spawn_review_thread(
         auth_manager: auth_manager_for_context,
         initial_settings: Arc::clone(&step_settings),
         disabled_plugin_ids: parent_turn_context.disabled_plugin_ids.clone(),
+        active_host_plugin_identities: None,
         current_settings: ArcSwap::from(step_settings),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
