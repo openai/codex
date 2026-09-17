@@ -14,6 +14,7 @@ use std::path::Path;
 use tracing::warn;
 use url::Url;
 
+use crate::NetworkProxyExecutorOs;
 use crate::mitm_hook::MitmHookConfig;
 use crate::policy::normalize_host;
 
@@ -106,6 +107,9 @@ pub enum NetworkUnixSocketPermission {
     Deny,
 }
 
+/// Socket policy keys are preserved across controller and executor hosts.
+/// Allow entries must be NUL-free and absolute according to the executor OS;
+/// Deny entries are retained without path validation or expansion.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct NetworkUnixSocketPermissions {
     #[serde(flatten)]
@@ -487,21 +491,28 @@ impl ValidatedUnixSocketPath {
         if let Some(path) = UnixStyleAbsolutePath::parse(socket_path) {
             return Ok(Self::UnixStyleAbsolute(path));
         }
-
         bail!("expected an absolute path, got {socket_path:?}");
     }
 }
 
-pub(crate) fn validate_unix_socket_allowlist_paths(cfg: &NetworkProxyConfig) -> Result<()> {
+pub(crate) fn validate_unix_socket_allowlist_paths(
+    cfg: &NetworkProxyConfig,
+    executor_os: NetworkProxyExecutorOs,
+) -> Result<()> {
     for (index, socket_path) in cfg.allow_unix_sockets().iter().enumerate() {
-        ValidatedUnixSocketPath::parse(socket_path)
-            .with_context(|| format!("invalid network.allow_unix_sockets[{index}]"))?;
+        anyhow::ensure!(
+            executor_os.socket_path_is_absolute(socket_path) && !socket_path.contains('\0'),
+            "invalid network.allow_unix_sockets[{index}]: expected a NUL-free absolute path for {executor_os:?}, got {socket_path:?}"
+        );
     }
     Ok(())
 }
 
-pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
-    validate_unix_socket_allowlist_paths(cfg)?;
+pub fn resolve_runtime(
+    cfg: &NetworkProxyConfig,
+    executor_os: NetworkProxyExecutorOs,
+) -> Result<RuntimeConfig> {
+    validate_unix_socket_allowlist_paths(cfg, executor_os)?;
 
     let http_addr = resolve_addr(&cfg.proxy_url, /*default_port*/ 3128)
         .with_context(|| format!("invalid network.proxy_url: {}", cfg.proxy_url))?;
@@ -517,7 +528,10 @@ pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
 
 /// Returns the sorted loopback ports used by the configured managed proxy listeners.
 pub fn managed_proxy_ports(cfg: &NetworkProxyConfig) -> Result<Vec<u16>> {
-    let runtime = resolve_runtime(cfg)?;
+    let runtime = resolve_runtime(
+        cfg,
+        NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+    )?;
     if runtime.http_addr.port() == 0 {
         bail!("network.proxy_url must use a fixed non-zero port for managed proxy provisioning");
     }
@@ -1085,29 +1099,77 @@ mod tests {
     }
 
     #[test]
-    fn resolve_runtime_rejects_relative_allow_unix_sockets_entries() {
-        let cfg = settings_with_unix_sockets(&["relative.sock"]);
-
-        let err = match resolve_runtime(&cfg) {
-            Ok(runtime) => panic!(
-                "relative allow_unix_sockets should fail, but resolve_runtime succeeded: {:?}",
-                runtime.http_addr
-            ),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("network.allow_unix_sockets[0]"),
-            "error should point at the invalid allow_unix_sockets entry: {err:#}"
-        );
+    fn resolve_runtime_validates_allow_unix_sockets_for_executor_os() {
+        for (path, unix_absolute, windows_absolute) in [
+            ("relative.sock", false, false),
+            ("~/example.sock", false, false),
+            ("/tmp/example.sock", true, true),
+            (r"C:\example.sock", false, true),
+            ("C:/example.sock", false, true),
+            (r"\\server\share\example.sock", false, true),
+            (r"\\?\C:\example.sock", false, true),
+            (r"\\.\pipe\example", false, true),
+            (r"C:example.sock", false, false),
+            (r"\example.sock", false, false),
+            (r"\\server", false, false),
+            ("/tmp/\0example.sock", false, false),
+            ("C:\\example\0.sock", false, false),
+        ] {
+            let cfg = settings_with_unix_sockets(&[path]);
+            for (executor_os, accepted) in [
+                (NetworkProxyExecutorOs::Linux, unix_absolute),
+                (NetworkProxyExecutorOs::Macos, unix_absolute),
+                (NetworkProxyExecutorOs::Windows, windows_absolute),
+                (
+                    NetworkProxyExecutorOs::Unknown,
+                    unix_absolute || windows_absolute,
+                ),
+            ] {
+                assert_eq!(
+                    resolve_runtime(&cfg, executor_os).is_ok(),
+                    accepted,
+                    "{executor_os:?}: {path:?}"
+                );
+            }
+            // Each platform's CI compares the portable implementation to native
+            // Core acceptance, with the deliberate shared NUL rejection.
+            assert_eq!(
+                resolve_runtime(
+                    &cfg,
+                    NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS))
+                )
+                .is_ok(),
+                (Path::new(path).is_absolute() || path.starts_with('/')) && !path.contains('\0'),
+                "native parity: {path:?}"
+            );
+        }
     }
 
     #[test]
     fn resolve_runtime_accepts_unix_style_absolute_allow_unix_sockets_entries() {
-        let cfg = settings_with_unix_sockets(&["/private/tmp/example.sock"]);
+        let mut cfg = settings_with_unix_sockets(&[
+            "/private/tmp/example.sock",
+            "/tmp/../example.sock",
+            r"/tmp/name\part.sock",
+        ]);
+        for path in ["relative.sock", "~/example.sock", r"C:\example.sock", "\0"] {
+            cfg.unix_sockets
+                .as_mut()
+                .unwrap()
+                .entries
+                .insert(path.to_string(), NetworkUnixSocketPermission::Deny);
+        }
 
-        assert!(
-            resolve_runtime(&cfg).is_ok(),
-            "unix-style absolute allow_unix_sockets entry should be accepted"
-        );
+        for executor_os in [
+            NetworkProxyExecutorOs::Linux,
+            NetworkProxyExecutorOs::Macos,
+            NetworkProxyExecutorOs::Windows,
+            NetworkProxyExecutorOs::Unknown,
+        ] {
+            assert!(
+                resolve_runtime(&cfg, executor_os).is_ok(),
+                "unix-style absolute allow_unix_sockets entry should be accepted"
+            );
+        }
     }
 }

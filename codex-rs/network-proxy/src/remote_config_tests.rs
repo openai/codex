@@ -4,9 +4,12 @@ use super::RemoteNetworkProxyConfig;
 use super::RemoteNetworkProxyLaunchConfig;
 use crate::MitmHookConfig;
 use crate::NetworkMode;
+use crate::NetworkProxy;
 use crate::NetworkProxyAuditMetadata;
 use crate::NetworkProxyConfig;
+use crate::NetworkProxyExecutorOs;
 use crate::NetworkProxyState;
+use std::sync::Arc;
 
 #[test]
 fn optional_socket_policy_preserves_input_and_resolves_at_remote_boundary() {
@@ -38,27 +41,65 @@ fn optional_socket_policy_preserves_input_and_resolves_at_remote_boundary() {
     }
 }
 
-#[test]
-fn round_trip_preserves_supported_effective_settings() {
-    let mut config = NetworkProxyConfig {
-        enabled: true,
-        enable_socks5: false,
-        enable_socks5_udp: false,
-        allow_upstream_proxy: false,
-        dangerously_allow_all_unix_sockets: Some(true),
-        mode: NetworkMode::Limited,
-        allow_local_binding: true,
-        ..NetworkProxyConfig::default()
-    };
-    config.set_allowed_domains(vec!["example.com".into()]);
-    config.set_denied_domains(vec!["blocked.example.com".into()]);
-    config.set_allow_unix_sockets(vec!["/var/run/example.sock".into()]);
+#[tokio::test]
+async fn round_trip_preserves_supported_effective_settings() {
+    for (executor_os, socket) in [
+        (NetworkProxyExecutorOs::Linux, "/var/run/example.sock"),
+        (NetworkProxyExecutorOs::Macos, "/var/run/example.sock"),
+        (NetworkProxyExecutorOs::Windows, r"C:\example.sock"),
+        (NetworkProxyExecutorOs::Unknown, r"C:\example.sock"),
+    ] {
+        let mut config = NetworkProxyConfig {
+            enabled: true,
+            enable_socks5: false,
+            enable_socks5_udp: false,
+            allow_upstream_proxy: false,
+            dangerously_allow_all_unix_sockets: Some(true),
+            mode: NetworkMode::Limited,
+            allow_local_binding: true,
+            ..NetworkProxyConfig::default()
+        };
+        config.set_allowed_domains(vec!["example.com".into()]);
+        config.set_denied_domains(vec!["blocked.example.com".into()]);
+        config.set_allow_unix_sockets(vec![socket.into()]);
 
-    let remote =
-        RemoteNetworkProxyConfig::from_effective_config(&config).expect("supported remote config");
-    let round_trip = remote.into_network_proxy_config();
+        let remote = RemoteNetworkProxyConfig::from_effective_config(&config)
+            .expect("supported remote config");
+        let round_trip = remote.clone().into_network_proxy_config();
 
-    assert_eq!(round_trip, config);
+        assert_eq!(round_trip, config);
+
+        let state = Arc::new(
+            NetworkProxyState::from_remote_launch_config(
+                RemoteNetworkProxyLaunchConfig::new(remote),
+                executor_os,
+            )
+            .unwrap(),
+        );
+        // Policy edits and carrier construction must retain the executor's OS even
+        // when the controller itself cannot interpret the socket as a native path.
+        state.add_allowed_domain("added.example.com").await.unwrap();
+        let proxy = NetworkProxy::builder()
+            .state(state)
+            .managed_by_codex(/*managed_by_codex*/ false)
+            .build()
+            .await
+            .unwrap();
+        config.upsert_domain_permission(
+            "added.example.com".into(),
+            crate::NetworkDomainPermission::Allow,
+            crate::normalize_host,
+        );
+        assert_eq!(
+            proxy
+                .remote_launch_config()
+                .await
+                .unwrap()
+                .proxy
+                .into_network_proxy_config(),
+            config
+        );
+    }
 }
 
 #[test]
@@ -136,13 +177,16 @@ fn launch_config_materializes_audit_and_execution_attribution() {
         model: Some("model-1".to_string()),
         ..NetworkProxyAuditMetadata::default()
     };
-    let state = NetworkProxyState::from_remote_launch_config(RemoteNetworkProxyLaunchConfig {
-        proxy,
-        audit_metadata: audit_metadata.clone(),
-        environment_id: Some("remote".to_string()),
-        execution_id: Some("execution-1".to_string()),
-        policy_decision_timeout_ms: None,
-    })
+    let state = NetworkProxyState::from_remote_launch_config(
+        RemoteNetworkProxyLaunchConfig {
+            proxy,
+            audit_metadata: audit_metadata.clone(),
+            environment_id: Some("remote".to_string()),
+            execution_id: Some("execution-1".to_string()),
+            policy_decision_timeout_ms: None,
+        },
+        NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+    )
     .expect("remote launch state");
 
     assert_eq!(state.audit_metadata(), &audit_metadata);

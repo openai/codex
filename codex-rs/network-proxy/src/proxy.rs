@@ -224,7 +224,7 @@ impl NetworkProxyBuilder {
         state
             .set_blocked_request_observer(self.blocked_request_observer.clone())
             .await;
-        let current_cfg = state.current_cfg().await?;
+        let (current_cfg, _, executor_os) = state.current_cfg_with_brokerage_provenance().await?;
         #[cfg(target_os = "windows")]
         let (current_cfg, runtime_settings, mut windows_ingress) = {
             let current_cfg = config::NetworkProxyConfig {
@@ -238,7 +238,7 @@ impl NetworkProxyBuilder {
         let (requested_http_addr, requested_socks_addr, reserved_listeners) = if self
             .managed_by_codex
         {
-            let runtime = config::resolve_runtime(&current_cfg)?;
+            let runtime = config::resolve_runtime(&current_cfg, executor_os)?;
             #[cfg(target_os = "windows")]
             let shared_ingress_addrs = if self.managed_proxy_routing
                 == ManagedProxyRouting::SharedIngress
@@ -273,7 +273,7 @@ impl NetworkProxyBuilder {
                 )
             }
         } else {
-            let runtime = config::resolve_runtime(&current_cfg)?;
+            let runtime = config::resolve_runtime(&current_cfg, executor_os)?;
             (
                 self.http_addr.unwrap_or(runtime.http_addr),
                 self.socks_addr.unwrap_or(runtime.socks_addr),
@@ -926,7 +926,7 @@ impl NetworkProxy {
 
     /// Captures the static inputs needed to launch a matching executor-local proxy.
     pub async fn remote_launch_config(&self) -> Result<crate::RemoteNetworkProxyLaunchConfig> {
-        let (mut config, brokerage_created_default_allowlist) =
+        let (mut config, brokerage_created_default_allowlist, _) =
             self.state.current_cfg_with_brokerage_provenance().await?;
         // Proxy enablement and credential brokerage remain controller-owned.
         let mut broker_only_config = config::NetworkProxyConfig {
@@ -1817,7 +1817,11 @@ mod tests {
                 format!("{expected_bind_host}:8081").parse::<SocketAddr>()?,
             )
         );
-        let replacement = crate::state::build_config_state(config.clone(), Default::default())?;
+        let replacement = crate::state::build_config_state(
+            config.clone(),
+            Default::default(),
+            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        )?;
         proxy.replace_config_state(replacement).await?;
         let expected_unix_sockets = if cfg!(target_os = "windows") {
             Vec::new()
@@ -2087,6 +2091,7 @@ mod tests {
                     ..NetworkProxyConfig::default()
                 },
                 Default::default(),
+                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
             )
             .expect("replacement config state");
             proxy
@@ -2169,7 +2174,11 @@ mod tests {
 
         for allow_all in [false, true] {
             config.dangerously_allow_all_unix_sockets = Some(allow_all);
-            let replacement = crate::state::build_config_state(config.clone(), Default::default())?;
+            let replacement = crate::state::build_config_state(
+                config.clone(),
+                Default::default(),
+                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            )?;
             proxy.replace_config_state(replacement).await?;
             let prepared = proxy
                 .prepare_for_optional_environment(HashMap::new(), /*environment_id*/ None)?;

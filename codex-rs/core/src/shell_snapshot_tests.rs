@@ -521,6 +521,9 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
             .replace_config_state(codex_network_proxy::build_config_state(
                 config,
                 codex_network_proxy::NetworkProxyConstraints::default(),
+                codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(
+                    std::env::consts::OS,
+                )),
             )?)
             .await?;
         assert_eq!(
@@ -569,6 +572,9 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
             .replace_config_state(codex_network_proxy::build_config_state(
                 config,
                 codex_network_proxy::NetworkProxyConstraints::default(),
+                codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(
+                    std::env::consts::OS,
+                )),
             )?)
             .await?;
         fs::write(dir.path().join("finish-startup"), "").await?;

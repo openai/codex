@@ -902,7 +902,12 @@ mod tests {
     fn state_for_settings(network: NetworkProxyConfig) -> Arc<NetworkProxyState> {
         let config = network;
         let _mitm_config_state_guard = config.mitm.then(|| MITM_CONFIG_STATE_LOCK.lock().unwrap());
-        let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
+        let state = build_config_state(
+            config,
+            NetworkProxyConstraints::default(),
+            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        )
+        .unwrap();
         let reloader = Arc::new(StaticReloader {
             state: state.clone(),
         });

@@ -57,9 +57,12 @@ pub struct PartialNetworkProxyConfig {
     pub mitm_hooks: Option<Vec<MitmHookConfig>>,
 }
 
+/// Compiles policy using the supplied executor OS, which may differ from this host.
+/// Socket paths are validated without native normalization or filesystem access.
 pub fn build_config_state(
     mut config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
+    executor_os: crate::NetworkProxyExecutorOs,
 ) -> anyhow::Result<ConfigState> {
     if constraints.enabled == Some(false) {
         config.credential_broker = false;
@@ -74,7 +77,7 @@ pub fn build_config_state(
     if brokerage_created_default_allowlist {
         config.set_allowed_domains(vec!["*".to_string()]);
     }
-    crate::config::validate_unix_socket_allowlist_paths(&config)?;
+    crate::config::validate_unix_socket_allowlist_paths(&config, executor_os)?;
     anyhow::ensure!(
         !config.credential_broker || config.mitm,
         "network.credential_broker requires network.mitm = true"
@@ -94,6 +97,7 @@ pub fn build_config_state(
         None
     };
     Ok(ConfigState {
+        executor_os,
         config,
         brokerage_created_default_allowlist,
         allow_set,

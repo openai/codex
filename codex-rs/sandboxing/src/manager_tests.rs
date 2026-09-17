@@ -541,6 +541,7 @@ async fn linux_unix_socket_grant_uses_effective_managed_policy() -> anyhow::Resu
             ..Default::default()
         },
         NetworkProxyConstraints::default(),
+        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
     )?;
     let network = NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(

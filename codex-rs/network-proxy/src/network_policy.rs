@@ -674,7 +674,12 @@ mod tests {
             ..NetworkProxyConfig::default()
         };
         let config = network;
-        let state = build_config_state(config, NetworkProxyConstraints::default()).unwrap();
+        let state = build_config_state(
+            config,
+            NetworkProxyConstraints::default(),
+            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        )
+        .unwrap();
         let reloader = Arc::new(StaticReloader {
             state: state.clone(),
         });

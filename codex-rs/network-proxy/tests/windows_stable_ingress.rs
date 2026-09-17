@@ -302,7 +302,11 @@ async fn build_proxy(
         ..NetworkProxyConfig::default()
     };
     config.set_allowed_domains(vec![allowed_domain.to_string()]);
-    let config_state = build_config_state(config, Default::default())?;
+    let config_state = build_config_state(
+        config,
+        Default::default(),
+        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+    )?;
     let reloader = Arc::new(StaticReloader(config_state.clone()));
     let state = Arc::new(NetworkProxyState::with_reloader(config_state, reloader));
     let mut builder = NetworkProxy::builder().state(state);

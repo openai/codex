@@ -140,8 +140,14 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
         if allow_path {
             config.set_allow_unix_sockets(vec![socket_path.to_string_lossy().into_owned()]);
         }
-        let state = build_config_state(config, NetworkProxyConstraints::default())
-            .expect("valid managed network configuration");
+        let state = build_config_state(
+            config,
+            NetworkProxyConstraints::default(),
+            codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(
+                std::env::consts::OS,
+            )),
+        )
+        .expect("valid managed network configuration");
         let network = NetworkProxy::builder()
             .state(Arc::new(NetworkProxyState::with_reloader(
                 state.clone(),

@@ -84,7 +84,11 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
             Some(expected),
             "{name}"
         );
-        let state = Arc::new(controller.build_state_with_audit_metadata(Default::default())?);
+        let state =
+            Arc::new(controller.build_state_with_audit_metadata(
+                Default::default(),
+                NetworkProxyExecutorOs::Linux,
+            )?);
         let proxy = NetworkProxy::builder()
             .state(Arc::clone(&state))
             .managed_by_codex(false)
@@ -138,7 +142,9 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
                 &profile,
             )?;
             proxy
-                .replace_config_state(restricted.build_config_state_for_spec()?)
+                .replace_config_state(
+                    restricted.build_config_state_for_spec(NetworkProxyExecutorOs::Linux)?,
+                )
                 .await?;
             assert!(
                 !scoped
@@ -169,7 +175,7 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
     };
 
     let state = spec
-        .build_state_with_audit_metadata(metadata.clone())
+        .build_state_with_audit_metadata(metadata.clone(), NetworkProxyExecutorOs::Linux)
         .expect("state should build");
     assert_eq!(state.audit_metadata(), &metadata);
 }
@@ -252,11 +258,15 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     let owner_policy =
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert_eq!(
-        validate_environment_network_policy(&owner_policy, &profile),
+        validate_environment_network_policy(&owner_policy, &profile, NetworkProxyExecutorOs::Linux),
         Ok(())
     );
     assert_eq!(
-        validate_environment_network_policy(&owner_policy, &PermissionProfile::Disabled),
+        validate_environment_network_policy(
+            &owner_policy,
+            &PermissionProfile::Disabled,
+            NetworkProxyExecutorOs::Linux
+        ),
         Err(EnvironmentNetworkConfigError)
     );
     let compose = NetworkProxySpec::for_environment;
@@ -324,14 +334,22 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert!(compose(Some(&spec), &wildcard_policy, &profile, &empty).is_err());
     assert_eq!(
-        validate_environment_network_policy(&wildcard_policy, &profile),
+        validate_environment_network_policy(
+            &wildcard_policy,
+            &profile,
+            NetworkProxyExecutorOs::Linux
+        ),
         Err(EnvironmentNetworkConfigError)
     );
     owner.set_allowed_domains(vec!["[".to_string()]);
     let malformed_policy =
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert_eq!(
-        validate_environment_network_policy(&malformed_policy, &profile),
+        validate_environment_network_policy(
+            &malformed_policy,
+            &profile,
+            NetworkProxyExecutorOs::Linux
+        ),
         Err(EnvironmentNetworkConfigError)
     );
 }
