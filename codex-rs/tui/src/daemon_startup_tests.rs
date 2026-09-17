@@ -83,3 +83,82 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
     }
     Ok(())
 }
+
+#[test]
+fn daemon_eligibility_preserves_launch_options_and_explains_exclusions() {
+    use clap::Parser;
+    for (args, expected) in [
+        ("--no-daemon", Some("--no-daemon")),
+        ("--worktree", Some("--worktree")),
+        ("--oss", Some("--oss")),
+        ("--profile test", Some("--profile")),
+        ("--strict-config", Some("--strict-config")),
+        (
+            "--dangerously-bypass-hook-trust",
+            Some("--dangerously-bypass-hook-trust"),
+        ),
+        (
+            "-m test --cd /tmp -i image.png -a never -s workspace-write --add-dir /tmp --no-alt-screen hello",
+            None,
+        ),
+    ] {
+        let cli = Cli::parse_from(std::iter::once("codex").chain(args.split_whitespace()));
+        assert_eq!(
+            daemon_startup::exclusion(
+                &cli,
+                &[],
+                &LoaderOverrides::default(),
+                /*workload_identity_selected*/ false,
+                /*exec_server_url*/ None
+            ),
+            expected
+        );
+    }
+    let mut cli = Cli::parse_from(["codex"]);
+    let overrides = vec![("web_search".into(), toml::Value::String("live".into()))];
+    let loader = LoaderOverrides {
+        ignore_user_config: true,
+        ..Default::default()
+    };
+    for (kv, loader, workload, executor, expected) in [
+        (
+            &overrides[..],
+            LoaderOverrides::default(),
+            false,
+            None,
+            "command-line configuration overrides (-c, --enable, --disable, or --search)",
+        ),
+        (&[][..], loader, false, None, "custom configuration loader"),
+        (
+            &[][..],
+            LoaderOverrides::default(),
+            true,
+            None,
+            "workload identity",
+        ),
+        (
+            &[][..],
+            LoaderOverrides::default(),
+            false,
+            Some(std::ffi::OsStr::new("executor")),
+            "executor selection (CODEX_EXEC_SERVER_URL)",
+        ),
+    ] {
+        assert_eq!(
+            daemon_startup::exclusion(&cli, kv, &loader, workload, executor),
+            Some(expected)
+        );
+    }
+    cli.agents_overview = true;
+    cli.strict_config = true;
+    assert_eq!(
+        daemon_startup::exclusion(
+            &cli,
+            &overrides,
+            &LoaderOverrides::default(),
+            /*workload_identity_selected*/ false,
+            /*exec_server_url*/ None
+        ),
+        None
+    );
+}

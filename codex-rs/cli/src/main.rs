@@ -337,6 +337,9 @@ struct DebugTraceReduceCommand {
 
 #[derive(Debug, Parser)]
 struct AgentsCommand {
+    /// The agents overview requires a shared server; this option is rejected.
+    #[arg(long, hide = true)]
+    no_daemon: bool,
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
@@ -1215,6 +1218,7 @@ async fn cli_main(
     if let Some(options) = agents_options {
         interactive.cwd = options.cwd.clone().or(interactive.cwd.take());
         interactive.no_alt_screen |= options.no_alt_screen;
+        interactive.no_daemon |= options.no_daemon;
     }
     let root_strict_config = interactive.strict_config;
     interactive
@@ -2797,6 +2801,18 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
+    if interactive.no_daemon {
+        if interactive.agents_overview {
+            return Ok(AppExitInfo::fatal(
+                "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it.",
+            ));
+        }
+        if remote.is_some() {
+            return Ok(AppExitInfo::fatal(
+                "--no-daemon cannot be used with --remote.",
+            ));
+        }
+    }
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
@@ -2833,7 +2849,9 @@ async fn run_interactive_tui(
             .map_err(std::io::Error::other)?;
         codex_app_server_daemon::run(AppServerLifecycleCommand::Start)
             .await
-            .map_err(std::io::Error::other)?;
+            .map_err(|err| std::io::Error::other(format!(
+                "{err:#}\nThe agents overview requires a shared server. Use codex --no-daemon to work without it."
+            )))?;
     }
 
     let remote_endpoint = match resolve_remote_endpoint(remote, remote_auth_token_env.clone()) {
@@ -3056,6 +3074,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         approval_policy,
         web_search,
         no_alt_screen,
+        no_daemon,
         prompt,
         mut config_overrides,
         ..
@@ -3076,6 +3095,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         interactive.web_search = true;
     }
     interactive.no_alt_screen |= no_alt_screen;
+    interactive.no_daemon |= no_daemon;
     if strict_config {
         interactive.strict_config = true;
     }
@@ -4264,6 +4284,21 @@ mod tests {
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_and_fork_preserve_no_daemon() {
+        for (command, finalize) in [
+            ("resume", finalize_resume_from_args as fn(&[&str]) -> TuiCli),
+            ("fork", finalize_fork_from_args as fn(&[&str]) -> TuiCli),
+        ] {
+            for args in [
+                ["codex", "--no-daemon", command, "--last"],
+                ["codex", command, "--last", "--no-daemon"],
+            ] {
+                assert!(finalize(&args).no_daemon);
+            }
+        }
     }
 
     #[test]

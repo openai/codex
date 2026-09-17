@@ -298,3 +298,35 @@ async fn features_list_honors_cloud_managed_feature_requirements() -> Result<()>
 
     Ok(())
 }
+
+#[test]
+fn no_daemon_rejects_agents_and_explicit_remote_targets() -> Result<()> {
+    for args in [
+        "--no-daemon agents",
+        "agents --no-daemon",
+        "--no-daemon queue --thread example --message hello",
+        "--no-daemon --remote ws://localhost:9999 agents",
+        "--no-daemon --remote ws://localhost:9999",
+        "--no-daemon --remote ws://localhost:9999 archive example",
+        "--no-daemon --remote ws://localhost:9999 queue --thread example --message hello",
+        "--remote ws://localhost:9999 resume --no-daemon --last",
+        "--no-daemon fork --remote ws://localhost:9999 session-name",
+    ] {
+        let args = args.split_whitespace().collect::<Vec<_>>();
+        let home = TempDir::new()?;
+        let expected = if args.contains(&"agents") {
+            "--no-daemon cannot be used with codex agents."
+        } else if args.contains(&"queue") && !args.contains(&"--remote") {
+            "--no-daemon cannot be used with codex queue."
+        } else {
+            "--no-daemon cannot be used with --remote."
+        };
+        codex_command(home.path())?
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(contains(expected));
+        assert!(!home.path().join("app-server-daemon").exists());
+    }
+    Ok(())
+}

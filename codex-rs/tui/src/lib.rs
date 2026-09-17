@@ -987,19 +987,6 @@ fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
     loader_overrides_are_default
 }
 
-fn can_reuse_implicit_local_daemon(
-    cli_kv_overrides: &[(String, toml::Value)],
-    loader_overrides: &LoaderOverrides,
-    strict_config: bool,
-    has_non_replayable_launch_overrides: bool,
-) -> bool {
-    // A reused daemon cannot adopt this invocation's full launch config state.
-    cli_kv_overrides.is_empty()
-        && loader_overrides_are_default(loader_overrides)
-        && !strict_config
-        && !has_non_replayable_launch_overrides
-}
-
 /// Restore terminal modes before a fatal startup exit bypasses destructor cleanup.
 fn restore_terminal_before_fatal_exit() {
     if crossterm::terminal::is_raw_mode_enabled().unwrap_or(false) {
@@ -2175,6 +2162,8 @@ fn should_show_bedrock_setup_wizard(
             .is_login_method_allowed(ForcedLoginMethod::Api)
 }
 
+mod daemon_startup;
+
 #[cfg(test)]
 #[path = "daemon_startup_tests.rs"]
 mod daemon_startup_tests;
@@ -3017,45 +3006,6 @@ requires_openai_auth = {requires_openai_auth}
             error.to_string(),
             "workload identity must be configured on the remote app-server host"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn can_reuse_implicit_local_daemon_requires_default_launch_config() -> color_eyre::Result<()> {
-        let mut loader_overrides = LoaderOverrides::default();
-        let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
-
-        assert!(can_reuse_implicit_local_daemon(
-            &[],
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        assert!(!can_reuse_implicit_local_daemon(
-            &cli_kv_overrides,
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        loader_overrides.ignore_user_config = true;
-        assert!(!can_reuse_implicit_local_daemon(
-            &[],
-            &loader_overrides,
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        assert!(!can_reuse_implicit_local_daemon(
-            &[],
-            &LoaderOverrides::default(),
-            /*strict_config*/ true,
-            /*has_non_replayable_launch_overrides*/ false,
-        ));
-        assert!(!can_reuse_implicit_local_daemon(
-            &[],
-            &LoaderOverrides::default(),
-            /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ true,
-        ));
         Ok(())
     }
 

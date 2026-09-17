@@ -80,6 +80,10 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Run without the shared background server, even if it is already running.
+    #[arg(long)]
+    pub no_daemon: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
