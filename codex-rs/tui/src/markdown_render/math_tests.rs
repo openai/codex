@@ -32,6 +32,60 @@ fn unicode_math_inline_narrow_snapshot() {
 }
 
 #[test]
+fn unicode_math_accents_and_symbols_snapshot() {
+    insta::assert_snapshot!(plain(
+        r"Operators: $\hat H^2 + \hbar^2$, $\ell$, $A\dagger$, $B\ddagger$.
+Accents: $\bar{x}_1$, $\tilde{x}^2$, $\vec{v}_i$, $\dot{x}$, $\ddot{x}$.
+Greek accents: $\hat{\Psi}^2$, $\bar{\varrho}$, $\tilde{\varsigma}$.
+Other symbols: $\varkappa+\varpi$, $\Re z+\Im z$, $\aleph_0$, $\hat{\imath}$.
+Relations: $a\propto b\sim c\simeq d\ll e\gg f$.
+Geometry: $a\perp b\parallel c$, $\angle ABC\cong\angle DEF$.
+Bounds: $a\lesssim b\gtrsim c$; operators: $a\oplus b\otimes c\odot d$.
+Sets: $A\supseteq B\supset C\ni x$, $A\setminus B=\varnothing$.
+Logic: $\neg P\land Q\lor R\implies S\iff T\impliedby U$, $\nexists x$.
+Arrows: $a\leftrightarrow b\mapsto c\Leftarrow d$, $\uparrow\downarrow\updownarrow$.
+Integrals: $\iint f$, $\iiint g$, $\oint h$.
+Collections: $\coprod A$, $\bigcup B$, $\bigcap C$.
+Punctuation: $x\prime$, $a\circ b\bullet c$, $\vdots\ddots$.",
+        /*width*/ 80
+    ));
+}
+
+#[test]
+fn unicode_math_named_delimiters_snapshot() {
+    insta::assert_snapshot!(plain(
+        r"Inner product: $\left\langle\hat H\right\rangle$.
+Rounding: $\lfloor x\rfloor + \left\lceil y\right\rceil$.
+Norms: $\left\lVert v\right\rVert$, $\lvert x\rvert$, $\left\|w\right\|$.
+Sets: $\left\{x\right\}$, $\lbrace y\rbrace$, $\lbrack z\rbrack$.
+Angles: $\left<x\right>$.",
+        /*width*/ 80
+    ));
+}
+
+#[test]
+fn unicode_math_accents_reject_ambiguous_arguments() {
+    for source in [
+        r"\hat{xy}",
+        r"\bar{x+y}",
+        r"\tilde{x^2}",
+        r"\vec{\frac{x}{y}}",
+        r"\dot{}",
+        r"\ddot{ }",
+        r"\hat",
+        "\\hat{\u{0302}}",
+    ] {
+        for display in [false, true] {
+            assert_eq!(render(source, display), None, "{source}");
+        }
+        assert_eq!(
+            plain(&format!("\\({source}\\)"), /*width*/ 80),
+            format!("\\({source}\\)")
+        );
+    }
+}
+
+#[test]
 fn unicode_math_preserves_markdown_contexts() {
     for (source, expected) in [
         (
@@ -77,6 +131,8 @@ fn unicode_math_bounds_and_unsupported_input() {
         r"\sqrt[3]{x}",
         r"\sqrt [3]{x}",
         r"\left x",
+        r"\left\alpha x\right\rangle",
+        r"\left\ ",
         r"\text{\alpha}",
         r"\begin{matrix}a&b\end{matrix}",
     ] {

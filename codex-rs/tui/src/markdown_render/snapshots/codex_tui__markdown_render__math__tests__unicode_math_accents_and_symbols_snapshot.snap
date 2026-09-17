@@ -1,0 +1,17 @@
+---
+source: tui/src/markdown_render/math_tests.rs
+expression: "plain(r\"Operators: $\\hat H^2 + \\hbar^2$, $\\ell$, $A\\dagger$, $B\\ddagger$.\nAccents: $\\bar{x}_1$, $\\tilde{x}^2$, $\\vec{v}_i$, $\\dot{x}$, $\\ddot{x}$.\nGreek accents: $\\hat{\\Psi}^2$, $\\bar{\\varrho}$, $\\tilde{\\varsigma}$.\nOther symbols: $\\varkappa+\\varpi$, $\\Re z+\\Im z$, $\\aleph_0$, $\\hat{\\imath}$.\nRelations: $a\\propto b\\sim c\\simeq d\\ll e\\gg f$.\nGeometry: $a\\perp b\\parallel c$, $\\angle ABC\\cong\\angle DEF$.\nBounds: $a\\lesssim b\\gtrsim c$; operators: $a\\oplus b\\otimes c\\odot d$.\nSets: $A\\supseteq B\\supset C\\ni x$, $A\\setminus B=\\varnothing$.\nLogic: $\\neg P\\land Q\\lor R\\implies S\\iff T\\impliedby U$, $\\nexists x$.\nArrows: $a\\leftrightarrow b\\mapsto c\\Leftarrow d$, $\\uparrow\\downarrow\\updownarrow$.\nIntegrals: $\\iint f$, $\\iiint g$, $\\oint h$.\nCollections: $\\coprod A$, $\\bigcup B$, $\\bigcap C$.\nPunctuation: $x\\prime$, $a\\circ b\\bullet c$, $\\vdots\\ddots$.\",\n80)"
+---
+Operators: Ĥ² + ℏ², ℓ, A†, B‡.
+Accents: x̄₁, x̃², v⃗ᵢ, ẋ, ẍ.
+Greek accents: Ψ̂², ϱ̄, ς̃.
+Other symbols: ϰ+ϖ, ℜ z+ℑ z, ℵ₀, ı̂.
+Relations: a∝ b∼ c≃ d≪ e≫ f.
+Geometry: a⊥ b∥ c, ∠ ABC≅∠ DEF.
+Bounds: a≲ b≳ c; operators: a⊕ b⊗ c⊙ d.
+Sets: A⊇ B⊃ C∋ x, A∖ B=∅.
+Logic: ¬ P∧ Q∨ R⇒ S⇔ T⇐ U, ∄ x.
+Arrows: a↔ b↦ c⇐ d, ↑↓↕.
+Integrals: ∬ f, ∭ g, ∮ h.
+Collections: ∐ A, ⋃ B, ⋂ C.
+Punctuation: x′, a∘ b∙ c, ⋮⋱.

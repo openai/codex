@@ -1,0 +1,9 @@
+---
+source: tui/src/markdown_render/math_tests.rs
+expression: "plain(r\"Inner product: $\\left\\langle\\hat H\\right\\rangle$.\nRounding: $\\lfloor x\\rfloor + \\left\\lceil y\\right\\rceil$.\nNorms: $\\left\\lVert v\\right\\rVert$, $\\lvert x\\rvert$, $\\left\\|w\\right\\|$.\nSets: $\\left\\{x\\right\\}$, $\\lbrace y\\rbrace$, $\\lbrack z\\rbrack$.\nAngles: $\\left<x\\right>$.\",\n80)"
+---
+Inner product: ⟨Ĥ⟩.
+Rounding: ⌊ x⌋ + ⌈ y⌉.
+Norms: ‖ v‖, | x|, ‖w‖.
+Sets: {x}, { y}, [ z].
+Angles: ⟨x⟩.

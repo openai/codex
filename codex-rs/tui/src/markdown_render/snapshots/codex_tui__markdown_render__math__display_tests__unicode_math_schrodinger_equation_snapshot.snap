@@ -1,0 +1,7 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(r\"\\[\ni\\hbar \\frac{\\partial}{\\partial t}\\Psi(\\mathbf r,t)\n=\n\\hat H\\Psi(\\mathbf r,t)\n=\n\\left[-\\frac{\\hbar^2}{2m}\\nabla^2+V(\\mathbf r,t)\\right]\\Psi(\\mathbf r,t).\n\\]\",\n100)"
+---
+    ∂                       ℏ²
+iℏ ───Ψ(r,t) = ĤΨ(r,t) = [- ──∇²+V(r,t)]Ψ(r,t).
+   ∂ t                      2m

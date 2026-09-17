@@ -57,6 +57,20 @@ $$\beta$$";
 }
 
 #[test]
+fn unicode_math_schrodinger_equation_snapshot() {
+    insta::assert_snapshot!(plain(
+        r"\[
+i\hbar \frac{\partial}{\partial t}\Psi(\mathbf r,t)
+=
+\hat H\Psi(\mathbf r,t)
+=
+\left[-\frac{\hbar^2}{2m}\nabla^2+V(\mathbf r,t)\right]\Psi(\mathbf r,t).
+\]",
+        /*width*/ 100
+    ));
+}
+
+#[test]
 fn unicode_math_narrow_layout_stays_meaningful() {
     insta::assert_snapshot!(plain(
         "$$\\frac{a+b}{c+d}$$\n\nWords $\\alpha^2$ more words.",

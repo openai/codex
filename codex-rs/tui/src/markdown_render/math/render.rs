@@ -1,6 +1,8 @@
 //! Bounded Unicode layout for a deliberately small TeX math subset.
+//! Accents apply only to single graphemes so their scope survives terminal rendering.
 
 use crate::width::display_width;
+use unicode_segmentation::UnicodeSegmentation;
 
 const MAX_ROWS: usize = 16;
 const MAX_COLUMNS: usize = 256;
@@ -111,7 +113,9 @@ impl MathParser<'_> {
             let atom = self.atom()?;
             if !ch.is_whitespace() && ch != '^' && ch != '_' {
                 // Flattening a compound base would change the scope of a following script.
-                has_base = atom.single().is_some_and(|text| text.chars().count() == 1);
+                has_base = atom
+                    .single()
+                    .is_some_and(|text| text.graphemes(/*is_extended*/ true).count() == 1);
             }
             result = result.join(atom)?;
         }
@@ -245,6 +249,26 @@ impl MathParser<'_> {
                 };
                 Some(Layout::text(text))
             }
+            "hat" | "bar" | "tilde" | "vec" | "dot" | "ddot" => {
+                let arg = self.argument()?;
+                let text = arg.single()?;
+                if text.graphemes(/*is_extended*/ true).count() != 1
+                    || text.trim().is_empty()
+                    || display_width(text) == 0
+                {
+                    return None;
+                }
+                let accent = match name {
+                    "hat" => '\u{0302}',
+                    "bar" => '\u{0304}',
+                    "tilde" => '\u{0303}',
+                    "vec" => '\u{20d7}',
+                    "dot" => '\u{0307}',
+                    "ddot" => '\u{0308}',
+                    _ => unreachable!(),
+                };
+                Some(Layout::text(format!("{text}{accent}")))
+            }
             "mathrm" | "mathbf" | "mathit" => self.argument(),
             "text" | "operatorname" => {
                 self.remaining = self.remaining.trim_start().strip_prefix('{')?;
@@ -263,6 +287,19 @@ impl MathParser<'_> {
                 match self.take()? {
                     '.' => Some(Layout::text("")),
                     ch @ ('(' | ')' | '[' | ']' | '|') => Some(Layout::text(ch.to_string())),
+                    '<' => Some(Layout::text("⟨")),
+                    '>' => Some(Layout::text("⟩")),
+                    '\\' => {
+                        let length = self
+                            .remaining
+                            .bytes()
+                            .take_while(u8::is_ascii_alphabetic)
+                            .count()
+                            .max(/*other*/ 1);
+                        let (name, remaining) = self.remaining.split_at_checked(length)?;
+                        self.remaining = remaining;
+                        delimiter(name).map(Layout::text)
+                    }
                     _ => None,
                 }
             }
@@ -289,13 +326,17 @@ fn symbol(name: &str) -> Option<&'static str> {
         "vartheta" => "ϑ",
         "iota" => "ι",
         "kappa" => "κ",
+        "varkappa" => "ϰ",
         "lambda" => "λ",
         "mu" => "μ",
         "nu" => "ν",
         "xi" => "ξ",
         "pi" => "π",
+        "varpi" => "ϖ",
         "rho" => "ρ",
+        "varrho" => "ϱ",
         "sigma" => "σ",
+        "varsigma" => "ς",
         "tau" => "τ",
         "upsilon" => "υ",
         "phi" => "ϕ",
@@ -316,35 +357,103 @@ fn symbol(name: &str) -> Option<&'static str> {
         "Omega" => "Ω",
         "sum" => "∑",
         "prod" => "∏",
+        "coprod" => "∐",
         "int" => "∫",
+        "iint" => "∬",
+        "iiint" => "∭",
+        "oint" => "∮",
         "infty" => "∞",
         "partial" => "∂",
         "nabla" => "∇",
+        "hbar" => "ℏ",
+        "ell" => "ℓ",
+        "Re" => "ℜ",
+        "Im" => "ℑ",
+        "aleph" => "ℵ",
+        "imath" => "ı",
+        "jmath" => "ȷ",
+        "prime" => "′",
+        "angle" => "∠",
+        "dagger" => "†",
+        "ddagger" => "‡",
         "pm" => "±",
         "mp" => "∓",
         "times" => "×",
         "cdot" => "·",
         "div" => "÷",
+        "circ" => "∘",
+        "bullet" => "∙",
+        "oplus" => "⊕",
+        "otimes" => "⊗",
+        "odot" => "⊙",
         "le" | "leq" => "≤",
         "ge" | "geq" => "≥",
         "ne" | "neq" => "≠",
         "approx" => "≈",
+        "propto" => "∝",
+        "sim" => "∼",
+        "simeq" => "≃",
+        "cong" => "≅",
+        "lesssim" => "≲",
+        "gtrsim" => "≳",
+        "ll" => "≪",
+        "gg" => "≫",
+        "perp" => "⊥",
+        "parallel" => "∥",
         "equiv" => "≡",
         "in" => "∈",
         "notin" => "∉", // codespell:ignore notin
+        "ni" => "∋",
         "subset" => "⊂",
         "subseteq" => "⊆",
+        "supset" => "⊃",
+        "supseteq" => "⊇",
         "cup" => "∪",
         "cap" => "∩",
-        "emptyset" => "∅",
+        "bigcup" => "⋃",
+        "bigcap" => "⋂",
+        "setminus" => "∖",
+        "emptyset" | "varnothing" => "∅",
+        "land" | "wedge" => "∧",
+        "lor" | "vee" => "∨",
+        "neg" | "lnot" => "¬",
+        "top" => "⊤",
+        "bot" => "⊥",
         "forall" => "∀",
         "exists" => "∃",
+        "nexists" => "∄",
         "to" | "rightarrow" => "→",
         "leftarrow" => "←",
-        "Rightarrow" => "⇒",
-        "Leftrightarrow" => "⇔",
+        "leftrightarrow" => "↔",
+        "mapsto" => "↦",
+        "uparrow" => "↑",
+        "downarrow" => "↓",
+        "updownarrow" => "↕",
+        "Leftarrow" | "impliedby" => "⇐",
+        "Rightarrow" | "implies" => "⇒",
+        "Leftrightarrow" | "iff" => "⇔",
         "ldots" | "dots" => "…",
         "cdots" => "⋯",
+        "vdots" => "⋮",
+        "ddots" => "⋱",
+        _ => return delimiter(name),
+    })
+}
+
+fn delimiter(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "langle" => "⟨",
+        "rangle" => "⟩",
+        "lbrace" | "{" => "{",
+        "rbrace" | "}" => "}",
+        "lbrack" => "[",
+        "rbrack" => "]",
+        "vert" | "lvert" | "rvert" => "|",
+        "Vert" | "lVert" | "rVert" | "|" => "‖",
+        "lfloor" => "⌊",
+        "rfloor" => "⌋",
+        "lceil" => "⌈",
+        "rceil" => "⌉",
         _ => return None,
     })
 }
