@@ -3474,6 +3474,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connected_thread_start_preserves_flex_without_catalog_support() -> Result<()> {
+        for fast_mode_enabled in [false, true] {
+            let codex_home = tempfile::tempdir()?;
+            let server_config = build_config(&codex_home).await;
+            let mut config = server_config.clone();
+            config.model = Some("gpt-5.5".to_string());
+            config.service_tier = Some(ServiceTier::Flex.request_value().to_string());
+            config
+                .features
+                .set_enabled(Feature::FastMode, fast_mode_enabled)?;
+            let mut app_server =
+                crate::start_embedded_app_server_for_picker(&server_config).await?;
+            app_server.thread_params_mode = ThreadParamsMode::Remote;
+            let mut preset = crate::test_support::TEST_MODEL_PRESETS
+                .iter()
+                .find(|preset| preset.model == "gpt-5.5")
+                .expect("gpt-5.5 test preset")
+                .clone();
+            preset.service_tiers.clear();
+            preset.default_service_tier = None;
+            app_server.available_models = vec![preset];
+
+            let started = app_server.start_thread(&config).await?;
+
+            assert_eq!(
+                started.session.service_tier,
+                Some(ServiceTier::Flex.request_value().to_string())
+            );
+            app_server.shutdown().await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn persisted_resume_does_not_forward_implicit_service_tier() -> Result<()> {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&codex_home).await;

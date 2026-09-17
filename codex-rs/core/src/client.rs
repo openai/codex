@@ -932,7 +932,12 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
-        let service_tier = model_info.service_tier_for_request(service_tier);
+        let service_tier = if self.state.provider.info().is_amazon_bedrock() {
+            // Bedrock only supports the implicit default tier, including with custom catalogs.
+            None
+        } else {
+            model_info.service_tier_for_request(service_tier)
+        };
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions,

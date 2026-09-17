@@ -867,9 +867,12 @@ impl ModelPreset {
 
 impl ModelInfo {
     pub fn supports_service_tier(&self, service_tier: &str) -> bool {
-        self.service_tiers
-            .iter()
-            .any(|tier| tier.id == service_tier)
+        // Flex is an API request option, even when the Codex catalog does not advertise it.
+        service_tier == ServiceTier::Flex.request_value()
+            || self
+                .service_tiers
+                .iter()
+                .any(|tier| tier.id == service_tier)
     }
 
     pub fn service_tier_for_request(&self, service_tier: Option<String>) -> Option<String> {
@@ -1836,6 +1839,19 @@ mod tests {
         assert_eq!(
             model.service_tier_for_request(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
             None
+        );
+    }
+
+    #[test]
+    fn service_tier_for_request_preserves_flex_without_catalog_support() {
+        let model = ModelInfo {
+            service_tiers: Vec::new(),
+            ..test_model(/*spec*/ None)
+        };
+
+        assert_eq!(
+            model.service_tier_for_request(Some(ServiceTier::Flex.request_value().to_string())),
+            Some(ServiceTier::Flex.request_value().to_string())
         );
     }
 

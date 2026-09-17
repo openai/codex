@@ -4628,14 +4628,6 @@ fn get_service_tier_drops_unsupported_configured_tier_when_fast_mode_enabled() {
     );
     assert_eq!(
         get_service_tier(
-            Some(ServiceTier::Flex.request_value().to_string()),
-            /*fast_mode_enabled*/ true,
-            &model_info,
-        ),
-        None
-    );
-    assert_eq!(
-        get_service_tier(
             Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()),
             /*fast_mode_enabled*/ true,
             &model_info,
@@ -4645,7 +4637,22 @@ fn get_service_tier_drops_unsupported_configured_tier_when_fast_mode_enabled() {
 }
 
 #[test]
-fn get_service_tier_ignores_configured_tier_when_fast_mode_disabled() {
+fn get_service_tier_preserves_flex_without_catalog_support_or_fast_mode() {
+    let model_info = model_with_default_service_tier(/*default_service_tier*/ None);
+    for fast_mode_enabled in [false, true] {
+        assert_eq!(
+            get_service_tier(
+                Some(ServiceTier::Flex.request_value().to_string()),
+                fast_mode_enabled,
+                &model_info,
+            ),
+            Some(ServiceTier::Flex.request_value().to_string())
+        );
+    }
+}
+
+#[test]
+fn get_service_tier_ignores_non_flex_tiers_when_fast_mode_disabled() {
     let model_info = model_with_default_service_tier(Some(ServiceTier::Fast.request_value()));
 
     assert_eq!(

@@ -18,8 +18,10 @@ use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
+use codex_login::auth::BedrockApiKeyAuth;
 use codex_login::default_client::originator;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
+use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
@@ -104,6 +106,96 @@ use wiremock::matchers::query_param;
 const INSTALLATION_ID_FILENAME: &str = "installation_id";
 const TEST_WINDOW_ID: &str = "test-thread:0";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_request_preserves_flex_without_catalog_support_or_fast_mode()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    for configure_at_start in [false, true] {
+        let server = start_mock_server().await;
+        let response_mock = mount_sse_once(&server, sse(vec![ev_completed("done")])).await;
+        let test = test_codex()
+            .with_model("gpt-5.4")
+            .with_model_info_override("gpt-5.4", |model| model.service_tiers.clear())
+            .with_config(move |config| {
+                config
+                    .features
+                    .disable(Feature::FastMode)
+                    .expect("disable FastMode");
+                config.service_tier = configure_at_start.then(|| "flex".to_string());
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        if !configure_at_start {
+            core_test_support::submit_thread_settings(
+                &test.codex,
+                ThreadSettingsOverrides {
+                    service_tier: Some(Some("flex".to_string())),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        }
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+
+        assert_eq!(
+            response_mock.single_request().body_json()["service_tier"],
+            json!("flex"),
+            "configure_at_start={configure_at_start}",
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_request_uses_implicit_default_tier_for_bedrock() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    for provider_id in [
+        AMAZON_BEDROCK_PROVIDER_ID,
+        AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
+    ] {
+        let server = start_mock_server().await;
+        let response_mock = mount_sse_once(&server, sse(vec![ev_completed("done")])).await;
+        let test = test_codex()
+            .with_auth(CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+                api_key: "dummy".to_string(),
+                region: "us-east-1".to_string(),
+            }))
+            .with_model("gpt-5.4")
+            .with_model_info_override("gpt-5.4", |model| model.service_tiers.clear())
+            .with_config(move |config| {
+                let base_url = config.model_provider.base_url.clone();
+                config.model_provider_id = provider_id.to_string();
+                config.model_provider = built_in_model_providers(/*openai_base_url*/ None)
+                    .remove(provider_id)
+                    .expect("built-in Bedrock provider");
+                config.model_provider.base_url = base_url;
+                config.service_tier = Some("flex".to_string());
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        test.submit_turn("hello").await?;
+
+        assert_eq!(
+            response_mock
+                .single_request()
+                .body_json()
+                .get("service_tier"),
+            None,
+            "provider={provider_id}",
+        );
+    }
+    Ok(())
+}
 
 fn rollout_response_item(item: ResponseItem) -> RolloutItem {
     RolloutItem::ResponseItem(item.into())

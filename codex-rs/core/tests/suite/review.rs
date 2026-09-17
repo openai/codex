@@ -806,7 +806,7 @@ async fn review_uses_updated_turn_permissions_and_approval_policy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_omits_retained_tier_when_fast_mode_disabled() -> anyhow::Result<()> {
+async fn review_preserves_flex_tier_when_fast_mode_disabled() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let (server, request_log) =
         start_responses_server_with_sse(completed_sse(), /*expected_requests*/ 1).await;
@@ -859,7 +859,7 @@ async fn review_omits_retained_tier_when_fast_mode_disabled() -> anyhow::Result<
     );
     assert_eq!(
         request_log.single_request().body_json().get("service_tier"),
-        None
+        Some(&serde_json::json!("flex"))
     );
     Ok(())
 }

@@ -1,6 +1,7 @@
 use crate::legacy_core::config::Config;
 use codex_features::Feature;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelPreset;
 
 pub(crate) fn configured_service_tier(
@@ -19,11 +20,14 @@ pub(crate) fn effective_service_tier(
     model: &str,
     models: &[ModelPreset],
 ) -> Option<String> {
+    let configured = configured_service_tier(config, notices);
+    if configured.as_deref() == Some(ServiceTier::Flex.request_value()) {
+        return configured;
+    }
     if !config.features.enabled(Feature::FastMode) {
         return None;
     }
 
-    let configured = configured_service_tier(config, notices);
     let Some(preset) = models.iter().find(|preset| preset.model == model) else {
         return configured;
     };
@@ -45,13 +49,13 @@ pub(crate) fn service_tier_update_for_core(
     model: &str,
     models: &[ModelPreset],
 ) -> Option<Option<String>> {
-    if !config.features.enabled(Feature::FastMode) {
-        return None;
-    }
-
     let effective = effective_service_tier(config, notices, model, models);
     if let Some(service_tier) = effective {
         return Some(Some(service_tier));
+    }
+
+    if !config.features.enabled(Feature::FastMode) {
+        return None;
     }
 
     if !models.iter().any(|preset| preset.model == model) {

@@ -3320,6 +3320,39 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
 }
 
 #[tokio::test]
+async fn user_turn_preserves_flex_without_catalog_support() {
+    for fast_mode_enabled in [false, true] {
+        let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+        chat.thread_id = Some(ThreadId::new());
+        set_chatgpt_auth(&mut chat);
+        let mut models = chat.model_catalog.try_list_models().expect("test catalog");
+        for model in &mut models {
+            model.service_tiers.clear();
+            model.default_service_tier = None;
+        }
+        chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(models));
+        chat.set_feature_enabled(Feature::FastMode, fast_mode_enabled);
+        chat.set_service_tier(Some(ServiceTier::Flex.request_value().to_string()));
+
+        assert_eq!(
+            chat.current_service_tier(),
+            Some(ServiceTier::Flex.request_value())
+        );
+        chat.bottom_pane
+            .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let Op::UserTurn { service_tier, .. } = next_submit_op(&mut op_rx) else {
+            panic!("expected a user turn");
+        };
+        assert_eq!(
+            service_tier,
+            Some(Some(ServiceTier::Flex.request_value().to_string()))
+        );
+    }
+}
+
+#[tokio::test]
 async fn model_switch_recomputes_catalog_default_service_tier() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     chat.thread_id = Some(ThreadId::new());

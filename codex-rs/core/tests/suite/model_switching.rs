@@ -717,7 +717,7 @@ async fn unsupported_configured_service_tier_warns_at_session_start() -> Result<
     let mut builder = test_codex()
         .with_model(model_slug)
         .with_config(move |config| {
-            config.service_tier = Some(ServiceTier::Flex.request_value().to_string());
+            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
             config.model_catalog = Some(ModelsResponse {
                 models: vec![model],
             });
@@ -737,7 +737,7 @@ async fn unsupported_configured_service_tier_warns_at_session_start() -> Result<
     };
     assert_eq!(
         warning.message,
-        "Configured service tier `flex` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests."
+        "Configured service tier `priority` is not advertised as supported for model `test-no-tier-model` and will be omitted from requests."
     );
     Ok(())
 }
