@@ -527,6 +527,7 @@ pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Pa
         AuthCredentialsStoreMode::File,
     )?;
 
+    app_test_support::mount_workspace_routing(server).await;
     Ok(())
 }
 

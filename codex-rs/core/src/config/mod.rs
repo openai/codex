@@ -1844,22 +1844,16 @@ impl Config {
     pub async fn rebuild_with_session_layers(
         session_layers: &ConfigLayerStack,
         cwd: PathBuf,
-        refreshed_config: &Config,
+        refreshed_layers: &ConfigLayerStack,
+        codex_home: AbsolutePathBuf,
+        default_zsh_path: Option<AbsolutePathBuf>,
     ) -> std::io::Result<Self> {
-        let config_layer_stack = Self::layer_stack_preserving_session(
-            session_layers,
-            &refreshed_config.config_layer_stack,
-        )?;
+        let config_layer_stack =
+            Self::layer_stack_preserving_session(session_layers, refreshed_layers)?;
         let cfg: ConfigToml = config_layer_stack
             .effective_config()
             .try_into()
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-        let default_zsh_path = refreshed_config
-            .zsh_path
-            .clone()
-            .map(AbsolutePathBuf::try_from)
-            .transpose()?;
-
         Self::load_config_with_layer_stack(
             LOCAL_FS.as_ref(),
             cfg,
@@ -1868,7 +1862,7 @@ impl Config {
                 default_zsh_path,
                 ..Default::default()
             },
-            refreshed_config.codex_home.clone(),
+            codex_home,
             config_layer_stack,
         )
         .await

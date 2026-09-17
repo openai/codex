@@ -13,7 +13,7 @@ use crate::AuthManager;
 use crate::CodexAuth;
 
 /// A successful discovery for one selected workspace.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceRouting {
     pub chatgpt_account_id: String,
     pub backend_origin: String,
@@ -44,7 +44,8 @@ pub struct WorkspaceRoutingRequest {
 
 /// Resolves routing through the account owner's cache and requirements loader.
 /// Returns no routing for independent destinations or no selected workspace.
-/// Destination scope is decided here, before making a discovery request.
+/// Custom ChatGPT-auth destinations require successful discovery before independence
+/// can be established; a cache miss is not evidence of an independent destination.
 /// Implementations must reject failed discovery and changes to the selected account.
 pub trait WorkspaceRoutingResolver: Send + Sync {
     fn resolve(
@@ -68,13 +69,15 @@ impl AuthManager {
         let Some(resolver) = self.workspace_routing_resolver.get() else {
             return Ok(None);
         };
-        let auth_changes = self.auth_change_receiver();
-        let revision = *auth_changes.borrow();
+        let auth_changes = self.auth_change_state_receiver();
+        let owner_generation = auth_changes.borrow().owner_generation;
         let resolver = resolver
             .upgrade()
             .ok_or_else(|| io::Error::other("workspace routing owner is unavailable"))?;
         let routing = resolver.resolve(request).await?;
-        if *auth_changes.borrow() != revision
+        // Discovery may recover expired credentials for the same owner. Model
+        // client setup rebuilds routing and credentials after that revision change.
+        if auth_changes.borrow().owner_generation != owner_generation
             || routing.as_ref().is_some_and(|routing| {
                 auth.get_account_id().as_deref() != Some(routing.chatgpt_account_id.as_str())
             })

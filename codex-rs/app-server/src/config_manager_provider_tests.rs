@@ -71,6 +71,13 @@ impl ThreadConfigLoader for UnavailableThreadConfig {
 async fn provider_requirements_do_not_reload_thread_config() -> Result<()> {
     let home = tempdir()?;
     let mut manager = ConfigManager::without_managed_config_for_tests(home.path().to_path_buf());
+    manager.thread_config_loader = Arc::new(codex_config::StaticThreadConfigLoader::new(vec![
+        ThreadConfigSource::Session(codex_config::SessionThreadConfig {
+            model_provider: Some("retained".into()),
+            model_providers: toml::from_str("[retained]\nname = 'Retained'")?,
+            ..Default::default()
+        }),
+    ]));
     let current = manager.load_latest_config(/*fallback_cwd*/ None).await?;
     manager.thread_config_loader = Arc::new(UnavailableThreadConfig);
     assert!(
@@ -80,6 +87,13 @@ async fn provider_requirements_do_not_reload_thread_config() -> Result<()> {
             .is_err()
     );
     manager.check_thread_model_provider(&current).await?;
+    manager.cloud_config_bundle = Arc::new(RwLock::new(
+        CloudConfigBundleFixture::loader_with_enterprise_requirement("model_provider = 'retained'"),
+    ));
+    let retained = manager
+        .load_retained_session_config(&current.config_layer_stack, &current.cwd)
+        .await?;
+    assert_eq!(retained.model_provider, current.model_provider);
 
     manager.cloud_config_bundle = Arc::new(RwLock::new(
         CloudConfigBundleFixture::loader_with_enterprise_requirement("model_provider = 'other'"),

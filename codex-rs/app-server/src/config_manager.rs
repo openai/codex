@@ -172,7 +172,38 @@ impl ConfigManager {
         let mut config = Config::rebuild_with_session_layers(
             session_layers,
             cwd.to_path_buf(),
-            &refreshed_config,
+            &refreshed_config.config_layer_stack,
+            refreshed_config.codex_home.clone(),
+            refreshed_config
+                .zsh_path
+                .clone()
+                .map(AbsolutePathBuf::try_from)
+                .transpose()?,
+        )
+        .await?;
+        self.apply_runtime_feature_enablement(&mut config);
+        self.apply_arg0_paths(&mut config);
+        Ok(config)
+    }
+
+    /// Refreshes global settings and managed requirements using already fetched session layers.
+    pub(crate) async fn load_retained_session_config(
+        &self,
+        session_layers: &ConfigLayerStack,
+        cwd: &Path,
+    ) -> std::io::Result<Config> {
+        let mut manager = self.clone();
+        manager.thread_config_loader = Arc::new(codex_config::NoopThreadConfigLoader);
+        let refreshed_layers = manager
+            .load_config_layers_for_cwd(AbsolutePathBuf::from_absolute_path(cwd)?)
+            .await?;
+        // Merge the retained provider definitions before resolving managed provider selection.
+        let mut config = Config::rebuild_with_session_layers(
+            session_layers,
+            cwd.to_path_buf(),
+            &refreshed_layers,
+            AbsolutePathBuf::from_absolute_path(&self.codex_home)?,
+            /*default_zsh_path*/ None,
         )
         .await?;
         self.apply_runtime_feature_enablement(&mut config);

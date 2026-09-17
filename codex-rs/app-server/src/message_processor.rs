@@ -144,7 +144,7 @@ pub(crate) struct MessageProcessor {
     models_refresh_worker: ModelsRefreshWorker,
     turn_cost_worker: Option<TurnCostWorker>,
     skills_watcher: Arc<SkillsWatcher>,
-    account_processor: AccountRequestProcessor,
+    account_processor: Arc<AccountRequestProcessor>,
     apps_processor: AppsRequestProcessor,
     catalog_processor: CatalogRequestProcessor,
     command_exec_processor: CommandExecRequestProcessor,

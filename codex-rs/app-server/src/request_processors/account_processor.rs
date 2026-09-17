@@ -94,7 +94,7 @@ pub(crate) struct AccountRequestProcessor {
     config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     workspace_routing: Arc<Mutex<Option<workspace_routing::CachedWorkspaceRouting>>>,
-    workspace_routing_fetch: Arc<Semaphore>,
+    workspace_routing_fetches: Arc<Mutex<workspace_routing::WorkspaceRoutingFetches>>,
     workspace_routing_shutdown: CancellationToken,
 }
 
@@ -105,8 +105,8 @@ impl AccountRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         config_manager: ConfigManager,
-    ) -> Self {
-        let processor = Self {
+    ) -> Arc<Self> {
+        let processor = Arc::new(Self {
             auth_manager,
             thread_manager,
             outgoing,
@@ -114,16 +114,16 @@ impl AccountRequestProcessor {
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
             workspace_routing: Arc::new(Mutex::new(None)),
-            workspace_routing_fetch: Arc::new(Semaphore::new(/*permits*/ 1)),
+            workspace_routing_fetches: Arc::new(Mutex::new(HashMap::new())),
             workspace_routing_shutdown: CancellationToken::new(),
-        };
+        });
+        let resolver: Arc<dyn codex_login::WorkspaceRoutingResolver> = processor.clone();
+        processor
+            .auth_manager
+            .set_workspace_routing_resolver(Arc::downgrade(&resolver));
         let startup = processor.clone();
         tokio::spawn(async move {
-            let _ = startup
-                .get_account_response(GetAccountParams {
-                    refresh_token: false,
-                })
-                .await;
+            let _ = startup.read_account(/*request*/ None).await;
         });
         processor
     }
@@ -148,15 +148,6 @@ impl AccountRequestProcessor {
         params: CancelLoginAccountParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.cancel_login_response(params)
-            .await
-            .map(|response| Some(response.into()))
-    }
-
-    pub(crate) async fn get_account(
-        &self,
-        params: GetAccountParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_response(params)
             .await
             .map(|response| Some(response.into()))
     }
@@ -896,14 +887,10 @@ impl AccountRequestProcessor {
         let auth_changes = self.auth_manager.auth_change_state_receiver();
         let owner_generation = auth_changes.borrow().owner_generation;
         if payload.success
-            && let Err(error) = self
-                .get_account_response(GetAccountParams {
-                    refresh_token: false,
-                })
-                .await
+            && let Err(error) = self.read_account(/*request*/ None).await
         {
             payload.success = false;
-            payload.error = Some(error.message);
+            payload.error = Some(error.to_string());
         }
         if payload.success && auth_changes.borrow().owner_generation == owner_generation {
             Self::maybe_refresh_plugin_caches_for_current_config(

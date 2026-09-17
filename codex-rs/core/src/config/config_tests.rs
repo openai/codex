@@ -5478,10 +5478,13 @@ async fn rebuild_with_session_layers_refreshes_requirements() -> std::io::Result
         thread_layer_stack,
     )
     .await?;
+    let zsh_path = refreshed_config.zsh_path.clone();
     let config = Config::rebuild_with_session_layers(
         &thread_config.config_layer_stack,
         thread_config.cwd.to_path_buf(),
-        &refreshed_config,
+        &refreshed_config.config_layer_stack,
+        refreshed_config.codex_home.clone(),
+        zsh_path.map(AbsolutePathBuf::try_from).transpose()?,
     )
     .await?;
 
@@ -5603,10 +5606,13 @@ async fn rebuild_with_session_layers_refreshes_plugin_derived_mcp_config() -> an
         thread_layer_stack,
     )
     .await?;
+    let zsh_path = refreshed_config.zsh_path.clone();
     let config = Config::rebuild_with_session_layers(
         &thread_config.config_layer_stack,
         thread_config.cwd.to_path_buf(),
-        &refreshed_config,
+        &refreshed_config.config_layer_stack,
+        refreshed_config.codex_home.clone(),
+        zsh_path.map(AbsolutePathBuf::try_from).transpose()?,
     )
     .await?;
     let plugins_manager =

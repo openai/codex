@@ -16,6 +16,12 @@ async fn cyber_refusal_reads_eligibility_without_changing_the_model() -> Result<
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let backend = wiremock::MockServer::start().await;
     app.config.chatgpt_base_url = backend.uri();
+    // Embedded account discovery reloads the bootstrap URL from disk.
+    std::fs::write(
+        app.config.codex_home.join("config.toml"),
+        format!("chatgpt_base_url = {:?}\n", backend.uri()),
+    )?;
+    app_test_support::mount_workspace_routing(&backend).await;
     app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
     write_chatgpt_auth(
         &app.config.codex_home,
@@ -43,6 +49,7 @@ async fn cyber_refusal_reads_eligibility_without_changing_the_model() -> Result<
         (200, false, "gpt-5.6-sol", true, Notice::Limited),
     ] {
         backend.reset().await;
+        app_test_support::mount_workspace_routing(&backend).await;
         let codex_home = app.config.codex_home.clone();
         let response = wiremock::ResponseTemplate::new(status)
             .set_delay(if model == "gpt-5.6-sol" && enrolled { Duration::from_secs(1) } else { Duration::ZERO })
