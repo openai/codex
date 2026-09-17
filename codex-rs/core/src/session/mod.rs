@@ -122,6 +122,7 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -3548,9 +3549,18 @@ impl Session {
     }
 
     pub(crate) fn response_item_from_user_input(&self, input: Vec<UserInput>) -> ResponseItem {
+        self.response_item_from_user_input_with_image_positions(input, &mut HashMap::new())
+    }
+
+    fn response_item_from_user_input_with_image_positions(
+        &self,
+        input: Vec<UserInput>,
+        user_image_content_indices: &mut HashMap<usize, usize>,
+    ) -> ResponseItem {
         let mut item = ResponseItem::from(ResponseInputItem::from_user_input(
             input,
             LocalImagePreparation::Defer,
+            user_image_content_indices,
         ));
         if let ResponseItem::Message {
             content,
@@ -4843,20 +4853,37 @@ impl Session {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
-        let response_item = self.response_item_from_user_input(input.to_vec());
-        self.record_annotated_conversation_items(
+        let mut user_image_content_indices = HashMap::new();
+        let response_item = self.response_item_from_user_input_with_image_positions(
+            input.to_vec(),
+            &mut user_image_content_indices,
+        );
+        let (prepared_items, image_preparations) = self
+            .prepare_annotated_conversation_items_for_history(
+                turn_context,
+                model_info,
+                vec![ResponseItemEnvelope {
+                    item: response_item,
+                    metadata: acceptance_order.map(|order| CodexHarnessMetadata {
+                        user_input_order: Some(order),
+                        ..Default::default()
+                    }),
+                }],
+            )
+            .await;
+        let mut user_message_item = UserMessageItem::new(input);
+        apply_prepared_image_file_ids(
+            &mut user_message_item,
+            &prepared_items,
+            &user_image_content_indices,
+        );
+        self.record_prepared_conversation_items(
             turn_context,
             model_info,
-            vec![ResponseItemEnvelope {
-                item: response_item,
-                metadata: acceptance_order.map(|order| CodexHarnessMetadata {
-                    user_input_order: Some(order),
-                    ..Default::default()
-                }),
-            }],
+            prepared_items,
+            image_preparations,
         )
         .await;
-        let mut user_message_item = UserMessageItem::new(input);
         user_message_item.client_id = client_id;
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
@@ -4940,6 +4967,37 @@ impl Session {
 
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
+    }
+}
+
+fn apply_prepared_image_file_ids(
+    user_message_item: &mut UserMessageItem,
+    prepared_items: &[ResponseItemEnvelope],
+    user_image_content_indices: &HashMap<usize, usize>,
+) {
+    // Preparation replaces image slots in place; resize notices are separate messages.
+    // Read the references from the original message while retaining UI-only input spans.
+    if let Some(ResponseItemEnvelope {
+        item: ResponseItem::Message { content, .. },
+        ..
+    }) = prepared_items.first()
+    {
+        for (&input_index, &content_index) in user_image_content_indices {
+            if let Some(ContentItem::InputImage {
+                image: ImageReference::File { file_id },
+                ..
+            }) = content.get(content_index)
+                && let UserInput::Image { detail, .. } | UserInput::LocalImage { detail, .. } =
+                    &user_message_item.content[input_index]
+            {
+                user_message_item.content[input_index] = UserInput::Image {
+                    image: ImageReference::File {
+                        file_id: file_id.clone(),
+                    },
+                    detail: *detail,
+                };
+            }
+        }
     }
 }
 

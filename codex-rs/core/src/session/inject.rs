@@ -1,6 +1,7 @@
 use super::TurnInput as PendingTurnInput;
 use super::session::Session;
 use super::turn_context::TurnContext;
+use codex_analytics::ImagePreparationMetadata;
 use codex_features::Feature;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
@@ -124,6 +125,24 @@ impl Session {
             return;
         }
 
+        let (annotated_items, image_preparations) = self
+            .prepare_annotated_conversation_items_for_history(turn_context, model_info, items)
+            .await;
+        self.record_prepared_conversation_items(
+            turn_context,
+            model_info,
+            annotated_items,
+            image_preparations,
+        )
+        .await;
+    }
+
+    pub(super) async fn prepare_annotated_conversation_items_for_history(
+        &self,
+        turn_context: &TurnContext,
+        model_info: &ModelInfo,
+        items: Vec<ResponseItemEnvelope>,
+    ) -> (Vec<ResponseItemEnvelope>, Vec<ImagePreparationMetadata>) {
         let mut annotated_items = Vec::with_capacity(items.len());
         let mut image_preparations = Vec::new();
         for envelope in items {
@@ -144,13 +163,7 @@ impl Session {
                 }
             }));
         }
-        self.record_prepared_conversation_items(
-            turn_context,
-            model_info,
-            annotated_items,
-            image_preparations,
-        )
-        .await;
+        (annotated_items, image_preparations)
     }
 
     /// Injects items into active work, or records them without starting a turn.
