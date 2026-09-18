@@ -43,6 +43,7 @@ mod removal;
 
 pub(crate) use metadata::remove as remove_metadata;
 pub(crate) use removal::prepare as prepare_removal;
+pub(crate) use removal::restore_disabled_accounts;
 
 /// Must escape request handling: pending resources are retained until this service exits.
 #[derive(Debug)]
@@ -132,6 +133,7 @@ pub(crate) fn provision(
         .join(&family)
         .join(APP_CORE_RUNNER_ALIAS);
         accounts.push(RuntimeAccountRegistration {
+            cleanup_logon_pending: false,
             account,
             user_sid: profile.user_sid.clone(),
             alias_path: Some(alias_path),
@@ -202,26 +204,36 @@ pub(crate) fn provision(
     Ok(())
 }
 
-/// Prepare one retirement fence under the caller's setup lock. Removal preparation
-/// then retains exact account logons before the native guard disables those users.
-pub(crate) fn prepare_cleanup(mut record: InstallationRecord) -> Result<InstallationRecord> {
+/// Validate cleanup ownership under the caller's setup lock before obtaining logons.
+pub(crate) fn prepare_cleanup(record: InstallationRecord) -> Result<InstallationRecord> {
     validate_record(&record)?;
     for account in &record.runtime()?.accounts {
         if codex_windows_sandbox::local_user_flags(account.account.username())?.is_some() {
-            let sid = lookup_sid(account.account.username())?;
-            ensure!(
-                string_from_sid_bytes(&sid).map_err(anyhow::Error::msg)? == account.user_sid,
-                "managed runtime account was replaced before cleanup"
-            );
+            validate_account_sid(account)?;
         }
     }
     ensure!(
         record.runtime()?.retiring.is_none(),
         "interrupted runtime cleanup requires repair"
     );
-    record.runtime_mut()?.ready_package = None;
-    record.runtime_mut()?.retiring = Some(format!("{:?}", windows::core::GUID::new()?));
+    ensure!(
+        record
+            .runtime()?
+            .accounts
+            .iter()
+            .all(|account| !account.cleanup_logon_pending),
+        "cleanup logon recovery is pending"
+    );
     Ok(record)
+}
+
+fn validate_account_sid(account: &RuntimeAccountRegistration) -> Result<()> {
+    let sid = lookup_sid(account.account.username())?;
+    ensure!(
+        string_from_sid_bytes(&sid).map_err(anyhow::Error::msg)? == account.user_sid,
+        "managed runtime account was replaced before cleanup"
+    );
+    Ok(())
 }
 
 fn validate_record(record: &InstallationRecord) -> Result<()> {

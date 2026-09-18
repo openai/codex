@@ -83,11 +83,11 @@ pub(super) fn stop(users: &DisabledSandboxUsers, retained: &RetainedLogons) -> R
         // A token can outlive its process or exist before a runner starts. Account disable does
         // not revoke it, so check for remaining logins before removing protections. Only
         // explicitly pinned, private SYSTEM-finalizer tokens may remain; no process is exempt.
-        if !has_sandbox_logon_session(users, retained)? {
+        let Some(blocker) = blocking_logon_session(users, retained)? else {
             return Ok(());
-        }
+        };
         if Instant::now() >= deadline {
-            bail!("sandbox processes or logon tokens remain after the uninstall deadline");
+            bail!("sandbox cleanup blocked after the uninstall deadline: {blocker}");
         }
         // Repeat to catch descendants created during the previous snapshot.
         std::thread::sleep(
@@ -159,10 +159,10 @@ fn sandbox_processes(users: &DisabledSandboxUsers) -> Result<Vec<OwnedHandle>> {
     Ok(handles)
 }
 
-fn has_sandbox_logon_session(
+fn blocking_logon_session(
     users: &DisabledSandboxUsers,
     retained: &RetainedLogons,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let mut count = 0;
     let mut logons = null_mut();
     let status = unsafe { LsaEnumerateLogonSessions(&mut count, &mut logons) };
@@ -171,7 +171,7 @@ fn has_sandbox_logon_session(
     }
     let logons = LsaBuffer(logons.cast());
     if count == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     for logon in unsafe { std::slice::from_raw_parts(logons.0.cast::<LUID>(), count as usize) } {
         // LocalSystem uses the reserved logon ID 0:0x3e7 and has no normal logon data.
@@ -188,17 +188,23 @@ fn has_sandbox_logon_session(
         }
         // Keep protections when LSA returns no session data.
         if data.is_null() {
-            return Ok(true);
+            return Ok(Some(format!(
+                "LSA returned no data for logon {:08x}:{:08x}",
+                logon.HighPart, logon.LowPart
+            )));
         }
         let data = LsaBuffer(data.cast());
         let data = unsafe { &*data.0.cast::<SECURITY_LOGON_SESSION_DATA>() };
         // LSA also lists sessions without a user SID, even before sandbox accounts exist.
         // Only sessions identified as sandbox users are evidence of remaining sandbox tokens.
         if is_sandbox_user(users, data.Sid) && !retained.contains(*logon) {
-            return Ok(true);
+            return Ok(Some(format!(
+                "sandbox logon {:08x}:{:08x} remains (logon type {}, session {})",
+                logon.HighPart, logon.LowPart, data.LogonType, data.Session
+            )));
         }
     }
-    Ok(false)
+    Ok(None)
 }
 
 fn is_sandbox_user(users: &DisabledSandboxUsers, sid: *mut c_void) -> bool {
