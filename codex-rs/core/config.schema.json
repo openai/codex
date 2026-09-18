@@ -1030,6 +1030,9 @@
             "step_model_switching": {
               "type": "boolean"
             },
+            "system_proxy_fallback": {
+              "type": "boolean"
+            },
             "telepathy": {
               "type": "boolean"
             },
@@ -6682,6 +6685,9 @@
           "type": "boolean"
         },
         "step_model_switching": {
+          "type": "boolean"
+        },
+        "system_proxy_fallback": {
           "type": "boolean"
         },
         "telepathy": {

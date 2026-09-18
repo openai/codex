@@ -201,7 +201,7 @@ pub async fn complete_device_code_login(
     };
     let redirect_uri = format!("{base_url}/deviceauth/callback");
 
-    let tokens = crate::server::exchange_code_for_tokens(
+    let (tokens, _) = crate::server::exchange_code_for_tokens(
         base_url,
         &opts.client_id,
         &redirect_uri,
