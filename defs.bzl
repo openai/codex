@@ -98,6 +98,7 @@ def _workspace_root_test_impl(ctx):
         ),
         RunEnvironmentInfo(
             environment = env,
+            inherited_environment = ctx.attr.env_inherit,
         ),
     ]
 
@@ -153,6 +154,7 @@ workspace_root_test = rule(
             allow_files = True,
         ),
         "env": attr.string_dict(),
+        "env_inherit": attr.string_list(),
         "runfile_env": attr.label_keyed_string_dict(
             cfg = "target",
         ),
