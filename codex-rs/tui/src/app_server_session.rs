@@ -1913,7 +1913,7 @@ fn new_thread_reasoning_overrides(config: &Config) -> Option<HashMap<String, ser
     let mut overrides = config_request_overrides_from_config(config).unwrap_or_default();
     let summary = config
         .model_reasoning_summary
-        .unwrap_or(codex_protocol::config_types::ReasoningSummary::Detailed);
+        .unwrap_or(codex_protocol::config_types::ReasoningSummary::None);
     overrides.insert(
         "model_reasoning_summary".to_string(),
         serde_json::Value::String(summary.to_string()),

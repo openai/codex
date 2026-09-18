@@ -10,14 +10,24 @@ use serde_json::json;
 #[tokio::test]
 async fn embedded_reasoning_defaults_reach_responses() -> Result<()> {
     for (settings, summary, stream_options) in [
-        ("", json!("detailed"), json!(null)),
+        ("", json!(null), json!(null)),
         (
             "[features]\nconcurrent_reasoning_summaries = false",
-            json!("detailed"),
+            json!(null),
             json!(null),
         ),
         (
             "[features]\nconcurrent_reasoning_summaries = true",
+            json!(null),
+            json!(null),
+        ),
+        (
+            "model_reasoning_summary = 'detailed'",
+            json!("detailed"),
+            json!(null),
+        ),
+        (
+            "model_reasoning_summary = 'detailed'\n[features]\nconcurrent_reasoning_summaries = true",
             json!("detailed"),
             json!({"reasoning_summary_delivery": "sequential_cutoff"}),
         ),
@@ -102,12 +112,19 @@ stream_max_retries = 0
 }
 
 #[tokio::test]
-async fn new_tui_threads_request_summaries_unless_explicitly_disabled() {
+async fn new_tui_threads_disable_summaries_unless_explicitly_enabled() {
     let temp_dir = tempfile::tempdir().expect("tempdir");
     for (config_text, expected_summary, expected_concurrent) in [
-        ("", "detailed", false),
+        ("", "none", false),
         (
             "[features]\nconcurrent_reasoning_summaries = true",
+            "none",
+            false,
+        ),
+        ("model_reasoning_summary = 'auto'", "auto", false),
+        ("model_reasoning_summary = 'detailed'", "detailed", false),
+        (
+            "model_reasoning_summary = 'detailed'\n[features]\nconcurrent_reasoning_summaries = true",
             "detailed",
             true,
         ),
