@@ -223,6 +223,7 @@ impl LocalAgentControl {
             .map(|turn_id| root_evidence.trusted_skill_paths(turn_id))
             .unwrap_or_default();
         Some(GuardianRootSnapshot {
+            root_thread_id,
             authorization_version,
             messages,
             trusted_skill_paths,

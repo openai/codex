@@ -5,6 +5,8 @@
 use super::LocalAgentControl;
 use crate::TurnStartOptions;
 use crate::agent::child_config::build_agent_resume_config;
+use crate::agent::types::AgentMessage;
+use crate::agent::types::MessageDeliveryMode;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::context::ContextualUserFragment;
@@ -15,18 +17,6 @@ use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::InterAgentCommunication;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MessageDeliveryMode {
-    QueueOnly,
-    TriggerTurn,
-}
-
-/// Keeps model-provided encrypted content distinct from text that needs a context wrapper.
-pub(crate) enum AgentMessage {
-    Plaintext(String),
-    Encrypted(String),
-}
 
 impl AgentMessage {
     pub(crate) fn into_communication(

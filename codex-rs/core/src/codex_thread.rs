@@ -173,6 +173,8 @@ pub struct GuardianAuthorizationVersion {
 /// Bounded root conversation and authorization state from one history snapshot.
 #[derive(Debug, Eq, PartialEq)]
 pub struct GuardianRootSnapshot {
+    /// Authoritative root from which this evidence was captured.
+    pub root_thread_id: ThreadId,
     pub authorization_version: GuardianAuthorizationVersion,
     pub messages: Vec<GuardianRootMessage>,
     pub trusted_skill_paths: Vec<String>,

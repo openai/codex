@@ -6,7 +6,7 @@
 use super::analytics::ToolCallAnalytics;
 use super::*;
 use crate::agent::control::MessageDeliveryError;
-use crate::agent::control::MessageDeliveryMode;
+use crate::agent::types::MessageDeliveryMode;
 use crate::tools::context::FunctionToolOutput;
 
 #[derive(Debug, Deserialize)]

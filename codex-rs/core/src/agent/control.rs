@@ -2,11 +2,11 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::agent::types::AgentMetadata;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -16,7 +16,6 @@ use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
-use crate::session::multi_agents::ResolvedMultiAgentV2UsageHints;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
 use crate::thread_manager::ResumeThreadWithHistoryOptions;
@@ -52,8 +51,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
-use codex_protocol::protocol::TurnEnvironmentSelection;
-use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
@@ -67,10 +64,7 @@ use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
 
-pub(crate) use self::delivery::AgentMessage;
 pub(crate) use self::delivery::MessageDeliveryError;
-pub(crate) use self::delivery::MessageDeliveryMode;
-pub(crate) use self::execution::AgentExecutionGuard;
 use self::execution::AgentExecutionLimiter;
 pub(crate) use self::interrupt::AgentInterruptError;
 pub(crate) use self::interrupt::AgentInterruptOutcome;
@@ -88,33 +82,6 @@ mod user_authorization;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SpawnAgentForkMode {
-    FullHistory,
-    LastNTurns(usize),
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SpawnAgentOptions {
-    pub(crate) fork_parent_spawn_call_id: Option<String>,
-    pub(crate) fork_mode: Option<SpawnAgentForkMode>,
-    pub(crate) parent_thread_id: Option<ThreadId>,
-    pub(crate) parent_turn_id: Option<String>,
-    /// Attribute delegated usage to the turn that initiated it.
-    pub(crate) turn_trigger: Option<String>,
-    pub(crate) root_turn_id: Option<String>,
-    pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
-    pub(crate) multi_agent_v2_usage_hints: Option<ResolvedMultiAgentV2UsageHints>,
-    pub(crate) cyber_access_program: Option<CyberAccessProgram>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LiveAgent {
-    pub(crate) thread_id: ThreadId,
-    pub(crate) metadata: AgentMetadata,
-    pub(crate) status: AgentStatus,
-}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct ListedAgent {

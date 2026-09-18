@@ -1,3 +1,4 @@
+use crate::agent::types::ResolvedMultiAgentV2UsageHints;
 use crate::config::MultiAgentV2Config;
 use crate::context::MultiAgentRoleInstructions;
 use crate::session::step_context::StepContext;
@@ -9,12 +10,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ResolvedMultiAgentV2UsageHints {
-    pub(crate) root: Option<MultiAgentRoleInstructions>,
-    pub(crate) subagent: Option<MultiAgentRoleInstructions>,
-}
 
 pub(super) fn usage_hint_text(step_context: &StepContext) -> Option<MultiAgentRoleInstructions> {
     let turn_context = step_context.turn.as_ref();

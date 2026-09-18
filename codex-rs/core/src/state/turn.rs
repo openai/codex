@@ -18,7 +18,7 @@ use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
 use super::TurnTokenUsage;
-use crate::agent::control::AgentExecutionGuard;
+use crate::agent::types::AgentExecutionGuard;
 use crate::session::TurnInputQueue;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;

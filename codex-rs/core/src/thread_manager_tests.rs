@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::control::SpawnAgentOptions;
+use crate::agent::types::SpawnAgentOptions;
 use crate::config::test_config;
 use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;

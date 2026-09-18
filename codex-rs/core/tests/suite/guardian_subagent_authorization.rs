@@ -548,10 +548,11 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         .expect("worker root snapshot");
     assert_eq!(
         (
+            snapshot.root_thread_id,
             snapshot.messages,
             snapshot.authorization_version.retained_context_complete
         ),
-        (expected_messages.clone(), evidence_complete),
+        (root_thread_id, expected_messages.clone(), evidence_complete),
     );
 
     let worker_request = worker_review_request.single_request();

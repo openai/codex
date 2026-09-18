@@ -1232,7 +1232,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            crate::agent::control::SpawnAgentOptions::default(),
+            crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
         .expect("worker spawn should succeed")
@@ -1308,7 +1308,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            crate::agent::control::SpawnAgentOptions::default(),
+            crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
         .expect("worker spawn should succeed")
@@ -1473,7 +1473,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            crate::agent::control::SpawnAgentOptions::default(),
+            crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
         .expect("researcher agent should spawn");
@@ -1493,7 +1493,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            crate::agent::control::SpawnAgentOptions::default(),
+            crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
         .expect("worker agent should spawn");
@@ -4023,7 +4023,7 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_id() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            crate::agent::control::SpawnAgentOptions::default(),
+            crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
         .expect("worker spawn should succeed")
@@ -4090,7 +4090,7 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            crate::agent::control::SpawnAgentOptions::default(),
+            crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
         .expect("worker spawn should succeed")

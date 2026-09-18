@@ -2,7 +2,7 @@ use super::analytics::ToolCallAnalytics;
 use super::message_tool::SendMessageArgs;
 use super::message_tool::handle_message_string_tool;
 use super::*;
-use crate::agent::control::MessageDeliveryMode;
+use crate::agent::types::MessageDeliveryMode;
 use crate::tools::handlers::multi_agents_spec::create_send_message_tool;
 use codex_tools::ToolSpec;
 
