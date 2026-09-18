@@ -3453,6 +3453,7 @@ dependencies = [
  "mime_guess",
  "pretty_assertions",
  "sentry",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

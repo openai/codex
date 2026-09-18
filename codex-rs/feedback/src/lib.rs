@@ -66,7 +66,8 @@ pub const MAX_ATTACHMENTS_BYTES: usize = 126 * 1024 * 1024;
 const MAX_DECODED_UPLOAD_BYTES: usize = 200 * 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 const FEEDBACK_TAGS_TARGET: &str = "feedback_tags";
-const MAX_FEEDBACK_TAGS: usize = 64;
+// Leave room for every feature, usage settings, and request/auth diagnostics.
+const MAX_FEEDBACK_TAGS: usize = 512;
 
 /// Structured request/auth fields that should be attached to feedback uploads.
 pub struct FeedbackRequestTags<'a> {
@@ -818,6 +819,12 @@ where
 
         let mut visitor = FeedbackTagsVisitor::default();
         event.record(&mut visitor);
+        // Expand runtime-selected keys alongside ordinary tracing fields.
+        if let Some(json) = visitor.tags.remove("tags_json")
+            && let Ok(tags) = serde_json::from_str::<BTreeMap<String, String>>(&json)
+        {
+            visitor.tags.extend(tags);
+        }
         if visitor.tags.is_empty() {
             return;
         }
@@ -869,6 +876,10 @@ impl Visit for FeedbackTagsVisitor {
             .insert(field.name().to_string(), format!("{value:?}"));
     }
 }
+
+#[cfg(test)]
+#[path = "metadata_tests.rs"]
+mod metadata_tests;
 
 #[cfg(test)]
 #[path = "feedback_event_tests.rs"]

@@ -2436,7 +2436,12 @@ async fn try_run_sampling_request(
         sandbox_policy = &turn_context.sandbox_policy(),
         effort = step_context.settings.reasoning_effort(),
         auth_mode = sess.services.auth_manager.auth_mode(),
-        features = sess.features.enabled_features(),
+        tags_json = tracing::field::display(serde_json::json!(crate::feedback_config::usage_tags(
+            &turn_context.config,
+            &sess.features,
+            &step_context.settings.model_info,
+            step_context.settings.service_tier.as_deref(),
+        ))),
     );
     let inference_trace = sess.services.rollout_thread_trace.inference_trace_context(
         turn_context.sub_id.as_str(),
