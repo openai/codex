@@ -92,9 +92,20 @@ impl OpenAiModelsEndpoint {
         client_version: &str,
         http_client_factory: HttpClientFactory,
     ) -> CoreResult<ModelsEndpointResponse> {
-        let _timer =
-            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth().await;
+        let metric_auth_mode = if self.has_provider_api_key()
+            || auth.as_ref().is_some_and(CodexAuth::is_api_key_auth)
+        {
+            "api_key"
+        } else if auth.is_some() {
+            "chatgpt"
+        } else {
+            "none"
+        };
+        let _timer = codex_otel::start_global_timer(
+            "codex.remote_models.fetch_update.duration_ms",
+            &[("auth_mode", metric_auth_mode)],
+        );
         let identity = crate::models_identity::identity(&self.provider_info, auth.as_ref())?;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let mut api_provider = self.provider_info.to_api_provider(auth_mode)?;
