@@ -43,6 +43,7 @@ fn environment_descriptor_binds_every_manifest_resource() {
         description: None,
         keywords: Vec::new(),
         paths: PluginManifestPaths {
+            onboarding_skill: None,
             skills: vec![path_uri(&skills)],
             mcp_servers: Some(PluginManifestMcpServers::Path(path_uri(&mcp_servers))),
             apps: Some(path_uri(&apps)),
@@ -77,6 +78,7 @@ fn environment_descriptor_binds_every_manifest_resource() {
             description: None,
             keywords: Vec::new(),
             paths: PluginManifestPaths {
+                onboarding_skill: None,
                 skills: vec![resource("executor-1", &skills)],
                 mcp_servers: Some(PluginManifestMcpServers::Path(resource(
                     "executor-1",
@@ -109,6 +111,7 @@ fn environment_descriptor_rejects_resources_outside_package_root() {
         description: None,
         keywords: Vec::new(),
         paths: PluginManifestPaths {
+            onboarding_skill: None,
             skills: Vec::new(),
             mcp_servers: Some(PluginManifestMcpServers::Path(path_uri(&outside))),
             apps: None,

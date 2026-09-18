@@ -1560,6 +1560,7 @@ pub(super) fn plugins_test_detail(
     mcp_servers: &[&str],
 ) -> PluginDetail {
     PluginDetail {
+        onboarding_skill: None,
         marketplace_name: "ChatGPT Marketplace".to_string(),
         marketplace_path: Some(plugins_test_absolute_path("marketplaces/chatgpt")),
         summary,
@@ -1612,6 +1613,7 @@ pub(super) fn plugins_test_remote_detail(
     description: Option<&str>,
 ) -> PluginDetail {
     PluginDetail {
+        onboarding_skill: None,
         marketplace_name: marketplace_name.to_string(),
         marketplace_path: None,
         summary,

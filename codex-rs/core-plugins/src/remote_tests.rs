@@ -640,6 +640,7 @@ fn directory_plugin(id: &str, name: &str) -> RemotePluginDirectoryItem {
                 screenshot_urls: Vec::new(),
             },
             skills: Vec::new(),
+            onboarding_skill_name: None,
             mcp_servers: Vec::new(),
             scheduled_tasks: None,
         },

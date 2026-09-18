@@ -299,6 +299,7 @@ pub struct RemotePluginDetail {
     pub bundle_download_url: Option<String>,
     pub app_manifest: Option<JsonValue>,
     pub skills: Vec<RemotePluginSkill>,
+    pub onboarding_skill_name: Option<String>,
     pub app_ids: Vec<String>,
     pub app_templates: Vec<RemoteAppTemplate>,
     pub mcp_servers: Vec<String>,
@@ -633,6 +634,8 @@ struct RemotePluginReleaseResponse {
     interface: RemotePluginReleaseInterfaceResponse,
     #[serde(default)]
     skills: Vec<RemotePluginSkillResponse>,
+    #[serde(default)]
+    onboarding_skill_name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     mcp_servers: Vec<RemotePluginMcpServerResponse>,
     scheduled_tasks: Option<Vec<ScheduledTaskSummary>>,
@@ -1485,6 +1488,7 @@ async fn build_remote_plugin_detail(
         bundle_download_url: plugin.release.bundle_download_url,
         app_manifest: plugin.release.app_manifest,
         skills,
+        onboarding_skill_name: plugin.release.onboarding_skill_name,
         app_ids,
         app_templates: plugin
             .release

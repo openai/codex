@@ -761,6 +761,9 @@ pub struct PluginDetail {
     pub share_url: Option<String>,
     pub description: Option<String>,
     pub skills: Vec<SkillSummary>,
+    /// The declared onboarding skill, when the plugin and visible skill are enabled.
+    #[serde(default)]
+    pub onboarding_skill: Option<SkillSummary>,
     pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppSummary>,
     pub app_templates: Vec<AppTemplateSummary>,

@@ -870,6 +870,7 @@ async fn plugin_detail_unmaterialized_default_uses_remote_install_path() {
         cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: PluginDetail {
+                onboarding_skill: None,
                 marketplace_name: "workspace-shared-with-me-private".to_string(),
                 marketplace_path: None,
                 summary,

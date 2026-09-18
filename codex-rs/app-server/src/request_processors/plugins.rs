@@ -65,12 +65,12 @@ pub(crate) struct PluginRequestProcessor {
         Arc<dyn Fn(codex_core_plugins::EffectivePluginsChange) + Send + Sync>,
 }
 
-fn plugin_skills_to_info(
-    skills: &[codex_skills::SkillMetadata],
+fn plugin_skills_to_info<'a>(
+    skills: impl IntoIterator<Item = &'a codex_skills::SkillMetadata>,
     disabled_skill_paths: &HashSet<AbsolutePathBuf>,
 ) -> Vec<SkillSummary> {
     skills
-        .iter()
+        .into_iter()
         .map(|skill| SkillSummary {
             name: skill.name.clone(),
             description: skill.description.clone(),
@@ -1098,17 +1098,23 @@ impl PluginRequestProcessor {
                     &outcome.plugin.app_category_by_id,
                 )
                 .await;
-                let visible_skills = outcome
-                    .plugin
-                    .skills
-                    .iter()
-                    .filter(|skill| {
-                        skill.matches_product_restriction_for_product(
-                            self.thread_manager.session_source().restriction_product(),
-                        )
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>();
+                let visible_skills = outcome.plugin.skills.iter().filter(|skill| {
+                    skill.matches_product_restriction_for_product(
+                        self.thread_manager.session_source().restriction_product(),
+                    )
+                });
+                let skills =
+                    plugin_skills_to_info(visible_skills, &outcome.plugin.disabled_skill_paths);
+                let onboarding_skill = if outcome.plugin.enabled
+                    && let Some(path) = outcome.plugin.onboarding_skill.as_ref()
+                {
+                    skills
+                        .iter()
+                        .find(|skill| skill.enabled && skill.path.as_ref() == Some(path))
+                        .cloned()
+                } else {
+                    None
+                };
                 PluginDetail {
                     marketplace_name: outcome.marketplace_name,
                     marketplace_path: outcome.marketplace_path,
@@ -1135,10 +1141,8 @@ impl PluginRequestProcessor {
                     },
                     share_url: None,
                     description: outcome.plugin.description,
-                    skills: plugin_skills_to_info(
-                        &visible_skills,
-                        &outcome.plugin.disabled_skill_paths,
-                    ),
+                    skills,
+                    onboarding_skill,
                     hooks: outcome
                         .plugin
                         .hooks
@@ -2247,24 +2251,38 @@ fn remote_plugin_detail_to_info(
         })
         .collect();
 
+    let skills = detail
+        .skills
+        .into_iter()
+        .map(|skill| SkillSummary {
+            name: skill.name,
+            description: skill.description,
+            short_description: skill.short_description,
+            interface: skill.interface,
+            path: None,
+            enabled: skill.enabled,
+        })
+        .collect::<Vec<_>>();
+    let onboarding_skill = if detail.summary.enabled
+        && detail.summary.availability == PluginAvailability::Available
+        && let Some(name) = detail.onboarding_skill_name.as_ref()
+    {
+        skills
+            .iter()
+            .find(|skill| skill.enabled && &skill.name == name)
+            .cloned()
+    } else {
+        None
+    };
+
     PluginDetail {
         marketplace_name: detail.marketplace_name,
         marketplace_path: None,
         summary: remote_plugin_summary_to_info(detail.summary),
         share_url: detail.share_url,
         description: detail.description,
-        skills: detail
-            .skills
-            .into_iter()
-            .map(|skill| SkillSummary {
-                name: skill.name,
-                description: skill.description,
-                short_description: skill.short_description,
-                interface: skill.interface,
-                path: None,
-                enabled: skill.enabled,
-            })
-            .collect(),
+        skills,
+        onboarding_skill,
         hooks: Vec::new(),
         apps,
         app_templates,
