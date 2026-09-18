@@ -458,7 +458,16 @@ fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
     )?;
     // An incomplete selected package must fail without installing a replacement.
     std::fs::create_dir_all(home.path().join("packages/app-server-daemon/current"))?;
-    let mut terminal = PtyCodex::start(workspace.path(), home, &[])?;
+    let mut terminal = PtyCodex::start(
+        workspace.path(),
+        home,
+        &[
+            "-c",
+            "features.api_key_model_discovery=true",
+            "-c",
+            "suppress_unstable_features_warning=true",
+        ],
+    )?;
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
         terminal.read_output(Duration::from_millis(/*millis*/ 50))?;

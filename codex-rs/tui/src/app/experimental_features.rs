@@ -67,7 +67,7 @@ impl App {
             tokio::select! {
                 _ = response_tx.closed() => {},
                 _guard = lock.lock() => crate::experimental_features::fetch(
-                    handle, thread_id, "tui-experimental-features", response_tx,
+                    handle, Some(thread_id), "tui-experimental-features", response_tx,
                 ),
             }
         });

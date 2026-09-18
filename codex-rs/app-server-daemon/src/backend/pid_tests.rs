@@ -577,6 +577,7 @@ async fn exited_unreaped_updater_is_reaped() {
 #[test]
 fn update_loop_uses_hidden_app_server_subcommand() {
     let backend = PidBackend {
+        feature_overrides: Default::default(),
         codex_bin: "codex".into(),
         pid_file: "updater.pid".into(),
         lock_file: "updater.pid.lock".into(),

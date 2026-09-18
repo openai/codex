@@ -91,7 +91,7 @@ impl PidBackend {
         command
             // Handoff suppression belongs to the foreground CLI, not its long-lived children.
             .env_remove(crate::telemetry::HANDOFF_ENV)
-            .args(self.command_args())
+            .args(self.command_args().iter().map(std::borrow::Cow::as_ref))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_log.into_std().await));

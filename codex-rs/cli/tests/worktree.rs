@@ -161,6 +161,12 @@ async fn worktree_start_and_fork(backend: &str) -> anyhow::Result<()> {
     for path in [&home, &source, &launcher, &launcher.join("extra")] {
         fs::create_dir(path)?;
     }
+    // Forking without --cd must select the daemon using the resolved project, not this launcher.
+    fs::create_dir(launcher.join(".codex"))?;
+    fs::write(
+        launcher.join(".codex/config.toml"),
+        "features.auth_elicitation = false\n",
+    )?;
     fs::write(
         source.join("AGENTS.md"),
         "committed destination instructions",
@@ -185,7 +191,7 @@ cli_auth_credentials_store = "file"
 chatgpt_base_url = "{}/source/backend-api"
 analytics.enabled = false
 check_for_update_on_startup = false
-features.daemon_auto_start = true
+features.daemon_auto_start = {}
 model_provider = "local"
 model = "test-model"
 sandbox_mode = "workspace-write"
@@ -203,6 +209,7 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#,
             server.uri(),
+            backend == "daemon",
             server.uri(),
             server.uri(),
             serde_json::to_string(&source)?,
@@ -279,6 +286,10 @@ trust_level = "trusted"
         "--enable".into(),
         "worktrees".into(),
         "--no-alt-screen".into(),
+        "-c".into(),
+        "features.mcp_oauth_refresh_coordination=true".into(),
+        "-c".into(),
+        "suppress_unstable_features_warning=true".into(),
     ];
     let mut owner = None;
     let mut previous: Vec<String> = Vec::new();
@@ -358,19 +369,10 @@ trust_level = "trusted"
             })
             .mount(&server)
             .await;
-        if backend == "daemon" && previous.is_empty() {
-            // Policy mocks must be ready before the daemon loads its startup configuration.
-            let started = Command::new(&program)
-                .envs(&env)
-                .args(["app-server", "daemon", "start"])
-                .output()?;
-            anyhow::ensure!(
-                started.status.success(),
-                "daemon startup failed: {}",
-                String::from_utf8_lossy(&started.stderr)
-            );
-        }
         let mut args = worktree_args.clone();
+        if backend == "daemon" && previous.is_empty() {
+            args.extend(["-c".into(), "features.auth_elicitation=true".into()]);
+        }
         if fork {
             args.extend([
                 "--add-dir".into(),
@@ -518,6 +520,10 @@ trust_level = "trusted"
                 .context("metrics export while the TUI is running")?;
         }
         let startup_result = observed.as_ref().map(|result| result.as_ref().map(|_| ()));
+        assert!(
+            !output.contains("Under-development features enabled:"),
+            "{output}"
+        );
         if !matches!(startup_result, Ok(Ok(()))) || renamed.is_err() {
             // Bypass libtest capture and report before tearing down the Windows PTY.
             let _ = writeln!(
@@ -613,7 +619,14 @@ trust_level = "trusted"
                 ("terminal_name", "unknown"),
                 ("multiplexer", "none"),
                 ("daemon_selection_reason", "incompatible_option"),
-                ("daemon_auto_start", "enabled"),
+                (
+                    "daemon_auto_start",
+                    if backend == "daemon" {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                ),
                 ("auto_update", "enabled"),
                 ("auto_update_setting", "default"),
                 ("update_interval_setting", "default"),

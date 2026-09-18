@@ -2,6 +2,7 @@ mod pid;
 #[cfg(windows)]
 pub(crate) mod windows;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -21,14 +22,17 @@ pub(crate) struct BackendPaths {
     pub(crate) pid_file: PathBuf,
     pub(crate) update_pid_file: PathBuf,
     pub(crate) remote_control_enabled: bool,
+    pub(crate) feature_overrides: BTreeMap<String, bool>,
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
-    PidBackend::new(
+    let mut backend = PidBackend::new(
         paths.codex_bin,
         paths.pid_file,
         paths.remote_control_enabled,
-    )
+    );
+    backend.feature_overrides = paths.feature_overrides;
+    backend
 }
 
 pub(crate) fn pid_update_loop_backend(paths: BackendPaths) -> PidBackend {

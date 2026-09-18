@@ -81,7 +81,7 @@ async fn experimental_features_rpc_paginates_thread_config_and_bounds_bad_server
         let (tx, rx) = oneshot::channel();
         fetch(
             AppServerRequestHandle::Remote(client.request_handle()),
-            thread_id,
+            Some(thread_id),
             "tui-experimental-features",
             tx,
         );
@@ -126,7 +126,7 @@ async fn experimental_features_rpc_paginates_thread_config_and_bounds_bad_server
                 let (tx, rx) = oneshot::channel();
                 fetch(
                     AppServerRequestHandle::Remote(client.request_handle()),
-                    thread_id,
+                    Some(thread_id),
                     "tui-experimental-features",
                     tx,
                 );

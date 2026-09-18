@@ -1877,6 +1877,7 @@ fn config_request_overrides_from_config(
                     | "permissions"
                     | "sandbox_workspace_write"
                     | "shell_environment_policy"
+                    | "suppress_unstable_features_warning"
             )
         })
         .filter_map(|(key, value)| {
@@ -2870,6 +2871,10 @@ mod tests {
             })
             .cli_overrides(vec![
                 (
+                    "suppress_unstable_features_warning".to_string(),
+                    toml::Value::Boolean(true),
+                ),
+                (
                     "features.multi_agent_mode".to_string(),
                     toml::Value::Boolean(true),
                 ),
@@ -2900,11 +2905,13 @@ mod tests {
                 overrides.get("features").cloned(),
                 overrides.get("sandbox_workspace_write").cloned(),
                 overrides.get("instructions").cloned(),
+                overrides.get("suppress_unstable_features_warning").cloned(),
             ),
             (
                 Some(serde_json::json!({ "multi_agent_mode": true })),
                 Some(serde_json::json!({ "network_access": false })),
                 None,
+                Some(serde_json::json!(true)),
             )
         );
         for mode in [ThreadParamsMode::Embedded, ThreadParamsMode::Remote] {

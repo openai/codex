@@ -543,6 +543,82 @@ async fn manual_update_restarts_managed_daemon_with_automatic_updates_disabled()
 
 #[cfg(unix)]
 #[tokio::test]
+async fn daemon_start_and_restart_preserve_launch_features() {
+    for features in [
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::from([
+            ("api_key_model_discovery".to_string(), true),
+            ("code_mode_host".to_string(), false),
+        ]),
+    ] {
+        let home = TempDir::new().unwrap();
+        let (daemon, _) = manual_update_daemon(&home);
+        let args_path = home.path().join("launch-args");
+        std::fs::write(
+        &daemon.settings_file,
+        r#"{"featureOverrides":{"auth_elicitation":true},"updater":{"autoUpdateEnabled":false}}"#,
+    )
+    .unwrap();
+        std::fs::write(&daemon.managed_codex_bin, format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex 1.0.0; exit; fi\nif [ \"$3\" = --help ]; then exit; fi\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
+        args_path.display(),
+    )).unwrap();
+        let control = async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 10);
+            while !args_path.exists() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "daemon did not launch"
+                );
+                tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+            }
+            test_control_server(&daemon, home.path())
+                .await
+                .abort_handle()
+        };
+        let (started, server) = tokio::join!(daemon.start(&features), control);
+        assert_eq!(started.unwrap().status, crate::LifecycleStatus::Started);
+        assert_eq!(
+            daemon.load_settings().await.unwrap().feature_overrides,
+            features
+        );
+        let expected = if features.is_empty() {
+            "app-server\n--listen\nunix://\n--managed-daemon\n"
+        } else {
+            "app-server\n--listen\nunix://\n-c\nfeatures.api_key_model_discovery=true\n-c\nfeatures.code_mode_host=false\n--managed-daemon\n"
+        };
+        assert_eq!(std::fs::read_to_string(&args_path).unwrap(), expected);
+        let reused = daemon
+            .start(&std::collections::BTreeMap::from([(
+                "api_key_model_discovery".to_string(),
+                false,
+            )]))
+            .await
+            .unwrap();
+        assert_eq!(reused.status, crate::LifecycleStatus::AlreadyRunning);
+        assert_eq!(
+            daemon.load_settings().await.unwrap().feature_overrides,
+            features
+        );
+        assert_eq!(std::fs::read_to_string(&args_path).unwrap(), expected);
+        std::fs::remove_file(&args_path).unwrap();
+        let restarted = daemon.restart().await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 10);
+        while std::fs::read_to_string(&args_path).ok().as_deref() != Some(expected)
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 20)).await;
+        }
+        let args = std::fs::read_to_string(args_path);
+        daemon.stop().await.unwrap();
+        server.abort();
+        assert_eq!(restarted.unwrap().status, crate::LifecycleStatus::Restarted);
+        assert_eq!(args.unwrap(), expected);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn manual_update_restarts_local_daemon_with_automatic_updates_disabled() {
     check_manual_update_restart("app-server-daemon").await;
 }

@@ -3,6 +3,9 @@
 #[path = "pid_identity.rs"]
 mod identity;
 
+#[cfg(any(unix, windows))]
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::io::SeekFrom;
 use std::path::Path;
 use std::path::PathBuf;
@@ -33,6 +36,7 @@ const STDERR_LOG_TAIL_BYTES: u64 = 4096;
 #[derive(Debug)]
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 pub(crate) struct PidBackend {
+    pub(super) feature_overrides: BTreeMap<String, bool>,
     codex_bin: PathBuf,
     pid_file: PathBuf,
     lock_file: PathBuf,
@@ -98,6 +102,7 @@ impl PidBackend {
     pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf, remote_control_enabled: bool) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
         Self {
+            feature_overrides: BTreeMap::new(),
             codex_bin,
             pid_file,
             lock_file,
@@ -114,6 +119,7 @@ impl PidBackend {
     ) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
         Self {
+            feature_overrides: BTreeMap::new(),
             codex_bin,
             pid_file,
             lock_file,
@@ -362,22 +368,37 @@ impl PidBackend {
     }
 
     #[cfg(any(unix, windows))]
-    fn command_args(&self) -> Vec<&str> {
-        match &self.command_kind {
+    fn command_args(&self) -> Vec<Cow<'_, str>> {
+        let mut args = match &self.command_kind {
             PidCommandKind::AppServer {
                 remote_control_enabled: true,
-            } => vec!["app-server", "--remote-control", "--listen", "unix://"],
+            } => vec![
+                "app-server".into(),
+                "--remote-control".into(),
+                "--listen".into(),
+                "unix://".into(),
+            ],
             PidCommandKind::AppServer {
                 remote_control_enabled: false,
-            } => vec!["app-server", "--listen", "unix://"],
+            } => vec!["app-server".into(), "--listen".into(), "unix://".into()],
             PidCommandKind::UpdateLoop { restore_release } => {
-                let mut args = vec!["app-server", "daemon", "pid-update-loop"];
+                let mut args = vec![
+                    "app-server".into(),
+                    "daemon".into(),
+                    "pid-update-loop".into(),
+                ];
                 if let Some(release) = restore_release {
-                    args.extend(["--restore-release", release.as_str()]);
+                    args.extend(["--restore-release".into(), release.as_str().into()]);
                 }
                 args
             }
+        };
+        if matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
+            for (name, enabled) in &self.feature_overrides {
+                args.extend(["-c".into(), format!("features.{name}={enabled}").into()]);
+            }
         }
+        args
     }
 
     #[cfg(any(unix, windows))]

@@ -1,0 +1,5 @@
+---
+source: tui/tests/suite/daemon_compatibility.rs
+expression: warning
+---
+⚠ Running without the shared background server: code-mode host fallback policy requires embedded mode.

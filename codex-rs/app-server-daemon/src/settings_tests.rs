@@ -23,7 +23,7 @@ async fn remote_control_save_preserves_updater_settings() {
 
     tokio::fs::write(
         &path,
-        r#"{"remoteControlEnabled":true,"shutdownGraceSeconds":25,"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":17},"futureSetting":42}"#,
+        r#"{"remoteControlEnabled":true,"shutdownGraceSeconds":25,"updater":{"autoUpdateEnabled":false,"updateIntervalMinutes":17},"featureOverrides":{"api_key_model_discovery":true,"code_mode_host":false},"futureSetting":42}"#,
     )
     .await
     .expect("write settings");
@@ -43,6 +43,7 @@ async fn remote_control_save_preserves_updater_settings() {
             "remoteControlEnabled": false,
             "shutdownGraceSeconds": 25,
             "updater": {"autoUpdateEnabled": false, "updateIntervalMinutes": 17},
+            "featureOverrides": {"api_key_model_discovery": true, "code_mode_host": false},
             "futureSetting": 42,
         })
     );

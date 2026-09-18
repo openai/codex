@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ pub(crate) const MAX_SHUTDOWN_GRACE_SECONDS: u32 = 5 * 60;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DaemonSettings {
     pub(crate) remote_control_enabled: bool,
+    pub(crate) feature_overrides: BTreeMap<String, bool>,
     pub(crate) auto_update_enabled: bool,
     pub(crate) update_interval_minutes: u32,
     pub(crate) shutdown_grace_seconds: u32,
@@ -26,6 +28,7 @@ impl Default for DaemonSettings {
     fn default() -> Self {
         Self {
             remote_control_enabled: false,
+            feature_overrides: BTreeMap::new(),
             auto_update_enabled: true,
             update_interval_minutes: DEFAULT_UPDATE_INTERVAL_MINUTES,
             shutdown_grace_seconds: DEFAULT_SHUTDOWN_GRACE_SECONDS,
@@ -44,6 +47,8 @@ struct StopSettings {
 struct StoredSettings {
     #[serde(default)]
     remote_control_enabled: bool,
+    #[serde(default)]
+    feature_overrides: BTreeMap<String, bool>,
     #[serde(default = "default_shutdown_grace_seconds")]
     shutdown_grace_seconds: u32,
     #[serde(default)]
@@ -54,6 +59,7 @@ impl Default for StoredSettings {
     fn default() -> Self {
         Self {
             remote_control_enabled: false,
+            feature_overrides: BTreeMap::new(),
             shutdown_grace_seconds: DEFAULT_SHUTDOWN_GRACE_SECONDS,
             updater: UpdaterSettings::default(),
         }
@@ -127,6 +133,7 @@ impl DaemonSettings {
         validate_shutdown_grace(settings.shutdown_grace_seconds)?;
         Ok(Self {
             remote_control_enabled: settings.remote_control_enabled,
+            feature_overrides: settings.feature_overrides,
             auto_update_enabled: settings.updater.auto_update_enabled,
             update_interval_minutes: settings.updater.update_interval_minutes,
             shutdown_grace_seconds: settings.shutdown_grace_seconds,
@@ -161,6 +168,14 @@ impl DaemonSettings {
             "remoteControlEnabled".to_string(),
             Value::Bool(self.remote_control_enabled),
         );
+        if self.feature_overrides.is_empty() {
+            settings.remove("featureOverrides");
+        } else {
+            settings.insert(
+                "featureOverrides".to_string(),
+                serde_json::to_value(&self.feature_overrides)?,
+            );
+        }
         let contents =
             serde_json::to_vec_pretty(&settings).context("failed to serialize settings")?;
         let temporary_path = path.with_extension("tmp");

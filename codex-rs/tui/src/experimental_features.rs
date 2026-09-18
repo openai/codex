@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 
 pub(crate) fn fetch(
     request_handle: AppServerRequestHandle,
-    thread_id: ThreadId,
+    thread_id: Option<ThreadId>,
     request_id: &'static str,
     mut response_tx: oneshot::Sender<Result<Vec<ExperimentalFeature>, String>>,
 ) {
@@ -38,7 +38,7 @@ pub(crate) fn fetch(
                             params: ExperimentalFeatureListParams {
                                 cursor,
                                 limit: Some(100),
-                                thread_id: Some(thread_id.to_string()),
+                                thread_id: thread_id.map(|id| id.to_string()),
                             },
                         },
                     )
@@ -88,7 +88,7 @@ pub(crate) async fn write(
     let (tx, rx) = oneshot::channel();
     fetch(
         request_handle.clone(),
-        thread_id,
+        Some(thread_id),
         "tui-experimental-save-readback",
         tx,
     );
@@ -133,7 +133,7 @@ pub(crate) async fn write(
     let (tx, rx) = oneshot::channel();
     fetch(
         request_handle,
-        thread_id,
+        Some(thread_id),
         "tui-experimental-save-readback",
         tx,
     );

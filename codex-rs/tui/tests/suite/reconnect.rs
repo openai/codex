@@ -36,7 +36,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
             "status": {"type": "active", "activeFlags": []}, "cwd": server_cwd,
             "cliVersion": "0.0.0", "source": "cli", "turns": [{"id": "running", "items": [], "status": "inProgress", "error": null}]
         });
-        for connection in 0..3 {
+        // The first connection checks daemon compatibility before TUI startup.
+        for connection in -1..3 {
             let mut socket = loop {
                 let (stream, _) = listener.accept().await?;
                 // Startup probes the default daemon socket before opening its WebSocket.
@@ -77,6 +78,14 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                 }
                 let result = match request.method.as_str() {
                     "initialize" => json!({"userAgent": "reconnect-pty"}),
+                    // An older daemon can omit the client's default-disabled features.
+                    "experimentalFeature/list" => {
+                        json!({"data": (["code_mode_host", "auth_elicitation"].map(|name| json!({
+                        "name": name, "stage": "stable", "displayName": null,
+                        "description": null, "announcement": null,
+                        "enabled": true, "defaultEnabled": true,
+                    }))), "nextCursor": null})
+                    }
                     "account/read" => {
                         json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": false})
                     }
