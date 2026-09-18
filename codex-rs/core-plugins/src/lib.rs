@@ -108,5 +108,6 @@ pub use remote::RecommendedPlugin;
 pub use remote::RecommendedPluginsMode;
 pub use remote_metadata::remote_catalog_metadata_eq;
 pub use script_attribution::PluginCommandAttribution;
+pub use script_attribution::PluginMeasurementTarget;
 pub use script_attribution::TrustedPluginRoots;
 pub use script_attribution::command_script_arguments;

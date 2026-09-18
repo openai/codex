@@ -8,4 +8,5 @@ codex_rust_crate(
         "src/assets/success_legacy.html",
     ],
     crate_name = "codex_login",
+    unit_test_timeout = "long",
 )

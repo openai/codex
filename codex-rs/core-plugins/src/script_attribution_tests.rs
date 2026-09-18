@@ -10,15 +10,24 @@ use crate::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::test_support::write_curated_plugin_sha_with;
 use crate::test_support::write_openai_api_curated_marketplace;
 use crate::test_support::write_openai_curated_marketplace;
+use codex_exec_server::ExecServerError;
+use codex_exec_server::LOCAL_FS;
+use codex_exec_server::NoiseChannelPublicKey;
+use codex_exec_server::NoiseRendezvousConnectBundle;
+use codex_exec_server::NoiseRendezvousConnectProvider;
+use codex_exec_server_test_support::environment_manager_without_environments;
 use codex_plugin::PluginLoadOutcome;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::SkillDiscoveryMode;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::sync::Arc;
 use tempfile::TempDir;
 const ENABLED: bool = true;
 const DISABLED: bool = false;
@@ -151,6 +160,7 @@ fn resolves_primary_runtime_scripts_from_the_installed_plugin_cache() {
     let roots = TrustedPluginRoots {
         roots: vec![TrustedPluginRoot {
             plugin_id: plugin_id.clone(),
+            version: "0.1.29".to_string(),
             metrics_operations_by_path: BTreeMap::new(),
             root: plugin_root.canonicalize().expect("canonical plugin root"),
         }],
@@ -193,22 +203,20 @@ async fn resolves_relocated_script_through_executor_filesystem() {
     let executor = TempDir::new().expect("executor temp dir");
     let executor_root = executor
         .path()
-        .join("plugins/cache/openai-curated/sample/remote-version");
+        .join("plugins/cache/openai-curated/sample")
+        .join(curated_plugin_cache_version(TEST_CURATED_PLUGIN_SHA));
     let executor_script = executor_root.join("scripts/run.py");
     fs::create_dir_all(executor_script.parent().expect("script parent"))
         .expect("create executor scripts");
     fs::copy(script.as_path(), &executor_script).expect("copy script to executor");
     let cwd = PathUri::from_host_native_path(&executor_root).expect("executor root URI");
-    let environment =
-        codex_exec_server::Environment::create_for_tests(/*exec_server_url*/ None)
-            .expect("local executor environment");
 
     assert_eq!(
         roots
             .resolve_executor_attribution(
                 &command(&["python", "scripts/run.py"]),
                 &cwd,
-                environment.get_filesystem().as_ref(),
+                LOCAL_FS.as_ref(),
             )
             .await,
         Some(PluginCommandAttribution {
@@ -223,7 +231,7 @@ async fn resolves_relocated_script_through_executor_filesystem() {
             .resolve_executor_attribution(
                 &command(&["python", "scripts/run.py"]),
                 &cwd,
-                environment.get_filesystem().as_ref(),
+                LOCAL_FS.as_ref(),
             )
             .await,
         None
@@ -232,17 +240,35 @@ async fn resolves_relocated_script_through_executor_filesystem() {
 
 #[test]
 fn recognizes_windows_executor_plugin_cache_root() {
-    let attribution = PluginCommandAttribution {
+    let reference = TempDir::new().expect("reference root");
+    let trusted = TrustedPluginRoot {
         plugin_id: PluginId::parse("presentations@openai-primary-runtime").expect("plugin id"),
-        normalized_relative_path:
-            "skills/presentations/container_tools/mark_artifact_operation_started.mjs".to_string(),
+        version: "0.1.29".to_string(),
+        root: path(reference.path()),
+        metrics_operations_by_path: BTreeMap::new(),
     };
+    let relative_path = "skills/presentations/container_tools/mark_artifact_operation_started.mjs";
     let script = PathUri::parse(
         "file:///C:/Users/user/.codex/plugins/cache/openai-primary-runtime/presentations/0.1.29/skills/presentations/container_tools/mark_artifact_operation_started.mjs",
     )
     .expect("Windows script URI");
 
-    assert!(executor_plugin_root_matches(&script, &attribution));
+    assert!(executor_plugin_root_matches(
+        &script,
+        &trusted,
+        relative_path,
+        PluginVersionMatch::Exact,
+    ));
+    let wrong_version = PathUri::parse(
+        "file:///C:/Users/user/.codex/plugins/cache/openai-primary-runtime/presentations/0.1.28/skills/presentations/container_tools/mark_artifact_operation_started.mjs",
+    )
+    .expect("other-version Windows script URI");
+    assert!(!executor_plugin_root_matches(
+        &wrong_version,
+        &trusted,
+        relative_path,
+        PluginVersionMatch::Exact,
+    ));
 }
 fn assert_invalid_metrics_manifest(codex_home: &Path, root: &AbsolutePathBuf, manifest: &str) {
     fs::write(root.join("analytics.yaml"), manifest).expect("write analytics manifest");
@@ -321,17 +347,20 @@ fn trusted_roots_require_verified_curated_or_remote_cache() {
         vec![
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("sample@openai-curated").expect("plugin id"),
+                version: curated_plugin_cache_version(TEST_CURATED_PLUGIN_SHA),
                 metrics_operations_by_path: BTreeMap::new(),
                 root: root.canonicalize().expect("canonical root"),
             },
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("api-sample@openai-api-curated").expect("plugin id"),
+                version: curated_plugin_cache_version(TEST_CURATED_PLUGIN_SHA),
                 metrics_operations_by_path: BTreeMap::new(),
                 root: api_root.canonicalize().expect("canonical root"),
             },
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("remote-sample@openai-curated-remote")
                     .expect("plugin id"),
+                version: "1.2.3".to_string(),
                 metrics_operations_by_path: BTreeMap::new(),
                 root: remote_root.canonicalize().expect("canonical root"),
             },
@@ -651,11 +680,13 @@ fn rejects_ambiguous_commands_overlaps_and_symlink_escapes() {
         roots: vec![
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("sample@openai-curated").expect("plugin id"),
+                version: curated_plugin_cache_version(TEST_CURATED_PLUGIN_SHA),
                 metrics_operations_by_path: BTreeMap::new(),
                 root: root.canonicalize().expect("canonical root"),
             },
             TrustedPluginRoot {
                 plugin_id: PluginId::parse("nested@openai-curated").expect("plugin id"),
+                version: curated_plugin_cache_version(TEST_CURATED_PLUGIN_SHA),
                 metrics_operations_by_path: BTreeMap::new(),
                 root: root.join("scripts").canonicalize().expect("nested root"),
             },
@@ -687,4 +718,462 @@ fn rejects_ambiguous_commands_overlaps_and_symlink_escapes() {
             );
         }
     }
+}
+
+const REFERENCE_HELPER: &str = "scripts/install-dependencies.sh";
+
+fn reference_metrics_operation(variant: &str) -> PluginMetricsOperation {
+    PluginMetricsOperation {
+        operation_name: "dependency_install".to_string(),
+        measurements: BTreeMap::from([(
+            "duration_ms".to_string(),
+            PluginMeasurementDefinition {
+                enum_dimensions: BTreeMap::from([(
+                    "variant".to_string(),
+                    BTreeSet::from([variant.to_string()]),
+                )]),
+            },
+        )]),
+    }
+}
+
+fn reference_identity_fixture(root: &Path, variant: &str, contents: &str) -> AbsolutePathBuf {
+    fs::create_dir_all(root.join("scripts")).expect("create reference scripts");
+    fs::write(root.join(REFERENCE_HELPER), contents).expect("write helper");
+    fs::write(
+        root.join("analytics.yaml"),
+        format!(
+            "version: 1\noperations:\n  dependency_install:\n    path: ./{REFERENCE_HELPER}\n    measurements:\n      duration_ms:\n        dimensions:\n          variant: [{variant}]\n"
+        ),
+    )
+    .expect("write operation manifest");
+    path(root).canonicalize().expect("canonical reference root")
+}
+
+fn reference_fixture(bundles: &[(&str, &str, &str, &str)]) -> (TempDir, TrustedPluginRoots) {
+    let home = TempDir::new().expect("references");
+    let roots = TrustedPluginRoots {
+        roots: bundles
+            .iter()
+            .map(|(name, version, variant, contents)| {
+                let root = reference_identity_fixture(
+                    &home.path().join(name).join(version),
+                    variant,
+                    contents,
+                );
+                TrustedPluginRoot {
+                    plugin_id: PluginId::parse(&format!("{name}@openai-curated-remote"))
+                        .expect("plugin id"),
+                    version: version.to_string(),
+                    metrics_operations_by_path: load_plugin_metrics_operations(&root)
+                        .expect("valid fixture analytics"),
+                    root,
+                }
+            })
+            .collect(),
+    };
+    (home, roots)
+}
+
+fn executor_plugin(home: &Path, name: &str, version: &str, contents: &str) -> AbsolutePathBuf {
+    reference_identity_fixture(
+        &home.join(format!(
+            "plugins/cache/openai-curated-remote/{name}/{version}"
+        )),
+        "untrusted_executor_metadata",
+        contents,
+    )
+}
+
+// Check both APIs: ordinary attribution can survive version differences, while
+// measurements must use the exact authenticated declaration (never executor YAML).
+async fn assert_executor_resolution(
+    roots: &TrustedPluginRoots,
+    command: &[String],
+    cwd: &PathUri,
+    plugin_id: &PluginId,
+    variant: Option<&str>,
+) {
+    assert_eq!(
+        roots
+            .resolve_executor_attribution(command, cwd, LOCAL_FS.as_ref())
+            .await,
+        Some(PluginCommandAttribution {
+            plugin_id: plugin_id.clone(),
+            normalized_relative_path: REFERENCE_HELPER.to_string(),
+        }),
+        "attribution for {command:?} at {cwd:?}"
+    );
+    assert_eq!(
+        roots
+            .resolve_metrics_operation_in_filesystem(command, cwd, LOCAL_FS.as_ref())
+            .await,
+        variant.map(|variant| ResolvedPluginMetricsOperation {
+            plugin_id: plugin_id.clone(),
+            operation: reference_metrics_operation(variant),
+        }),
+        "measurements for {command:?} at {cwd:?}"
+    );
+}
+
+#[test]
+fn executor_cache_identity_obeys_windows_and_posix_case_conventions() {
+    let (_reference, roots) =
+        reference_fixture(&[("sites", "2.0.0-RC1", "selected", "printf shared\\n\n")]);
+    let plugin_id = PluginId::parse("sites@openai-curated-remote").expect("plugin id");
+    for prefix in ["file:///C:/Users/user/.codex", "file://server/share/.codex"] {
+        let script = PathUri::parse(&format!(
+            "{prefix}/PLUGINS/CACHE/OPENAI-CURATED-REMOTE/SITES/2.0.0-rc1/{REFERENCE_HELPER}"
+        ))
+        .expect("Windows script");
+        let target = PluginMeasurementTarget::from_script_path(&script)
+            .expect("Windows cache preselection follows the resolver's path identity");
+        assert_eq!(
+            target,
+            PluginMeasurementTarget {
+                plugin_id: plugin_id.clone(),
+                version: "2.0.0-rc1".to_string(),
+                path_convention: PathConvention::Windows,
+            }
+        );
+        let equivalent = PathUri::parse(&format!(
+            "{prefix}/plugins/cache/openai-curated-remote/sites/2.0.0-RC1/{REFERENCE_HELPER}"
+        ))
+        .expect("equivalent Windows script");
+        assert_eq!(
+            PluginMeasurementTarget::from_script_path(&equivalent),
+            Some(target)
+        );
+        let candidates =
+            roots.local_candidates_for_executor_script(&script, PluginVersionMatch::Exact);
+        let candidate = candidates
+            .first()
+            .expect("Windows identity casing must not prevent canonicalization");
+        assert_eq!(
+            candidate.matched.metrics_operation(),
+            Some(ResolvedPluginMetricsOperation {
+                plugin_id: plugin_id.clone(),
+                operation: reference_metrics_operation("selected"),
+            })
+        );
+    }
+    for script in [
+        format!(
+            "file:///home/user/.codex/PLUGINS/CACHE/OPENAI-CURATED-REMOTE/SITES/2.0.0-rc1/{REFERENCE_HELPER}"
+        ),
+        format!(
+            "file:///home/user/.codex/plugins/cache/openai-curated-remote/SITES/2.0.0-RC1/{REFERENCE_HELPER}"
+        ),
+        format!(
+            "file:///C:/Users/user/.codex/PLUGINS/CACHE/OPENAI-CURATED-REMOTE/SITES/2.0.0-rc2/{REFERENCE_HELPER}"
+        ),
+        format!(
+            "file:///C:/Users/user/.codex/PLUGINS/CACHE/OPENAI-CURATED-REMOTE/OTHER/2.0.0-rc1/{REFERENCE_HELPER}"
+        ),
+    ] {
+        let script = PathUri::parse(&script).expect("script");
+        let path_convention = script.infer_path_convention().expect("path convention");
+        let expected = PluginMeasurementTarget {
+            plugin_id: plugin_id.clone(),
+            version: match path_convention {
+                PathConvention::Windows => "2.0.0-rc1",
+                PathConvention::Posix => "2.0.0-RC1",
+            }
+            .to_string(),
+            path_convention,
+        };
+        assert_ne!(
+            PluginMeasurementTarget::from_script_path(&script),
+            Some(expected),
+            "preselection must not match a differently cased POSIX identity or another version"
+        );
+        assert!(
+            roots
+                .local_candidates_for_executor_script(&script, PluginVersionMatch::Exact)
+                .is_empty(),
+            "POSIX casing and different Windows versions must remain distinct"
+        );
+    }
+    for version in ["2.0.0-RC1", "2.0.0-rc1"] {
+        let script = PathUri::parse(&format!(
+            "file:///home/user/.codex/plugins/cache/openai-curated-remote/sites/{version}/{REFERENCE_HELPER}"
+        ))
+        .expect("POSIX script");
+        let target =
+            PluginMeasurementTarget::from_script_path(&script).expect("POSIX cache preselection");
+        assert_eq!(
+            target,
+            PluginMeasurementTarget {
+                plugin_id: plugin_id.clone(),
+                version: version.to_string(),
+                path_convention: PathConvention::Posix,
+            }
+        );
+    }
+}
+
+#[test]
+fn extending_trusted_roots_preserves_existing_plugins_and_deduplicates_snapshots() {
+    let contents = "printf shared\\n\n";
+    let (_frontend, mut roots) = reference_fixture(&[("sites", "1.2.3", "primary", contents)]);
+    let original = roots.clone();
+    let (_snapshot, additional) = reference_fixture(&[
+        ("sites", "1.2.3", "copied", contents),
+        ("other", "1.2.3", "additional", contents),
+    ]);
+
+    roots.extend(&additional);
+    let expected = TrustedPluginRoots {
+        roots: vec![original.roots[0].clone(), additional.roots[1].clone()],
+    };
+    assert_eq!(roots, expected);
+    roots.extend(&additional);
+    assert_eq!(roots, expected, "repeated snapshots must remain idempotent");
+}
+
+#[tokio::test]
+async fn authenticated_v2_reference_coexists_with_loaded_frontend_v1() {
+    let frontend = TempDir::new().expect("frontend");
+    let v1 = installed_remote_plugin_root(frontend.path(), "sites");
+    reference_identity_fixture(v1.as_path(), "install_v1", "printf v1\\n\n");
+    let plugin_id = PluginId::parse("sites@openai-curated-remote").expect("plugin id");
+    let mut roots = roots_for(
+        frontend.path(),
+        vec![loaded_plugin(&plugin_id.as_key(), v1.as_path(), ENABLED)],
+    );
+    let (_reference, references) =
+        reference_fixture(&[("sites", "2.0.0", "install_v2", "printf v2\\n\n")]);
+    roots.extend(&references);
+    // The operation must stay bound to the selected root when two versions share
+    // a plugin ID and helper path, for both local and executor resolution.
+    for (root, variant) in [
+        (&v1, "install_v1"),
+        (&references.roots[0].root, "install_v2"),
+    ] {
+        assert_eq!(
+            roots.resolve_metrics_operation(&command(&["sh", REFERENCE_HELPER]), root),
+            Some(ResolvedPluginMetricsOperation {
+                plugin_id: plugin_id.clone(),
+                operation: reference_metrics_operation(variant),
+            })
+        );
+    }
+    let executor = TempDir::new().expect("executor");
+    let root = executor_plugin(executor.path(), "sites", "2.0.0", "printf v2\\n\n");
+    let cwd = PathUri::from_host_native_path(root.as_path()).expect("executor URI");
+    assert_executor_resolution(
+        &roots,
+        &command(&["sh", REFERENCE_HELPER]),
+        &cwd,
+        &plugin_id,
+        Some("install_v2"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn same_helper_path_in_two_plugins_resolves_by_executor_identity() {
+    // Identical bytes: neither suffix nor content identifies a plugin.
+    let contents = "printf shared\\n\n";
+    let (_reference, roots) = reference_fixture(&[
+        ("sites", "2.0.0", "sites_install", contents),
+        ("other", "2.0.0", "other_install", contents),
+    ]);
+    let executor = TempDir::new().expect("executor");
+    for (name, variant) in [("sites", "sites_install"), ("other", "other_install")] {
+        let root = executor_plugin(executor.path(), name, "2.0.0", contents);
+        let cwd = PathUri::from_host_native_path(root.as_path()).expect("executor URI");
+        let plugin_id =
+            PluginId::parse(&format!("{name}@openai-curated-remote")).expect("plugin id");
+        assert_executor_resolution(
+            &roots,
+            &command(&["sh", REFERENCE_HELPER]),
+            &cwd,
+            &plugin_id,
+            Some(variant),
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn identical_script_bytes_do_not_authorize_another_executor_version() {
+    let contents = "printf shared\\n\n";
+    let (_reference, roots) =
+        reference_fixture(&[("sites", "2.0.0", "v2_only_operation", contents)]);
+    let plugin_id = PluginId::parse("sites@openai-curated-remote").expect("plugin id");
+    let executor = TempDir::new().expect("executor");
+    for version in ["1.2.3", "2.0.0"] {
+        let root = executor_plugin(executor.path(), "sites", version, contents);
+        let cwd = PathUri::from_host_native_path(root.as_path()).expect("executor URI");
+        let candidate = command(&["bash", "-lc", &format!("sh {REFERENCE_HELPER}")]);
+        assert_eq!(
+            PluginMeasurementTarget::from_command(&candidate, &cwd, LOCAL_FS.as_ref()).await,
+            Some(PluginMeasurementTarget {
+                plugin_id: plugin_id.clone(),
+                version: version.to_string(),
+                path_convention: PathConvention::native(),
+            })
+        );
+        assert_executor_resolution(
+            &roots,
+            &command(&["sh", REFERENCE_HELPER]),
+            &cwd,
+            &plugin_id,
+            (version == "2.0.0").then_some("v2_only_operation"),
+        )
+        .await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_symlink_cannot_change_authenticated_plugin_or_version() {
+    let contents = "printf shared\\n\n";
+    let (_reference, roots) =
+        reference_fixture(&[("sites", "2.0.0", "v2_only_operation", contents)]);
+    let executor = TempDir::new().expect("executor");
+    let original = executor
+        .path()
+        .join("plugins/cache/openai-curated-remote/sites/2.0.0");
+    fs::create_dir_all(original.join("scripts")).expect("original scripts directory");
+    let cwd = PathUri::from_host_native_path(&original).expect("original executor URI");
+    for target_identity in [
+        "openai-curated-remote/other/2.0.0",
+        "openai-curated-remote/sites/1.2.3",
+        "openai-curated/sites/2.0.0",
+        "../outside-cache",
+    ] {
+        let target = reference_identity_fixture(
+            &executor.path().join("plugins/cache").join(target_identity),
+            "ignored_executor_metadata",
+            contents,
+        );
+        std::os::unix::fs::symlink(
+            target.join(REFERENCE_HELPER),
+            original.join(REFERENCE_HELPER),
+        )
+        .expect("redirect helper to another identity");
+        assert_eq!(
+            roots
+                .resolve_metrics_operation_in_filesystem(
+                    &command(&["sh", REFERENCE_HELPER]),
+                    &cwd,
+                    LOCAL_FS.as_ref(),
+                )
+                .await,
+            None,
+            "canonical identity changed to {target_identity}"
+        );
+        fs::remove_file(original.join(REFERENCE_HELPER)).expect("remove helper symlink");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn executor_aliases_use_canonical_plugin_paths() {
+    let contents = "printf shared\\n\n";
+    let (_reference, roots) = reference_fixture(&[
+        ("sites", "1.2.3", "older", contents),
+        ("sites", "2.0.0", "selected", contents),
+    ]);
+    let older_roots = TrustedPluginRoots {
+        roots: vec![roots.roots[0].clone()],
+    };
+    let plugin_id = PluginId::parse("sites@openai-curated-remote").expect("plugin id");
+    let executor = TempDir::new().expect("executor");
+    let target = executor_plugin(executor.path(), "sites", "2.0.0", contents);
+    let alias = executor.path().join("plugin-link");
+    std::os::unix::fs::symlink(target.as_path(), &alias).expect("directory alias");
+    let version_alias = executor
+        .path()
+        .join("plugins/cache/openai-curated-remote/sites/1.2.3/scripts/renamed-entry.sh");
+    fs::create_dir_all(version_alias.parent().expect("alias parent")).expect("V1 alias directory");
+    std::os::unix::fs::symlink(target.join(REFERENCE_HELPER), &version_alias).expect("V1 alias");
+    let cwd = PathUri::from_host_native_path(executor.path()).expect("executor URI");
+    // An already loaded reference still supports directory aliases. Preparation
+    // only probes cache paths, so ordinary workspace scripts need no executor I/O.
+    assert_executor_resolution(
+        &roots,
+        &command(&["sh", &alias.join(REFERENCE_HELPER).to_string_lossy()]),
+        &cwd,
+        &plugin_id,
+        Some("selected"),
+    )
+    .await;
+    let command = command(&["sh", &version_alias.to_string_lossy()]);
+    assert_eq!(
+        PluginMeasurementTarget::from_command(&command, &cwd, LOCAL_FS.as_ref()).await,
+        Some(PluginMeasurementTarget {
+            plugin_id: plugin_id.clone(),
+            version: "2.0.0".to_string(),
+            path_convention: PathConvention::Posix,
+        })
+    );
+    assert_executor_resolution(&roots, &command, &cwd, &plugin_id, Some("selected")).await;
+    assert_eq!(
+        older_roots
+            .resolve_metrics_operation_in_filesystem(&command, &cwd, LOCAL_FS.as_ref())
+            .await,
+        None,
+        "a V1-shaped alias and identical bytes cannot authorize V2 metrics"
+    );
+}
+
+#[tokio::test]
+async fn measurement_target_rejects_inline_commands_and_local_versions() -> anyhow::Result<()> {
+    let executor = TempDir::new()?;
+    let root = reference_identity_fixture(
+        &executor
+            .path()
+            .join("plugins/cache/openai-curated-remote/sites/local"),
+        "ignored",
+        "printf fixture\n",
+    );
+    let cwd = PathUri::from_host_native_path(root.as_path())?;
+    for args in [&["node", "-e", "42"][..], &["sh", REFERENCE_HELPER][..]] {
+        let command = command(args);
+        let fs = codex_exec_server::LOCAL_FS.as_ref();
+        assert_eq!(
+            PluginMeasurementTarget::from_command(&command, &cwd, fs).await,
+            None
+        );
+    }
+    Ok(())
+}
+
+struct UnusedConnectProvider;
+
+impl NoiseRendezvousConnectProvider for UnusedConnectProvider {
+    fn connect_bundle(
+        &self,
+        _: NoiseChannelPublicKey,
+    ) -> BoxFuture<'_, Result<NoiseRendezvousConnectBundle, ExecServerError>> {
+        panic!("unrelated script must not connect to the executor")
+    }
+}
+
+#[tokio::test]
+async fn unrelated_scripts_skip_executor_lookup() -> anyhow::Result<()> {
+    let (_reference, roots) =
+        reference_fixture(&[("sites", "2.0.0", "selected", "printf shared\\n\n")]);
+    let manager = environment_manager_without_environments();
+    let pending = manager.materialize_pending_noise_environment(
+        "tools".to_string(),
+        Arc::new(UnusedConnectProvider),
+    )?;
+    let fs = pending.get_filesystem();
+    let cwd = PathUri::parse("file:///workspace")?;
+    let command = command(&["node", "build.js"]);
+    // An executor lookup waits for provisioning; unrelated scripts must finish immediately.
+    assert_eq!(
+        futures::future::join3(
+            roots.resolve_executor_attribution(&command, &cwd, fs.as_ref()),
+            roots.resolve_metrics_operation_in_filesystem(&command, &cwd, fs.as_ref()),
+            PluginMeasurementTarget::from_command(&command, &cwd, fs.as_ref()),
+        )
+        .now_or_never(),
+        Some((None, None, None)),
+    );
+    Ok(())
 }
