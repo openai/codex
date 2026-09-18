@@ -1,0 +1,26 @@
+---
+source: cli/src/doctor/filesystem_paths_tests.rs
+expression: "super::super::render_human_report(&report, super::super::HumanOutputOptions\n{ show_details: true, show_all: false, ascii: true, color_enabled: false, },)"
+---
+Codex Doctor vtest
+
+Configuration
+  [ok] sandbox      configured filesystem paths listed; read restrictions prevent probes
+      permission profile       diagnostic
+      operation                resolve paths only; read/write access is not tested
+      probe budgets            2 seconds per path, 8 seconds total, at most 32 paths
+      path 1                   FIXTURE/unavailable (read); not probed (filesystem read restrictions apply)
+      path 1 source            permissions.diagnostic.filesystem.FIXTURE/unavailable.. in user (FIXTURE/config.toml)
+      path 2                   FIXTURE/unavailable/.git (write); not probed (filesystem read restrictions apply)
+      path 2 source            permissions.base.filesystem.FIXTURE/unavailable..git in user (FIXTURE/config.toml)
+      path 3                   FIXTURE/unavailable/overridden (write); not probed (filesystem read restrictions apply)
+      path 3 source            effective filesystem policy (entry provenance unavailable)
+      path 4                   FIXTURE/unavailable/subtree (read); not probed (filesystem read restrictions apply)
+      path 4 source            permissions.base.filesystem.FIXTURE/unavailable.subtree/** in user (FIXTURE/config.toml)
+      paths checked            4 of 4
+
+-------------------------------------------------------------
+1 ok | 0 warn | 0 fail ok
+
+--summary compact output           --all expand truncated lists
+--json redacted report

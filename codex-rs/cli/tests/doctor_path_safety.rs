@@ -197,6 +197,80 @@ fn non_interactive_dumb_terminal_preserves_other_doctor_failures() -> Result<()>
     Ok(())
 }
 
+#[test]
+fn doctor_reports_configured_filesystem_paths() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let config_file = fixture.home.join("config.toml");
+    let original = std::fs::read_to_string(&config_file)?;
+    let existing = fixture.workspace.join("probe-existing");
+    let missing = fixture.workspace.join("probe-missing");
+    std::fs::create_dir(&existing)?;
+    let existing_key = toml::Value::String(existing.display().to_string());
+    let missing_key = toml::Value::String(missing.display().to_string());
+    std::fs::write(
+        &config_file,
+        format!(
+            r#"default_permissions = "diagnostic"
+{original}
+[permissions.diagnostic]
+extends = ":read-only"
+[permissions.diagnostic.filesystem]
+{existing_key} = "read"
+{missing_key} = "write"
+"#
+        ),
+    )?;
+    let output = fixture.command()?.args(["doctor", "--json"]).output()?;
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    #[cfg(windows)]
+    assert_eq!(report["checks"]["sandbox.filesystem_paths"]["status"], "ok");
+    let mut details = report["checks"]["sandbox.filesystem_paths"]["details"].clone();
+    // Snapshot outcomes and provenance independently of helper startup speed.
+    details
+        .as_object_mut()
+        .expect("path details")
+        .retain(|key, _| !key.ends_with(" latency"));
+    let canonical_root = fixture.root.path().canonicalize()?;
+    for value in details.as_object_mut().expect("path details").values_mut() {
+        let detail = value
+            .as_str()
+            .expect("scalar path detail")
+            .replace(&canonical_root.display().to_string(), "FIXTURE")
+            .replace(&fixture.root.path().display().to_string(), "FIXTURE")
+            .replace('\\', "/");
+        *value = Value::String(detail);
+    }
+    let snapshot_name = if cfg!(windows) {
+        "doctor_configured_filesystem_paths_windows"
+    } else {
+        "doctor_configured_filesystem_paths"
+    };
+    insta::assert_snapshot!(snapshot_name, serde_json::to_string_pretty(&details)?);
+    Ok(())
+}
+
+#[test]
+fn filesystem_probe_does_not_load_configuration() -> Result<()> {
+    let fixture = Fixture::new()?;
+    std::fs::write(fixture.home.join("config.toml"), "invalid TOML = [")?;
+    for (path, expected) in [
+        (&fixture.workspace, 0),
+        (&fixture.workspace.join("missing"), 2),
+    ] {
+        let output = fixture
+            .command()?
+            .args(["doctor", "--probe-filesystem-path"])
+            .arg(path)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(if cfg!(windows) { 5 } else { expected })
+        );
+        assert!(output.stdout.is_empty());
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn interactive_tmux_startup_does_not_execute_workspace_helpers() -> Result<()> {

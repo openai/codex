@@ -1,0 +1,14 @@
+---
+source: cli/tests/doctor_path_safety.rs
+expression: "serde_json::to_string_pretty(&details)?"
+---
+{
+  "operation": "resolve paths only; read/write access is not tested",
+  "path 1": "FIXTURE/workspace/probe-existing (read); not probed on Windows (network authentication risk)",
+  "path 1 source": "permissions.diagnostic.filesystem.FIXTURE/workspace/probe-existing in user (FIXTURE/home/config.toml)",
+  "path 2": "FIXTURE/workspace/probe-missing (write); not probed on Windows (network authentication risk)",
+  "path 2 source": "permissions.diagnostic.filesystem.FIXTURE/workspace/probe-missing in user (FIXTURE/home/config.toml)",
+  "paths checked": "2 of 2",
+  "permission profile": "diagnostic",
+  "probe budgets": "2 seconds per path, 8 seconds total, at most 32 paths"
+}
