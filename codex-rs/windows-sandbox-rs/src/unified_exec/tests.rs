@@ -337,7 +337,12 @@ fn elevated_non_tty_cmd_forwards_env_output_and_exit() {
             /*use_private_desktop*/ true,
         )
         .await
-        .expect("spawn elevated non-tty cmd session");
+        .unwrap_or_else(|err| {
+            panic!(
+                "spawn elevated non-tty cmd session: {err:#}\nsandbox log:\n{}",
+                sandbox_log(codex_home.path())
+            )
+        });
         let (stdout, exit_code) =
             collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(10)).await;
         let stdout = String::from_utf8_lossy(&stdout);

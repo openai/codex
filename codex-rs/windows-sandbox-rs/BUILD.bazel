@@ -55,4 +55,8 @@ codex_rust_crate(
         ":codex-command-runner",
         ":codex-windows-sandbox-setup",
     ],
+    # Setup rotates machine-wide account passwords. The process-local test lock
+    # cannot prevent exec-server's elevated filesystem tests from rotating them
+    # between this crate's setup and logon. Windows tests execute locally in CI.
+    test_tags = ["exclusive-if-local"],
 )
