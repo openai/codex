@@ -62,7 +62,7 @@ pub struct PartialNetworkProxyConfig {
 pub fn build_config_state(
     mut config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
-    executor_os: crate::NetworkProxyExecutorOs,
+    executor_os: crate::Platform,
 ) -> anyhow::Result<ConfigState> {
     if constraints.enabled == Some(false) {
         config.credential_broker = false;

@@ -42,10 +42,10 @@ fn environment_policy_presence_keeps_selected_and_managed_denials() {
 #[test]
 fn attachment_projection_preserves_policy_and_drops_listener_addresses() {
     for executor_os in [
-        NetworkProxyExecutorOs::Linux,
-        NetworkProxyExecutorOs::Macos,
-        NetworkProxyExecutorOs::Windows,
-        NetworkProxyExecutorOs::Unknown,
+        Platform::Linux,
+        Platform::Macos,
+        Platform::Windows,
+        Platform::Unknown,
     ] {
         for (raw, windows_only) in [
             ("", false),
@@ -76,11 +76,8 @@ allow_local_binding = false
             ),
         ] {
             let expected: NetworkToml = toml::from_str(raw).unwrap();
-            let accepted = !windows_only
-                || matches!(
-                    executor_os,
-                    NetworkProxyExecutorOs::Windows | NetworkProxyExecutorOs::Unknown
-                );
+            let accepted =
+                !windows_only || matches!(executor_os, Platform::Windows | Platform::Unknown);
             assert_eq!(
                 build_config_state(
                     expected.to_network_proxy_config(),
@@ -165,7 +162,7 @@ action = ['redact']
             validate_environment_network_policy(
                 &policy,
                 &PermissionProfile::read_only(),
-                NetworkProxyExecutorOs::Unknown,
+                Platform::Unknown,
             ),
             Err(EnvironmentNetworkConfigError),
             "{raw}"
@@ -202,7 +199,7 @@ action = ['redact']
             validate_environment_network_policy(
                 &policy,
                 &PermissionProfile::read_only(),
-                NetworkProxyExecutorOs::Unknown,
+                Platform::Unknown,
             ),
             Ok(()),
             "{raw}"

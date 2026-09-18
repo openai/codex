@@ -175,7 +175,7 @@ impl TestProxy {
         let config_state = build_config_state(
             config,
             NetworkProxyConstraints::default(),
-            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            crate::Platform::native(),
         )
         .unwrap();
         let state = Arc::new(NetworkProxyState::with_reloader(

@@ -79,7 +79,7 @@ async fn test_network_proxy_with_config(
     let state = codex_network_proxy::build_config_state(
         config,
         NetworkProxyConstraints::default(),
-        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        codex_utils_path_uri::Platform::native(),
     )?;
     NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(

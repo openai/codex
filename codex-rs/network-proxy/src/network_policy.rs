@@ -677,7 +677,7 @@ mod tests {
         let state = build_config_state(
             config,
             NetworkProxyConstraints::default(),
-            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            crate::Platform::native(),
         )
         .unwrap();
         let reloader = Arc::new(StaticReloader {

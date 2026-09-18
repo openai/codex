@@ -1820,7 +1820,7 @@ mod tests {
         let replacement = crate::state::build_config_state(
             config.clone(),
             Default::default(),
-            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            crate::Platform::native(),
         )?;
         proxy.replace_config_state(replacement).await?;
         let expected_unix_sockets = if cfg!(target_os = "windows") {
@@ -2091,7 +2091,7 @@ mod tests {
                     ..NetworkProxyConfig::default()
                 },
                 Default::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+                crate::Platform::native(),
             )
             .expect("replacement config state");
             proxy
@@ -2177,7 +2177,7 @@ mod tests {
             let replacement = crate::state::build_config_state(
                 config.clone(),
                 Default::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+                crate::Platform::native(),
             )?;
             proxy.replace_config_state(replacement).await?;
             let prepared = proxy

@@ -128,6 +128,7 @@ pub use config_requirements::WebSearchModeRequirement;
 pub use config_requirements::WindowsRequirementsToml;
 pub use config_requirements::WindowsSandboxImplementationToml;
 pub use config_requirements::sandbox_mode_requirement_for_permission_profile;
+pub use config_toml::effective_sandbox_mode;
 pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;

@@ -143,9 +143,7 @@ for family in (socket.AF_NETLINK, getattr(socket, 'AF_VSOCK', 40)):
         let state = build_config_state(
             config,
             NetworkProxyConstraints::default(),
-            codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(
-                std::env::consts::OS,
-            )),
+            codex_network_proxy::Platform::native(),
         )
         .expect("valid managed network configuration");
         let network = NetworkProxy::builder()

@@ -305,7 +305,7 @@ async fn build_proxy(
     let config_state = build_config_state(
         config,
         Default::default(),
-        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        codex_network_proxy::Platform::native(),
     )?;
     let reloader = Arc::new(StaticReloader(config_state.clone()));
     let state = Arc::new(NetworkProxyState::with_reloader(config_state, reloader));

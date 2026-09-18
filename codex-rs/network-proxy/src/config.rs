@@ -14,7 +14,7 @@ use std::path::Path;
 use tracing::warn;
 use url::Url;
 
-use crate::NetworkProxyExecutorOs;
+use crate::Platform;
 use crate::mitm_hook::MitmHookConfig;
 use crate::policy::normalize_host;
 
@@ -497,21 +497,19 @@ impl ValidatedUnixSocketPath {
 
 pub(crate) fn validate_unix_socket_allowlist_paths(
     cfg: &NetworkProxyConfig,
-    executor_os: NetworkProxyExecutorOs,
+    executor_os: Platform,
 ) -> Result<()> {
     for (index, socket_path) in cfg.allow_unix_sockets().iter().enumerate() {
         anyhow::ensure!(
-            executor_os.socket_path_is_absolute(socket_path) && !socket_path.contains('\0'),
+            crate::socket_path::socket_path_is_absolute(executor_os, socket_path)
+                && !socket_path.contains('\0'),
             "invalid network.allow_unix_sockets[{index}]: expected a NUL-free absolute path for {executor_os:?}, got {socket_path:?}"
         );
     }
     Ok(())
 }
 
-pub fn resolve_runtime(
-    cfg: &NetworkProxyConfig,
-    executor_os: NetworkProxyExecutorOs,
-) -> Result<RuntimeConfig> {
+pub fn resolve_runtime(cfg: &NetworkProxyConfig, executor_os: Platform) -> Result<RuntimeConfig> {
     validate_unix_socket_allowlist_paths(cfg, executor_os)?;
 
     let http_addr = resolve_addr(&cfg.proxy_url, /*default_port*/ 3128)
@@ -528,10 +526,7 @@ pub fn resolve_runtime(
 
 /// Returns the sorted loopback ports used by the configured managed proxy listeners.
 pub fn managed_proxy_ports(cfg: &NetworkProxyConfig) -> Result<Vec<u16>> {
-    let runtime = resolve_runtime(
-        cfg,
-        NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
-    )?;
+    let runtime = resolve_runtime(cfg, Platform::native())?;
     if runtime.http_addr.port() == 0 {
         bail!("network.proxy_url must use a fixed non-zero port for managed proxy provisioning");
     }
@@ -1117,13 +1112,10 @@ mod tests {
         ] {
             let cfg = settings_with_unix_sockets(&[path]);
             for (executor_os, accepted) in [
-                (NetworkProxyExecutorOs::Linux, unix_absolute),
-                (NetworkProxyExecutorOs::Macos, unix_absolute),
-                (NetworkProxyExecutorOs::Windows, windows_absolute),
-                (
-                    NetworkProxyExecutorOs::Unknown,
-                    unix_absolute || windows_absolute,
-                ),
+                (Platform::Linux, unix_absolute),
+                (Platform::Macos, unix_absolute),
+                (Platform::Windows, windows_absolute),
+                (Platform::Unknown, unix_absolute || windows_absolute),
             ] {
                 assert_eq!(
                     resolve_runtime(&cfg, executor_os).is_ok(),
@@ -1134,11 +1126,7 @@ mod tests {
             // Each platform's CI compares the portable implementation to native
             // Core acceptance, with the deliberate shared NUL rejection.
             assert_eq!(
-                resolve_runtime(
-                    &cfg,
-                    NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS))
-                )
-                .is_ok(),
+                resolve_runtime(&cfg, Platform::native()).is_ok(),
                 (Path::new(path).is_absolute() || path.starts_with('/')) && !path.contains('\0'),
                 "native parity: {path:?}"
             );
@@ -1161,10 +1149,10 @@ mod tests {
         }
 
         for executor_os in [
-            NetworkProxyExecutorOs::Linux,
-            NetworkProxyExecutorOs::Macos,
-            NetworkProxyExecutorOs::Windows,
-            NetworkProxyExecutorOs::Unknown,
+            Platform::Linux,
+            Platform::Macos,
+            Platform::Windows,
+            Platform::Unknown,
         ] {
             assert!(
                 resolve_runtime(&cfg, executor_os).is_ok(),

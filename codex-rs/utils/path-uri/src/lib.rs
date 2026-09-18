@@ -26,11 +26,13 @@ mod absolute_path_normalization;
 mod api_path_string;
 mod config_path;
 mod native_path_bytes;
+mod platform;
 
 use absolute_path_normalization::path_uri_from_segments;
 
 pub use api_path_string::LegacyAppPathString;
 pub use api_path_string::LegacyAppPathStringError;
+pub use platform::Platform;
 
 pub const FILE_SCHEME: &str = "file";
 const BAD_PATH_URI_PREFIX: &str = "file:///%00/bad/path/";

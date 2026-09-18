@@ -169,7 +169,7 @@ fn blocked_request_violation_log_line(entry: &BlockedRequest) -> String {
 #[derive(Clone)]
 pub struct ConfigState {
     /// Preserve the target when policy edits rebuild state on a controller.
-    pub(crate) executor_os: crate::NetworkProxyExecutorOs,
+    pub(crate) executor_os: crate::Platform,
     pub config: NetworkProxyConfig,
     pub(crate) brokerage_created_default_allowlist: bool,
     pub allow_set: GlobSet,
@@ -290,7 +290,7 @@ impl NetworkProxyState {
     /// The launching executor supplies its own OS; the wire policy cannot override it.
     pub fn from_remote_launch_config(
         launch: crate::RemoteNetworkProxyLaunchConfig,
-        executor_os: crate::NetworkProxyExecutorOs,
+        executor_os: crate::Platform,
     ) -> Result<Self> {
         let crate::RemoteNetworkProxyLaunchConfig {
             proxy,
@@ -584,7 +584,7 @@ impl NetworkProxyState {
 
     pub(crate) async fn current_cfg_with_brokerage_provenance(
         &self,
-    ) -> Result<(NetworkProxyConfig, bool, crate::NetworkProxyExecutorOs)> {
+    ) -> Result<(NetworkProxyConfig, bool, crate::Platform)> {
         // Callers treat `NetworkProxyState` as a live view of policy. We reload-on-demand so edits to
         // `config.toml` (including Codex-managed writes) take effect without a restart.
         self.reload_if_needed().await?;
@@ -1188,7 +1188,7 @@ pub(crate) fn network_proxy_state_for_policy(
         config.set_allowed_domains(vec!["*".to_string()]);
     }
     let state = ConfigState {
-        executor_os: crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        executor_os: crate::Platform::native(),
         allow_set: crate::policy::compile_allowlist_globset(
             &config.allowed_domains().unwrap_or_default(),
         )
@@ -1296,7 +1296,7 @@ mod tests {
         let initial_state = build_config_state(
             config.clone(),
             NetworkProxyConstraints::default(),
-            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            crate::Platform::native(),
         )
         .unwrap();
         let mut reloaded_config = config;
@@ -1304,7 +1304,7 @@ mod tests {
         let reloaded_state = build_config_state(
             reloaded_config,
             NetworkProxyConstraints::default(),
-            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            crate::Platform::native(),
         )
         .unwrap();
         let state = NetworkProxyState::with_reloader(
@@ -1333,7 +1333,7 @@ mod tests {
                 enabled: Some(false),
                 ..NetworkProxyConstraints::default()
             },
-            crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+            crate::Platform::native(),
         )
         .expect("managed-disabled credential broker should fail open");
         let state = NetworkProxyState::with_reloader(config_state, Arc::new(NoopReloader));
@@ -1384,7 +1384,7 @@ mod tests {
             let config_state = build_config_state(
                 config,
                 NetworkProxyConstraints::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+                crate::Platform::native(),
             )
             .expect("valid credential-broker configuration");
             assert_eq!(config_state.brokerage_created_default_allowlist, !enabled);
@@ -1472,12 +1472,7 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
         let state = NetworkProxyState::with_reloader(
-            build_config_state(
-                config,
-                constraints,
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
-            )
-            .unwrap(),
+            build_config_state(config, constraints, crate::Platform::native()).unwrap(),
             Arc::new(NoopReloader),
         );
 
@@ -1504,12 +1499,7 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
         let state = NetworkProxyState::with_reloader(
-            build_config_state(
-                config,
-                constraints,
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
-            )
-            .unwrap(),
+            build_config_state(config, constraints, crate::Platform::native()).unwrap(),
             Arc::new(NoopReloader),
         );
 
@@ -1534,12 +1524,7 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
         let state = NetworkProxyState::with_reloader(
-            build_config_state(
-                config,
-                constraints,
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
-            )
-            .unwrap(),
+            build_config_state(config, constraints, crate::Platform::native()).unwrap(),
             Arc::new(NoopReloader),
         );
 
@@ -2211,7 +2196,7 @@ mod tests {
             build_config_state(
                 config,
                 NetworkProxyConstraints::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS))
+                crate::Platform::native()
             )
             .is_ok()
         );
@@ -2226,7 +2211,7 @@ mod tests {
             build_config_state(
                 config,
                 NetworkProxyConstraints::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS))
+                crate::Platform::native()
             )
             .is_ok()
         );
@@ -2241,7 +2226,7 @@ mod tests {
             build_config_state(
                 config,
                 NetworkProxyConstraints::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS))
+                crate::Platform::native()
             )
             .is_err()
         );
@@ -2256,7 +2241,7 @@ mod tests {
             build_config_state(
                 config,
                 NetworkProxyConstraints::default(),
-                crate::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS))
+                crate::Platform::native()
             )
             .is_err()
         );

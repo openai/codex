@@ -1819,9 +1819,7 @@ mod tests {
             .expect("build remote network proxy config");
         let state = NetworkProxyState::from_remote_launch_config(
             RemoteNetworkProxyLaunchConfig::new(proxy_config),
-            codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(
-                std::env::consts::OS,
-            )),
+            codex_utils_path_uri::Platform::native(),
         )
         .expect("build network proxy state");
         let proxy = NetworkProxy::builder()

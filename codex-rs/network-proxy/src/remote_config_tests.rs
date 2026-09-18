@@ -7,8 +7,8 @@ use crate::NetworkMode;
 use crate::NetworkProxy;
 use crate::NetworkProxyAuditMetadata;
 use crate::NetworkProxyConfig;
-use crate::NetworkProxyExecutorOs;
 use crate::NetworkProxyState;
+use crate::Platform;
 use std::sync::Arc;
 
 #[test]
@@ -44,10 +44,10 @@ fn optional_socket_policy_preserves_input_and_resolves_at_remote_boundary() {
 #[tokio::test]
 async fn round_trip_preserves_supported_effective_settings() {
     for (executor_os, socket) in [
-        (NetworkProxyExecutorOs::Linux, "/var/run/example.sock"),
-        (NetworkProxyExecutorOs::Macos, "/var/run/example.sock"),
-        (NetworkProxyExecutorOs::Windows, r"C:\example.sock"),
-        (NetworkProxyExecutorOs::Unknown, r"C:\example.sock"),
+        (Platform::Linux, "/var/run/example.sock"),
+        (Platform::Macos, "/var/run/example.sock"),
+        (Platform::Windows, r"C:\example.sock"),
+        (Platform::Unknown, r"C:\example.sock"),
     ] {
         let mut config = NetworkProxyConfig {
             enabled: true,
@@ -185,7 +185,7 @@ fn launch_config_materializes_audit_and_execution_attribution() {
             execution_id: Some("execution-1".to_string()),
             policy_decision_timeout_ms: None,
         },
-        NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        Platform::native(),
     )
     .expect("remote launch state");
 

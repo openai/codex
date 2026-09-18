@@ -350,7 +350,7 @@ async fn prepare_managed_network(
     };
     let mut state = NetworkProxyState::from_remote_launch_config(
         network_proxy,
-        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        codex_utils_path_uri::Platform::native(),
     )
     .map_err(|err| invalid_params(format!("invalid network proxy config: {err}")))?;
     if let Some(observer) = network_policy_audit_observer {

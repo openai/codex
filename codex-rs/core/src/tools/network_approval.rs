@@ -18,7 +18,6 @@ use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkPolicyRequest;
 use codex_network_proxy::NetworkProtocol;
 use codex_network_proxy::NetworkProxy;
-use codex_network_proxy::NetworkProxyExecutorOs;
 use codex_network_proxy::NetworkRequestCancellation;
 use codex_network_proxy::NetworkRequestCancellationReason;
 use codex_network_proxy::NetworkRequestDisconnect;
@@ -33,6 +32,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::WarningEvent;
 use codex_sandboxing::record_network_sandbox_violation;
 use codex_tools::ToolName;
+use codex_utils_path_uri::Platform;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -1152,7 +1152,7 @@ pub(crate) async fn begin_network_approval(
                 })?
         } else {
             // This carrier never listens: the executor starts the real per-command proxy.
-            let executor_os = NetworkProxyExecutorOs::from_platform_os(
+            let executor_os = Platform::from_platform_os(
                 environments
                     .turn_environments()
                     .find(|environment| environment.selection.environment_id == environment_id)

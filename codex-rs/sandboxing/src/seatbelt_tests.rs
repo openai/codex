@@ -819,7 +819,7 @@ async fn prepared_managed_network_context_takes_precedence_over_live_proxy_socke
     let state = build_config_state(
         network_config,
         NetworkProxyConstraints::default(),
-        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        codex_utils_path_uri::Platform::native(),
     )?;
     let network_proxy = NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(
@@ -1531,7 +1531,7 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
     let state = build_config_state(
         network_config,
         NetworkProxyConstraints::default(),
-        codex_network_proxy::NetworkProxyExecutorOs::from_platform_os(Some(std::env::consts::OS)),
+        codex_utils_path_uri::Platform::native(),
     )?;
     let network_proxy = NetworkProxy::builder()
         .state(Arc::new(NetworkProxyState::with_reloader(
