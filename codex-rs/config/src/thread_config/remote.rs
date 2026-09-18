@@ -180,6 +180,7 @@ fn model_provider_from_proto(
             .auth
             .map(model_provider_auth_from_proto)
             .transpose()?,
+        gateway_oauth: None,
         aws: None,
         wire_api,
         query_params: provider.query_params.map(redacted_string_map),
@@ -208,6 +209,7 @@ fn model_provider_to_proto(
         env_key_instructions,
         experimental_bearer_token,
         auth,
+        gateway_oauth: _,
         aws: _,
         wire_api,
         query_params,
@@ -568,6 +570,7 @@ mod tests {
             requires_openai_auth: false,
             supports_websockets: true,
             supports_standalone_web_search: true,
+            gateway_oauth: None,
             aws: None,
         }
     }

@@ -73,6 +73,41 @@ fn rollout_line_decoder_preserves_canonical_json_compatibility() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn rollout_line_decoder_preserves_terminal_records_with_unknown_errors() -> Result<()> {
+    let expected = serde_json::json!({
+        "timestamp": "2025-01-03T12:00:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "turn_id": "turn-1",
+            "last_agent_message": null,
+            "error": {
+                "message": "The request was blocked.",
+                "codex_error_info": "other"
+            },
+            "started_at": 10,
+            "completed_at": 20,
+            "duration_ms": 10000
+        }
+    });
+    for error_info in [
+        serde_json::json!("future_error"),
+        serde_json::json!({"future_error": {"detail": "new payload"}}),
+    ] {
+        let mut encoded = expected.clone();
+        encoded["payload"]["error"]["codex_error_info"] = error_info;
+        let decoded = crate::decode_rollout_line(encoded)?;
+        assert_eq!(serde_json::to_value(decoded)?, expected);
+    }
+
+    let mut malformed = expected;
+    malformed["payload"]["error"]["codex_error_info"] =
+        serde_json::json!({"active_turn_not_steerable": {"turn_kind": "unknown"}});
+    assert!(crate::decode_rollout_line(malformed).is_err());
+    Ok(())
+}
+
 fn provider_vec(providers: &[&str]) -> Vec<String> {
     providers
         .iter()

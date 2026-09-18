@@ -31,6 +31,10 @@ use std::sync::PoisonError;
 use std::sync::RwLock;
 use std::time::Duration;
 
+mod gateway_oauth;
+pub use gateway_oauth::GatewayOAuthConfig;
+pub use gateway_oauth::GatewayOAuthDelivery;
+
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +149,8 @@ pub struct ModelProviderInfo {
     pub experimental_bearer_token: Option<RedactedString>,
     /// Command-backed bearer-token configuration for this provider.
     pub auth: Option<ModelProviderAuthInfo>,
+    /// Secondary OAuth credentials required by the provider's gateway.
+    pub gateway_oauth: Option<GatewayOAuthConfig>,
     /// AWS SigV4 auth configuration for this provider.
     pub aws: Option<ModelProviderAwsAuthInfo>,
     /// Which wire protocol this provider expects.
@@ -274,6 +280,9 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if let Some(gateway) = &self.gateway_oauth {
+            gateway.validate(self)?;
+        }
         if let Some(aws) = self.aws.as_ref() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -505,6 +514,7 @@ other non-default provider fields are not supported"
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            gateway_oauth: None,
             aws: None,
             wire_api: WireApi::Responses,
             query_params: None,
@@ -548,6 +558,7 @@ other non-default provider fields are not supported"
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            gateway_oauth: None,
             aws: Some(aws.unwrap_or(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,
@@ -727,6 +738,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         wire_api,
         query_params: None,

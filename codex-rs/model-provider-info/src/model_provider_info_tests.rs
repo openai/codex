@@ -66,6 +66,7 @@ base_url = "http://localhost:11434/v1"
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
@@ -99,6 +100,7 @@ query_params = { api-version = "2025-04-01-preview" }
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         wire_api: WireApi::Responses,
         query_params: Some(maplit::hashmap! {
@@ -136,6 +138,7 @@ supports_standalone_web_search = true
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
@@ -318,6 +321,7 @@ fn test_create_amazon_bedrock_provider() {
             env_key_instructions: None,
             experimental_bearer_token: None,
             auth: None,
+            gateway_oauth: None,
             aws: Some(ModelProviderAwsAuthInfo {
                 profile: None,
                 region: None,

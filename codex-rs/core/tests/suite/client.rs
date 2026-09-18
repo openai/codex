@@ -1608,6 +1608,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: Some(auth),
+        gateway_oauth: None,
         aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
@@ -3108,6 +3109,7 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         wire_api: WireApi::Responses,
         query_params: None,
@@ -3735,6 +3737,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         env_key: Some(EXISTING_ENV_VAR_WITH_NON_EMPTY_VALUE.to_string()),
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
@@ -3824,6 +3827,7 @@ async fn env_var_overrides_loaded_auth() {
         env_key_instructions: None,
         experimental_bearer_token: None,
         auth: None,
+        gateway_oauth: None,
         aws: None,
         wire_api: WireApi::Responses,
         http_headers: Some(std::collections::HashMap::from([(
