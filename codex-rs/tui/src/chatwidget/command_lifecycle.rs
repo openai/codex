@@ -431,7 +431,6 @@ impl ChatWidget {
                 self.request_redraw();
             }
             ExecEndTarget::NewCell => {
-                self.flush_active_cell();
                 let mut cell = new_active_exec_command(
                     id.clone(),
                     command,
@@ -442,12 +441,28 @@ impl ChatWidget {
                 );
                 let completed = cell.complete_call(&id, output, duration);
                 debug_assert!(completed, "new exec cell should contain {id}");
-                if cell.should_flush() {
-                    self.add_to_history(cell);
-                } else {
-                    self.transcript.active_cell = Some(Box::new(cell));
+                if let Some(active) = self
+                    .transcript
+                    .active_cell
+                    .as_mut()
+                    .and_then(|cell| cell.as_any_mut().downcast_mut::<ExecCell>())
+                    && !active.is_active()
+                    && active.is_exploring_cell()
+                    && cell.is_exploring_cell()
+                {
+                    // Replayed commands have completion events without matching starts.
+                    active.calls.extend(cell.calls);
                     self.bump_active_cell_revision();
                     self.request_redraw();
+                } else {
+                    self.flush_active_cell();
+                    if cell.should_flush() {
+                        self.add_to_history(cell);
+                    } else {
+                        self.transcript.active_cell = Some(Box::new(cell));
+                        self.bump_active_cell_revision();
+                        self.request_redraw();
+                    }
                 }
             }
         }

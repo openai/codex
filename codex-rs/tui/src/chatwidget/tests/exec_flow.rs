@@ -141,12 +141,10 @@ async fn failed_exploration_keeps_overlapping_commands_active_until_all_finish()
     assert!(drain_insert_history(&mut rx).is_empty());
     end_exec(&mut chat, followup, "followup\n", "", /*exit_code*/ 0);
 
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1);
-    let history = lines_to_single_string(&cells[0]);
-    insta::assert_snapshot!(history, @r"
+    assert!(drain_insert_history(&mut rx).is_empty());
+    insta::assert_snapshot!(active_blob(&chat), @r"
 • Explored
-  └ List missing
+  └ List missing (exit 1)
     Read foo.txt, bar.txt
 ");
 
@@ -154,8 +152,151 @@ async fn failed_exploration_keeps_overlapping_commands_active_until_all_finish()
     end_exec(&mut chat, later, "later\n", "", /*exit_code*/ 0);
     insta::assert_snapshot!(active_blob(&chat), @r"
 • Explored
-  └ Read later.txt
+  └ List missing (exit 1)
+    Read foo.txt, bar.txt, later.txt
 ");
+}
+
+#[tokio::test]
+async fn exploration_nonzero_exits_remain_visible_beside_successful_reads() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    for (id, command, exit_code) in [
+        ("read", "cat first.txt", 0),
+        ("missing", "cat missing.txt", 1),
+        ("later", "cat later.txt", 0),
+        ("search", "rg absent .", 1),
+        ("error", "rg text missing.txt", 2),
+        ("compound", "cat existing.txt && rg absent .", 1),
+    ] {
+        let item = begin_exec(&mut chat, id, command);
+        end_exec(&mut chat, item, "", "", exit_code);
+    }
+    insta::assert_snapshot!(active_blob(&chat));
+    let statuses = chat
+        .transcript
+        .active_cell
+        .as_ref()
+        .unwrap()
+        .display_lines(/*width*/ 80)
+        .into_iter()
+        .flat_map(|line| line.spans)
+        .filter(|span| {
+            span.content.starts_with(" (exit") || span.content.starts_with(" (command exit")
+        })
+        .map(|span| (span.content.into_owned(), span.style.fg))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        statuses,
+        vec![
+            (" (exit 1)".to_string(), Some(ratatui::style::Color::Red)),
+            (" (exit 1)".to_string(), None),
+            (" (exit 2)".to_string(), Some(ratatui::style::Color::Red)),
+            (" (command exit 1)".to_string(), None),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
+    let mut renders = Vec::new();
+    for replay in [false, true] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.on_task_started();
+        for (id, script, exit_code) in [
+            ("list", "ls missing", 1),
+            ("read", "cat index.html", 0),
+            ("run", "echo boundary", 0),
+            ("later", "cat later.txt", 0),
+            ("after-message", "cat final.txt", 0),
+        ] {
+            let command = vec!["bash".to_string(), "-lc".to_string(), script.to_string()];
+            let mut item = AppServerThreadItem::CommandExecution {
+                model_context: None,
+                id: id.to_string(),
+                command: codex_shell_command::parse_command::shlex_join(&command),
+                cwd: chat.config.cwd.clone().into(),
+                process_id: None,
+                plugin_id: None,
+                script_path: None,
+                source: ExecCommandSource::UnifiedExecStartup,
+                status: AppServerCommandExecutionStatus::InProgress,
+                command_actions: codex_shell_command::parse_command::parse_command(&command)
+                    .into_iter()
+                    .map(|parsed| {
+                        AppServerCommandAction::from_core_with_cwd(parsed, &chat.config.cwd)
+                    })
+                    .collect(),
+                aggregated_output: Some(format!("{id} output\n")),
+                exit_code: Some(exit_code),
+                duration_ms: Some(5),
+            };
+            if !replay {
+                handle_exec_begin(&mut chat, item.clone());
+            }
+            if let AppServerThreadItem::CommandExecution { status, .. } = &mut item {
+                *status = if exit_code == 0 {
+                    AppServerCommandExecutionStatus::Completed
+                } else {
+                    AppServerCommandExecutionStatus::Failed
+                };
+            }
+            if replay {
+                chat.replay_thread_item(item, "turn-1".to_string(), ReplayKind::ThreadSnapshot);
+            } else {
+                handle_exec_end(&mut chat, item);
+            }
+            if id == "list" {
+                for summary in ["Inspecting the page", "Checking its contents"] {
+                    if replay {
+                        chat.replay_thread_item(
+                            AppServerThreadItem::Reasoning {
+                                id: summary.to_string(),
+                                summary: vec![summary.to_string()],
+                                content: Vec::new(),
+                            },
+                            "turn-1".to_string(),
+                            ReplayKind::ThreadSnapshot,
+                        );
+                    } else {
+                        chat.on_agent_reasoning_delta(summary.to_string());
+                        chat.on_agent_reasoning_final();
+                    }
+                }
+            }
+            if id == "later" {
+                complete_assistant_message(
+                    &mut chat,
+                    "message",
+                    "Checking one more file.",
+                    Some(MessagePhase::Commentary),
+                );
+            }
+        }
+        chat.flush_active_cell();
+        let cells = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(cell),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cells.len(), 5);
+        let mut render = String::new();
+        for mode in ["Compact", "Expanded", "Raw"] {
+            render.push_str(&format!("{mode}:\n"));
+            for cell in &cells {
+                let lines = match mode {
+                    "Compact" => cell.display_lines(/*width*/ 80),
+                    "Expanded" => cell.transcript_lines(/*width*/ 80),
+                    _ => cell.raw_lines(),
+                };
+                render.push_str(&lines_to_single_string(&lines));
+                render.push('\n');
+            }
+        }
+        renders.push(render);
+    }
+    assert_eq!(renders[0], renders[1]);
+    insta::assert_snapshot!(renders[0]);
 }
 
 #[tokio::test]
