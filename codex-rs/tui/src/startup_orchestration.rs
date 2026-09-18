@@ -18,6 +18,11 @@ pub(super) async fn run_main_inner(
             "--no-daemon cannot be used with --remote.",
         ));
     }
+    if explicit_remote_endpoint.is_some() && !cli.add_dir.is_empty() {
+        return Err(std::io::Error::other(
+            "--add-dir is not supported with --remote. Configure additional workspace roots on the server.",
+        ));
+    }
     let strict_config = cli.strict_config;
     if cli.shared.worktree {
         if explicit_remote_endpoint.is_some() {
@@ -67,6 +72,16 @@ pub(super) async fn run_main_inner(
             std::process::exit(1);
         }
     };
+    if explicit_remote_endpoint.is_some()
+        && cli_kv_overrides.iter().any(|(key, value)| {
+            key == "sandbox_workspace_write.writable_roots"
+                || (key == "sandbox_workspace_write" && value.get("writable_roots").is_some())
+        })
+    {
+        return Err(std::io::Error::other(
+            "sandbox_workspace_write.writable_roots overrides are not supported with --remote. Configure additional workspace roots on the server.",
+        ));
+    }
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]

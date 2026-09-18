@@ -185,6 +185,12 @@ enum ForkPresentation {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForkConfigSource {
+    Local,
+    Session,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ThreadHistorySupport {
     Paginated,
     LegacyOnly,
@@ -343,6 +349,15 @@ pub(crate) enum ResumeModelSettings {
 }
 
 impl ThreadParamsMode {
+    fn workspace_roots_from_config(self, config: &Config) -> Option<Vec<AbsolutePathBuf>> {
+        match self {
+            Self::Embedded => Some(config.workspace_roots.clone()),
+            // Client config paths belong to the client host. Let the server resolve its
+            // defaults or restore the saved roots, then adopt the roots in its response.
+            Self::Remote => None,
+        }
+    }
+
     fn model_provider_from_config(self, config: &Config) -> Option<String> {
         match self {
             Self::Embedded => Some(config.model_provider_id.clone()),
@@ -883,6 +898,7 @@ impl AppServerSession {
             ForkPresentation::Regular,
             /*selected_profile*/ None,
             permission_mode,
+            ForkConfigSource::Local,
         )
         .await
     }
@@ -911,6 +927,7 @@ impl AppServerSession {
             ForkPresentation::Regular,
             selected_profile,
             ForkPermissionMode::InheritSaved,
+            ForkConfigSource::Session,
         )
         .await
     }
@@ -931,6 +948,7 @@ impl AppServerSession {
             ForkPresentation::SideConversation,
             /*selected_profile*/ None,
             ForkPermissionMode::InheritSaved,
+            ForkConfigSource::Session,
         )
         .await
     }
@@ -950,6 +968,7 @@ impl AppServerSession {
         presentation: ForkPresentation,
         selected_profile: Option<&PermissionProfileSelection>,
         permission_mode: ForkPermissionMode,
+        config_source: ForkConfigSource,
     ) -> Result<AppServerStartedThread> {
         let fork_parent = match presentation {
             ForkPresentation::Regular => self
@@ -982,6 +1001,11 @@ impl AppServerSession {
                 self.remote_cwd_override.as_deref(),
             )
         };
+        if config_source == ForkConfigSource::Session {
+            // Active-session config has already adopted the server's roots. Fork does
+            // not restore saved roots when omitted, so preserve this explicit selection.
+            params.runtime_workspace_roots = Some(config.workspace_roots.clone());
+        }
         if self.thread_params_mode() == ThreadParamsMode::Remote
             && permission_mode == ForkPermissionMode::InheritSaved
         {
@@ -2072,7 +2096,7 @@ pub(crate) fn thread_start_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(config),
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
-        runtime_workspace_roots: Some(config.workspace_roots.clone()),
+        runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(config),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox,
@@ -2139,7 +2163,7 @@ fn thread_resume_params_from_config(
         model_provider,
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
-        runtime_workspace_roots: Some(config.workspace_roots.clone()),
+        runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(&config),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
@@ -2183,7 +2207,7 @@ fn thread_fork_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
-        runtime_workspace_roots: Some(config.workspace_roots.clone()),
+        runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(&config),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
@@ -2515,6 +2539,10 @@ pub(crate) fn app_server_rate_limit_snapshots(
 #[cfg(test)]
 #[path = "app_server_session/reasoning_defaults_tests.rs"]
 mod reasoning_defaults_tests;
+
+#[cfg(test)]
+#[path = "app_server_session/workspace_roots_tests.rs"]
+mod workspace_roots_tests;
 
 #[cfg(test)]
 #[path = "app_server_session/prompt_history_tests.rs"]
@@ -3157,7 +3185,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_lifecycle_params_omit_cwd_without_remote_override_for_remote_sessions() {
+    async fn thread_lifecycle_params_omit_local_paths_for_remote_sessions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
         let thread_id = ThreadId::new();
@@ -3165,7 +3193,6 @@ mod tests {
             &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
-        let expected_runtime_workspace_roots = Some(config.workspace_roots.clone());
 
         let start = thread_start_params_from_config(
             &config,
@@ -3190,18 +3217,9 @@ mod tests {
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);
         assert_eq!(fork.cwd, None);
-        assert_eq!(
-            start.runtime_workspace_roots,
-            expected_runtime_workspace_roots
-        );
-        assert_eq!(
-            resume.runtime_workspace_roots,
-            expected_runtime_workspace_roots
-        );
-        assert_eq!(
-            fork.runtime_workspace_roots,
-            expected_runtime_workspace_roots
-        );
+        assert_eq!(start.runtime_workspace_roots, None);
+        assert_eq!(resume.runtime_workspace_roots, None);
+        assert_eq!(fork.runtime_workspace_roots, None);
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
@@ -3221,7 +3239,6 @@ mod tests {
     async fn remote_resume_params_keep_cwd_without_overriding_saved_permissions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let config = build_config(&temp_dir).await;
-        let expected_workspace_roots = config.workspace_roots.clone();
         let remote_cwd = if cfg!(windows) {
             std::path::PathBuf::from("/srv/remote/project")
         } else {
@@ -3237,10 +3254,7 @@ mod tests {
         );
 
         assert_eq!(resume.cwd, Some(remote_cwd.to_string_lossy().to_string()));
-        assert_eq!(
-            resume.runtime_workspace_roots,
-            Some(expected_workspace_roots)
-        );
+        assert_eq!(resume.runtime_workspace_roots, None);
     }
 
     #[test]
@@ -3344,6 +3358,9 @@ mod tests {
         assert_eq!(start.cwd.as_deref(), Some("repo/on/server"));
         assert_eq!(resume.cwd.as_deref(), Some("repo/on/server"));
         assert_eq!(fork.cwd.as_deref(), Some("repo/on/server"));
+        assert_eq!(start.runtime_workspace_roots, None);
+        assert_eq!(resume.runtime_workspace_roots, None);
+        assert_eq!(fork.runtime_workspace_roots, None);
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);

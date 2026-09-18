@@ -27,6 +27,8 @@ mod buffered_replay;
 mod connector_policy;
 #[path = "tests/disconnect_tests.rs"]
 mod disconnect;
+#[path = "tests/fork_workspace_roots_tests.rs"]
+mod fork_workspace_roots_tests;
 #[path = "tests/fresh_sparkle_tests.rs"]
 mod fresh_sparkle_tests;
 #[path = "tests/key_chords.rs"]

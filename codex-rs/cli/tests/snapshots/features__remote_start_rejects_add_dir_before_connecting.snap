@@ -1,0 +1,5 @@
+---
+source: cli/tests/features.rs
+expression: "String::from_utf8(output)?"
+---
+Error: --add-dir is not supported with --remote. Configure additional workspace roots on the server.

@@ -454,6 +454,11 @@ impl App {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
                     let mut fork_config = self.config.clone();
+                    if app_server.uses_remote_workspace() {
+                        fork_config.workspace_roots.clone_from(
+                            &self.chat_widget.config_ref().workspace_roots,
+                        );
+                    }
                     fork_config.model = Some(self.chat_widget.current_model().to_string());
                     fork_config.model_reasoning_effort =
                         self.chat_widget.current_reasoning_effort();
