@@ -457,6 +457,20 @@ impl Session {
             Arc::clone(&active_turn.turn_state)
         };
 
+        self.services
+            .models_manager
+            .refresh_after_auth_change(self.get_config().await.http_client_factory())
+            .await;
+        // A completion-triggered wakeup can be interrupted while discovery waits.
+        if self
+            .active_turn
+            .lock()
+            .await
+            .as_ref()
+            .is_none_or(|turn| !Arc::ptr_eq(&turn.turn_state, &turn_state))
+        {
+            return;
+        }
         let (input, mut start_options) =
             self.input_queue.get_pending_input(&self.active_turn).await;
         if !input.iter().any(

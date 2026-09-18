@@ -603,7 +603,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(ModelsResponse {
                 models: vec![model.clone()],
             }))
-            .expect(2)
+            .expect(/*r*/ 3)
             .mount(&server)
             .await;
         let mut provider = provider_info_with_command_auth();
@@ -634,6 +634,12 @@ mod tests {
                 .find(|candidate| candidate.slug == model.slug),
             Some(&model)
         );
+        // The cached identity still matches here; resolving command auth must
+        // detect the next token before deciding whether a refresh is needed.
+        manager
+            .refresh_after_auth_change(HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault))
+            .await;
+        assert_eq!(manager.get_remote_models().await, catalog.models);
         auth.auth().await;
         let bundled = codex_models_manager::bundled_models_response().unwrap();
         assert_eq!(manager.get_remote_models().await, bundled.models);
@@ -662,7 +668,7 @@ mod tests {
                 .iter()
                 .map(|request| request.headers["authorization"].to_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["Bearer token-2", "Bearer token-6"]
+            vec!["Bearer token-2", "Bearer token-5", "Bearer token-9"]
         );
     }
 }

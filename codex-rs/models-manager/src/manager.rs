@@ -138,6 +138,15 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         http_client_factory: HttpClientFactory,
     ) -> ModelsManagerFuture<'_, ModelsResponse>;
 
+    /// Best-effort refresh when the in-memory catalog belongs to different credentials.
+    /// Static catalogs need no refresh. Failures leave the existing cache/default fallback.
+    fn refresh_after_auth_change(
+        &self,
+        _http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
+        Box::pin(std::future::ready(()))
+    }
+
     /// Return the current in-memory remote model catalog without refreshing or loading cache state.
     fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>>;
 
@@ -343,6 +352,36 @@ impl ModelsManager for OpenAiModelsManager {
             refresh_strategy,
             http_client_factory,
         ))
+    }
+
+    fn refresh_after_auth_change(
+        &self,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'_, ()> {
+        Box::pin(async move {
+            let refresh = async {
+                // Resolve lazy command credentials before comparing catalog identities.
+                if !self.should_refresh_models().await {
+                    return Ok(());
+                }
+                let identity = self.endpoint_client.identity();
+                if identity.is_some() && self.remote_models.read().await.identity == identity {
+                    return Ok(());
+                }
+                self.refresh_available_models(
+                    RefreshStrategy::OnlineIfUncached,
+                    &http_client_factory,
+                )
+                .await
+            };
+            // Include auth resolution and cache access in the best-effort deadline.
+            if !matches!(
+                tokio::time::timeout(Duration::from_secs(/*secs*/ 5), refresh).await,
+                Ok(Ok(()))
+            ) {
+                tracing::warn!("model catalog refresh after auth change failed or timed out");
+            }
+        })
     }
 
     fn get_remote_models(&self) -> ModelsManagerFuture<'_, Vec<ModelInfo>> {

@@ -1060,6 +1060,15 @@ impl Session {
         if let Some(service_tier) = service_tier_for_turn {
             Arc::make_mut(&mut configuration.step_settings).service_tier = Some(service_tier);
         }
+        if !crate::guardian::is_basic_session_source(&configuration.session_source) {
+            self.services
+                .models_manager
+                .refresh_after_auth_change(
+                    self.build_effective_session_config(&configuration)
+                        .http_client_factory(),
+                )
+                .await;
+        }
         let turn_environments = self.activate_turn_environments(&configuration).await;
         let turn_context = self
             .new_turn_from_configuration(sub_id, configuration, turn_environments, options)
