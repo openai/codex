@@ -121,7 +121,6 @@
   (global-name "com.apple.espd")
   (global-name "com.apple.logd")
   (global-name "com.apple.logd.events")
-  (global-name "com.apple.runningboard")
   (global-name "com.apple.secinitd")
   (global-name "com.apple.system.DirectoryService.libinfo_v1")
   (global-name "com.apple.system.logger")
