@@ -524,10 +524,22 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         br#"{"shutdownGraceSeconds":0}"#,
     )?;
     let cli_before = daemon.codex.canonicalize()?;
-    let result = daemon
-        .command()
-        .args(["app-server", "daemon", action])
-        .output()?;
+    let mut command = daemon.command();
+    command.args(["app-server", "daemon", action]);
+    // A freshly copied executable can briefly remain busy on Linux CI workers.
+    let mut retries = 0;
+    let result = loop {
+        let result = command.output();
+        if !result
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::ExecutableFileBusy)
+            || retries == 2
+        {
+            break result?;
+        }
+        retries += 1;
+        std::thread::sleep(Duration::from_millis(/*millis*/ 10));
+    };
     ensure!(
         result.status.success(),
         "{}",
