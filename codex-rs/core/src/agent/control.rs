@@ -70,6 +70,7 @@ pub(crate) use self::interrupt::AgentInterruptError;
 pub(crate) use self::interrupt::AgentInterruptOutcome;
 use self::residency::V2Residency;
 
+mod budget;
 mod completion;
 mod delivery;
 mod execution;
@@ -154,10 +155,6 @@ impl LocalAgentControl {
 
     pub(crate) fn generate_thread_id(&self) -> ThreadId {
         (self.thread_id_generator)()
-    }
-
-    pub(crate) fn rollout_budget(&self) -> &RolloutBudget {
-        self.rollout_budget.as_ref()
     }
 
     /// Send rich user input items to an existing agent thread.
