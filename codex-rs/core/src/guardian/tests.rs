@@ -295,13 +295,6 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
         .await;
 }
 
-fn rollout_item_contains_message_text(item: &RolloutItem, needle: &str) -> bool {
-    let RolloutItem::ResponseItem(response_item) = item else {
-        return false;
-    };
-    response_item_contains_message_text(response_item, needle)
-}
-
 fn response_item_contains_message_text(item: &ResponseItem, needle: &str) -> bool {
     let ResponseItem::Message { content, .. } = item else {
         return false;
@@ -2335,7 +2328,15 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     assert_eq!(
         committed_rollout_items
             .iter()
-            .filter(|item| rollout_item_contains_message_text(
+            .flat_map(|item| match item {
+                RolloutItem::ResponseItem(item) => std::slice::from_ref(item),
+                RolloutItem::Compacted(checkpoint) => checkpoint
+                    .replacement_history
+                    .as_deref()
+                    .unwrap_or_default(),
+                _ => &[],
+            })
+            .filter(|item| response_item_contains_message_text(
                 item,
                 "Use prior reviews as context, not binding precedent."
             ))

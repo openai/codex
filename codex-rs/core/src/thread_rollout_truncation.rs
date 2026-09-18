@@ -23,6 +23,11 @@ pub(crate) fn initial_history_has_prior_user_turns(conversation_history: &Initia
 fn rollout_item_is_user_turn_boundary(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => is_user_turn_boundary(item),
+        RolloutItem::Compacted(checkpoint) => checkpoint
+            .replacement_history
+            .iter()
+            .flatten()
+            .any(|item| is_user_turn_boundary(item)),
         RolloutItem::InterAgentCommunication(_) => true,
         _ => false,
     }

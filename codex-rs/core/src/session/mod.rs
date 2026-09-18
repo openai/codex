@@ -235,6 +235,7 @@ mod daemon_recovery;
 mod environment;
 mod extension_interruption;
 pub(crate) mod extension_metrics;
+mod guardian_checkpoint;
 mod handlers;
 mod inject;
 mod reasoning_effort;
