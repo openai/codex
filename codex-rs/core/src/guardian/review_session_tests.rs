@@ -366,7 +366,7 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         )
     );
 
-    assert_eq!(
+    assert_ne!(
         cached_reuse_key,
         GuardianReviewSessionReuseKey::from_spawn_config(
             &cached_spawn_config,
@@ -414,20 +414,20 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         "changing the effective Node REPL policy must invalidate reviewer history"
     );
 
-    let mut compaction_enabled_config = cached_spawn_config;
-    compaction_enabled_config
+    let mut compaction_disabled_config = cached_spawn_config;
+    compaction_disabled_config
         .features
-        .enable(Feature::GuardianReuseParentCompaction)
+        .disable(Feature::GuardianReuseParentCompaction)
         .expect("Guardian parent-compaction reuse should be configurable");
-    assert_ne!(
+    assert_eq!(
         GuardianReviewSessionReuseKey::from_spawn_config(
-            &compaction_enabled_config,
+            &compaction_disabled_config,
             SessionInstructions::default(),
             /*parent_history_version*/ 0,
             GuardianContextMode::Legacy,
         ),
         GuardianReviewSessionReuseKey::from_spawn_config(
-            &compaction_enabled_config,
+            &compaction_disabled_config,
             SessionInstructions::default(),
             /*parent_history_version*/ 1,
             GuardianContextMode::Legacy,
@@ -441,9 +441,6 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
 async fn encrypted_parent_compaction_requires_original_item_id(thread_context_enabled: bool) {
     let (session, _) = crate::session::tests::make_session_and_context().await;
     let mut features = session.get_config().await.features.clone();
-    features
-        .enable(Feature::GuardianReuseParentCompaction)
-        .expect("legacy reuse");
     features
         .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
         .expect("context mode");

@@ -280,7 +280,6 @@ async fn guardians_retain_evidence_after_compaction_and_resume(
         .with_root_config("approvals_reviewer = \"auto_review\"\nmodel_auto_compact_token_limit = 1000000")
         .enable_feature(Feature::DefaultModeRequestUserInput)
         .enable_feature(Feature::GuardianApproval)
-        .enable_feature(Feature::GuardianReuseParentCompaction)
         .disable_feature(Feature::EnableRequestCompression)
         .disable_feature(Feature::TokenBudget)
         .with_extra_config(&format!(
