@@ -481,6 +481,10 @@ pub struct ModelInfo {
     pub supports_experimental_context: bool,
     #[serde(default)]
     pub use_responses_lite: bool,
+    /// Whether the model accepts reasoning-effort `configuration_update` items.
+    /// Missing metadata keeps effort changes on the ordinary request parameter.
+    #[serde(default)]
+    pub supports_reasoning_effort_updates: bool,
     #[serde(default)]
     pub node_repl_auto_review_required: bool,
     #[serde(default)]
@@ -989,6 +993,7 @@ mod tests {
             supports_search_tool: false,
             supports_experimental_context: false,
             use_responses_lite: false,
+            supports_reasoning_effort_updates: false,
             guardian: None,
             node_repl_auto_review_required: false,
             node_repl_disabled: false,
@@ -1543,6 +1548,7 @@ mod tests {
         assert!(!model.supports_search_tool);
         assert!(!model.supports_experimental_context);
         assert!(!model.use_responses_lite);
+        assert!(!model.supports_reasoning_effort_updates);
         assert!(!model.node_repl_auto_review_required);
         assert!(!model.node_repl_disabled);
         assert_eq!(model.comp_hash, None);

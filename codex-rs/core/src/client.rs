@@ -528,8 +528,10 @@ impl ModelClient {
         }
     }
 
-    pub(crate) fn reasoning_effort_override_enabled(&self) -> bool {
+    pub(crate) fn reasoning_effort_override_enabled(&self, model_info: &ModelInfo) -> bool {
         self.state.reasoning_effort_override_enabled
+            && self.state.provider.info().is_openai()
+            && model_info.supports_reasoning_effort_updates
     }
 
     pub(crate) fn with_restored_history(mut self, restored_history: bool) -> Self {
@@ -867,8 +869,8 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<ResponsesApiRequest> {
         let mut input = prompt.get_formatted_input_for_request(model_info);
-        if !self.state.reasoning_effort_override_enabled {
-            // Disabling overrides must also recover threads with saved updates.
+        if !self.reasoning_effort_override_enabled(model_info) {
+            // Unsupported models and disabled overrides must also accept saved history.
             // Filter only the request copy; persisted history remains unchanged.
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }

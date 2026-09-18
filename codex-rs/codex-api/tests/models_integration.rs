@@ -155,6 +155,7 @@ async fn models_client_hits_models_endpoint() {
             supports_search_tool: false,
             supports_experimental_context: false,
             use_responses_lite: false,
+            supports_reasoning_effort_updates: true,
             guardian: None,
             node_repl_auto_review_required: true,
             node_repl_disabled: true,

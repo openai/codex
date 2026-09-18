@@ -43,6 +43,7 @@ fn override_builder() -> TestCodexBuilder {
     test_codex()
         .with_model_info_override("gpt-5.4", |model| {
             model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
         })
         .with_config(|config| {
             config
@@ -354,9 +355,12 @@ async fn reasoning_effort_override_persistent_transitions(
     Ok(())
 }
 
+#[test_case(true; "responses lite")]
+#[test_case(false; "ordinary responses")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_preserves_prefix_and_only_appends_on_change()
--> anyhow::Result<()> {
+async fn reasoning_effort_override_preserves_prefix_and_only_appends_on_change(
+    use_responses_lite: bool,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let mut mocks = Vec::new();
@@ -366,7 +370,12 @@ async fn reasoning_effort_override_preserves_prefix_and_only_appends_on_change()
                 .await,
         );
     }
-    let test = override_builder().build_with_auto_env(&server).await?;
+    let test = override_builder()
+        .with_model_info_override("gpt-5.4", move |model| {
+            model.use_responses_lite = use_responses_lite;
+        })
+        .build_with_auto_env(&server)
+        .await?;
     test.submit_text_turn("first message").await?;
     submit_thread_settings(
         &test.codex,
@@ -718,8 +727,12 @@ async fn reasoning_effort_override_websocket_appends_then_replays_after_reconnec
     Ok(())
 }
 
+#[test_case(OverrideUnavailable::FeatureDisabled; "feature disabled")]
+#[test_case(OverrideUnavailable::ModelUnsupported; "unsupported model")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_disabled_filters_websocket_history() -> anyhow::Result<()> {
+async fn reasoning_effort_override_unavailable_filters_websocket_history(
+    unavailable: OverrideUnavailable,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let initial_mock = responses::mount_sse_once(
@@ -747,11 +760,7 @@ async fn reasoning_effort_override_disabled_filters_websocket_history() -> anyho
     ]])
     .await;
     let base_url = format!("{}/v1", websocket.uri());
-    let mut builder = override_builder().with_config(move |config| {
-        config
-            .features
-            .disable(Feature::ReasoningEffortOverride)
-            .expect("disable overrides");
+    let mut builder = unavailable.builder().with_config(move |config| {
         config.model_reasoning_effort = Some(ReasoningEffort::High);
         config.model_provider.base_url = Some(base_url);
         config.model_provider.supports_websockets = true;
@@ -788,12 +797,33 @@ async fn reasoning_effort_override_disabled_filters_websocket_history() -> anyho
 enum OverrideUnavailable {
     FeatureDisabled,
     NonOpenAiProvider,
-    ResponsesLiteDisabled,
+    ModelUnsupported,
+}
+
+impl OverrideUnavailable {
+    fn builder(self) -> TestCodexBuilder {
+        match self {
+            Self::FeatureDisabled => override_builder().with_config(|config| {
+                config
+                    .features
+                    .disable(Feature::ReasoningEffortOverride)
+                    .expect("disable overrides");
+            }),
+            Self::NonOpenAiProvider => override_builder().with_config(|config| {
+                config.model_provider.name = "unsupported provider".into();
+            }),
+            Self::ModelUnsupported => {
+                override_builder().with_model_info_override("gpt-5.4", |model| {
+                    model.supports_reasoning_effort_updates = false;
+                })
+            }
+        }
+    }
 }
 
 #[test_case(OverrideUnavailable::FeatureDisabled; "feature disabled")]
 #[test_case(OverrideUnavailable::NonOpenAiProvider; "unsupported provider")]
-#[test_case(OverrideUnavailable::ResponsesLiteDisabled; "responses lite disabled")]
+#[test_case(OverrideUnavailable::ModelUnsupported; "unsupported model")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reasoning_effort_override_unavailable_uses_request_effort(
     unavailable: OverrideUnavailable,
@@ -810,20 +840,7 @@ async fn reasoning_effort_override_unavailable_uses_request_effort(
         responses::sse(vec![responses::ev_completed("second")]),
     )
     .await;
-    let mut builder = match unavailable {
-        OverrideUnavailable::FeatureDisabled => override_builder().with_config(|config| {
-            config
-                .features
-                .disable(Feature::ReasoningEffortOverride)
-                .expect("disable overrides");
-        }),
-        OverrideUnavailable::NonOpenAiProvider => override_builder().with_config(|config| {
-            config.model_provider.name = "unsupported provider".into();
-        }),
-        OverrideUnavailable::ResponsesLiteDisabled => override_builder()
-            .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = false),
-    };
-    let test = builder.build_with_auto_env(&server).await?;
+    let test = unavailable.builder().build_with_auto_env(&server).await?;
     test.submit_text_turn("first").await?;
     submit_thread_settings(
         &test.codex,
@@ -846,8 +863,12 @@ async fn reasoning_effort_override_unavailable_uses_request_effort(
     Ok(())
 }
 
+#[test_case(OverrideUnavailable::FeatureDisabled; "feature disabled")]
+#[test_case(OverrideUnavailable::ModelUnsupported; "unsupported model")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_effort_override_disabled_recovers_saved_history() -> anyhow::Result<()> {
+async fn reasoning_effort_override_unavailable_recovers_saved_history(
+    unavailable: OverrideUnavailable,
+) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let reply = |id, text| {
@@ -891,13 +912,10 @@ async fn reasoning_effort_override_disabled_recovers_saved_history() -> anyhow::
     })
     .await;
     let chatgpt_base_url = format!("{}/backend-api", server.uri());
-    let mut builder = override_builder()
+    let mut builder = unavailable
+        .builder()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
-            config
-                .features
-                .disable(Feature::ReasoningEffortOverride)
-                .expect("disable overrides");
             config.model_reasoning_effort = Some(ReasoningEffort::High);
             config.chatgpt_base_url = chatgpt_base_url;
         });
@@ -984,6 +1002,7 @@ async fn reasoning_effort_override_model_switch_reestablishes_selected_effort(
         .with_model_info_override("gpt-5.5", |model| {
             model.comp_hash = None;
             model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
         })
         .with_model("gpt-5.4")
         .build_with_auto_env(&server)
@@ -1018,6 +1037,145 @@ async fn reasoning_effort_override_model_switch_reestablishes_selected_effort(
         ]),
         serde_json::json!(["gpt-5.5", effort])
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_effort_override_unsupported_model_round_trip() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let test = override_builder()
+        .with_model_info_override("gpt-6-astra", |model| {
+            model.comp_hash = None;
+            model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
+        })
+        .with_model_info_override("gpt-5.5", |model| {
+            model.comp_hash = None;
+            // Lite alone is not sufficient: unsupported models must still filter updates.
+            model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = false;
+        })
+        .with_model("gpt-6-astra")
+        .build_with_auto_env(&server)
+        .await?;
+    let turns = [
+        ("gpt-6-astra", ReasoningEffort::Medium, "Start at medium."),
+        (
+            "gpt-6-astra",
+            ReasoningEffort::High,
+            "Raise effort to high.",
+        ),
+        (
+            "gpt-5.5",
+            ReasoningEffort::High,
+            "Switch to the unsupported model.",
+        ),
+        ("gpt-5.5", ReasoningEffort::Low, "Lower effort to low."),
+        (
+            "gpt-6-astra",
+            ReasoningEffort::Low,
+            "Return to the supported model.",
+        ),
+        ("gpt-6-astra", ReasoningEffort::High, "Raise effort again."),
+    ];
+    let mut requests = Vec::new();
+    for (index, (model, effort, prompt)) in turns.iter().enumerate() {
+        let id = format!("turn-{index}");
+        let mock = responses::mount_sse_once(
+            &server,
+            responses::sse(vec![
+                responses::ev_assistant_message(&id, "Acknowledged."),
+                responses::ev_completed(&id),
+            ]),
+        )
+        .await;
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                model: Some((*model).to_string()),
+                effort: Some(Some(effort.clone())),
+                ..Default::default()
+            },
+        )
+        .await?;
+        test.submit_text_turn(prompt).await?;
+        requests.push(mock.single_request());
+    }
+    let initial_updates = vec![
+        effort_update(ReasoningEffort::Medium),
+        effort_update(ReasoningEffort::High),
+    ];
+    let mut returned_updates = initial_updates.clone();
+    returned_updates.push(effort_update(ReasoningEffort::Low));
+    let mut final_updates = returned_updates.clone();
+    final_updates.push(effort_update(ReasoningEffort::High));
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                let body = request.body_json();
+                (
+                    body["model"].clone(),
+                    body["reasoning"]["effort"].clone(),
+                    effort_updates(request),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                Value::from("gpt-6-astra"),
+                Value::from("medium"),
+                vec![effort_update(ReasoningEffort::Medium)]
+            ),
+            (
+                Value::from("gpt-6-astra"),
+                Value::from("medium"),
+                initial_updates
+            ),
+            (Value::from("gpt-5.5"), Value::from("high"), vec![]),
+            (Value::from("gpt-5.5"), Value::from("low"), vec![]),
+            (
+                Value::from("gpt-6-astra"),
+                Value::from("low"),
+                returned_updates
+            ),
+            (
+                Value::from("gpt-6-astra"),
+                Value::from("low"),
+                final_updates.clone()
+            ),
+        ],
+    );
+    for (index, request) in requests.iter().enumerate() {
+        assert_eq!(
+            request
+                .message_input_texts("user")
+                .into_iter()
+                .filter(|text| { turns.iter().any(|(_, _, prompt)| text.as_str() == *prompt) })
+                .collect::<Vec<_>>(),
+            turns[..=index]
+                .iter()
+                .map(|(_, _, prompt)| prompt.to_string())
+                .collect::<Vec<_>>(),
+        );
+    }
+    test.codex.shutdown_and_wait().await?;
+    let saved_updates = test
+        .codex
+        .load_history(/*include_archived*/ false)
+        .await?
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            RolloutItem::ResponseItem(ResponseItemEnvelope {
+                item: item @ ResponseItem::ConfigurationUpdate { .. },
+                ..
+            }) => Some(serde_json::to_value(item).expect("serialize saved update")),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(saved_updates, final_updates);
     Ok(())
 }
 
@@ -1129,6 +1287,7 @@ async fn reasoning_effort_override_compaction_fallback_uses_each_models_effort()
         .with_model_info_override("gpt-5.2", |model| {
             model.comp_hash = Some("fallback".to_string());
             model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
         })
         .with_model("gpt-5.4")
         .with_config(move |config| {

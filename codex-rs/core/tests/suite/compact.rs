@@ -1038,6 +1038,7 @@ async fn reasoning_effort_override_remote_v2_compaction_resets_pinned_effort(
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override("gpt-5.4", |model| {
             model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
         })
         .with_config(move |config| {
             config.model_provider.stream_max_retries = Some(0);
