@@ -114,6 +114,7 @@ pub use runtime::BlockedRequestObserverFuture;
 pub use runtime::ConfigReloader;
 pub use runtime::ConfigReloaderFuture;
 pub use runtime::ConfigState;
+pub use runtime::LocalBindingPolicy;
 pub use runtime::NetworkProxyState;
 pub use state::NetworkProxyAuditMetadata;
 pub use state::NetworkProxyConstraintError;

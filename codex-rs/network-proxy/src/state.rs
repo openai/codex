@@ -228,7 +228,7 @@ pub fn validate_policy_against_constraints(
     )?;
 
     if let Some(allow_local_binding) = constraints.allow_local_binding {
-        validate(config.allow_local_binding, move |candidate| {
+        validate(config.allow_local_binding(), move |candidate| {
             if *candidate && !allow_local_binding {
                 Err(invalid_value(
                     "network.allow_local_binding",

@@ -30,7 +30,7 @@ impl EnvironmentNetworkPolicy {
             dangerously_allow_all_unix_sockets: config
                 .dangerously_allow_all_unix_sockets
                 .unwrap_or(false),
-            allow_local_binding: config.allow_local_binding,
+            allow_local_binding: config.allow_local_binding(),
             managed_allowed_domains_only,
         }
     }
@@ -87,6 +87,6 @@ impl EnvironmentNetworkPolicy {
         config.dangerously_allow_all_unix_sockets =
             Some(inherited_permits_all && owner_permits_all);
         config.allow_upstream_proxy &= self.allow_upstream_proxy;
-        config.allow_local_binding &= self.allow_local_binding;
+        config.allow_local_binding = Some(config.allow_local_binding() && self.allow_local_binding);
     }
 }

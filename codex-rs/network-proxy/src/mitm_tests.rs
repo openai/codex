@@ -124,7 +124,7 @@ async fn mitm_policy_rechecks_local_private_target_after_connect() {
     let app_state = Arc::new(network_proxy_state_for_policy({
         let mut network = NetworkProxyConfig::default();
         network.set_allowed_domains(vec!["example.com".to_string()]);
-        network.allow_local_binding = false;
+        network.allow_local_binding = Some(false);
         network
     }));
     let ctx = policy_ctx(

@@ -5,6 +5,7 @@ use codex_config::NetworkDomainPermissionToml;
 use codex_config::NetworkDomainPermissionsToml;
 use codex_execpolicy::Decision::Allow;
 use codex_execpolicy::NetworkRuleProtocol::Https;
+use codex_network_proxy::LocalBindingPolicy::DefaultFalse;
 use codex_network_proxy::NetworkDomainPermission;
 use codex_network_proxy::NetworkUnixSocketPermission;
 use codex_network_proxy::NetworkUnixSocketPermissions;
@@ -78,15 +79,18 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
             &owner,
             &profile,
             &Policy::empty(),
+            DefaultFalse,
         )?;
         assert_eq!(
             composed.config.dangerously_allow_all_unix_sockets,
             Some(expected),
             "{name}"
         );
-        let state = Arc::new(
-            controller.build_state_with_audit_metadata(Default::default(), Platform::Linux)?,
-        );
+        let state = Arc::new(controller.build_state_with_audit_metadata(
+            Default::default(),
+            Platform::Linux,
+            DefaultFalse,
+        )?);
         let proxy = NetworkProxy::builder()
             .state(Arc::clone(&state))
             .managed_by_codex(false)
@@ -99,7 +103,7 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
             Some(composed.environment_policy()),
             /*fallback_policy_decider*/ None,
         )?;
-        let launch = scoped.remote_launch_config().await?;
+        let launch = scoped.remote_launch_config(DefaultFalse).await?;
         assert_eq!(
             launch.proxy.dangerously_allow_all_unix_sockets, expected,
             "{name}"
@@ -115,7 +119,7 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
             // Inheritance must not grant sockets to ordinary controller-only commands.
             assert!(
                 !proxy
-                    .remote_launch_config()
+                    .remote_launch_config(DefaultFalse)
                     .await?
                     .proxy
                     .dangerously_allow_all_unix_sockets
@@ -123,7 +127,7 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
             state.add_allowed_domain("granted.example").await?;
             assert!(
                 scoped
-                    .remote_launch_config()
+                    .remote_launch_config(DefaultFalse)
                     .await?
                     .proxy
                     .dangerously_allow_all_unix_sockets
@@ -144,7 +148,7 @@ async fn attachment_socket_grants_respect_configured_restrictions_at_remote_laun
                 .await?;
             assert!(
                 !scoped
-                    .remote_launch_config()
+                    .remote_launch_config(DefaultFalse)
                     .await?
                     .proxy
                     .dangerously_allow_all_unix_sockets
@@ -171,7 +175,7 @@ fn build_state_with_audit_metadata_threads_metadata_to_state() {
     };
 
     let state = spec
-        .build_state_with_audit_metadata(metadata.clone(), Platform::Linux)
+        .build_state_with_audit_metadata(metadata.clone(), Platform::Linux, DefaultFalse)
         .expect("state should build");
     assert_eq!(state.audit_metadata(), &metadata);
 }
@@ -184,7 +188,7 @@ fn windows_sandbox_proxy_listeners_preserve_effective_protocol_roles() {
             enabled: true,
             proxy_url: "http://127.0.0.1:48081".to_string(),
             socks_url: "socks5h://127.0.0.1:3128".to_string(),
-            allow_local_binding: true,
+            allow_local_binding: Some(true),
             ..NetworkProxyConfig::default()
         },
         /*requirements*/ None,
@@ -250,7 +254,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
         "/tmp/allowed.sock".to_string(),
     ]);
     owner.dangerously_allow_all_unix_sockets = Some(true);
-    owner.allow_local_binding = true;
+    owner.allow_local_binding = Some(true);
     let owner_policy =
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false);
     assert_eq!(
@@ -265,7 +269,12 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
         ),
         Err(EnvironmentNetworkConfigError)
     );
-    let compose = NetworkProxySpec::for_environment;
+    let compose = |controller: Option<&NetworkProxySpec>,
+                   policy: &EnvironmentNetworkPolicy,
+                   profile: &PermissionProfile,
+                   rules: &Policy| {
+        NetworkProxySpec::for_environment(controller, policy, profile, rules, DefaultFalse)
+    };
     let empty = Policy::empty();
     let disabled_controller = NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
@@ -297,7 +306,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     owner.unix_sockets.clone_from(&spec.config.unix_sockets);
     owner.allow_upstream_proxy = false;
     owner.dangerously_allow_all_unix_sockets = Some(false);
-    owner.allow_local_binding = false;
+    owner.allow_local_binding = Some(false);
     assert_eq!(
         restricted.environment_policy(),
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false)

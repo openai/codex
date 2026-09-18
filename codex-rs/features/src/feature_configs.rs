@@ -480,6 +480,9 @@ pub struct NetworkProxyConfigToml {
     pub domains: Option<BTreeMap<String, NetworkProxyDomainPermissionToml>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unix_sockets: Option<BTreeMap<String, NetworkProxyUnixSocketPermissionToml>>,
+    /// Permits local servers and direct host-loopback connections and skips the proxy's
+    /// additional private-network destination checks. Proxy domain rules still apply.
+    /// Defaults to true for MXC, which cannot enforce false; otherwise defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_local_binding: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

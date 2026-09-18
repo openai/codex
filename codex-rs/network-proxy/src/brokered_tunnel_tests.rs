@@ -159,7 +159,7 @@ impl TestProxy {
             mode,
             mitm: true,
             credential_broker: true,
-            allow_local_binding: true,
+            allow_local_binding: Some(true),
             credential_providers: BTreeMap::from([(
                 "local".to_string(),
                 CredentialProviderConfig {

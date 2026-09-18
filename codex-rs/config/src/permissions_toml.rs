@@ -340,6 +340,9 @@ pub struct NetworkToml {
     pub mode: Option<NetworkMode>,
     pub domains: Option<NetworkDomainPermissionsToml>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+    /// Permits local servers and direct host-loopback connections and skips the proxy's
+    /// additional private-network destination checks. Proxy domain rules still apply.
+    /// Defaults to true for MXC, which cannot enforce false; otherwise defaults to false.
     pub allow_local_binding: Option<bool>,
     pub mitm: Option<NetworkMitmToml>,
 }
@@ -515,7 +518,7 @@ impl NetworkToml {
             config.unix_sockets = Some(proxy_unix_sockets);
         }
         if let Some(allow_local_binding) = self.allow_local_binding {
-            config.allow_local_binding = allow_local_binding;
+            config.allow_local_binding = Some(allow_local_binding);
         }
         if let Some(mitm) = self.mitm.as_ref() {
             config.mitm_hooks = mitm.to_runtime_hooks(mitm.actions.as_ref());

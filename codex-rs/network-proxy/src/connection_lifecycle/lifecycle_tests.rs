@@ -71,7 +71,7 @@ async fn canceling_wait_closes_proxy_connections() -> Result<()> {
 
 async fn assert_stop_closes_connections(stop: StopProxy) -> Result<()> {
     let mut config = NetworkProxyConfig {
-        allow_local_binding: true,
+        allow_local_binding: Some(true),
         allow_upstream_proxy: false,
         enable_socks5_udp: false,
         ..NetworkProxyConfig::default()

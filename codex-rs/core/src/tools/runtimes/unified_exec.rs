@@ -354,13 +354,21 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
         };
         let (mut env, managed_network_context, network_proxy_launch) = match managed_network {
             Some(network) if environment_is_remote => {
-                let mut launch = network.remote_launch_config().await.map_err(|err| {
-                    ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
-                })?;
+                let mut launch = network
+                    .remote_launch_config(crate::windows_sandbox::local_binding_policy_for_sandbox(
+                        req.turn_environment.config().windows_sandbox_type,
+                        req.turn_environment.executor_platform_os.as_deref(),
+                    ))
+                    .await
+                    .map_err(|err| {
+                        ToolError::Codex(CodexErr::Io(io::Error::other(err.to_string())))
+                    })?;
                 if routes_approval_policy_to_guardian(
                     ctx.step_context.settings.approval_policy(),
                     ctx.step_context.settings.approvals_reviewer(),
-                ) && network.remote_policy_decider().is_some()
+                ) && network
+                    .remote_policy_decider(launch.proxy.allow_local_binding)
+                    .is_some()
                 {
                     let timeout = ctx
                         .session

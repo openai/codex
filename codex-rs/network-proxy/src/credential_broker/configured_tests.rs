@@ -280,7 +280,7 @@ fn local_proxy_bypass_preserves_credentials_and_aliases_across_reload() {
         assert_ne!(dummy, token);
         assert_ne!(github_dummy, github);
 
-        config.allow_local_binding = true;
+        config.allow_local_binding = Some(true);
         let revision = broker.config_revision();
         broker.configure(&config);
         assert_eq!(broker.config_revision(), revision + 1);
@@ -305,7 +305,7 @@ fn local_proxy_bypass_preserves_credentials_and_aliases_across_reload() {
                 }
             );
         }
-        config.allow_local_binding = false;
+        config.allow_local_binding = Some(false);
         let mut snapshot_env = env.clone();
         broker.virtualize_snapshot_env(&mut snapshot_env, /*environment_id*/ None);
         assert_eq!(snapshot_env["VENDOR_TOKEN"], dummy);
@@ -325,7 +325,7 @@ fn child_alias_identity_survives_scoped_dummies_and_partial_direct_restoration()
         let broker = CredentialBroker::new(/*enabled*/ true);
         broker.configure(&NetworkProxyConfig {
             credential_broker: true,
-            allow_local_binding,
+            allow_local_binding: Some(allow_local_binding),
             credential_providers: BTreeMap::from([(
                 "local".to_string(),
                 CredentialProviderConfig {
@@ -386,7 +386,7 @@ fn local_proxy_bypass_is_scoped_for_inherited_credentials_and_aliases() {
             let broker = CredentialBroker::new(/*enabled*/ true);
             broker.configure(&NetworkProxyConfig {
                 credential_broker: true,
-                allow_local_binding: true,
+                allow_local_binding: Some(true),
                 credential_providers: BTreeMap::from([(
                     "vendor".to_string(),
                     CredentialProviderConfig {

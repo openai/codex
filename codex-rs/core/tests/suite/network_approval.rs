@@ -1858,7 +1858,7 @@ async fn thread_turnover_closes_managed_proxy_tunnels() -> Result<()> {
     let mut network = NetworkProxyConfig {
         enabled: true,
         mode: codex_network_proxy::NetworkMode::Full,
-        allow_local_binding: true,
+        allow_local_binding: Some(true),
         allow_upstream_proxy: false,
         ..NetworkProxyConfig::default()
     };
@@ -2413,7 +2413,7 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 NetworkProxySpec::from_config_and_constraints(
                     NetworkProxyConfig {
                         enabled: true,
-                        allow_local_binding: true,
+                        allow_local_binding: Some(true),
                         ..NetworkProxyConfig::default()
                     },
                     /*requirements*/ None,
@@ -2458,7 +2458,7 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             }
             let marker = format!("{scenario}_OWNER_{suffix}");
             let mut proxy_config = NetworkProxyConfig {
-                allow_local_binding: true,
+                allow_local_binding: Some(true),
                 ..NetworkProxyConfig::default()
             };
             proxy_config.set_allowed_domains(vec![allowed_domain.to_string()]);

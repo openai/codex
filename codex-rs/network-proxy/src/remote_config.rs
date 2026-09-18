@@ -93,7 +93,7 @@ impl RemoteNetworkProxyConfig {
             mode: config.mode,
             domains: config.domains.clone(),
             unix_sockets: config.unix_sockets.clone(),
-            allow_local_binding: config.allow_local_binding,
+            allow_local_binding: config.allow_local_binding(),
         })
     }
 
@@ -107,7 +107,7 @@ impl RemoteNetworkProxyConfig {
             mode: self.mode,
             domains: self.domains,
             unix_sockets: self.unix_sockets,
-            allow_local_binding: self.allow_local_binding,
+            allow_local_binding: Some(self.allow_local_binding),
             ..NetworkProxyConfig::default()
         }
     }

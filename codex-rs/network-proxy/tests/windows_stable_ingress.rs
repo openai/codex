@@ -297,7 +297,7 @@ async fn build_proxy(
         socks_url: format!("socks5://{socks_addr}"),
         enable_socks5,
         enable_socks5_udp: false,
-        allow_local_binding: true,
+        allow_local_binding: Some(true),
         mode: NetworkMode::Full,
         ..NetworkProxyConfig::default()
     };

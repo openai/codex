@@ -1278,7 +1278,7 @@ impl UnifiedExecProcessManager {
         let network_policy_decider = network_proxy_launch
             .as_ref()
             .filter(|launch| launch.policy_decision_timeout_ms.is_some())
-            .and_then(|_| network.and_then(NetworkProxy::remote_policy_decider));
+            .and_then(|launch| network?.remote_policy_decider(launch.proxy.allow_local_binding));
         if environment.is_remote() && network.is_some() && network_proxy_launch.is_none() {
             request.exec_server_enforce_managed_network = false;
         }

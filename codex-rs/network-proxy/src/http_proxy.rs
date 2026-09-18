@@ -1264,7 +1264,7 @@ mod tests {
     async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
         let policy = {
             let mut policy = NetworkProxyConfig {
-                allow_local_binding: true,
+                allow_local_binding: Some(true),
                 ..NetworkProxyConfig::default()
             };
             policy.set_allowed_domains(vec!["example.com".to_string()]);
@@ -1562,7 +1562,7 @@ mod tests {
                 ..NetworkProxyConfig::default()
             };
             network.set_allowed_domains(vec!["127.0.0.1".to_string()]);
-            network.allow_local_binding = true;
+            network.allow_local_binding = Some(true);
             network
         }));
         let mut env = HashMap::from([
@@ -1639,7 +1639,7 @@ mod tests {
 
         let state = Arc::new(network_proxy_state_for_policy({
             let mut network = NetworkProxyConfig {
-                allow_local_binding: true,
+                allow_local_binding: Some(true),
                 mitm: true,
                 mitm_hooks: vec![crate::mitm_hook::MitmHookConfig {
                     host: "127.0.0.1".to_string(),

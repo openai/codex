@@ -435,6 +435,7 @@ pub struct NetworkRequirementsToml {
     /// network enforcement is active. User allowlist entries are ignored.
     pub managed_allowed_domains_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+    /// MXC requires true when managed networking is enabled; an explicit false is rejected.
     pub allow_local_binding: Option<bool>,
     /// Requirements-only header injections. These annotate matching requests
     /// without changing whether non-matching requests are allowed.

@@ -41,7 +41,7 @@ async fn connector_reaches_native_hostname_over_ipv4_and_ipv6() {
         let target = listener.local_addr().expect("local addr");
         let connector = TargetCheckedTcpConnector::new(Arc::new(network_proxy_state_for_policy(
             NetworkProxyConfig {
-                allow_local_binding: true,
+                allow_local_binding: Some(true),
                 ..NetworkProxyConfig::default()
             },
         )));

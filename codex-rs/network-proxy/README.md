@@ -47,7 +47,8 @@ mode = "full" # default when unset; use "limited" for read-only mode
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
 # Clients that always bypass proxies for loopback, such as Go's `net/http`, remain blocked by
 # the operating-system sandbox when local binding is disabled.
-allow_local_binding = false
+# Omitted: true for MXC, false elsewhere. MXC rejects an effective false.
+# allow_local_binding = false
 
 # DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
 # absolute socket path from `x-unix-socket`.

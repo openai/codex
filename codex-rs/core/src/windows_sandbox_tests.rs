@@ -125,7 +125,7 @@ fn provisioning_settings_omit_the_disabled_socks_proxy() {
         proxy_url: "http://127.0.0.1:43128".to_string(),
         enable_socks5: false,
         socks_url: "socks5h://127.0.0.1:48081".to_string(),
-        allow_local_binding: true,
+        allow_local_binding: Some(true),
         ..Default::default()
     };
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(

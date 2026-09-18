@@ -67,6 +67,7 @@ fn validate_environment_config(
             policy,
             config.permission_profile.permission_profile(),
             &Policy::empty(),
+            codex_network_proxy::LocalBindingPolicy::DefaultFalse,
         )
         .map_err(|error| {
             CodexErr::InvalidRequest(format!("invalid environment network policy: {error}"))

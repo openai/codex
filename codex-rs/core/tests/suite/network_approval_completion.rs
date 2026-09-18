@@ -1,14 +1,13 @@
-//! Exercises process cleanup while a remote network review is still pending.
+//! Exercises remote network review startup and cleanup, including MXC's local-binding default.
 
-use super::PushedExecScenario;
 use super::accept_initialized_exec_server;
 use super::read_exec_server_json;
-use super::respond_environment_info;
 use super::send_exec_server_json;
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::TurnInputRequest;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::CommandExecutionStatus;
@@ -16,8 +15,8 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::sandbox::SandboxType;
 use codex_protocol::user_input::UserInput;
-use core_test_support::managed_network_requirements_loader;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -34,13 +33,22 @@ use serde_json::Value;
 use serde_json::json;
 use std::fs;
 use std::time::Duration;
+use test_case::test_case;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 
+#[test_case(SandboxType::WindowsRestrictedToken, "allow_local_binding = true", Ok(true); "explicit_local_binding")]
+#[test_case(SandboxType::WindowsMxc, "", Ok(true); "mxc_default_local_binding")]
+#[test_case(SandboxType::WindowsMxc, "allow_local_binding = false", Err("MXC cannot enforce allow_local_binding=false"); "mxc_rejects_false")]
+#[test_case(SandboxType::WindowsRestrictedToken, "", Ok(false); "non_mxc_default_local_binding")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn completed_remote_process_withdraws_pending_network_review() -> Result<()> {
+async fn remote_local_binding_policy_and_review_cleanup(
+    sandbox_type: SandboxType,
+    local_binding: &'static str,
+    expected_local_binding: Result<bool, &'static str>,
+) -> Result<()> {
     let server = start_mock_server().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let exec_server_url = format!("ws://{}", listener.local_addr()?);
@@ -99,15 +107,26 @@ async fn completed_remote_process_withdraws_pending_network_review() -> Result<(
                 .as_u64()
                 .is_some()
         );
+        let allow_local_binding =
+            expected_local_binding.expect("invalid MXC config must not launch");
+        assert_eq!(
+            start["params"]["networkProxy"]["proxy"]["allowLocalBinding"],
+            allow_local_binding
+        );
         let process_id = &start["params"]["processId"];
         send_exec_server_json(
             &mut websocket,
             json!({"id": start["id"], "result": {"processId": process_id}}),
         )
         .await;
+        let host = if allow_local_binding {
+            "10.0.0.1"
+        } else {
+            "8.8.8.8"
+        };
         send_exec_server_json(&mut websocket, json!({
             "id": 1, "method": "network/policyRequest",
-            "params": {"processId": process_id, "request": {"protocol": "https_connect", "host": "review.example", "port": 443}}
+            "params": {"processId": process_id, "request": {"protocol": "https_connect", "host": host, "port": 443}}
         })).await;
         timeout(Duration::from_secs(/*secs*/ 10), async {
             while !pending_review.requests().iter().any(|request| {
@@ -155,24 +174,31 @@ async fn completed_remote_process_withdraws_pending_network_review() -> Result<(
     });
     let test = test_codex()
         .with_exec_server_url(exec_server_url)
-        .with_cloud_config_bundle(managed_network_requirements_loader())
-        .with_pre_build_hook(|home| {
+        .with_cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
+                "[experimental_network]\nenabled = true\n{local_binding}"
+            )),
+        )
+        .with_pre_build_hook(move |home| {
             fs::write(
                 home.join("config.toml"),
-                r#"default_permissions = "workspace"
+                format!(
+                    r#"default_permissions = "workspace"
 [permissions.workspace.filesystem]
 ":minimal" = "read"
 [permissions.workspace.network]
 enabled = true
 mode = "full"
-allow_local_binding = true
-"#,
+{local_binding}
+"#
+                ),
             )
             .expect("managed network config");
         })
-        .with_config(|config| {
+        .with_config(move |config| {
             config.project_doc_max_bytes = 0;
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config.permissions.windows_sandbox_type = sandbox_type;
             #[cfg(windows)]
             config.set_windows_sandbox_enabled(/*value*/ true);
         })
@@ -198,6 +224,21 @@ allow_local_binding = true
             }),
         )
         .await?;
+    timeout(Duration::from_secs(/*secs*/ 15), async {
+        while final_response.function_call_output_text(call_id).is_none() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await?;
+    let output = final_response
+        .function_call_output_text(call_id)
+        .context("tool output")?;
+    if let Err(expected_error) = expected_local_binding {
+        assert!(output.contains(expected_error), "{output}");
+        exec_server.abort();
+        assert!(exec_server.await.is_err_and(|err| err.is_cancelled()));
+        return Ok(());
+    }
     let completed = timeout(Duration::from_secs(/*secs*/ 15), async {
         loop {
             match test.codex.next_event().await?.msg {
@@ -225,15 +266,6 @@ allow_local_binding = true
             Some("build complete\n")
         )
     );
-    timeout(Duration::from_secs(/*secs*/ 10), async {
-        while final_response.function_call_output_text(call_id).is_none() {
-            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
-        }
-    })
-    .await?;
-    let output = final_response
-        .function_call_output_text(call_id)
-        .context("tool output")?;
     assert!(output.contains("Process exited with code 0"), "{output}");
     assert!(output.contains("build complete"), "{output}");
     assert_eq!(parent.requests().len(), 1);
@@ -257,7 +289,14 @@ fn review_body(request: &wiremock::Request) -> Value {
 async fn respond_setup_request(websocket: &mut WebSocketStream<TcpStream>, request: &Value) {
     match request["method"].as_str() {
         Some("environment/info") => {
-            respond_environment_info(websocket, &request["id"], PushedExecScenario::Complete).await;
+            send_exec_server_json(websocket, json!({
+                "id": request["id"],
+                "result": {
+                    "shell": {"name": "powershell", "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"},
+                    "platformOs": "windows",
+                    "capabilities": {"networkProxyLaunch": true}
+                }
+            })).await;
         }
         Some("fs/getMetadata" | "fs/readFile" | "fs/readDirectory") => {
             send_exec_server_json(
@@ -289,6 +328,6 @@ async fn respond_setup_request(websocket: &mut WebSocketStream<TcpStream>, reque
             )
             .await;
         }
-        method => panic!("unexpected setup request: {method:?}"),
+        _ => panic!("unexpected setup request: {request}"),
     }
 }

@@ -574,7 +574,7 @@ async fn shell_snapshot_v2_prewarm_stops_on_shutdown() -> Result<()> {
 }; "untrusted")]
 #[test_case::test_case(|config| {
     config.permissions.network = Some(NetworkProxySpec::from_config_and_constraints(
-        NetworkProxyConfig { enabled: true, allow_local_binding: true, ..Default::default() },
+        NetworkProxyConfig { enabled: true, allow_local_binding: Some(true), ..Default::default() },
         /*requirements*/ None,
         config.permissions.permission_profile(),
     ).expect("configure managed network"));

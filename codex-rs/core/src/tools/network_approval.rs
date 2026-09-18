@@ -1117,6 +1117,9 @@ pub(crate) async fn begin_network_approval(
     }
 
     let controller = turn.config.permissions.network.as_ref();
+    let environment = environments
+        .turn_environments()
+        .find(|environment| environment.selection.environment_id == environment_id);
     let owner_spec = network_policy
         .as_ref()
         .map(|policy| {
@@ -1126,6 +1129,15 @@ pub(crate) async fn begin_network_approval(
                 policy,
                 &permission_profile,
                 session.services.exec_policy.current().as_ref(),
+                environment.map_or(
+                    codex_network_proxy::LocalBindingPolicy::DefaultFalse,
+                    |environment| {
+                        crate::windows_sandbox::local_binding_policy_for_sandbox(
+                            environment.config().windows_sandbox_type,
+                            environment.executor_platform_os.as_deref(),
+                        )
+                    },
+                ),
             )
         })
         .transpose()
@@ -1153,15 +1165,13 @@ pub(crate) async fn begin_network_approval(
         } else {
             // This carrier never listens: the executor starts the real per-command proxy.
             let executor_os = Platform::from_platform_os(
-                environments
-                    .turn_environments()
-                    .find(|environment| environment.selection.environment_id == environment_id)
-                    .and_then(|environment| environment.executor_platform_os.as_deref()),
+                environment.and_then(|environment| environment.executor_platform_os.as_deref()),
             );
             let state = owner_spec
                 .build_state_with_audit_metadata(
                     session.services.network_proxy_audit_metadata.clone(),
                     executor_os,
+                    codex_network_proxy::LocalBindingPolicy::DefaultFalse,
                 )
                 .map_err(|error| {
                     ToolError::Rejected(format!(

@@ -239,6 +239,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         .start_proxy(
             &permission_profile,
             codex_network_proxy::ManagedProxyRouting::SharedIngress,
+            codex_network_proxy::LocalBindingPolicy::DefaultFalse,
             /*policy_decider*/ None,
             /*blocked_request_observer*/ None,
             /*enable_network_approval_flow*/ false,
@@ -627,7 +628,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
 
     let mut network_config = NetworkProxyConfig::default();
     network_config.set_credential_broker_enabled(/*enabled*/ true);
-    network_config.allow_local_binding = true;
+    network_config.allow_local_binding = Some(true);
     network_config.credential_providers.insert(
         "local".to_string(),
         CredentialProviderConfig {
@@ -670,6 +671,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
         .start_proxy(
             &permission_profile,
             codex_network_proxy::ManagedProxyRouting::SharedIngress,
+            codex_network_proxy::LocalBindingPolicy::DefaultFalse,
             /*policy_decider*/ None,
             /*blocked_request_observer*/ None,
             /*enable_network_approval_flow*/ false,

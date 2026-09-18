@@ -287,14 +287,14 @@ impl CredentialBroker {
             .then(|| active_credential_sources(&state, &HashMap::new()));
         if state.enabled != config.credential_broker
             || state.openai_api_host != config.credential_broker_openai_host
-            || state.allow_local_binding != config.allow_local_binding
+            || state.allow_local_binding != config.allow_local_binding()
             || state.configured_provider_configs != config.credential_providers
             || previous_context_sources.is_some()
         {
             state.config_revision += 1;
         }
         state.context.clone_from(&config.credential_broker_context);
-        state.allow_local_binding = config.allow_local_binding;
+        state.allow_local_binding = config.allow_local_binding();
         if state.enabled != config.credential_broker {
             state.enabled = config.credential_broker;
             state.credentials.clear();

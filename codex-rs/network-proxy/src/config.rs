@@ -139,7 +139,9 @@ pub struct NetworkProxyConfig {
     pub domains: Option<NetworkDomainPermissions>,
     #[serde(default)]
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
-    pub allow_local_binding: bool,
+    /// Omission is resolved for the selected sandbox; ordinary proxy execution defaults to false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_local_binding: Option<bool>,
     #[serde(default)]
     pub mitm: bool,
     #[serde(default)]
@@ -175,7 +177,7 @@ impl Default for NetworkProxyConfig {
             mode: NetworkMode::default(),
             domains: None,
             unix_sockets: None,
-            allow_local_binding: false,
+            allow_local_binding: None,
             mitm: false,
             credential_broker: false,
             credential_broker_enabled_mitm: false,
@@ -189,6 +191,10 @@ impl Default for NetworkProxyConfig {
 }
 
 impl NetworkProxyConfig {
+    pub fn allow_local_binding(&self) -> bool {
+        self.allow_local_binding.unwrap_or(false)
+    }
+
     pub fn set_credential_broker_enabled(&mut self, enabled: bool) {
         self.credential_broker = enabled;
         if enabled {
@@ -710,7 +716,7 @@ mod tests {
                 mode: NetworkMode::Full,
                 domains: None,
                 unix_sockets: None,
-                allow_local_binding: false,
+                allow_local_binding: None,
                 mitm: false,
                 credential_broker: false,
                 credential_broker_enabled_mitm: false,
@@ -905,7 +911,6 @@ mod tests {
                     "example.com": "deny",
                 },
                 "unix_sockets": null,
-                "allow_local_binding": false,
                 "mitm": false,
                 "credential_broker": false,
                 "dangerously_allow_plaintext_credential_injection": false,
