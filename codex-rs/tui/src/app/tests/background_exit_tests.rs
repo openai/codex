@@ -306,6 +306,10 @@ async fn run_in_background_detaches_without_interrupting_main_or_side_threads() 
 #[tokio::test]
 async fn exit_interrupts_before_requesting_shutdown() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    // The UI fixture's placeholder cwd does not exist on clean runners.
+    // This test starts a real shell, so keep its working directory alive.
+    let cwd = tempdir()?;
+    app.config.cwd = cwd.path().abs();
     prepare_running_local_daemon(&mut app)?;
     app.chat_widget
         .set_feature_enabled(Feature::Goals, /*enabled*/ true);
@@ -338,26 +342,60 @@ async fn exit_interrupts_before_requesting_shutdown() -> Result<()> {
         ),
         /*replay_kind*/ None,
     );
+    // Keep the command alive until interruption, even on a busy runner. Dropping
+    // the directory also releases it if the test fails before reaching the exit.
+    let running = tempdir()?;
+    let running_path = running.path().to_string_lossy();
     let command = if cfg!(windows) {
-        "Start-Sleep -Seconds 30"
+        format!(
+            "Write-Output 'exit-test-ready'; while (Test-Path -LiteralPath '{}') {{ Start-Sleep -Milliseconds 100 }}",
+            running_path.replace('\'', "''"),
+        )
     } else {
-        "sleep 30"
+        format!(
+            "printf 'exit-test-ready\\n'; while [ -d {} ]; do sleep 0.1; done",
+            shlex::try_quote(&running_path)?,
+        )
     };
-    app_server
-        .thread_shell_command(thread_id, command.to_string())
-        .await?;
-    let turn_id = loop {
-        let event = time::timeout(Duration::from_secs(/*secs*/ 5), app_server.next_event())
-            .await
-            .expect("app-server should emit a turn/start event")
-            .expect("app-server event stream should remain open");
-        if let codex_app_server_client::AppServerEvent::ServerNotification(notification) = event
-            && let ServerNotification::TurnStarted(notification) = notification.as_ref()
-            && notification.thread_id == thread_id.to_string()
-        {
-            break notification.turn.id.clone();
+    app_server.thread_shell_command(thread_id, command).await?;
+    let turn_id = time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        let mut turn_id = None;
+        let mut output = String::new();
+        loop {
+            let event = app_server
+                .next_event()
+                .await
+                .expect("app-server event stream should remain open");
+            if let codex_app_server_client::AppServerEvent::ServerNotification(notification) = event
+            {
+                match notification.as_ref() {
+                    ServerNotification::TurnStarted(notification)
+                        if notification.thread_id == thread_id.to_string() =>
+                    {
+                        turn_id = Some(notification.turn.id.clone());
+                    }
+                    ServerNotification::CommandExecutionOutputDelta(notification)
+                        if notification.thread_id == thread_id.to_string() =>
+                    {
+                        output.push_str(&notification.delta);
+                    }
+                    ServerNotification::TurnCompleted(notification)
+                        if notification.thread_id == thread_id.to_string() =>
+                    {
+                        panic!("shell command ended before interruption: {notification:?}");
+                    }
+                    _ => {}
+                }
+            }
+            if output.contains("exit-test-ready")
+                && let Some(turn_id) = turn_id.as_ref()
+            {
+                break turn_id.clone();
+            }
         }
-    };
+    })
+    .await
+    .expect("shell command should be running before interruption");
     app.thread_event_channels.insert(
         thread_id,
         ThreadEventChannel::new_with_session(
