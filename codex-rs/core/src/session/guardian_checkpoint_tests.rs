@@ -87,10 +87,14 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
     session
         .replace_history(Vec::new(), /*reference_context_item*/ None)
         .await;
-    session
-        .record_initial_history(InitialHistory::Forked(items))
+    // Replay into a fresh session so preserved live state cannot mask missing checkpoint data.
+    let (mut fork, _) = make_session_and_context().await;
+    fork.guardian_context_mode = mode;
+    fork.state.lock().await.history =
+        ContextManager::with_guardian_context_mode(mode, &SessionSource::default());
+    fork.record_initial_history(InitialHistory::Forked(items))
         .await;
-    let restored = session.clone_history().await;
+    let restored = fork.clone_history().await;
     assert_eq!(restored.annotated_items(), expected.annotated_items());
     assert_eq!(restored.retained_context(), expected.retained_context());
     assert_eq!(
