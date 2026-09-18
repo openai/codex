@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 BUNDLE_ID = "com.openai.codex.cli"
+# Existing login-keychain ACLs identify the CLI by its code-signing identifier.
+# Keep this stable independently of the bundle and provisioned App ID.
+CODE_SIGNING_ID = "codex"
 APP = Path("CodexCLI.app")
 EXECUTABLE = APP / "Contents/MacOS/codex"
 SIGNING = Path(__file__).resolve().parent
@@ -156,6 +159,13 @@ def prepare(package, reports, configuration: ProfileConfiguration):
 def verify(package, reports, expected_target, configuration: ProfileConfiguration):
     """Check profile and certificate pins; the signing driver verifies code."""
     load_profile(configuration)
+    info = plistlib.loads((package / APP / "Contents/Info.plist").read_bytes())
+    if (
+        info.get("CFBundleIdentifier") != BUNDLE_ID
+        or info.get("CFBundleExecutable") != EXECUTABLE.name
+        or info.get("CFBundlePackageType") != "APPL"
+    ):
+        raise ValueError("Unexpected provisioned CLI bundle identity or executable")
     if (
         package / APP / "Contents/embedded.provisionprofile"
     ).read_bytes() != configuration.profile.read_bytes():

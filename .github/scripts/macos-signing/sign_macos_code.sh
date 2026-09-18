@@ -227,8 +227,7 @@ sign_with_rcodesign() {
     rcodesign_args+=(--binary-identifier "$identifier")
   fi
 
-  rcodesign_args+=("$target")
-  rcodesign "${rcodesign_args[@]}"
+  rcodesign "${rcodesign_args[@]}" "$target"
 }
 
 case "${OAI_CODESIGN_BACKEND:-codesign}" in

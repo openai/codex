@@ -41,7 +41,7 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
         if provisioned and relative == "bin/codex":
             binary = package / bundle.EXECUTABLE
             target = package / bundle.APP
-            identifier = bundle.BUNDLE_ID
+            identifier = bundle.CODE_SIGNING_ID
             entitlements = reports / "codex-provisioned-entitlements.plist"
         if args.operation == "sign":
             command = [
@@ -95,6 +95,18 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
                 ["lipo", str(binary), "-verify_arch", architectures[target_triple]],
                 check=True,
             )
+            # Preserve the CLI's existing login-keychain identity while checking
+            # its bundle/App ID and provisioning independently in bundle.verify.
+            requirement = (
+                "=anchor apple generic"
+                " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+                " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+            )
+            if provisioned and relative == "bin/codex":
+                requirement += (
+                    f' and identifier "{bundle.CODE_SIGNING_ID}"'
+                    f' and certificate leaf[subject.OU] = "{configuration.team_id}"'
+                )
             subprocess.run(
                 [
                     "codesign",
@@ -102,12 +114,7 @@ def main(configuration: bundle.ProfileConfiguration | None = None):
                     "--strict",
                     "--verbose=2",
                     "--test-requirement",
-                    # Require Apple's Developer ID Application certificate chain.
-                    (
-                        "=anchor apple generic"
-                        " and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
-                        " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
-                    ),
+                    requirement,
                     str(target),
                 ],
                 check=True,
