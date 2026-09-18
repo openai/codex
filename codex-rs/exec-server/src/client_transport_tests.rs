@@ -239,6 +239,7 @@ async fn deferred_initialize_timeout_reports_configured_budget() {
         },
         /*reconnect_strategy*/ None,
         NoiseInitializeContext {
+            executor_registration_id: "registration".to_string(),
             span: tracing::info_span!("codex.exec_server.request"),
             timeout_for_error: configured_timeout,
         },
@@ -451,6 +452,29 @@ async fn initial_noise_connection_does_not_retry_permanent_registry_errors() -> 
             sequence.assert_requested_identity(&identity, 1 + usize::from(initial_offline));
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn noise_session_resume_rejects_a_changed_noise_key_before_connecting() -> Result<()> {
+    let sequence = Arc::new(SequenceNoiseConnectProvider::default());
+    let bundle = test_bundle("ws://must-not-connect.invalid".to_string())?;
+    let executor_public_key = NoiseChannelIdentity::generate()?.public_key();
+    sequence.push_response(futures::future::ready(Ok(bundle)));
+    let strategy = ExecServerReconnectStrategy::NoiseRendezvous {
+        executor_public_key,
+        provider: sequence,
+        identity: NoiseChannelIdentity::generate()?,
+        client_name: "test".to_string(),
+        connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
+        initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
+        http_client_factory: codex_http_client::HttpClientFactory::new(
+            codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+        ),
+    };
+    assert!(
+        matches!(strategy.resume("session").await, Err(ExecServerError::Protocol(message)) if message == "executor key changed during session recovery")
+    );
     Ok(())
 }
 

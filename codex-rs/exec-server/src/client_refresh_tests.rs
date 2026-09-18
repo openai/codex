@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use tokio::net::TcpListener;
@@ -15,6 +16,9 @@ use super::*;
 use crate::ExecServerRuntimePaths;
 use crate::NoiseChannelIdentity;
 use crate::ProcessId;
+use crate::noise_relay::stream_handler::NoiseOutboundMessage;
+use crate::noise_relay::stream_handler::NoiseStreamConnection;
+use crate::noise_relay::stream_handler::NoiseStreamHandler;
 use crate::relay::HarnessKeyValidator;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
@@ -100,24 +104,74 @@ impl HarnessKeyValidator for Validator {
     }
 }
 
+#[derive(Clone)]
+struct NotifyingProcessor {
+    processor: ConnectionProcessor,
+    detached: Arc<Notify>,
+}
+
+impl NoiseStreamHandler for NotifyingProcessor {
+    type Incoming = <ConnectionProcessor as NoiseStreamHandler>::Incoming;
+    type Outgoing = <ConnectionProcessor as NoiseStreamHandler>::Outgoing;
+
+    fn decode(payload: Bytes) -> Result<Self::Incoming, ExecServerError> {
+        ConnectionProcessor::decode(payload)
+    }
+
+    fn encode(message: Self::Outgoing) -> Result<NoiseOutboundMessage, ExecServerError> {
+        ConnectionProcessor::encode(message)
+    }
+
+    async fn run_connection(
+        self,
+        connection: NoiseStreamConnection<Self::Incoming, Self::Outgoing>,
+    ) {
+        NoiseStreamHandler::run_connection(self.processor, connection).await;
+        // Connection cleanup has detached the session before recovery can resume it.
+        self.detached.notify_one();
+    }
+}
+
 struct Executor {
     target: Target,
+    processor: ConnectionProcessor,
+    detached: Arc<Notify>,
     _server: AbortOnDropHandle<()>,
 }
 
 impl Executor {
     async fn start(validator: Validator) -> Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let target = Target {
-            url: format!("ws://{}", listener.local_addr()?),
-            identity: NoiseChannelIdentity::generate()?,
-            registration: uuid::Uuid::new_v4().to_string(),
-        };
-        let executor = target.clone();
+        Self::start_with_identity(validator, NoiseChannelIdentity::generate()?).await
+    }
+
+    async fn start_with_identity(
+        validator: Validator,
+        identity: NoiseChannelIdentity,
+    ) -> Result<Self> {
         let processor = ConnectionProcessor::new(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
             /*codex_linux_sandbox_exe*/ None,
         )?);
+        Self::start_with_processor(validator, identity, processor).await
+    }
+
+    async fn start_with_processor(
+        validator: Validator,
+        identity: NoiseChannelIdentity,
+        processor: ConnectionProcessor,
+    ) -> Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let target = Target {
+            url: format!("ws://{}", listener.local_addr()?),
+            identity,
+            registration: uuid::Uuid::new_v4().to_string(),
+        };
+        let executor = target.clone();
+        let detached = Arc::new(Notify::new());
+        let server_processor = NotifyingProcessor {
+            processor: processor.clone(),
+            detached: Arc::clone(&detached),
+        };
         let server = tokio::spawn(async move {
             let mut connections = JoinSet::new();
             loop {
@@ -125,7 +179,7 @@ impl Executor {
                     socket = listener.accept() => {
                         let (socket, _) = socket.unwrap();
                         let executor = executor.clone();
-                        let processor = processor.clone();
+                        let processor = server_processor.clone();
                         let validator = validator.clone();
                         connections.spawn(async move {
                             let socket = tokio_tungstenite::accept_async(socket).await.unwrap();
@@ -138,6 +192,8 @@ impl Executor {
         });
         Ok(Self {
             target,
+            processor,
+            detached,
             _server: AbortOnDropHandle::new(server),
         })
     }
@@ -225,17 +281,223 @@ async fn refresh_retires_a_still_connected_old_executor() -> Result<()> {
 }
 
 #[tokio::test]
-async fn refresh_preserves_a_current_session_across_registration_renewal() -> Result<()> {
+async fn refresh_preserves_a_current_registration() -> Result<()> {
     let _clock = freeze_clock();
     let executor = Executor::start(Validator::default()).await?;
-    let (client, registry) = executor.client()?;
+    let (client, _registry) = executor.client()?;
     let original = client.get().await?;
-    registry.target.lock().unwrap().registration = "renewed-registration".to_owned();
     let concurrent = client.clone();
     let concurrent = tokio::spawn(async move { concurrent.refresh_connection().await });
     client.refresh_connection().await?;
     concurrent.await??;
     assert!(Arc::ptr_eq(&original.inner, &client.get().await?.inner));
+    original.environment_status().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_snapshot_changes_only_after_same_key_replacement_is_installed() -> Result<()>
+{
+    let _clock = freeze_clock();
+    let old = Executor::start(Validator::default()).await?;
+    let validator = Validator {
+        handshake: Some(Arc::new(Notify::new())),
+        ..Default::default()
+    };
+    let new = Executor::start_with_identity(validator.clone(), old.target.identity.clone()).await?;
+    let (client, registry) = old.client()?;
+    let environment =
+        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    assert_eq!(environment.cached_executor_registration_id(), None);
+    let original = client.get().await?;
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(old.target.registration.clone())
+    );
+    *registry.target.lock().unwrap() = new.target.clone();
+    let refreshing = environment.clone();
+    let refresh = tokio::spawn(async move { refreshing.refresh_connection().await });
+    validator.started.notified().await;
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(old.target.registration.clone())
+    );
+    validator.handshake.as_ref().unwrap().notify_one();
+    refresh.await??;
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(new.target.registration.clone())
+    );
+    assert_ne!(original.session_id(), client.get().await?.session_id());
+    assert!(original.is_disconnected());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn registration_renewal_recovers_the_session_and_running_process() -> Result<()> {
+    let _clock = freeze_clock();
+    let old = Executor::start(Validator::default()).await?;
+    let validator = Validator {
+        handshake: Some(Arc::new(Notify::new())),
+        ..Default::default()
+    };
+    let renewed = Executor::start_with_processor(
+        validator.clone(),
+        old.target.identity.clone(),
+        old.processor.clone(),
+    )
+    .await?;
+    let (client, registry) = old.client()?;
+    let environment =
+        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let original = client.get().await?;
+    let session_id = original.session_id();
+    let process =
+        original
+            .start_process(
+                crate::protocol::ExecParams {
+                    metadata: Default::default(),
+                    process_id: ProcessId::from("renewed-process"),
+                    argv: vec![
+                        "/bin/sh".to_owned(),
+                        "-c".to_owned(),
+                        "IFS= read line; printf 'from-stdin:%s\\n' \"$line\"".to_owned(),
+                    ],
+                    cwd: codex_utils_path_uri::PathUri::from_host_native_path(
+                        std::env::current_dir()?,
+                    )?,
+                    shell_snapshot: None,
+                    env_policy: None,
+                    env: Default::default(),
+                    tty: false,
+                    pipe_stdin: true,
+                    arg0: None,
+                    sandbox: None,
+                    enforce_managed_network: false,
+                    managed_network: None,
+                    network_proxy: None,
+                },
+                /*network_policy_decider*/ None,
+            )
+            .await?;
+    let mut events = process.subscribe_events();
+    *registry.target.lock().unwrap() = renewed.target.clone();
+    disconnect(&original).await;
+    validator.started.notified().await;
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(old.target.registration.clone())
+    );
+    old.detached.notified().await;
+    validator.handshake.as_ref().unwrap().notify_one();
+    original.inner.rpc_client().await?;
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(renewed.target.registration.clone())
+    );
+    let recovered = client.get().await?;
+    assert!(Arc::ptr_eq(&original.inner, &recovered.inner));
+    assert_eq!(recovered.session_id(), session_id);
+    assert_eq!(
+        process.write(b"after-renewal\n".to_vec()).await?.status,
+        crate::protocol::WriteStatus::Accepted
+    );
+    let mut output = Vec::new();
+    let mut exit_code = None;
+    loop {
+        match events.recv().await? {
+            crate::process::ExecProcessEvent::Output(chunk) => {
+                output.extend_from_slice(&chunk.chunk.into_inner());
+            }
+            crate::process::ExecProcessEvent::Exited {
+                exit_code: code, ..
+            } => {
+                exit_code = Some(code);
+            }
+            crate::process::ExecProcessEvent::Closed { .. } => break,
+            crate::process::ExecProcessEvent::Failed(message) => {
+                anyhow::bail!("process failed after registration renewal: {message}");
+            }
+        }
+    }
+    assert_eq!(
+        (String::from_utf8(output)?, exit_code),
+        ("from-stdin:after-renewal\n".to_owned(), Some(0))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn same_key_replacement_cannot_resume_a_missing_session() -> Result<()> {
+    let _clock = freeze_clock();
+    let old = Executor::start(Validator::default()).await?;
+    let replacement =
+        Executor::start_with_identity(Validator::default(), old.target.identity.clone()).await?;
+    let (client, registry) = old.client()?;
+    let environment =
+        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let original = client.get().await?;
+    let process = original
+        .register_session(&ProcessId::from("old-process"))
+        .await?;
+    *registry.target.lock().unwrap() = replacement.target.clone();
+    disconnect(&original).await;
+    assert!(matches!(
+        original.inner.rpc_client().await,
+        Err(ExecServerError::Disconnected(_))
+    ));
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(old.target.registration.clone())
+    );
+    assert!(matches!(
+        process.write(b"never replay".to_vec()).await,
+        Err(ExecServerError::Disconnected(_))
+    ));
+    assert!(matches!(
+        original.environment_status().await,
+        Err(ExecServerError::Disconnected(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_refresh_lookup_does_not_retire_a_renewed_session() -> Result<()> {
+    let _clock = freeze_clock();
+    let old = Executor::start(Validator::default()).await?;
+    let renewed = Executor::start_with_processor(
+        Validator::default(),
+        old.target.identity.clone(),
+        old.processor.clone(),
+    )
+    .await?;
+    let (client, registry) = old.client()?;
+    let environment =
+        crate::Environment::remote_with_client(client.clone(), /*local_runtime_paths*/ None);
+    let original = client.get().await?;
+    let release = registry.block_next_lookup();
+    let refreshing = client.refresh_connection();
+    tokio::pin!(refreshing);
+    assert!(futures::poll!(refreshing.as_mut()).is_pending());
+    *registry.target.lock().unwrap() = renewed.target.clone();
+    let recovery = registry.block_next_lookup();
+    disconnect(&original).await;
+    old.detached.notified().await;
+    recovery.send(()).unwrap();
+    original.inner.rpc_client().await?;
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(renewed.target.registration.clone())
+    );
+    release.send(()).unwrap();
+    refreshing.await?;
+    assert!(Arc::ptr_eq(&original.inner, &client.get().await?.inner));
+    assert!(!original.inner.retired.is_cancelled());
+    assert_eq!(
+        environment.cached_executor_registration_id(),
+        Some(renewed.target.registration.clone())
+    );
     original.environment_status().await?;
     Ok(())
 }

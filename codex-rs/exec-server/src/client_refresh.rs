@@ -85,6 +85,9 @@ impl LazyRemoteExecServerClient {
         let _refresh = self.refresh_lock.lock().await;
         let (previous, attempt) = loop {
             let observed = self.cached_client();
+            let observed_registration = observed
+                .as_ref()
+                .and_then(ExecServerClient::executor_registration_id);
             let mut transport = self.transport_params.clone().ok_or_else(|| {
                 ExecServerError::Protocol(
                     "connection refresh requires a Noise registry".to_string(),
@@ -111,6 +114,7 @@ impl LazyRemoteExecServerClient {
                 )
             })??;
             let executor_public_key = bundle.executor_public_key.clone();
+            let executor_registration_id = bundle.executor_registration_id.clone();
             *provider = Arc::new(PrefetchedConnectProvider {
                 bundle: StdMutex::new(Some(bundle)),
                 provider: Arc::clone(provider),
@@ -124,8 +128,8 @@ impl LazyRemoteExecServerClient {
                 .current_client
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // An ordinary connection may have finished during the lookup. Re-read the
-            // registry rather than retire a newer client using a superseded response.
+            // A new client makes the lookup stale. Recovery can also renew the
+            // registration on the same client, so compare it under the connection lock.
             if !match (&observed, &*current) {
                 (Some(observed), Some(current)) => Arc::ptr_eq(&observed.inner, &current.inner),
                 (None, None) => true,
@@ -133,18 +137,31 @@ impl LazyRemoteExecServerClient {
             } {
                 continue;
             }
-            // is_disconnected means terminally failed, not temporarily recovering.
-            // Preserve same-executor recovery; the final probe fails fast if still recovering.
-            if current.as_ref().is_some_and(|client| {
-                !client.is_disconnected()
+            if let Some(client) = current.as_ref() {
+                let connection = client
+                    .inner
+                    .connection
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if connection.executor_registration_id != observed_registration {
+                    continue;
+                }
+                // Preserve same-executor recovery; the final probe fails fast if still recovering.
+                if !matches!(connection.status, ConnectionStatus::Failed(_))
+                    && connection.executor_registration_id.as_ref()
+                        == Some(&executor_registration_id)
                     && matches!(
                         client.inner.reconnect_strategy.as_ref(),
                         Some(ExecServerReconnectStrategy::NoiseRendezvous {
                             executor_public_key: key, ..
                         }) if key == &executor_public_key
                     )
-            }) {
-                break (current.clone(), None);
+                {
+                    break (current.clone(), None);
+                }
+                // Claim retirement before recovery can install another registration.
+                // Transport shutdown and pending-work cleanup happen outside these locks.
+                client.inner.retired.cancel();
             }
             // Cancellation and connection installation use the same lock. A late
             // handshake cannot install a client after its attempt has been superseded.

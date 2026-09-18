@@ -907,6 +907,7 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
     let test = builder.build(&server).await?;
     let initial_cwd = test.config.cwd.clone();
     let initial_environments = test.codex.environment_selections().await;
+    assert_eq!(test.codex.active_turn_environment_selections().await, None);
     let next_workspace = TempDir::new()?;
     let next_cwd = next_workspace.path().abs();
     let next_environments =
@@ -923,6 +924,11 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
         _ => None,
     })
     .await;
+
+    assert_eq!(
+        test.codex.active_turn_environment_selections().await,
+        Some(initial_environments.clone())
+    );
 
     let preview = test
         .codex
@@ -954,6 +960,10 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
         test.codex.environment_selections().await,
         next_environments.environments
     );
+    assert_eq!(
+        test.codex.active_turn_environment_selections().await,
+        Some(initial_environments)
+    );
     let snapshot = test.codex.config_snapshot().await;
     assert_eq!(
         snapshot.environment_selections(),
@@ -978,6 +988,7 @@ async fn settings_update_does_not_retarget_active_turn_environment() -> Result<(
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    assert_eq!(test.codex.active_turn_environment_selections().await, None);
     test.submit_turn("start the next turn").await?;
 
     let request_texts = response_mock
@@ -1105,6 +1116,19 @@ async fn deferred_executor_promotes_primary_environment_when_startup_completes()
     })
     .await;
 
+    let active_environments = test
+        .codex
+        .active_turn_environment_selections()
+        .await
+        .context("active turn environments")?;
+    assert_eq!(
+        active_environments
+            .iter()
+            .map(|selection| selection.environment_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![REMOTE_ENVIRONMENT_ID, "local"]
+    );
+
     let requests = response_mock.requests();
     let initial_context = requests[1]
         .message_input_texts("user")
@@ -1164,6 +1188,10 @@ async fn deferred_executor_promotes_primary_environment_when_startup_completes()
         }
     });
     core_test_support::wait_for_mcp_server(&test.codex, "deferred").await?;
+    assert_eq!(
+        test.codex.active_turn_environment_selections().await,
+        Some(active_environments)
+    );
     test.codex
         .submit(Op::UserInputAnswer {
             id: request.turn_id,
@@ -1181,6 +1209,8 @@ async fn deferred_executor_promotes_primary_environment_when_startup_completes()
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+
+    assert_eq!(test.codex.active_turn_environment_selections().await, None);
 
     let requests = response_mock.requests();
     assert!(
