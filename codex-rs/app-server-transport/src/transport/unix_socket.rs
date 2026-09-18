@@ -15,10 +15,13 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
-use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::accept_hdr_async_with_config;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::Response as HandshakeResponse;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::Response;
 use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
@@ -26,6 +29,10 @@ use tracing::warn;
 
 #[cfg(unix)]
 const CONTROL_SOCKET_MODE: u32 = 0o600;
+// Advertise the effective incoming cap for single-frame messages so clients can
+// reject oversized requests before the socket closes.
+const MAX_UNFRAGMENTED_MESSAGE_BYTES_HEADER: &str =
+    "x-codex-websocket-max-unfragmented-message-bytes";
 
 #[derive(Clone, Copy)]
 pub enum DaemonShutdownAccess {
@@ -150,9 +157,18 @@ async fn run_control_socket_acceptor(
         let transport_event_tx = transport_event_tx.clone();
         tokio::spawn(async move {
             let mut shutdown_request = false;
-            let websocket_stream = match accept_hdr_async(
+            let websocket_config = WebSocketConfig::default();
+            let max_unfragmented_message_bytes = [
+                websocket_config.max_frame_size,
+                websocket_config.max_message_size,
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let websocket_stream = match accept_hdr_async_with_config(
                 stream,
-                |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                 mut response: HandshakeResponse| {
                     if request.uri().path() == "/daemon/shutdown" {
                         if !matches!(daemon_shutdown_access, DaemonShutdownAccess::Managed) {
                             let mut rejection = Response::new(Some("unmanaged server".to_string()));
@@ -161,8 +177,15 @@ async fn run_control_socket_acceptor(
                         }
                         shutdown_request = true;
                     }
+                    if let Some(max_bytes) = max_unfragmented_message_bytes {
+                        response.headers_mut().insert(
+                            MAX_UNFRAGMENTED_MESSAGE_BYTES_HEADER,
+                            HeaderValue::from(max_bytes),
+                        );
+                    }
                     Ok(response)
                 },
+                Some(websocket_config),
             )
             .await
             {

@@ -21,6 +21,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::client_async;
 use tokio_tungstenite::tungstenite::Bytes;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_util::sync::CancellationToken;
 
 #[test]
@@ -77,6 +78,26 @@ async fn control_socket_acceptor_upgrades_and_forwards_websocket_text_messages_a
         .await
         .expect("websocket upgrade should complete");
     assert_eq!(response.status().as_u16(), 101);
+    let advertised_max = response
+        .headers()
+        .get("x-codex-websocket-max-unfragmented-message-bytes")
+        .expect("byte cap header should be advertised")
+        .to_str()
+        .expect("byte cap header should be ASCII")
+        .parse::<usize>()
+        .expect("byte cap header should be a number");
+    let websocket_config = WebSocketConfig::default();
+    assert_eq!(
+        advertised_max,
+        [
+            websocket_config.max_frame_size,
+            websocket_config.max_message_size,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .expect("default websocket config should have an incoming size limit")
+    );
 
     let opened = timeout(Duration::from_secs(1), transport_event_rx.recv())
         .await
