@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_config::McpServerConfig;
+use codex_file_system::ExecutorFileSystem;
 use codex_mcp::McpServerSource;
 use codex_mcp::PreparedMcpCall;
 use codex_mcp::ResolvedMcpServer;
@@ -142,6 +143,31 @@ pub struct ToolStartInput<'a> {
     pub conversation_history: Arc<dyn ConversationHistorySnapshot>,
     /// Source that issued the tool call.
     pub source: ToolCallSource,
+}
+
+/// Finalized builtin command and the executor that will run it.
+///
+/// This runs after command hooks and environment resolution, before command
+/// attribution and measurement selection. Filesystem paths belong to the selected
+/// executor and must not be interpreted as host-local paths.
+pub struct CommandStartInput<'a> {
+    /// Store scoped to the host session runtime.
+    pub session_store: &'a ExtensionData,
+    /// Store scoped to this thread runtime.
+    pub thread_store: &'a ExtensionData,
+    /// Store scoped to this turn runtime.
+    pub turn_store: &'a ExtensionData,
+    /// Current turn submission id.
+    pub turn_id: &'a str,
+    /// Host tool call id.
+    pub call_id: &'a str,
+    /// Resolved argv, including the selected executor's shell wrapper.
+    /// Commands can contain sensitive plaintext and must not be logged.
+    pub command: &'a [String],
+    /// Effective working directory in the selected executor.
+    pub cwd: &'a PathUri,
+    /// Filesystem of the selected executor.
+    pub file_system: &'a dyn ExecutorFileSystem,
 }
 
 /// Input supplied after an MCP server responds, before the host reports completion.

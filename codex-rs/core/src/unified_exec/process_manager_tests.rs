@@ -47,6 +47,16 @@ async fn deterministic_process_ids_are_not_reused_after_release() {
     assert_eq!((first, second), (1000, 1001));
 }
 
+#[tokio::test]
+async fn deterministic_process_ids_are_not_reused_after_removal() {
+    let manager = UnifiedExecProcessManager::default();
+    let first = manager.allocate_process_id().await;
+    let _removed = manager.process_store.lock().await.remove(first);
+    let second = manager.allocate_process_id().await;
+
+    assert_eq!((first, second), (1000, 1001));
+}
+
 #[test]
 fn env_overlay_for_exec_server_keeps_runtime_changes_only() {
     let local_policy_env = HashMap::from([
