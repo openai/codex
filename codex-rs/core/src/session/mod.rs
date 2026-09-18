@@ -2291,6 +2291,14 @@ impl Session {
             .get::<GuardianReviewSessionManager>()
     }
 
+    pub(crate) async fn is_private_guardian_reviewer(&self) -> bool {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .trusted_guardian_reviewer
+    }
+
     pub(crate) async fn emit_turn_started(&self, turn_context: &TurnContext) {
         let event = TurnStartedEvent {
             turn_id: turn_context.sub_id.clone(),
@@ -2609,6 +2617,9 @@ impl Session {
     }
 
     async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
+        let flush_guardian_completion = persist
+            && matches!(event.msg, EventMsg::TurnComplete(_))
+            && self.is_private_guardian_reviewer().await;
         // Keep realtime reduction, canonical append, and delivery in the same order.
         // This lock must not acquire SessionState or ActiveTurn: event producers can
         // already hold those locks. Host presentation policies are synchronous.
@@ -2647,6 +2658,11 @@ impl Session {
             && let Err(error) = self.send_realtime_history_effects(&event.id, effects).await
         {
             warn!("failed to persist realtime history: {error}");
+        }
+        // Save the completed review and its terminal event together before the parent sees
+        // the decision. Turn completion skips its separate before/after barriers for this case.
+        if flush_guardian_completion && let Err(err) = self.flush_rollout().await {
+            warn!("failed to flush completed Guardian review: {err}");
         }
         self.deliver_event_raw(event).await;
     }

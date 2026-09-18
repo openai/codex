@@ -369,7 +369,13 @@ impl Session {
                     .instrument(trace_span!("session_task.run"))
                     .await;
                 let sess = Arc::clone(&session);
-                if let Err(err) = sess.flush_rollout().await {
+                // Private reviewers save their transcript together with the terminal event.
+                // Errors and cancellation retain their existing save path.
+                if (!sess.is_private_guardian_reviewer().await
+                    || task_cancellation_token.is_cancelled()
+                    || task_result.is_err())
+                    && let Err(err) = sess.flush_rollout().await
+                {
                     warn!("failed to flush rollout before completing turn: {err}");
                     sess.send_event(
                         ctx_for_finish.as_ref(),
@@ -824,7 +830,11 @@ impl Session {
                 time_to_first_token_ms,
             })
         };
-        self.send_event(turn_context.as_ref(), event).await;
+        let saved_guardian_completion =
+            matches!(event, EventMsg::TurnComplete(_)) && self.is_private_guardian_reviewer().await;
+        if !saved_guardian_completion {
+            self.send_event(turn_context.as_ref(), event.clone()).await;
+        }
 
         let cleared_active_turn = {
             let mut active = self.active_turn.lock().await;
@@ -838,12 +848,16 @@ impl Session {
                 false
             }
         };
+        if saved_guardian_completion {
+            // The parent can request another review as soon as it receives this event.
+            self.send_event(turn_context.as_ref(), event).await;
+        }
         if cleared_active_turn {
             self.emit_thread_idle_lifecycle_if_idle(idle_cause).await;
         }
-        // Regular items were flushed before this terminal event was appended; buffering
-        // thread writers may not flush it without another explicit barrier.
-        if let Err(err) = self.flush_rollout().await {
+        // Private reviewers already flushed the terminal event before delivering it.
+        // Other buffering writers still need a barrier for the terminal event.
+        if !saved_guardian_completion && let Err(err) = self.flush_rollout().await {
             warn!("failed to flush rollout after emitting terminal turn event: {err}");
         }
         if cleared_active_turn {

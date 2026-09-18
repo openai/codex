@@ -85,6 +85,9 @@ mod gateway_auth;
 mod guardian_context_budget;
 mod guardian_history;
 mod guardian_mcp_elicitation;
+#[cfg(not(target_os = "windows"))]
+#[path = "guardian_persistence_tests.rs"]
+mod guardian_persistence;
 mod guardian_retained_context;
 mod guardian_retry;
 #[cfg(not(target_os = "windows"))]
