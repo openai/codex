@@ -1697,10 +1697,6 @@ async fn unattributed_network_request_uses_active_turn_environment_fallback(
                         .clone(),
                     windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
                     windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-                    windows_sandbox_private_desktop: test
-                        .config
-                        .permissions
-                        .windows_sandbox_private_desktop,
                     use_legacy_landlock: test.config.features.use_legacy_landlock(),
                     exec_policy: None,
                     mcp_policy: None,
