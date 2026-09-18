@@ -115,13 +115,6 @@ impl TerminalPermissions {
         baseline: &PermissionProfile,
     ) -> Result<SandboxPermissions, &'static str> {
         let bypassed = self.launch_permissions.requires_escalated_permissions();
-        if current.environment_network.is_some()
-            && (bypassed || self.policy.environment_network != current.environment_network)
-        {
-            return Err(
-                "this terminal cannot enforce the current environment-owned network restrictions; start a new terminal",
-            );
-        }
         // Approval cannot retrofit denied reads onto a running process. Unless
         // its sandbox still matches, start a new terminal under the current policy.
         if baseline

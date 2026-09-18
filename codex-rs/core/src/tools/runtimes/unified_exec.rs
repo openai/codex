@@ -229,9 +229,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
             req.sandbox_permissions,
             &file_system_sandbox_policy,
         );
-        let network =
-            managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)
-                .cloned();
+        // Explicit full escalation bypasses controller and attachment-owned network proxies.
+        // Denied-read restrictions above can still require a sandboxed launch.
+        if sandbox_permissions.requires_escalated_permissions() {
+            return None;
+        }
+        let network = req.network.clone();
         // No-proxy fast path; owners still need a spec for execution-only proxies.
         if network.is_none() && req.turn_environment.config().network_policy.is_none() {
             return None;

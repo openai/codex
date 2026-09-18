@@ -96,7 +96,7 @@ fn denied_reads_reject_file_system_changes_but_only_review_network_changes() {
 }
 
 #[tokio::test]
-async fn captured_network_changes_require_review_or_a_new_terminal() -> anyhow::Result<()> {
+async fn captured_network_changes_require_review() -> anyhow::Result<()> {
     let (_session, mut turn) = make_session_and_context().await;
     let mut environment = turn.environments.primary().expect("environment").clone();
     environment.config_mut().permission_profile =
@@ -151,9 +151,7 @@ async fn captured_network_changes_require_review_or_a_new_terminal() -> anyhow::
     );
     assert_eq!(
         permissions.review_requirement(&current, environment.permission_profile()),
-        Err(
-            "this terminal cannot enforce the current environment-owned network restrictions; start a new terminal"
-        )
+        Ok(SandboxPermissions::RequireEscalated)
     );
     Ok(())
 }

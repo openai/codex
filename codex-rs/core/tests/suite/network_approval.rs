@@ -17,6 +17,8 @@ use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
+use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -31,6 +33,10 @@ use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -2398,19 +2404,25 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
         let mut remote = test.executor_environment().selection().clone();
 
         for (suffix, allowed_domain, expected) in [
+            (
+                "ESCALATION_DENIED",
+                NETWORK_TEST_HOST,
+                "test escalation denied",
+            ),
+            ("ESCALATED", NETWORK_TEST_HOST, "OWNER_ESCALATED:unproxied"),
+            ("ESCALATED_DENY_READ", "owner-only.invalid", "HTTP/1.1 403"),
             ("ALLOWED", NETWORK_TEST_HOST, "HTTP/1.1 502"),
             ("DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             ("REVIEWED", "owner-only.invalid", "HTTP/1.1 502"),
-            (
-                "ESCALATED",
-                NETWORK_TEST_HOST,
-                "attachment-owned network policy cannot be bypassed",
-            ),
             ("OFFLINE", "owner-only.invalid", "ROOTLESS_OWNER_OFFLINE"),
             ("GRANTED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
         ] {
+            let escalated = matches!(
+                suffix,
+                "ESCALATED" | "ESCALATION_DENIED" | "ESCALATED_DENY_READ"
+            );
             let restricted = matches!(suffix, "OFFLINE" | "GRANTED_DENIED");
-            if scenario != "ROOTLESS" && (restricted || suffix == "ESCALATED") {
+            if scenario != "ROOTLESS" && restricted {
                 continue;
             }
             let marker = format!("{scenario}_OWNER_{suffix}");
@@ -2419,14 +2431,35 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 ..NetworkProxyConfig::default()
             };
             proxy_config.set_allowed_domains(vec![allowed_domain.to_string()]);
+            let mut permission_profile = if restricted {
+                PermissionProfile::workspace_write()
+            } else {
+                test.config.permissions.permission_profile().clone()
+            };
+            const SECRET: &str = "owner-escalation-secret";
+            if suffix == "ESCALATED_DENY_READ" {
+                test.fs()
+                    .write_file(
+                        &remote.cwd.join("secret.env")?,
+                        SECRET.as_bytes().to_vec(),
+                        Default::default(),
+                        /*sandbox*/ None,
+                    )
+                    .await?;
+                let (mut filesystem, network) = permission_profile.to_runtime_permissions();
+                filesystem.entries.push(FileSystemSandboxEntry::new(
+                    FileSystemPath::GlobPattern {
+                        pattern: "**/secret.env".into(),
+                    },
+                    FileSystemAccessMode::Deny,
+                ));
+                permission_profile =
+                    PermissionProfile::from_runtime_permissions(&filesystem, network);
+            }
             let owner_config = EnvironmentConfig {
                 allow_login_shell: test.config.permissions.allow_login_shell,
                 workspace_roots: remote.workspace_roots.clone(),
-                permission_profile: PermissionProfileSnapshot::legacy(if restricted {
-                    PermissionProfile::workspace_write()
-                } else {
-                    test.config.permissions.permission_profile().clone()
-                }),
+                permission_profile: PermissionProfileSnapshot::legacy(permission_profile),
                 shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
                 windows_sandbox_type: test.config.permissions.windows_sandbox_type,
@@ -2457,14 +2490,31 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 format!(
                     "python3 -c \"import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.connect(('198.51.100.1', 9))\" 2>/dev/null || printf {marker}"
                 )
+            } else if suffix == "ESCALATED_DENY_READ" {
+                let read_probe = r#"python3 - <<'PYTHON'
+try:
+    with open('secret.env') as secret:
+        print(secret.read())
+except PermissionError:
+    print('READ_BLOCKED')
+PYTHON"#;
+                format!(
+                    "{read_probe}\n{}",
+                    remote_network_proxy_request_command(&marker)
+                )
+            } else if escalated {
+                // Direct sockets and an unproxied environment exercise the actual remote launch.
+                format!(
+                    "python3 -c \"import os,socket; assert '{PROXY_ACTIVE_ENV_KEY}' not in os.environ; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.connect(('198.51.100.1', 9)); print('{marker}:unproxied')\""
+                )
             } else {
                 remote_network_proxy_request_command(&marker)
             };
             let mut args = network_exec_args(&command);
             args["environment_id"] = json!(REMOTE_ENVIRONMENT_ID);
-            if suffix == "ESCALATED" {
+            if escalated {
                 args["sandbox_permissions"] = json!("require_escalated");
-                args["justification"] = json!("attempt to bypass the owner network policy");
+                args["justification"] = json!("exercise approved full sandbox escalation");
             } else if suffix == "GRANTED_DENIED" {
                 args["sandbox_permissions"] = json!("with_additional_permissions");
                 args["additional_permissions"] = json!({"network": {"enabled": true}});
@@ -2499,14 +2549,14 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 } else {
                     ApprovalsReviewer::User
                 },
-                if matches!(suffix, "REVIEWED" | "ESCALATED" | "GRANTED_DENIED") {
+                if escalated || matches!(suffix, "REVIEWED" | "GRANTED_DENIED") {
                     AskForApproval::OnRequest
                 } else {
                     AskForApproval::Never
                 },
             )
             .await?;
-            if suffix == "GRANTED_DENIED" {
+            if escalated || suffix == "GRANTED_DENIED" {
                 let event = wait_for_event(&test.codex, |event| {
                     matches!(
                         event,
@@ -2515,13 +2565,17 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 })
                 .await;
                 let EventMsg::ExecApprovalRequest(approval) = event else {
-                    anyhow::bail!("expected additional permissions approval before completion")
+                    anyhow::bail!("expected command approval before completion")
                 };
                 test.codex
                     .submit(Op::ExecApproval {
                         id: approval.effective_approval_id(),
                         turn_id: Some(approval.turn_id),
-                        decision: ReviewDecision::Approved,
+                        decision: if suffix == "ESCALATION_DENIED" {
+                            ReviewDecision::denied(expected)
+                        } else {
+                            ReviewDecision::Approved
+                        },
                     })
                     .await?;
             }
@@ -2539,9 +2593,145 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 output.contains(expected),
                 "unexpected network output for {marker}: {output}"
             );
+            if suffix == "ESCALATION_DENIED" {
+                assert!(!output.contains(":unproxied"));
+            } else if suffix == "ESCALATED_DENY_READ" {
+                assert!(output.contains("READ_BLOCKED"), "{output}");
+                assert!(!output.contains(SECRET), "{output}");
+            }
         }
     }
 
+    Ok(())
+}
+
+#[test_case(FileSystemSandboxPolicy::read_only(); "restricted_filesystem")]
+#[test_case(FileSystemSandboxPolicy::unrestricted(); "unrestricted_filesystem")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn escalated_owner_network_terminal_requires_stdin_approval(
+    filesystem: FileSystemSandboxPolicy,
+) -> Result<()> {
+    skip_if_target_windows!(Ok(()), "uses the POSIX/Python interactive fixture");
+    skip_if_host_windows!(Ok(()));
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_no_remote_env!(Ok(()));
+
+    let server = start_mock_server().await;
+    let profile =
+        PermissionProfile::from_runtime_permissions(&filesystem, NetworkSandboxPolicy::Enabled);
+    let test = test_codex()
+        .with_config(move |config| {
+            for feature in [Feature::UnifiedExec, Feature::WriteStdinApproval] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("enable test feature");
+            }
+            config.permissions.network = None;
+            config
+                .permissions
+                .set_permission_profile(profile)
+                .expect("set permission profile");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    assert!(test.session_configured.network_proxy.is_none());
+    let mut remote = test.executor_environment().selection().clone();
+    let mut proxy = NetworkProxyConfig::default();
+    proxy.set_allowed_domains(vec!["owner-only.invalid".to_string()]);
+    remote.config = EnvironmentConfigState::Ready(EnvironmentConfig {
+        allow_login_shell: test.config.permissions.allow_login_shell,
+        workspace_roots: remote.workspace_roots.clone(),
+        permission_profile: PermissionProfileSnapshot::legacy(
+            test.config.permissions.permission_profile().clone(),
+        ),
+        shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+        windows_sandbox_type: test.config.permissions.windows_sandbox_type,
+        windows_sandbox_private_desktop: test.config.permissions.windows_sandbox_private_desktop,
+        use_legacy_landlock: test.config.features.use_legacy_landlock(),
+        exec_policy: None,
+        mcp_policy: None,
+        network_policy: Some(EnvironmentNetworkPolicy::from_config(
+            &proxy, /*managed_allowed_domains_only*/ true,
+        )),
+        selected_capability_roots: Vec::new(),
+    });
+
+    let command = format!(
+        "python3 -c \"import os; assert '{PROXY_ACTIVE_ENV_KEY}' not in os.environ; print('INPUT:' + input())\""
+    );
+    let mut args = network_exec_args(&command);
+    args["environment_id"] = json!(REMOTE_ENVIRONMENT_ID);
+    args["tty"] = json!(true);
+    args["sandbox_permissions"] = json!("require_escalated");
+    args["justification"] = json!("exercise approved interactive escalation");
+    let launch_call = "owner-terminal-launch";
+    let stdin_call = "owner-terminal-stdin";
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(launch_call, "exec_command", &args.to_string()),
+                ev_completed("owner-terminal-started"),
+            ]),
+            sse(vec![
+                ev_function_call(
+                    stdin_call,
+                    "write_stdin",
+                    &json!({"session_id": 1000, "chars": "hello\n", "yield_time_ms": 1_000})
+                        .to_string(),
+                ),
+                ev_completed("owner-terminal-input"),
+            ]),
+            sse(vec![
+                ev_assistant_message("owner-terminal-done", "done"),
+                ev_completed("owner-terminal-done"),
+            ]),
+        ],
+    )
+    .await;
+    submit_managed_network_turn(
+        &test,
+        "launch a terminal and send input",
+        vec![remote],
+        ApprovalsReviewer::User,
+        AskForApproval::UnlessTrusted,
+    )
+    .await?;
+    let mut approvals = Vec::new();
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::ExecApprovalRequest(approval) => {
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: Some(approval.turn_id),
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+                approvals.push((approval.kind, approval.call_id, approval.approval_id));
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(
+        approvals,
+        vec![
+            (ExecApprovalKind::Command, launch_call.to_string(), None),
+            (
+                ExecApprovalKind::WriteStdin,
+                launch_call.to_string(),
+                Some(stdin_call.to_string()),
+            ),
+        ]
+    );
+    let output = responses
+        .function_call_output_text(stdin_call)
+        .context("expected terminal input output")?;
+    assert!(output.contains("INPUT:hello"), "{output}");
     Ok(())
 }
 
