@@ -1696,7 +1696,9 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 session_source: &SessionSource::Exec,
                 originator: &first_originator,
                 disabled_plugin_ids: &[],
-                environments: McpEnvironmentScope::Live(&first_session.services.turn_environments),
+                environments: McpEnvironmentScope::Selected(
+                    &first_session.services.turn_environments.selections(),
+                ),
             },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
@@ -1715,7 +1717,9 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 session_source: &second_session_source,
                 originator: &second_originator,
                 disabled_plugin_ids: &[],
-                environments: McpEnvironmentScope::Live(&second_session.services.turn_environments),
+                environments: McpEnvironmentScope::Selected(
+                    &second_session.services.turn_environments.selections(),
+                ),
             },
             /*ready_selected_capability_roots*/ &[],
             /*executor_capability_discovery*/ None,
@@ -1787,8 +1791,8 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     session_source: &SessionSource::Exec,
                     originator: &first_originator,
                     disabled_plugin_ids: &disabled_plugin_ids,
-                    environments: McpEnvironmentScope::Live(
-                        &first_session.services.turn_environments,
+                    environments: McpEnvironmentScope::Selected(
+                        &first_session.services.turn_environments.selections(),
                     ),
                 },
                 /*ready_selected_capability_roots*/ &[],

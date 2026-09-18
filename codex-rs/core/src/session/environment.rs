@@ -157,12 +157,10 @@ impl Session {
                     }
                 }
                 if environments != self.services.turn_environments.selections() {
-                    self.mark_mcp_runtime_dirty();
                     self.services.turn_environments.update_selections(
                         &environments,
                         &configuration.inferred_environment_config(),
                     );
-                    self.schedule_mcp_prewarm();
                 }
             }
             self.services.turn_environments.snapshot()

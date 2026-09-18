@@ -819,7 +819,9 @@ impl ThreadEnvironments {
             for environment in selected.iter() {
                 if let EnvironmentConfigState::Failed(error) = &environment.selection.config {
                     environments.push(TurnEnvironmentState::Failed {
-                        selection: environment.selection.clone(),
+                        selection: environment
+                            .config_origin
+                            .into_input_selection(environment.selection.clone()),
                         error: error.clone(),
                     });
                     continue;
@@ -858,6 +860,7 @@ pub(crate) enum TurnEnvironmentState {
     Starting(StartingTurnEnvironment),
     /// Unavailable for execution, but still selected when evaluating permissions.
     Failed {
+        // Keep the input form so connection failure doesn't hide whether config comes from the thread.
         selection: TurnEnvironmentSelection,
         error: String,
     },
@@ -874,7 +877,7 @@ impl TurnEnvironmentState {
                 if matches!(selection.config, EnvironmentConfigState::Pending) {
                     let Some(config) = environment.installed_config else {
                         return Self::Failed {
-                            selection,
+                            selection: starting.config_origin.into_input_selection(selection),
                             error: "Environment configuration was not supplied.".to_string(),
                         };
                     };
@@ -903,7 +906,9 @@ impl TurnEnvironmentState {
                     "skipping failed turn environment: {err}"
                 );
                 Self::Failed {
-                    selection: starting.selection,
+                    selection: starting
+                        .config_origin
+                        .into_input_selection(starting.selection),
                     error: err.to_string(),
                 }
             }
@@ -978,6 +983,17 @@ impl TurnEnvironmentSnapshot {
             };
             Some(environment)
         })
+    }
+
+    pub(crate) fn ready_environment_handles(&self) -> HashMap<String, Arc<Environment>> {
+        self.turn_environments()
+            .map(|environment| {
+                (
+                    environment.selection.environment_id.clone(),
+                    Arc::clone(&environment.environment),
+                )
+            })
+            .collect()
     }
 
     /// Maps each captured environment to its exact ready handle, or `None` when it was starting.
@@ -1055,6 +1071,20 @@ impl TurnEnvironmentSnapshot {
     pub(crate) fn to_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.turn_environments()
             .map(TurnEnvironment::selection)
+            .collect()
+    }
+
+    /// Returns every captured selection, including those still starting or unable to connect.
+    pub(crate) fn all_selections(&self) -> Vec<TurnEnvironmentSelection> {
+        self.environments
+            .iter()
+            .map(|environment| match environment {
+                TurnEnvironmentState::Ready(environment) => environment.selection(),
+                TurnEnvironmentState::Starting(environment) => environment
+                    .config_origin
+                    .into_input_selection(environment.selection.clone()),
+                TurnEnvironmentState::Failed { selection, .. } => selection.clone(),
+            })
             .collect()
     }
 
@@ -1640,6 +1670,10 @@ url = "ws://127.0.0.1:8765"
             vec![resolved_remote.clone()]
         );
         assert_eq!(starting.to_selections(), vec![local.clone()]);
+        assert_eq!(
+            starting.all_selections(),
+            vec![remote.clone(), local.clone()]
+        );
         assert!(starting.single_local_environment().is_none());
 
         let next_config = EnvironmentConfig {
@@ -1753,6 +1787,8 @@ url = "ws://127.0.0.1:8765"
         // Failed selections must not turn an empty executable snapshot into Full Access.
         for snapshot in [starting.refresh_readiness(), environments.snapshot().await] {
             assert!(!snapshot.has_full_access(AskForApproval::Never, &PermissionProfile::Disabled));
+            assert_eq!(snapshot.all_selections(), vec![selection.clone()]);
+            assert!(snapshot.ready_environment_handles().is_empty());
         }
         let selected_root = SelectedCapabilityRoot {
             id: "failed-root".to_string(),

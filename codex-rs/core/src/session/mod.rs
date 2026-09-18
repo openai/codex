@@ -3862,12 +3862,13 @@ impl Session {
         }
         let (mcp, prepared_recommendations) = async {
             tokio::join!(
-                self.mcp_runtime_for_step(
+                // MCP refresh can be large; keep it off the sampling request's stack.
+                Box::pin(self.mcp_runtime_for_step(
                     turn_context.as_ref(),
                     &selected_capability_roots,
                     required_servers,
                     required_plugins,
-                ),
+                )),
                 turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
             )
         }

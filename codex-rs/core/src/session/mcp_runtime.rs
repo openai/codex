@@ -11,13 +11,11 @@ use codex_config::McpServerDisabledReason;
 use codex_config::McpServerTransportConfig;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewerHandle;
-use codex_mcp::McpEnvironmentAuthority;
 use codex_mcp::McpServerRegistration;
 use codex_mcp::McpServerSource;
 use codex_mcp::McpStartupPolicy;
 use codex_mcp::PreparedMcpCall;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use codex_protocol::protocol::EnvironmentConfigState;
 use std::collections::HashSet;
 
 pub(super) struct McpDesiredState {
@@ -71,17 +69,15 @@ impl Session {
     pub(super) async fn latest_mcp_desired_state(
         &self,
         auth: Option<CodexAuth>,
+        environments: TurnEnvironmentSnapshot,
     ) -> McpDesiredState {
-        let (session_configuration, disabled_plugin_ids, environments) = {
+        let (session_configuration, disabled_plugin_ids) = {
             let state = self.state.lock().await;
-            // MCP tools must use current environments, not the selection saved for the next turn.
             (
                 state.session_configuration.clone(),
                 state.active_disabled_plugin_ids.clone(),
-                self.services.turn_environments.snapshot(),
             )
         };
-        let environments = environments.await;
         let cwd = environments
             .primary()
             .and_then(|environment| environment.cwd().to_abs_path().ok())
@@ -100,8 +96,8 @@ impl Session {
             config: Arc::new(config),
             auth,
             submit_id: self.next_internal_sub_id(),
-            originator: session_configuration.originator.clone(),
-            session_source: session_configuration.session_source.clone(),
+            originator: session_configuration.originator,
+            session_source: session_configuration.session_source,
             environments,
             local_process_cwd,
             disabled_plugin_ids,
@@ -272,35 +268,11 @@ impl Session {
             }
 
             if let Some(catalog) = catalog {
-                let selections = self.services.turn_environments.selections();
+                let selections = environments.all_selections();
+                let environment_scope = McpEnvironmentScope::Selected(&selections);
                 projection.config.mcp_server_catalog =
                     catalog.build_with_environment_authority(|environment_id| {
-                        let Some(selection) = selections
-                            .iter()
-                            .find(|selection| selection.environment_id == environment_id)
-                        else {
-                            return if environment_id
-                                == codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID
-                            {
-                                McpEnvironmentAuthority::Unrestricted
-                            } else {
-                                McpEnvironmentAuthority::SelectedPluginsOnly
-                            };
-                        };
-                        match &selection.config {
-                            EnvironmentConfigState::FromThread => {
-                                McpEnvironmentAuthority::Unrestricted
-                            }
-                            EnvironmentConfigState::Pending | EnvironmentConfigState::Failed(_) => {
-                                McpEnvironmentAuthority::Unavailable
-                            }
-                            EnvironmentConfigState::Ready(config) => config
-                                .mcp_policy
-                                .as_ref()
-                                .map_or(McpEnvironmentAuthority::Unrestricted, |policy| {
-                                    McpEnvironmentAuthority::Restricted(policy)
-                                }),
-                        }
+                        environment_scope.authority_for(environment_id)
                     });
             }
             projection
@@ -379,16 +351,8 @@ impl Session {
             desired.local_process_cwd.clone(),
         )
         .with_selected_environments(
-            desired
-                .environments
-                .turn_environments()
-                .map(|environment| {
-                    (
-                        environment.selection.environment_id.clone(),
-                        Arc::clone(&environment.environment),
-                    )
-                })
-                .collect(),
+            desired.environments.all_selections().into(),
+            desired.environments.ready_environment_handles(),
         );
         McpRuntimeInput {
             startup_policy: if matches!(desired.session_source, SessionSource::SubAgent(_)) {

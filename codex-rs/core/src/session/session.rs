@@ -1130,7 +1130,7 @@ impl Session {
                         session_source: &mcp_session_source,
                         originator: &mcp_originator,
                         disabled_plugin_ids: &mcp_disabled_plugin_ids,
-                        environments: McpEnvironmentScope::Initial(environment_selections),
+                        environments: McpEnvironmentScope::Selected(environment_selections),
                     },
                     /*ready_selected_capability_roots*/ &[],
                     /*executor_capability_discovery*/ None,
@@ -1800,8 +1800,10 @@ impl Session {
                 mcp_auth_changes.mark_unchanged();
             }
             let latest_auth = sess.services.auth_manager.auth().await;
+            let resolved_environment_selections = resolved_environments.all_selections();
             let mcp_projection = if startup_auth_changed
                 || mcp_auth_changes.has_changed().unwrap_or(false)
+                || resolved_environment_selections.as_slice() != environment_selections
             {
                 sess.services
                     .mcp_manager
@@ -1813,9 +1815,7 @@ impl Session {
                             session_source: &session_configuration.session_source,
                             originator: &session_configuration.originator,
                             disabled_plugin_ids: &session_configuration.disabled_plugin_ids,
-                            environments: McpEnvironmentScope::Live(
-                                &sess.services.turn_environments,
-                            ),
+                            environments: McpEnvironmentScope::Selected(&resolved_environment_selections),
                         },
                         /*ready_selected_capability_roots*/ &[],
                         /*executor_capability_discovery*/ None,
