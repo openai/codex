@@ -1,0 +1,19 @@
+---
+source: tui/src/tool_output_tests.rs
+expression: "format!(\"history:\\n{}\\n\\ntranscript:\\n{}\",\ncompleted.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ncell.transcript_lines(80).iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),)"
+---
+history:
+• Ran echo output
+  └ first
+    second
+    third
+    +2 lines (ctrl + t to view transcript)
+
+transcript:
+$ echo output
+first
+second
+third
+fourth
+fifth
+✓ • 0ms

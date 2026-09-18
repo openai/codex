@@ -1,0 +1,18 @@
+---
+source: tui/src/history_cell/mcp_tests.rs
+expression: "format!(\"history:\\n{}\\n\\ntranscript:\\n{}\",\ndisplay.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ntranscript.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),)"
+---
+history:
+• Called search.lookup()
+  └ first
+    second
+    third
+    +2 lines (ctrl + t to view transcript)
+
+transcript:
+• Called search.lookup()
+  └ first
+    second
+    third
+    fourth
+    fifth

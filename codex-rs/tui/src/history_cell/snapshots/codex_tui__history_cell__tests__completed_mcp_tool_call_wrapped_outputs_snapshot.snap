@@ -1,5 +1,5 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 • Called
@@ -8,6 +8,6 @@ expression: rendered
         ing_to_display_properly_in_the_h
         istory","limit":1})
     Line one of the response, which is
-        quite long and needs wrapping.
+    quite long and needs wrapping.
     Line two continues the response with
-        more detail.
+    +1 line (ctrl + t to view transcrip…

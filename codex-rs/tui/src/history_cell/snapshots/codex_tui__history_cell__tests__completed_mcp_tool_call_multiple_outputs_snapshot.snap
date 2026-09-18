@@ -1,10 +1,10 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 • Called
   └ search.find_docs({"query":"ratatui
         styling","limit":3})
     Found styling guidance in styles.md and
-        additional notes in CONTRIBUTING.md.
+    additional notes in CONTRIBUTING.md.
     link: file:///docs/styles.md

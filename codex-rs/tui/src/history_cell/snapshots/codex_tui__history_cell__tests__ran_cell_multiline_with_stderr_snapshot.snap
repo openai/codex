@@ -1,5 +1,5 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 • Ran echo
@@ -9,4 +9,4 @@ expression: rendered
   └ error: first line on
     stderr
     error: second line on
-    stderr
+    +1 line (ctrl + t to vi…

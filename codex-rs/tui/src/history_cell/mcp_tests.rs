@@ -134,6 +134,55 @@ fn result(content: Vec<Value>) -> CallToolResult {
 }
 
 #[test]
+fn mcp_preview_shares_one_limit_across_blocks_and_preserves_transcript() {
+    let mut cell = new_active_mcp_tool_call(
+        "call-preview".into(),
+        McpInvocation {
+            server: "search".into(),
+            tool: "lookup".into(),
+            arguments: None,
+        },
+        /*animations_enabled*/ false,
+    );
+    cell.complete(
+        Duration::ZERO,
+        Ok(result(vec![
+            json!({"type": "text", "text": "first\nsecond"}),
+            json!({"type": "text", "text": "third\nfourth\nfifth"}),
+        ])),
+    );
+    let display = cell.display_lines(/*width*/ 80);
+    let transcript = cell.transcript_lines(/*width*/ 80);
+    insta::assert_snapshot!(format!(
+        "history:\n{}\n\ntranscript:\n{}",
+        display
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        transcript
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    ));
+    assert_eq!(
+        cell.raw_lines()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        [
+            "Called search.lookup()",
+            "first",
+            "second",
+            "third",
+            "fourth",
+            "fifth"
+        ],
+    );
+}
+
+#[test]
 fn code_mode_output_shares_a_row_budget_across_blocks() {
     let mut cell = new_active_mcp_tool_call(
         "browser-call".to_string(),
@@ -159,13 +208,12 @@ fn code_mode_output_shares_a_row_budget_across_blocks() {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    insta::assert_snapshot!(display, @"
+    insta::assert_snapshot!(display, @r"
     • Inspect page
       └ Page title
         Navigation
-        … more · ctrl+t
-        Link
-        Footer
+        Main content
+        +3 lines (ctrl + t to view transcri…
     ");
     let transcript = cell
         .transcript_lines(/*width*/ 100)
@@ -178,7 +226,7 @@ fn code_mode_output_shares_a_row_budget_across_blocks() {
 }
 
 #[test]
-fn code_mode_output_keeps_trailing_failure_diagnostics() {
+fn code_mode_output_preserves_trailing_failure_diagnostics_in_transcript() {
     let mut cell = new_active_mcp_tool_call(
         "browser-error".to_string(),
         McpInvocation {
@@ -205,14 +253,20 @@ fn code_mode_output_keeps_trailing_failure_diagnostics() {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join("\n");
-    insta::assert_snapshot!(display, @"
+    insta::assert_snapshot!(display, @r"
     • Inspect page
       └ Script failed
         Page title
-        … more · ctrl+t
-        Script error:
-        permission denied
+        Navigation
+        +6 lines (ctrl + t to view transcri…
     ");
+    let transcript = cell
+        .transcript_lines(/*width*/ 80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(transcript.ends_with("    Script error:\n    permission denied"));
 }
 
 #[test]
@@ -243,13 +297,13 @@ fn code_mode_output_row_budget_applies_after_wrapping_and_to_errors() {
             cell.complete(Duration::ZERO, completion);
             for width in [20, 40, 80] {
                 let display = cell.display_lines(width);
-                assert_eq!(display.len(), 1 + TOOL_CALL_MAX_LINES);
+                assert_eq!(display.len(), 5); // Header, three output rows, and omission hint.
                 assert!(
                     display
                         .iter()
                         .all(|line| line.width() <= usize::from(width))
                 );
-                assert_eq!(display[3].to_string(), "    … more · ctrl+t");
+                assert!(display.last().unwrap().to_string().starts_with("    +"));
                 let transcript = cell
                     .transcript_lines(width)
                     .iter()
@@ -269,7 +323,7 @@ fn code_mode_output_row_budget_applies_after_wrapping_and_to_errors() {
 }
 
 #[test]
-fn projected_content_preserves_width_dependent_rendering() {
+fn projected_content_preserves_full_rendering() {
     let text = "{\"result\": [1, 2, 3], \"text\": \"long output 🦀\"}";
     let malformed = json!({"type": "image", "data": PNG});
     let invalid_metadata =
@@ -290,28 +344,25 @@ fn projected_content_preserves_width_dependent_rendering() {
         McpResultKind::Standard,
     );
 
-    for width in [1, 8, 40, 120, RAW_TOOL_OUTPUT_WIDTH] {
-        let format_text =
-            |text: &str| format_and_truncate_tool_result(text, TOOL_CALL_MAX_LINES, width);
-        assert_eq!(
-            projected
-                .content
-                .iter()
-                .map(|block| block.render(width))
-                .collect::<Vec<_>>(),
-            vec![
-                format_text(text),
-                "Returned image".to_string(),
-                "<audio content>".to_string(),
-                "embedded resource: file:///text.txt".to_string(),
-                "embedded resource: file:///blob.bin".to_string(),
-                "link: file:///linked.txt".to_string(),
-                format_text(&malformed.to_string()),
-                format_text(&invalid_metadata.to_string()),
-                format_text(&unknown.to_string()),
-            ],
-        );
-    }
+    let format_text = |text: &str| format_json_compact(text).unwrap_or_else(|| text.to_owned());
+    assert_eq!(
+        projected
+            .content
+            .iter()
+            .map(result::McpContentBlock::render)
+            .collect::<Vec<_>>(),
+        vec![
+            format_text(text),
+            "Returned image".to_string(),
+            "<audio content>".to_string(),
+            "embedded resource: file:///text.txt".to_string(),
+            "embedded resource: file:///blob.bin".to_string(),
+            "link: file:///linked.txt".to_string(),
+            format_text(&malformed.to_string()),
+            format_text(&invalid_metadata.to_string()),
+            format_text(&unknown.to_string()),
+        ],
+    );
 }
 
 #[test]
@@ -325,7 +376,7 @@ fn projected_image_marker_still_requires_a_complete_image() {
 
     let projected = McpToolResult::new(result(vec![invalid.clone()]), McpResultKind::Standard);
     assert!(!projected.has_image);
-    assert_eq!(projected.content[0].render(/*width*/ 80), "Returned image");
+    assert_eq!(projected.content[0].render(), "Returned image");
 
     let projected = McpToolResult::new(result(vec![invalid, valid]), McpResultKind::Standard);
     assert!(projected.has_image);
@@ -396,11 +447,7 @@ fn code_mode_preserves_text_fields_on_nontext_and_unknown_blocks() {
         vec![
             Line::from("Called node_repl.js({\"title\":\"Inspect results\"})"),
             Line::from("Returned image"),
-            Line::from(format_and_truncate_tool_result(
-                &unknown.to_string(),
-                TOOL_CALL_MAX_LINES,
-                RAW_TOOL_OUTPUT_WIDTH,
-            )),
+            Line::from(format_json_compact(&unknown.to_string()).unwrap()),
         ],
     );
 

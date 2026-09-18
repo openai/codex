@@ -218,6 +218,7 @@ mod theme_picker;
 mod thread_color;
 mod thread_transcript;
 mod token_usage;
+mod tool_output;
 mod tooltips;
 mod transcript_reflow;
 mod tui;

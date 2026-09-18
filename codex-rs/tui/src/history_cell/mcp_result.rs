@@ -3,8 +3,7 @@
 //! The wire result can contain multi-megabyte image, audio, or resource bodies. Validate each
 //! block once with the MCP model, then retain only what history rendering actually displays.
 
-use crate::exec_cell::TOOL_CALL_MAX_LINES;
-use crate::text_formatting::format_and_truncate_tool_result;
+use crate::text_formatting::format_json_compact;
 use base64::Engine;
 use codex_protocol::mcp::CallToolResult;
 use image::DynamicImage;
@@ -127,14 +126,16 @@ impl McpContentBlock {
         }
     }
 
-    /// Applies width-dependent formatting to full text or fallback JSON without reparsing the MCP
-    /// block. Media and resource summaries retain their existing untruncated display form.
-    pub(super) fn render(&self, width: usize) -> String {
+    /// Formats the complete text or fallback JSON. The caller applies a single preview limit
+    /// across all blocks, while transcript and raw output retain the full result.
+    pub(super) fn render(&self) -> Cow<'_, str> {
         match &self.display {
             McpContentDisplay::Text(text) | McpContentDisplay::Json(text) => {
-                format_and_truncate_tool_result(text, TOOL_CALL_MAX_LINES, width)
+                format_json_compact(text)
+                    .map(Cow::Owned)
+                    .unwrap_or(Cow::Borrowed(text))
             }
-            McpContentDisplay::Summary(summary) => summary.to_string(),
+            McpContentDisplay::Summary(summary) => Cow::Borrowed(summary),
         }
     }
 }

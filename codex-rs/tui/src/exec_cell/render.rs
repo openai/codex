@@ -13,6 +13,7 @@ use crate::motion::activity_indicator;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
+use crate::tool_output::tool_output_preview;
 use crate::ui_consts::TRANSCRIPT_HINT;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -130,7 +131,7 @@ pub(crate) fn output_lines(
 
     let head_end = total.min(line_limit).min(retained);
     for (i, raw) in output.lines().take(head_end).enumerate() {
-        let mut line = ansi_escape_line(raw.as_ref());
+        let mut line = dimmed_output_line(raw.as_ref());
         let prefix = if !include_prefix {
             ""
         } else if i == 0 && include_angle_pipe {
@@ -138,10 +139,7 @@ pub(crate) fn output_lines(
         } else {
             "    "
         };
-        line.spans.insert(0, prefix.into());
-        line.spans.iter_mut().for_each(|span| {
-            span.style = span.style.add_modifier(Modifier::DIM);
-        });
+        line.spans.insert(0, prefix.dim());
         out.push(line);
     }
 
@@ -157,13 +155,10 @@ pub(crate) fn output_lines(
 
     let tail = output.lines().rev().take(tail_len).collect_vec();
     for raw in tail.into_iter().rev() {
-        let mut line = ansi_escape_line(raw.as_ref());
+        let mut line = dimmed_output_line(raw.as_ref());
         if include_prefix {
-            line.spans.insert(0, "    ".into());
+            line.spans.insert(0, "    ".dim());
         }
-        line.spans.iter_mut().for_each(|span| {
-            span.style = span.style.add_modifier(Modifier::DIM);
-        });
         out.push(line);
     }
 
@@ -171,6 +166,23 @@ pub(crate) fn output_lines(
         lines: out,
         omitted,
     }
+}
+
+fn dimmed_output_line(raw: &str) -> Line<'static> {
+    let mut line = ansi_escape_line(raw);
+    for span in &mut line.spans {
+        span.style = span.style.add_modifier(Modifier::DIM);
+    }
+    line
+}
+
+fn output_preview_lines(output: &CommandOutput, width: usize) -> Vec<Line<'static>> {
+    let (total, _) = output.line_counts();
+    tool_output_preview(
+        output.lines().map(|raw| dimmed_output_line(raw.as_ref())),
+        width,
+        total,
+    )
 }
 
 fn activity_marker(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
@@ -419,25 +431,29 @@ impl ExecCell {
         }
 
         if let Some(output) = call.output.as_ref() {
-            let line_limit = if call.is_user_shell_command() {
-                USER_SHELL_TOOL_CALL_MAX_LINES
-            } else {
-                TOOL_CALL_MAX_LINES
-            };
+            if !call.is_user_shell_command() {
+                let preview = output_preview_lines(output, layout.output_block.wrap_width(width));
+                let preview = if preview.is_empty() && !call.is_unified_exec_interaction() {
+                    vec![Line::from("(no output)".dim())]
+                } else {
+                    preview
+                };
+                lines.extend(prefix_lines(
+                    preview,
+                    Span::from(layout.output_block.initial_prefix).dim(),
+                    Span::from(layout.output_block.subsequent_prefix),
+                ));
+                return lines;
+            }
             let raw_output = output_lines(
                 Some(output),
                 OutputLinesParams {
-                    line_limit,
+                    line_limit: USER_SHELL_TOOL_CALL_MAX_LINES,
                     only_err: false,
                     include_angle_pipe: false,
                     include_prefix: false,
                 },
             );
-            let display_limit = if call.is_user_shell_command() {
-                USER_SHELL_TOOL_CALL_MAX_LINES
-            } else {
-                layout.output_max_lines
-            };
 
             if raw_output.lines.is_empty() {
                 if !call.is_unified_exec_interaction() {
@@ -469,7 +485,7 @@ impl ExecCell {
                 );
                 let trimmed_output = Self::truncate_lines_middle(
                     &prefixed_output,
-                    display_limit,
+                    USER_SHELL_TOOL_CALL_MAX_LINES,
                     width,
                     raw_output.omitted,
                     Some(Line::from(
@@ -663,7 +679,6 @@ struct ExecDisplayLayout {
     command_continuation: PrefixedBlock,
     command_continuation_max_lines: usize,
     output_block: PrefixedBlock,
-    output_max_lines: usize,
 }
 
 impl ExecDisplayLayout {
@@ -671,13 +686,11 @@ impl ExecDisplayLayout {
         command_continuation: PrefixedBlock,
         command_continuation_max_lines: usize,
         output_block: PrefixedBlock,
-        output_max_lines: usize,
     ) -> Self {
         Self {
             command_continuation,
             command_continuation_max_lines,
             output_block,
-            output_max_lines,
         }
     }
 }
@@ -686,7 +699,6 @@ const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
     PrefixedBlock::new("  │ ", "  │ "),
     /*command_continuation_max_lines*/ 2,
     PrefixedBlock::new("  └ ", "    "),
-    /*output_max_lines*/ 5,
 );
 
 #[cfg(test)]

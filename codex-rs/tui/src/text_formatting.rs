@@ -14,25 +14,6 @@ pub(crate) fn capitalize_first(input: &str) -> String {
     }
 }
 
-/// Truncate a tool result to fit within the given height and width. If the text is valid JSON, we format it in a compact way before truncating.
-/// This is a best-effort approach that may not work perfectly for text where 1 grapheme is rendered as multiple terminal cells.
-pub(crate) fn format_and_truncate_tool_result(
-    text: &str,
-    max_lines: usize,
-    line_width: usize,
-) -> String {
-    // Work out the maximum number of graphemes we can display for a result.
-    // It's not guaranteed that 1 grapheme = 1 cell, so we subtract 1 per line as a fudge factor.
-    // It also won't handle future terminal resizes properly, but it's an OK approximation for now.
-    let max_graphemes = (max_lines * line_width).saturating_sub(max_lines);
-
-    if let Some(formatted_json) = format_json_compact(text) {
-        truncate_text(&formatted_json, max_graphemes)
-    } else {
-        truncate_text(text, max_graphemes)
-    }
-}
-
 /// Formats JSON on one line with spaces after separators for readability and natural wrap points.
 ///
 /// Compact JSON is hard to scan, while pretty-printed JSON consumes unnecessary terminal rows.
