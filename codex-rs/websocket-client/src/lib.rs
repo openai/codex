@@ -1,4 +1,5 @@
-//! Proxy-aware WebSocket connection setup shared by Codex API clients.
+//! Proxy-aware WebSocket connection setup shared by Codex API clients, reusing the HTTP factory's
+//! ChatGPT cookie store for secure handshakes.
 
 mod dialer;
 
@@ -27,6 +28,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::http::Uri;
+use tokio_tungstenite::tungstenite::http::header::COOKIE;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 /// Connects WebSockets using the outbound proxy policy resolved by application configuration.
@@ -133,12 +135,18 @@ impl WebSocketConnector {
 
     async fn connect_with_route(
         &self,
-        request: Request,
+        mut request: Request,
         config: WebSocketConfig,
         proxy_route: OutboundProxyRoute,
         loopback_direct: bool,
     ) -> Result<(WebSocketConnection, Response), WebSocketError> {
-        let (inner, response) = dialer::connect(
+        let uri = request.uri().clone();
+        if !request.headers().contains_key(COOKIE)
+            && let Some(cookies) = self.http_client_factory.chatgpt_cookie_header(&uri)
+        {
+            request.headers_mut().insert(COOKIE, cookies);
+        }
+        let result = dialer::connect(
             request,
             config,
             self.tls_config.clone(),
@@ -147,7 +155,18 @@ impl WebSocketConnector {
             loopback_direct,
         )
         .boxed()
-        .await?;
+        .await;
+        // Like HTTP responses, rejected upgrades can also refresh infrastructure cookies.
+        match &result {
+            Ok((_, response)) => self
+                .http_client_factory
+                .store_chatgpt_response_cookies(&uri, response.headers()),
+            Err(WebSocketError::Http(response)) => self
+                .http_client_factory
+                .store_chatgpt_response_cookies(&uri, response.headers()),
+            Err(_) => {}
+        }
+        let (inner, response) = result?;
         Ok((WebSocketConnection { inner }, response))
     }
 }
@@ -239,3 +258,7 @@ impl<T> AsyncIo for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cookie_tests.rs"]
+mod cookie_tests;
