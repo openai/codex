@@ -39,14 +39,19 @@ fn check_mounts(
         let [_, _, mount_device, root, destination] = fields.as_slice() else {
             return Err(invalid());
         };
-        let root = mount_path(root)?;
         let destination = mount_path(destination)?;
-        if *mount_device == device.as_bytes()
+        // Only roots on the socket filesystem can identify aliases. Other
+        // filesystems can use non-path roots such as nsfs `mnt:[inode]`, but
+        // their destinations still matter for nested-mount checks.
+        let root = (*mount_device == device.as_bytes())
+            .then(|| mount_path(root))
+            .transpose()?;
+        if let Some(root) = &root
             && let Ok(relative) = directory.strip_prefix(&destination)
         {
             locations.insert(root.join(relative));
         }
-        mounts.push((*mount_device, root, destination));
+        mounts.push((root, destination));
     }
     // Overmounts can leave hidden entries in mountinfo. Require every possible
     // containing mount to agree instead of guessing which root is visible.
@@ -54,10 +59,10 @@ fn check_mounts(
         return Err(invalid());
     }
     let location = locations.into_iter().next().ok_or_else(invalid)?;
-    for (mount_device, root, destination) in &mounts {
+    for (root, destination) in &mounts {
         // Nested mounts can introduce another filesystem (or an individual socket) under the mask.
         let nested = destination != directory && destination.starts_with(directory);
-        let alias = if *mount_device == device.as_bytes() {
+        let alias = if let Some(root) = root {
             if let Ok(relative) = location.strip_prefix(root) {
                 Some(destination.join(relative))
             } else if root.starts_with(&location) {
