@@ -19,6 +19,7 @@ fn record() -> InstallationRecord {
             metadata_roots: Vec::new(),
             ready_package: None,
             accounts: vec![RuntimeAccountRegistration {
+                cleanup_logon_pending: false,
                 account: SandboxRuntimeAccount::Offline,
                 user_sid: "S-1-5-21-1-2-3-1001".into(),
                 alias_path: None,
@@ -41,6 +42,7 @@ fn ready_runtime() -> RuntimeRegistration {
     runtime.ready_package = Some(READY_PACKAGE.into());
     runtime.accounts[0].alias_path = Some(PathBuf::from(r"C:\aliases\offline.exe"));
     runtime.accounts.push(RuntimeAccountRegistration {
+        cleanup_logon_pending: false,
         account: SandboxRuntimeAccount::Online,
         user_sid: "S-1-5-21-1-2-3-1002".into(),
         alias_path: Some(PathBuf::from(r"C:\aliases\online.exe")),
@@ -200,9 +202,13 @@ fn metadata_root_history_survives_record_round_trip() {
 }
 
 #[test]
-fn older_runtime_receipts_default_to_no_recorded_metadata_roots() {
+fn older_runtime_receipts_default_to_no_metadata_roots_or_cleanup_logon() {
     let expected = record();
-    let json = serde_json::to_value(&expected).unwrap();
+    let mut json = serde_json::to_value(&expected).unwrap();
+    json["runtime"]["accounts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("cleanup_logon_pending");
     assert!(json["runtime"].get("metadata_roots").is_none());
     assert_eq!(
         serde_json::from_value::<InstallationRecord>(json).unwrap(),
@@ -242,4 +248,28 @@ fn legacy_non_null_cleanup_journal_cannot_silently_drop_its_fence() {
 
         assert!(serde_json::from_value::<InstallationRecord>(json).is_err());
     }
+}
+
+#[test]
+fn interrupted_cleanup_logon_blocks_admission_after_record_reload() {
+    let mut original = record();
+    original.runtime = Some(ready_runtime());
+    original.runtime_mut().unwrap().accounts[0].cleanup_logon_pending = true;
+    let mut restored: InstallationRecord =
+        serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
+    assert_eq!(restored, original);
+    assert!(!restored.runtime().unwrap().ready_for_package(READY_PACKAGE));
+    assert!(
+        restored
+            .admit_owner(&original, "OpenAI.Codex_publisher")
+            .is_err()
+    );
+
+    restored.runtime_mut().unwrap().accounts[0].cleanup_logon_pending = false;
+    assert!(restored.runtime().unwrap().ready_for_package(READY_PACKAGE));
+    assert!(
+        restored
+            .admit_owner(&original, "OpenAI.Codex_publisher")
+            .is_ok()
+    );
 }
