@@ -19,10 +19,8 @@ use codex_exec_server::HttpRedirectPolicy;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::HttpResponseBodyStream;
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
-#[cfg(target_os = "macos")]
-use codex_utils_pty::process_group::kill_process_group_with_member_fallback as kill_process_group;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::Shared;

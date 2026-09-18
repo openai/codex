@@ -12,7 +12,7 @@ use tokio::time::timeout;
 
 use super::signal_process_group_with_member_fallback;
 use super::signal_process_id;
-use super::terminate_process_group_with_member_fallback;
+use super::terminate_process_group;
 
 #[tokio::test]
 async fn denied_group_signal_terminates_owned_descendants_and_preserves_escalation() -> Result<()> {
@@ -87,7 +87,7 @@ async fn denied_group_signal_terminates_owned_descendants_and_preserves_escalati
 #[test]
 fn denied_group_signal_rejects_unsafe_process_group_ids() {
     for process_group_id in [0, u32::MAX] {
-        let error = terminate_process_group_with_member_fallback(process_group_id)
+        let error = terminate_process_group(process_group_id)
             .expect_err("unsafe process group ID should be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
