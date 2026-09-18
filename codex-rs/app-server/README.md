@@ -57,6 +57,13 @@ stdio servers. The existing `mcp_2026_07_28` flag still governs eligible other
 servers, regardless of whether their names or URLs resemble hosted Apps.
 App-server does not persist this selection.
 
+# Project trust
+
+`thread/start` does not persist project trust for a directory where configuration
+discovery finds no project-root marker, Git checkout, or project-local `.codex`
+directory. Starting a task there does not preapprove project configuration added
+later. Existing trust decisions and permission checks for projects are unchanged.
+
 # Thread removal
 
 `thread/archive` and `thread/delete` reject attempts to remove a live internal

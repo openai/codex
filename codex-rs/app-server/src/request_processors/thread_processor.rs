@@ -1360,6 +1360,7 @@ impl ThreadRequestProcessor {
 
         if requested_cwd.is_some()
             && config.active_project.trust_level.is_none()
+            && !config.config_layer_stack.is_projectless()
             && effective_permissions_trust_project
         {
             let trust_target = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &config.cwd)

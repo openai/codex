@@ -1694,6 +1694,50 @@ async fn thread_start_with_nested_git_cwd_respects_effective_permissions_for_pro
 }
 
 #[tokio::test]
+async fn thread_start_projectless_does_not_preapprove_later_project_config() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let workspace = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    let config_before = std::fs::read_to_string(&config_path)?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+
+    let response = mcp
+        .start_thread(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            sandbox: Some(SandboxMode::DangerFullAccess),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(
+        response.sandbox,
+        codex_app_server_protocol::SandboxPolicy::DangerFullAccess
+    );
+    assert_eq!(std::fs::read_to_string(&config_path)?, config_before);
+
+    let project_config_dir = workspace.path().join(".codex");
+    std::fs::create_dir(&project_config_dir)?;
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        "model_reasoning_effort = \"high\"\n",
+    )?;
+    let response = mcp
+        .start_thread(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            sandbox: Some(SandboxMode::ReadOnly),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(response.reasoning_effort, None);
+    assert_eq!(std::fs::read_to_string(&config_path)?, config_before);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
@@ -1701,6 +1745,7 @@ async fn thread_start_with_read_only_sandbox_does_not_persist_project_trust() ->
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     let workspace = TempDir::new()?;
+    std::fs::create_dir(workspace.path().join(".codex"))?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1728,6 +1773,7 @@ async fn thread_start_preserves_untrusted_project_trust() -> Result<()> {
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     let workspace = TempDir::new()?;
+    std::fs::create_dir(workspace.path().join(".codex"))?;
     let config_path = codex_home.path().join("config.toml");
     let workspace_key = workspace.path().display().to_string();
     let mut config_toml =

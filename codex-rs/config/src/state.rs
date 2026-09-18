@@ -270,6 +270,7 @@ pub struct ConfigLayerStack {
     /// `None` means the loader did not check for stack-level warnings, while
     /// `Some(vec![])` means it checked and found nothing to report.
     startup_warnings: Option<Vec<String>>,
+    pub(crate) is_projectless: bool,
 }
 
 impl ConfigLayerStack {
@@ -290,6 +291,7 @@ impl ConfigLayerStack {
             requirements_toml,
             ignore_user_and_project_exec_policy_rules: false,
             startup_warnings: None,
+            is_projectless: false,
         })
     }
 
@@ -312,6 +314,12 @@ impl ConfigLayerStack {
 
     pub fn startup_warnings(&self) -> Option<&[String]> {
         self.startup_warnings.as_deref()
+    }
+
+    /// Whether discovery found no project markers or project-local configuration.
+    /// Returns false when project discovery was skipped.
+    pub fn is_projectless(&self) -> bool {
+        self.is_projectless
     }
 
     /// Returns the active raw user config layer, if any.
@@ -420,6 +428,7 @@ impl ConfigLayerStack {
             ignore_user_and_project_exec_policy_rules: self
                 .ignore_user_and_project_exec_policy_rules,
             startup_warnings: self.startup_warnings.clone(),
+            is_projectless: self.is_projectless,
         })
     }
 
@@ -455,6 +464,7 @@ impl ConfigLayerStack {
             ignore_user_and_project_exec_policy_rules: self
                 .ignore_user_and_project_exec_policy_rules,
             startup_warnings: self.startup_warnings.clone(),
+            is_projectless: self.is_projectless,
         }
     }
 
