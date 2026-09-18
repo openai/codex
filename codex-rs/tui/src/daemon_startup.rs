@@ -14,8 +14,6 @@ pub(super) fn exclusion(
 ) -> Option<&'static str> {
     if cli.no_daemon {
         Some("--no-daemon")
-    } else if cli.shared.worktree {
-        Some("--worktree")
     } else if cli.oss {
         Some("--oss")
     } else if workload_identity_selected {
@@ -42,7 +40,17 @@ pub(super) fn config_exclusion(
     strict_config: bool,
     bypass_hook_trust: bool,
 ) -> Option<&'static str> {
-    if !cli_kv_overrides.is_empty() {
+    // Worktree allocation is client-owned, and thread requests already forward this feature.
+    if !cli_kv_overrides
+        .iter()
+        .all(|(key, value)| match key.as_str() {
+            "features.worktrees" => value.is_bool(),
+            "features" => value.as_table().is_some_and(|features| {
+                features.len() == 1 && features.get("worktrees").is_some_and(toml::Value::is_bool)
+            }),
+            _ => false,
+        })
+    {
         Some("command-line configuration overrides (-c, --enable, --disable, or --search)")
     } else if !loader_overrides_are_default(loader_overrides) {
         Some("custom configuration loader")

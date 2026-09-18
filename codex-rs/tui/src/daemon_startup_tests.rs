@@ -6,6 +6,37 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 #[test]
+fn worktree_feature_override_allows_daemon_without_allowing_other_features() {
+    for (raw, eligible) in [
+        ("features.worktrees=true", true),
+        ("features.worktrees=false", true),
+        ("features={worktrees=true}", true),
+        ("features={worktrees=true,shell_tool=false}", false),
+        ("features.shell_tool=false", false),
+        ("features.worktrees.enabled=true", false),
+        ("features={}", false),
+        ("model='test'", false),
+    ] {
+        let overrides = codex_utils_cli::CliConfigOverrides {
+            raw_overrides: vec![raw.to_string()],
+        }
+        .parse_overrides()
+        .unwrap();
+        assert_eq!(
+            daemon_startup::config_exclusion(
+                &overrides,
+                &LoaderOverrides::default(),
+                /*strict_config*/ false,
+                /*bypass_hook_trust*/ false,
+            )
+            .is_none(),
+            eligible,
+            "{raw}"
+        );
+    }
+}
+
+#[test]
 fn daemon_launch_telemetry_records_once_on_connection_or_early_return() {
     for connected in [false, true] {
         let observations = std::cell::RefCell::new(Vec::new());
@@ -122,7 +153,8 @@ fn daemon_eligibility_preserves_launch_options_and_explains_exclusions() {
     use clap::Parser;
     for (args, expected) in [
         ("--no-daemon", Some("--no-daemon")),
-        ("--worktree", Some("--worktree")),
+        ("--worktree", None),
+        ("--worktree --no-daemon", Some("--no-daemon")),
         ("--oss", Some("--oss")),
         ("--profile test", Some("--profile")),
         ("--strict-config", Some("--strict-config")),
