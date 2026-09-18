@@ -1,9 +1,9 @@
 //! Shares the root user's selected routing tier across the entire agent tree.
 
-use super::AgentControl;
+use super::LocalAgentControl;
 use std::sync::Arc;
 
-impl AgentControl {
+impl LocalAgentControl {
     /// Returns the latest user-selected tier for this root and all its descendants.
     pub(crate) fn root_service_tier(&self) -> Option<String> {
         self.root_service_tier

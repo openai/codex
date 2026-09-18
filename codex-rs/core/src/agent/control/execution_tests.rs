@@ -1,12 +1,12 @@
-use crate::agent::AgentControl;
+use crate::agent::LocalAgentControl;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 
-fn control_with_limit(max_threads: usize) -> AgentControl {
-    let control = AgentControl::default();
+fn control_with_limit(max_threads: usize) -> LocalAgentControl {
+    let control = LocalAgentControl::default();
     control.agent_execution_limiter.initialize(max_threads);
     control
 }

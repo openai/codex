@@ -2,7 +2,7 @@
 //!
 //! Target checks precede reload, and queue-only messages retain their non-waking semantics.
 
-use super::AgentControl;
+use super::LocalAgentControl;
 use crate::TurnStartOptions;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent_communication::AgentCommunicationContext;
@@ -69,7 +69,7 @@ pub(crate) enum MessageDeliveryError {
     Agent(CodexErr),
 }
 
-impl AgentControl {
+impl LocalAgentControl {
     /// Checks and delivers to a resolved target, restoring an evicted runtime when necessary.
     ///
     /// The caller resolves tool-facing names separately so it can attribute failures and

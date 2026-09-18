@@ -3,7 +3,7 @@
 //! Root and self targets are rejected. An unloaded or already-dead runtime is a successful
 //! interruption; this operation never reloads it.
 
-use super::AgentControl;
+use super::LocalAgentControl;
 use crate::agent::AgentStatus;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -22,7 +22,7 @@ pub(crate) enum AgentInterruptError {
     Agent(CodexErr),
 }
 
-impl AgentControl {
+impl LocalAgentControl {
     /// Interrupts a spawned agent's current task, preserving the status observed before dispatch.
     pub(crate) async fn interrupt_spawned_agent(
         &self,

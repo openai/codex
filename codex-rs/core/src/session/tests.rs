@@ -5922,7 +5922,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         ClientMcpExtensions::default(),
-        AgentControl::default(),
+        LocalAgentControl::default(),
         /*reserved_thread_id*/ None,
         environment_manager,
         /*inherited_environments*/ None,
@@ -6005,7 +6005,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         auth_manager.clone(),
         config.model_provider.clone(),
     );
-    let agent_control = AgentControl::default();
+    let agent_control = LocalAgentControl::default();
     let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -6421,7 +6421,7 @@ async fn make_session_with_config_and_rx(
         Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
         codex_extension_api::ExtensionDataInit::default(),
         ClientMcpExtensions::default(),
-        AgentControl::default(),
+        LocalAgentControl::default(),
         /*reserved_thread_id*/ None,
         environment_manager,
         /*inherited_environments*/ None,
@@ -6446,7 +6446,7 @@ async fn make_session_with_config_and_rx(
 async fn make_session_with_history_source_and_agent_control_and_rx(
     initial_history: InitialHistory,
     session_source: SessionSource,
-    agent_control: AgentControl,
+    agent_control: LocalAgentControl,
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -6593,7 +6593,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
             rollout_path: None,
         }),
         SessionSource::Exec,
-        AgentControl::default(),
+        LocalAgentControl::default(),
     )
     .await
     .expect("resume should succeed");
@@ -6636,7 +6636,7 @@ async fn resumed_subagent_session_restores_persisted_session_id() {
             rollout_path: None,
         }),
         session_source,
-        AgentControl::default(),
+        LocalAgentControl::default(),
     )
     .await
     .expect("resume should succeed");
@@ -6689,7 +6689,7 @@ async fn resumed_copied_fork_ignores_source_history_base() {
             rollout_path: None,
         }),
         SessionSource::Exec,
-        AgentControl::default(),
+        LocalAgentControl::default(),
     )
     .await
     .expect("resume should succeed");
@@ -8249,7 +8249,7 @@ where
         auth_manager.clone(),
         config.model_provider.clone(),
     );
-    let agent_control = AgentControl::default();
+    let agent_control = LocalAgentControl::default();
     let exec_policy = Arc::new(ExecPolicyManager::default());
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let model = get_model_offline_for_tests(config.model.as_deref());

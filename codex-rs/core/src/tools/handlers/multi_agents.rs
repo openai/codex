@@ -1,6 +1,6 @@
 //! Implements the collaboration tool surface for spawning and managing sub-agents.
 //!
-//! This handler translates model tool calls into `AgentControl` operations and keeps spawned
+//! This handler translates model tool calls into `LocalAgentControl` operations and keeps spawned
 //! agents aligned with the live turn that created them. Sub-agents start from the turn's effective
 //! config, inherit runtime-only state such as provider, approval policy, sandbox, and cwd, and
 //! then optionally layer role-specific config on top.

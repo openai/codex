@@ -161,7 +161,7 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
 
 #[test]
 fn register_session_root_skips_threads_with_explicit_parent() {
-    let control = AgentControl::default();
+    let control = LocalAgentControl::default();
 
     control.register_session_root(ThreadId::new(), Some(ThreadId::new()));
 
@@ -185,7 +185,7 @@ struct AgentControlHarness {
     config: Config,
     state_db: Option<StateDbHandle>,
     manager: ThreadManager,
-    control: AgentControl,
+    control: LocalAgentControl,
 }
 
 impl AgentControlHarness {
@@ -416,7 +416,7 @@ async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str
 }
 
 async fn wait_for_live_thread_spawn_children(
-    control: &AgentControl,
+    control: &LocalAgentControl,
     parent_thread_id: ThreadId,
     expected_children: &[ThreadId],
 ) {
@@ -455,7 +455,7 @@ async fn assert_thread_not_loaded(manager: &ThreadManager, thread_id: ThreadId) 
 
 #[tokio::test]
 async fn send_input_errors_when_manager_dropped() {
-    let control = AgentControl::default();
+    let control = LocalAgentControl::default();
     let err = control
         .send_input(
             ThreadId::new(),
@@ -475,7 +475,7 @@ async fn send_input_errors_when_manager_dropped() {
 
 #[tokio::test]
 async fn get_status_returns_not_found_without_manager() {
-    let control = AgentControl::default();
+    let control = LocalAgentControl::default();
     let got = control.get_status(ThreadId::new()).await;
     assert_eq!(got, AgentStatus::NotFound);
 }
@@ -553,7 +553,7 @@ async fn on_event_updates_status_from_shutdown_complete() {
 
 #[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
-    let control = AgentControl::default();
+    let control = LocalAgentControl::default();
     let (_home, config) = test_config().await;
     let err = control
         .spawn_agent(config, text_input("hello"), /*session_source*/ None)
@@ -567,7 +567,7 @@ async fn spawn_agent_errors_when_manager_dropped() {
 
 #[tokio::test]
 async fn resume_agent_errors_when_manager_dropped() {
-    let control = AgentControl::default();
+    let control = LocalAgentControl::default();
     let (_home, config) = test_config().await;
     let err = control
         .resume_agent_from_rollout(config, ThreadId::new(), SessionSource::Exec)
@@ -750,7 +750,7 @@ enum V2ReloadRoute {
 }
 
 async fn spawn_v2_reload_test_child(
-    control: &AgentControl,
+    control: &LocalAgentControl,
     config: Config,
     parent: &CodexThread,
     task_name: &str,

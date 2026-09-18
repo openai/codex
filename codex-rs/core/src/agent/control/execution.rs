@@ -1,4 +1,4 @@
-use super::AgentControl;
+use super::LocalAgentControl;
 use crate::codex_thread::CodexThread;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
@@ -26,7 +26,7 @@ impl Drop for AgentExecutionGuard {
     }
 }
 
-impl AgentControl {
+impl LocalAgentControl {
     pub(crate) async fn ensure_execution_capacity_for_turn_start(
         &self,
         thread: &CodexThread,

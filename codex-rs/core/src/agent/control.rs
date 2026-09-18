@@ -123,13 +123,13 @@ pub(crate) struct ListedAgent {
 }
 
 /// Control-plane handle for multi-agent operations.
-/// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
+/// `LocalAgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
-/// An `AgentControl` instance is intended to be created at most once per root thread/session
-/// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
+/// An `LocalAgentControl` instance is intended to be created at most once per root thread/session
+/// tree. That same `LocalAgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
 #[derive(Clone)]
-pub(crate) struct AgentControl {
+pub(crate) struct LocalAgentControl {
     /// session_id is equal to the root thread's ID.
     session_id: SessionId,
     /// Weak handle back to the global thread registry/state.
@@ -147,7 +147,7 @@ pub(crate) struct AgentControl {
     root_service_tier: Arc<ArcSwapOption<String>>,
 }
 
-impl Default for AgentControl {
+impl Default for LocalAgentControl {
     fn default() -> Self {
         Self::new(
             Weak::default(),
@@ -157,8 +157,8 @@ impl Default for AgentControl {
     }
 }
 
-impl AgentControl {
-    /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
+impl LocalAgentControl {
+    /// Construct a new `LocalAgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(
         manager: Weak<ThreadManagerState>,
         thread_id_generator: ThreadIdGenerator,

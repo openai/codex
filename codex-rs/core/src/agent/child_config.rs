@@ -164,7 +164,7 @@ fn reject_full_fork_agent_type_override(agent_type: Option<&str>) -> Result<(), 
     Ok(())
 }
 
-/// Copies runtime-only turn state onto a child config before it is handed to `AgentControl`.
+/// Copies runtime-only turn state onto a child config before it is handed to `LocalAgentControl`.
 ///
 /// These values are chosen by the live turn rather than persisted config, so leaving them stale can
 /// make a child agent disagree with its parent about approval policy, cwd, or sandboxing.

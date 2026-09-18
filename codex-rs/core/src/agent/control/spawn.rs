@@ -172,7 +172,7 @@ async fn load_agent_model_context(
     }
 }
 
-impl AgentControl {
+impl LocalAgentControl {
     /// Restore persisted V2 agent identities without reopening their runtimes.
     pub(crate) async fn restore_v2_agent_metadata(
         &self,
@@ -689,7 +689,7 @@ impl AgentControl {
         };
         let notification_source = session_source.clone();
 
-        // The same `AgentControl` is sent to spawn the thread.
+        // The same `LocalAgentControl` is sent to spawn the thread.
         let new_thread = match (session_source, options.fork_mode.as_ref(), inheritance) {
             (Some(session_source), Some(_), inheritance) => {
                 Box::pin(self.spawn_forked_thread(

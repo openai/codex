@@ -1,4 +1,4 @@
-use super::AgentControl;
+use super::LocalAgentControl;
 use crate::agent::AgentStatus;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -45,7 +45,7 @@ impl Drop for V2ResidencySlot {
     }
 }
 
-impl AgentControl {
+impl LocalAgentControl {
     pub(super) async fn reserve_v2_residency_slot(
         &self,
         state: &Arc<ThreadManagerState>,

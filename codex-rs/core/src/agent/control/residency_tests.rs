@@ -1,6 +1,6 @@
 use crate::StartThreadOptions;
 use crate::ThreadManager;
-use crate::agent::AgentControl;
+use crate::agent::LocalAgentControl;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
@@ -134,7 +134,7 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
 }
 
 async fn spawn_v2_subagent(
-    control: &AgentControl,
+    control: &LocalAgentControl,
     state: &Arc<ThreadManagerState>,
     config: Config,
     parent_thread_id: ThreadId,

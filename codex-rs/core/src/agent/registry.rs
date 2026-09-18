@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering;
 /// the current implementation, it limits:
 /// * Total number of sub-agents (i.e. threads) per user session
 ///
-/// This structure is shared by all agents in the same user session (because the `AgentControl`
+/// This structure is shared by all agents in the same user session (because the `LocalAgentControl`
 /// is).
 #[derive(Default)]
 pub(crate) struct AgentRegistry {
