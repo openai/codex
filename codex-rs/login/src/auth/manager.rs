@@ -2074,6 +2074,13 @@ pub trait AuthManagerConfig {
     fn auth_route_config(&self) -> AuthRouteConfig;
 }
 
+/// Runtime storage and network policy shared by independent credential managers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthRuntimeConfig {
+    pub codex_home: PathBuf,
+    pub auth_route_config: AuthRouteConfig,
+}
+
 impl Debug for AuthManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthManager")
@@ -2695,6 +2702,14 @@ impl AuthManager {
 
     pub fn codex_api_key_env_enabled(&self) -> bool {
         self.enable_codex_api_key_env
+    }
+
+    /// Returns policy only; independent credential managers own their own state and lifecycle.
+    pub fn runtime_config(&self) -> AuthRuntimeConfig {
+        AuthRuntimeConfig {
+            codex_home: self.codex_home.clone(),
+            auth_route_config: self.auth_route_config.clone(),
+        }
     }
 
     /// Convenience constructor returning an `Arc` wrapper.

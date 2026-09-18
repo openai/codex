@@ -1,4 +1,4 @@
-//! Model catalog cache identity follows provider routing and effective auth.
+//! Model catalog cache identity follows provider routing, effective auth, and gateway OAuth config.
 //! Only a digest is persisted; access tokens for ChatGPT are excluded so token
 //! rotation does not discard a catalog for the same account, user, and plan.
 
@@ -75,6 +75,10 @@ pub(crate) fn identity(
     for (name, value) in headers {
         field(name.as_str().as_bytes());
         field(value.as_bytes());
+    }
+    // Preserve existing identities for providers without gateway OAuth.
+    if let Some(gateway_oauth) = &provider_info.gateway_oauth {
+        field(&serde_json::to_vec(gateway_oauth)?);
     }
     Ok(format!("{:x}", digest.finalize()))
 }

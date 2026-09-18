@@ -18,6 +18,7 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::GatewayAuthManager;
 use codex_login::collect_auth_env_telemetry;
 use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
@@ -33,8 +34,10 @@ use codex_response_debug_context::telemetry_transport_error_message;
 use http::HeaderMap;
 use tokio::time::timeout;
 
+use crate::auth::ResolvedProviderAuth;
 use crate::auth::agent_identity_telemetry;
 use crate::auth::resolve_provider_auth;
+use crate::combined_auth::compose_auth;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
@@ -44,6 +47,7 @@ const MODELS_ENDPOINT: &str = "/models";
 pub(crate) struct OpenAiModelsEndpoint {
     provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     transport_builder: Arc<dyn ModelsTransportBuilder>,
 }
 
@@ -51,10 +55,12 @@ impl OpenAiModelsEndpoint {
     pub(crate) fn new(
         provider_info: ModelProviderInfo,
         auth_manager: Option<Arc<AuthManager>>,
+        gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
     ) -> Self {
         Self {
             provider_info,
             auth_manager,
+            gateway_auth_manager,
             transport_builder: Arc::new(RouteAwareModelsTransportBuilder),
         }
     }
@@ -91,7 +97,13 @@ impl OpenAiModelsEndpoint {
             // Codex metadata is served by the Codex backend, not the public /v1/models API.
             api_provider.base_url = CHATGPT_CODEX_BASE_URL.to_string();
         }
-        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
+        let resolved = compose_auth(
+            &self.provider_info,
+            self.gateway_auth_manager.as_ref(),
+            ResolvedProviderAuth::new(resolve_provider_auth(auth.as_ref(), &self.provider_info)?),
+        )
+        .await?;
+        let api_auth = resolved.auth;
         let request_url =
             ModelsClient::<ReqwestTransport>::request_url(&api_provider, client_version);
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
@@ -396,6 +408,7 @@ mod tests {
                     ..ModelProviderInfo::create_openai_provider(base_url.map(str::to_string))
                 },
                 auth_manager: Some(auth.clone()),
+                gateway_auth_manager: None,
                 transport_builder: capture.clone(),
             });
             let manager = OpenAiModelsManager::new_without_cache(endpoint.clone(), Some(auth));
@@ -443,6 +456,7 @@ mod tests {
         let endpoint = OpenAiModelsEndpoint::new(
             provider_info_with_command_auth(),
             /*auth_manager*/ None,
+            /*gateway_auth_manager*/ None,
         );
 
         assert!(endpoint.has_command_auth());
@@ -453,6 +467,7 @@ mod tests {
         let endpoint = OpenAiModelsEndpoint::new(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             /*auth_manager*/ None,
+            /*gateway_auth_manager*/ None,
         );
 
         assert!(!endpoint.has_command_auth());
@@ -475,6 +490,7 @@ mod tests {
         let endpoint = OpenAiModelsEndpoint {
             provider_info: ModelProviderInfo::create_openai_provider(Some(server.uri())),
             auth_manager: None,
+            gateway_auth_manager: None,
             transport_builder: Arc::new(RecordingTransportBuilder {
                 observed_request: Arc::clone(&observed_request),
             }),
@@ -520,6 +536,7 @@ mod tests {
         let endpoint = OpenAiModelsEndpoint {
             provider_info,
             auth_manager: None,
+            gateway_auth_manager: None,
             transport_builder: Arc::new(RecordingTransportBuilder {
                 observed_request: Arc::new(Mutex::new(None)),
             }),
@@ -597,7 +614,11 @@ mod tests {
             "us".into(),
         )]));
         let manager = OpenAiModelsManager::new_without_cache(
-            Arc::new(OpenAiModelsEndpoint::new(provider, Some(auth.clone()))),
+            Arc::new(OpenAiModelsEndpoint::new(
+                provider,
+                Some(auth.clone()),
+                /*gateway_auth_manager*/ None,
+            )),
             Some(auth.clone()),
         );
         let catalog = manager

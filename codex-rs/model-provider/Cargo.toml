@@ -20,11 +20,13 @@ codex-aws-auth = { workspace = true }
 codex-http-client = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-keyring-store = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
+codex-secrets = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

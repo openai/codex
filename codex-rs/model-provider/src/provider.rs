@@ -11,6 +11,7 @@ use codex_api::TransportError;
 use codex_api::is_azure_responses_provider;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::GatewayAuthManager;
 use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
@@ -29,6 +30,7 @@ use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
 use crate::auth::resolve_provider_auth_for_scope;
+use crate::combined_auth::compose_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
 use crate::workspace_routing::WorkspaceRoutingContext;
 
@@ -178,6 +180,12 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// to think through whether Codex should have a unified provider-specific auth
     /// manager throughout the codebase; that is a larger refactor than this change.
     fn auth_manager(&self) -> Option<Arc<AuthManager>>;
+
+    /// Returns the gateway credential manager shared with inference and model discovery.
+    /// Hosts use this handle for explicit login; configured setup failures remain errors.
+    fn gateway_auth_manager(&self) -> std::io::Result<Option<Arc<GatewayAuthManager>>> {
+        Ok(None)
+    }
 
     /// Returns whether this transport failure can be recovered by provider-scoped authentication.
     ///
@@ -352,25 +360,44 @@ pub fn create_model_provider(
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
     if provider_info.is_amazon_bedrock() {
-        Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
-    } else {
-        Arc::new(ConfiguredModelProvider::new(provider_info, auth_manager))
+        return Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager));
     }
+    let gateway_auth_manager = provider_info.gateway_oauth.as_ref().map(|config| {
+        provider_info.validate()?;
+        let manager = auth_manager
+            .as_ref()
+            .ok_or_else(|| "gateway_oauth requires auth runtime configuration".to_string())?;
+        crate::shared_state::process_shared_state()
+            .gateway_auth(config, &manager.runtime_config())
+            .map_err(|_| "failed to create provider OAuth HTTP client".to_string())
+    });
+    let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
+    Arc::new(ConfiguredModelProvider::new(
+        provider_info,
+        auth_manager,
+        gateway_auth_manager,
+    ))
 }
 
-/// Runtime model provider backed by configured `ModelProviderInfo`.
+/// Runtime model provider that orchestrates primary and gateway credentials.
 #[derive(Clone, Debug)]
 struct ConfiguredModelProvider {
     info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
+    // Construct eagerly; report setup failures when auth is requested because the factory is infallible.
+    gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
 }
 
 impl ConfiguredModelProvider {
-    fn new(provider_info: ModelProviderInfo, auth_manager: Option<Arc<AuthManager>>) -> Self {
-        let auth_manager = auth_manager_for_provider(auth_manager, &provider_info);
+    fn new(
+        info: ModelProviderInfo,
+        auth_manager: Option<Arc<AuthManager>>,
+        gateway_auth_manager: Option<Result<Arc<GatewayAuthManager>, String>>,
+    ) -> Self {
         Self {
-            info: provider_info,
+            info,
             auth_manager,
+            gateway_auth_manager,
         }
     }
 }
@@ -412,6 +439,13 @@ impl ModelProvider for ConfiguredModelProvider {
         self.auth_manager.clone()
     }
 
+    fn gateway_auth_manager(&self) -> std::io::Result<Option<Arc<GatewayAuthManager>>> {
+        self.gateway_auth_manager
+            .clone()
+            .transpose()
+            .map_err(std::io::Error::other)
+    }
+
     fn supports_attestation(&self) -> bool {
         self.auth_manager
             .as_ref()
@@ -425,6 +459,44 @@ impl ModelProvider for ConfiguredModelProvider {
                 Some(auth_manager) => auth_manager.auth().await,
                 None => None,
             }
+        })
+    }
+
+    fn api_auth(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
+        Box::pin(async move {
+            let auth = self.auth().await;
+            let primary = resolve_provider_auth(auth.as_ref(), &self.info)?;
+            Ok(compose_auth(
+                &self.info,
+                self.gateway_auth_manager.as_ref(),
+                ResolvedProviderAuth::new(primary),
+            )
+            .await?
+            .auth)
+        })
+    }
+
+    fn api_auth_for_scope(
+        &self,
+        scope: ProviderAuthScope,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
+        Box::pin(async move {
+            let resolved = if provider_uses_first_party_auth_path(&self.info) {
+                let auth = self.auth().await;
+                resolve_provider_auth_for_scope(
+                    self.auth_manager.clone(),
+                    auth.as_ref(),
+                    &self.info,
+                    scope,
+                )
+                .await?
+            } else {
+                let auth = self.auth().await;
+                ResolvedProviderAuth::new(resolve_provider_auth(auth.as_ref(), &self.info)?)
+            };
+            compose_auth(&self.info, self.gateway_auth_manager.as_ref(), resolved).await
         })
     }
 
@@ -485,6 +557,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
+                    self.gateway_auth_manager.clone(),
                 ));
                 Arc::new(OpenAiModelsManager::new(
                     codex_home,
@@ -508,6 +581,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
+                    self.gateway_auth_manager.clone(),
                 ));
                 Arc::new(OpenAiModelsManager::new_without_cache(
                     endpoint,
@@ -531,6 +605,7 @@ impl ModelProvider for ConfiguredModelProvider {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
+                    self.gateway_auth_manager.clone(),
                 ));
                 Arc::new(OpenAiModelsManager::new_with_cache(
                     cache,
