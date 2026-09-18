@@ -678,7 +678,6 @@ mod tests {
     use super::load_plugin_manifest;
     use codex_exec_server::EnvironmentManager;
     use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-    use codex_plugin::PluginProvider;
     use codex_plugin::ResolvedPlugin;
     use codex_plugin::manifest::PluginManifest as GenericPluginManifest;
     use codex_plugin::manifest::PluginManifestHooks;
@@ -963,7 +962,7 @@ mod tests {
         };
 
         let executor_plugin = provider
-            .resolve(&selected_root)
+            .resolve_bound(&selected_root)
             .await
             .expect("resolve executor plugin")
             .expect("plugin descriptor");
@@ -984,7 +983,7 @@ mod tests {
         )
         .expect("valid expected descriptor");
 
-        assert_eq!(executor_plugin, expected_plugin);
+        assert_eq!(executor_plugin.plugin(), &expected_plugin);
     }
 
     #[test]

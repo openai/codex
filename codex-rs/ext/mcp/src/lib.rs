@@ -11,13 +11,13 @@ use codex_mcp::hosted_plugin_runtime_mcp_server_config;
 #[path = "event_stream_tests.rs"]
 mod event_stream_tests;
 mod plugin;
-mod provider;
 mod stream_manager;
 
-pub use provider::PluginListQuery;
-pub use provider::PluginProvider;
-pub use provider::PluginProviderError;
-pub use provider::PluginProviderFuture;
+pub use codex_core_plugins::PluginListQuery;
+pub use codex_core_plugins::PluginProvider;
+pub use codex_core_plugins::PluginProviderError;
+pub use codex_core_plugins::PluginProviderFuture;
+pub use codex_core_plugins::PluginProviderResult;
 pub use stream_manager::McpEventStreamManager;
 pub use stream_manager::McpEventStreamUpdate;
 
