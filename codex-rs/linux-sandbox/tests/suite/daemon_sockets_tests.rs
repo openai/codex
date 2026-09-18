@@ -65,6 +65,15 @@ fn private_tmp_fixture() {
     if !mount.status.success() {
         std::process::exit(/*code*/ 77);
     }
+    // Namespace mounts have non-path roots such as `net:[inode]`. An unrelated
+    // one must not stop startup or disable the socket-isolation checks below.
+    let namespace = "/tmp/network-namespace";
+    std::fs::File::create(namespace).unwrap();
+    let mount = std::process::Command::new("mount")
+        .args(["--bind", "/proc/self/ns/net", namespace])
+        .output()
+        .unwrap();
+    assert!(mount.status.success(), "{mount:?}");
     let root = codex_uds::prepare_shared_daemon_socket_directory().unwrap();
     let endpoint = root.join("rpc.sock");
     let _daemon = UnixListener::bind(&endpoint).unwrap();

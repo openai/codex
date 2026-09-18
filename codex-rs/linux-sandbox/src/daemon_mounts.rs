@@ -62,8 +62,13 @@ fn check_mounts(
         let [id, parent, mount_device, root, destination] = fields.as_slice() else {
             return Err(invalid());
         };
-        let root = mount_path(root)?;
         let destination = mount_path(destination)?;
+        // Only roots on the socket filesystem can identify aliases. Other
+        // filesystems can use non-path roots such as nsfs `mnt:[inode]`, but
+        // their destinations still matter for ancestry and nested-mount checks.
+        let root = (*mount_device == device.as_bytes())
+            .then(|| mount_path(root))
+            .transpose()?;
         mounts.push((*id, *parent, *mount_device, root, destination));
     }
     let (location, containing_mount) = if let Some(mount_id) = mount_id {
@@ -77,6 +82,7 @@ fn check_mounts(
         if *mount_device != device.as_bytes() {
             return Err(invalid());
         }
+        let root = root.as_ref().ok_or_else(invalid)?;
         let relative = directory.strip_prefix(destination).map_err(|_| invalid())?;
         let mut current = Some(selected);
         let mut visible_child: Option<&Path> = None;
@@ -106,8 +112,8 @@ fn check_mounts(
         // on the backing location, and do not assume any aliases are hidden.
         let locations: BTreeSet<_> = mounts
             .iter()
-            .filter(|(_, _, mount_device, ..)| *mount_device == device.as_bytes())
             .filter_map(|(_, _, _, root, destination)| {
+                let root = root.as_ref()?;
                 directory
                     .strip_prefix(destination)
                     .ok()
@@ -119,10 +125,10 @@ fn check_mounts(
         }
         (locations.into_iter().next().ok_or_else(invalid)?, None)
     };
-    for (id, _, mount_device, root, destination) in &mounts {
+    for (id, _, _, root, destination) in &mounts {
         // Nested mounts can introduce another filesystem (or an individual socket) under the mask.
         let nested = destination != directory && destination.starts_with(directory);
-        let alias = if *mount_device == device.as_bytes() {
+        let alias = if let Some(root) = root {
             if let Ok(relative) = location.strip_prefix(root) {
                 Some(destination.join(relative))
             } else if root.starts_with(&location) {
