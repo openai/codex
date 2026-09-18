@@ -70,6 +70,7 @@ pub(crate) use self::interrupt::AgentInterruptError;
 pub(crate) use self::interrupt::AgentInterruptOutcome;
 use self::residency::V2Residency;
 
+mod completion;
 mod delivery;
 mod execution;
 mod interrupt;
