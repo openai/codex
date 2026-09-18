@@ -703,7 +703,7 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                     text: "start".to_string(),
                     text_elements: Vec::new(),
                 }],
-                turn_trigger: Some("user".to_string()),
+                turn_trigger: Some("goal".to_string()),
                 cyber_access_program: Some(CyberAccessProgram::DaybreakBlue),
                 ..Default::default()
             },
@@ -746,7 +746,7 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                     text: "steer".to_string(),
                     text_elements: Vec::new(),
                 }],
-                turn_trigger: Some("goal".to_string()),
+                turn_trigger: Some("user".to_string()),
                 cyber_access_program: Some(CyberAccessProgram::Standard),
                 ..Default::default()
             },
@@ -773,7 +773,7 @@ async fn turn_start_steers_active_turn_and_returns_active_turn_id() -> Result<()
                 .as_str()
                 .context("expected x-codex-turn-metadata")?,
         )?;
-        assert_eq!(turn_metadata["turn_trigger"].as_str(), Some("user"));
+        assert_eq!(turn_metadata["turn_trigger"].as_str(), Some("goal"));
     }
     Ok(())
 }

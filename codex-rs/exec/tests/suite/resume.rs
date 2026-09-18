@@ -238,6 +238,18 @@ async fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
     assert!(content.contains(&marker2));
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
+    for request in &requests {
+        let body = request.body_json();
+        let metadata: Value = serde_json::from_str(
+            body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .context("canonical turn metadata")?,
+        )?;
+        assert_eq!(
+            (&metadata["thread_id"], &metadata["turn_trigger"]),
+            (&meta["payload"]["id"], &serde_json::json!("exec"))
+        );
+    }
     let resumed_request = requests[1].body_json().to_string();
     assert!(resumed_request.contains(&marker));
     assert!(resumed_request.contains(&marker2));

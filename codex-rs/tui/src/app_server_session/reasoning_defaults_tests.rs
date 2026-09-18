@@ -1,4 +1,4 @@
-//! Verify embedded TUI reasoning configuration and its outbound model request.
+//! Verify embedded TUI reasoning configuration and metadata on its outbound model request.
 
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
@@ -70,20 +70,27 @@ stream_max_retries = 0
             .await?;
         let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
         let started = app_server.start_thread(&config).await?;
-        let request_id = app_server.next_request_id();
-        let _: TurnStartResponse = app_server
-            .client
-            .request_typed(ClientRequest::TurnStart {
-                request_id,
-                params: TurnStartParams {
-                    thread_id: started.session.thread_id.to_string(),
-                    input: vec![UserInput::Text {
-                        text: "hello".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    ..Default::default()
-                },
-            })
+        let turn = app_server
+            .turn_start(
+                started.session.thread_id,
+                "tui-user-message".to_string(),
+                vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                config.cwd.to_path_buf(),
+                /*approval_policy*/ None,
+                /*approvals_reviewer*/ None,
+                TurnPermissionsOverride::Preserve,
+                &config.workspace_roots,
+                started.session.model.clone(),
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
+                /*output_schema*/ None,
+            )
             .await?;
         tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 30), async {
             while let Some(event) = app_server.next_event().await {
@@ -105,6 +112,23 @@ stream_max_retries = 0
             json!({"summary": body["reasoning"]["summary"], "stream_options": body["stream_options"]}),
             json!({"summary": summary, "stream_options": stream_options}),
             "settings: {settings}"
+        );
+        let metadata: serde_json::Value = serde_json::from_str(
+            body["client_metadata"]["x-codex-turn-metadata"]
+                .as_str()
+                .expect("canonical turn metadata"),
+        )?;
+        assert_eq!(
+            (
+                &metadata["thread_id"],
+                &metadata["turn_id"],
+                &metadata["turn_trigger"],
+            ),
+            (
+                &json!(started.session.thread_id),
+                &json!(turn.turn.id),
+                &json!("user"),
+            )
         );
         app_server.shutdown().await?;
     }
