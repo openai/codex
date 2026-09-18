@@ -75,13 +75,13 @@ pub(super) fn clean_up(lifecycle: &PackageLifecycle, record: InstallationRecord)
             }),
         "waiting for the authenticated runtime owner and home before sandbox file cleanup"
     );
-    let record = crate::registered_runtime::prepare_cleanup(record)?;
+    let mut record = crate::registered_runtime::prepare_cleanup(record)?;
     let removal = {
         let installation = lifecycle.installation.borrow();
         let installation = installation
             .as_ref()
             .context("authenticated installation is missing")?;
-        crate::registered_runtime::prepare_removal(installation.user_token.0, &record)?
+        crate::registered_runtime::prepare_removal(installation.user_token.0, &mut record)?
     };
     let prepared =
         prepare_packaged_windows_sandbox_cleanup_with_retained_tokens(&removal.tokens())?;

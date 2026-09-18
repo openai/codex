@@ -53,7 +53,9 @@ pub(super) fn foreground_owner(
 
 pub(super) fn run(state: &ServiceState, package_lifecycle: &PackageLifecycle) -> Result<()> {
     let cleaned = Cell::new(false);
-    let restore_owner = || {
+    let last_cleanup_error = Cell::new(None);
+    let restore_owner = || -> Result<()> {
+        crate::registered_runtime::restore_disabled_accounts()?;
         let restored = crate::installation_record::load().and_then(|record| {
             record.map_or(Ok(()), |record| {
                 package_lifecycle.restore_logged_in_owner(record.session_id)
@@ -65,11 +67,12 @@ pub(super) fn run(state: &ServiceState, package_lifecycle: &PackageLifecycle) ->
                 &format!("unable to restore package uninstall listener: {error:#}"),
             );
         }
+        Ok(())
     };
     crate::ipc::run(
         Arc::clone(&state.shutdown),
         || {
-            restore_owner();
+            restore_owner()?;
             state.report_status(SERVICE_RUNNING, NO_ERROR)?;
             log_information(
                 EVENT_SERVICE_STARTED,
@@ -81,8 +84,9 @@ pub(super) fn run(state: &ServiceState, package_lifecycle: &PackageLifecycle) ->
             package_lifecycle.register_authenticated_user(installation, user_token)
         },
         || loop {
-            restore_owner();
+            restore_owner()?;
             if !crate::package_lifecycle::runtime_owner_removed()? {
+                last_cleanup_error.set(None);
                 return Ok(());
             }
             let Err(error) = package_lifecycle.clean_up() else {
@@ -97,10 +101,7 @@ pub(super) fn run(state: &ServiceState, package_lifecycle: &PackageLifecycle) ->
             }) {
                 return Err(error);
             }
-            log_error(
-                EVENT_SERVICE_FAILED,
-                &format!("sandbox cleanup deferred: {error:#}"),
-            );
+            log_cleanup_error(&error, &last_cleanup_error);
             // Keep the pipe available during pre-fence backoff. A reinstall
             // resumes admission on the next owner check; SCM stops are never reset.
             if !wait_for_cleanup_retry(state) {
@@ -122,6 +123,7 @@ pub(super) fn run(state: &ServiceState, package_lifecycle: &PackageLifecycle) ->
 /// Retries the current teardown step, never a phase recovered from stored intent.
 pub(crate) fn retry_cleanup(mut operation: impl FnMut() -> Result<()>) -> Result<()> {
     let mut stop_failures = 0;
+    let last_cleanup_error = Cell::new(None);
     loop {
         let Err(error) = operation() else {
             return Ok(());
@@ -129,10 +131,7 @@ pub(crate) fn retry_cleanup(mut operation: impl FnMut() -> Result<()>) -> Result
         let Some(state) = SERVICE_STATE.get() else {
             return Err(error);
         };
-        log_error(
-            EVENT_SERVICE_FAILED,
-            &format!("sandbox cleanup deferred: {error:#}"),
-        );
+        log_cleanup_error(&error, &last_cleanup_error);
         if state.stop_requested.load(Ordering::Acquire) {
             // SCM stop initiates uninstall cleanup rather than cancelling it.
             // Four one-second retry waits fit within the 10-second SCM wait hint.
@@ -145,6 +144,15 @@ pub(crate) fn retry_cleanup(mut operation: impl FnMut() -> Result<()>) -> Result
             return Err(error);
         }
     }
+}
+
+fn log_cleanup_error(error: &anyhow::Error, previous: &Cell<Option<String>>) {
+    let message = format!("sandbox cleanup deferred: {error:#}");
+    // Retrying an unchanged failure must not flood the Windows event log.
+    if previous.take().as_deref() != Some(message.as_str()) {
+        log_error(EVENT_SERVICE_FAILED, &message);
+    }
+    previous.set(Some(message));
 }
 
 fn wait_for_cleanup_retry(state: &ServiceState) -> bool {

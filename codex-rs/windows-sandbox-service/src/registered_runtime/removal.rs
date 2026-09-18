@@ -22,6 +22,7 @@ use anyhow::ensure;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading as threading;
@@ -54,23 +55,67 @@ impl PreparedRemoval {
     }
 }
 
+/// Restore durable temporary-enable intent before owner restoration or IPC admission.
+pub(crate) fn restore_disabled_accounts() -> Result<()> {
+    let _lock = codex_windows_sandbox::acquire_sandbox_setup_lock(/*timeout_ms*/ 5_000)?;
+    let Some(mut record) = crate::installation_record::load_runtime()? else {
+        return Ok(());
+    };
+    if !crate::installation_record::is_current_package_family(&record)? {
+        return Ok(());
+    }
+    super::validate_record(&record)?;
+    for index in 0..record.runtime()?.accounts.len() {
+        let account = &record.runtime()?.accounts[index];
+        if !account.cleanup_logon_pending {
+            continue;
+        }
+        super::validate_account_sid(account)?;
+        let flags = codex_windows_sandbox::local_user_flags(account.account.username())?
+            .context("cleanup account disappeared before flag restoration")?;
+        codex_windows_sandbox::set_local_user_flags(
+            account.account.username(),
+            flags | UF_ACCOUNTDISABLE,
+        )?;
+        record.runtime_mut()?.accounts[index].cleanup_logon_pending = false;
+        crate::installation_record::save_runtime(&record)?;
+    }
+    Ok(())
+}
+
 // The cleanup entry checked the service family; prepare_cleanup validated this record
 // under the same setup lock. Fresh logons below still require exact account-SID checks.
-pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Result<PreparedRemoval> {
+pub(crate) fn prepare(
+    owner_token: HANDLE,
+    record: &mut InstallationRecord,
+) -> Result<PreparedRemoval> {
     ensure!(
-        record.runtime()?.retiring.is_some(),
-        "runtime is not retiring"
+        record.runtime()?.retiring.is_none(),
+        "runtime is already retiring"
     );
     let mut tokens = Vec::new();
     let mut targets = Vec::new();
-    for account in &record.runtime()?.accounts {
-        if codex_windows_sandbox::local_user_flags(account.account.username())?.is_none() {
+    for index in 0..record.runtime()?.accounts.len() {
+        let account = record.runtime()?.accounts[index].clone();
+        let Some(flags) = codex_windows_sandbox::local_user_flags(account.account.username())?
+        else {
             ensure!(
                 super::registered_packages(&account.user_sid, &record.runtime()?.package_family)?
                     .is_empty(),
                 "runtime account is missing while its package remains registered"
             );
             continue;
+        };
+        // Persist the obligation before changing SAM, so process death cannot lose it.
+        if flags & UF_ACCOUNTDISABLE != 0 {
+            record.runtime_mut()?.accounts[index].cleanup_logon_pending = true;
+            // Older bundled clients also fail closed while account recovery is pending.
+            record.runtime_mut()?.ready_package = None;
+            crate::installation_record::save_runtime(record)?;
+            codex_windows_sandbox::set_local_user_flags(
+                account.account.username(),
+                flags & !UF_ACCOUNTDISABLE,
+            )?;
         }
         let token = with_owner_impersonation(owner_token, || {
             let mut pins = Vec::new();
@@ -82,7 +127,21 @@ pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Resul
                 &record.codex_home,
                 account.account,
             )
-        })?;
+        });
+        if flags & UF_ACCOUNTDISABLE != 0 {
+            super::validate_account_sid(&account)?;
+            let current_flags =
+                codex_windows_sandbox::local_user_flags(account.account.username())?
+                    .context("cleanup account disappeared before flag restoration")?;
+            codex_windows_sandbox::set_local_user_flags(
+                account.account.username(),
+                current_flags | UF_ACCOUNTDISABLE,
+            )
+            .context("restore disabled sandbox account after cleanup logon")?;
+            record.runtime_mut()?.accounts[index].cleanup_logon_pending = false;
+            crate::installation_record::save_runtime(record)?;
+        }
+        let token = token?;
         super::validate_target(
             token.as_raw_handle() as _,
             account.account,
@@ -94,6 +153,9 @@ pub(crate) fn prepare(owner_token: HANDLE, record: &InstallationRecord) -> Resul
         }));
         tokens.push(token);
     }
+    // Flag recovery is durable before the in-memory retirement generation exists.
+    record.runtime_mut()?.ready_package = None;
+    record.runtime_mut()?.retiring = Some(format!("{:?}", windows::core::GUID::new()?));
     let group_sid = if tokens.is_empty() {
         None
     } else {

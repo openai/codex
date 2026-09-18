@@ -93,7 +93,7 @@ impl RuntimeRegistration {
             && self
                 .accounts
                 .iter()
-                .all(|account| account.alias_path.is_some())
+                .all(|account| account.alias_path.is_some() && !account.cleanup_logon_pending)
     }
 }
 
@@ -119,7 +119,12 @@ impl InstallationRecord {
             "registered sandbox resources belong to a different owner or package"
         );
         ensure!(
-            self.runtime()?.retiring.is_none(),
+            self.runtime()?.retiring.is_none()
+                && self
+                    .runtime()?
+                    .accounts
+                    .iter()
+                    .all(|account| !account.cleanup_logon_pending),
             "registered sandbox cleanup must finish before provisioning"
         );
         Ok(())
@@ -128,6 +133,9 @@ impl InstallationRecord {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuntimeAccountRegistration {
+    /// Persisted before temporarily enabling an account; cleared only after re-disabling it.
+    #[serde(default)]
+    pub cleanup_logon_pending: bool,
     pub account: SandboxRuntimeAccount,
     pub user_sid: String,
     /// OS-resolved alias written by the service, never inferred from a user name.
