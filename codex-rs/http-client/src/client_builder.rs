@@ -7,6 +7,8 @@
 
 use http::HeaderMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -31,6 +33,7 @@ use crate::with_chatgpt_cloudflare_cookie_store;
 pub struct HttpClientBuilder {
     default_headers: Option<HeaderMap>,
     follow_redirects: bool,
+    redirect_observed: Option<Arc<AtomicBool>>,
     connect_timeout: Option<Duration>,
     chatgpt_cloudflare_cookie_store: bool,
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
@@ -88,6 +91,13 @@ impl HttpClientBuilder {
 
     pub fn without_redirects(mut self) -> Self {
         self.follow_redirects = false;
+        self
+    }
+
+    /// Marks the supplied flag when a redirect is encountered, preserving the default policy.
+    /// Use a fresh flag for each operation whose retry safety depends on its redirect history.
+    pub fn with_redirect_tracking(mut self, redirect_observed: Arc<AtomicBool>) -> Self {
+        self.redirect_observed = Some(redirect_observed);
         self
     }
 
@@ -284,6 +294,11 @@ impl HttpClientBuilder {
         }
         if !self.follow_redirects {
             builder = builder.redirect(reqwest::redirect::Policy::none());
+        } else if let Some(redirect_observed) = self.redirect_observed {
+            builder = builder.redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                redirect_observed.store(/*val*/ true, Ordering::Relaxed);
+                reqwest::redirect::Policy::default().redirect(attempt)
+            }));
         }
         if let Some(connect_timeout) = self.connect_timeout {
             builder = builder.connect_timeout(connect_timeout);
@@ -303,6 +318,7 @@ impl Default for HttpClientBuilder {
         Self {
             default_headers: None,
             follow_redirects: true,
+            redirect_observed: None,
             connect_timeout: None,
             chatgpt_cloudflare_cookie_store: false,
             chatgpt_cookie_store: None,

@@ -413,7 +413,7 @@ impl AccountRequestProcessor {
             _ = auth_changes.wait_for(|state| state.owner_generation != auth_state.owner_generation) => {
                 return Err(WorkspaceRoutingError::AccountChanged.into());
             }
-            result = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), read) => {
+            result = tokio::time::timeout(Duration::from_secs(/*secs*/ 15), read) => {
                 result.map_err(|_| WorkspaceRoutingError::DiscoveryTimeout)?
             }
         };

@@ -21,6 +21,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -30,7 +32,6 @@ use crate::auth::save_auth;
 use crate::callback_params::LIFE_SCIENCES_OAUTH_STATE_SUFFIX;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::LoginOnboardingEntrypoint;
-use crate::default_client::create_raw_auth_client;
 use crate::default_client::originator;
 use crate::oauth::AuthorizationCodeGrant;
 use crate::oauth::AuthorizationRequest;
@@ -55,6 +56,11 @@ use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use chrono::Utc;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClient;
+use codex_http_client::HttpClientBuilder;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::auth::AuthMode;
 use codex_utils_template::Template;
 use serde_json::Value as JsonValue;
@@ -418,7 +424,7 @@ async fn process_request(
             )
             .await
             {
-                Ok(tokens) => {
+                Ok((tokens, client)) => {
                     if let Err(message) = ensure_workspace_allowed(
                         opts.forced_chatgpt_workspace_id.as_deref(),
                         &tokens.id_token,
@@ -432,14 +438,10 @@ async fn process_request(
                         );
                     }
                     // Obtain API key via token-exchange and persist
-                    let api_key = obtain_api_key(
-                        &opts.issuer,
-                        &opts.client_id,
-                        &tokens.id_token,
-                        &opts.auth_route_config,
-                    )
-                    .await
-                    .ok();
+                    let api_key =
+                        obtain_api_key(&client, &opts.issuer, &opts.client_id, &tokens.id_token)
+                            .await
+                            .ok();
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
@@ -698,7 +700,7 @@ pub(crate) struct ExchangedTokens {
     pub refresh_token: String,
 }
 
-/// Exchanges an authorization code for tokens.
+/// Exchanges an authorization code for tokens and returns the client for further token exchanges.
 ///
 /// The returned error remains suitable for user-facing CLI/browser surfaces, so backend-provided
 /// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
@@ -711,38 +713,59 @@ pub(crate) async fn exchange_code_for_tokens(
     pkce: &PkceCodes,
     code: &str,
     auth_route_config: &AuthRouteConfig,
-) -> io::Result<ExchangedTokens> {
-    // Reuse the route selected for the issuer, rather than resolving the token path again.
-    let client = create_raw_auth_client(issuer.trim_end_matches('/'), auth_route_config)?;
-    let endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
-    let oauth = OAuthClient::new(
-        &client,
-        TokenEndpoint {
-            url: &endpoint,
-            client_id,
-            encoding: TokenEncoding::Form,
-            timeout: None,
-            error_body_limit: ErrorBodyLimit::Unlimited,
-        },
-    );
+) -> io::Result<(ExchangedTokens, HttpClient)> {
+    let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    let factory = auth_route_config.http_client_factory();
+    let allows_fallback = factory.allows_system_proxy_fallback();
+    let redirect_observed = Arc::new(AtomicBool::new(false));
+    let mut builder = HttpClientBuilder::new().without_request_logging();
+    if allows_fallback {
+        // Only bound connection establishment. A response timeout could mean the one-time code
+        // was consumed, so it must never cause another token POST.
+        builder = builder
+            .with_redirect_tracking(Arc::clone(&redirect_observed))
+            .connect_timeout(Duration::from_secs(10));
+    }
     info!(
         issuer = %sanitize_url_for_logging(issuer),
-        token_endpoint = %sanitize_url_for_logging(&endpoint),
+        token_endpoint = %sanitize_url_for_logging(&token_endpoint),
         %redirect_uri,
         "starting oauth token exchange"
     );
-    match oauth
-        .exchange_code(AuthorizationCodeGrant {
-            code,
+    let (mut client, mut result) = send_code_exchange_request(
+        factory,
+        builder.clone(),
+        &token_endpoint,
+        client_id,
+        redirect_uri,
+        pkce,
+        code,
+    )
+    .await?;
+    // A redirect means the original POST reached the server and may have consumed the code.
+    if matches!(&result, Err(OAuthError::Transport(error)) if error.is_connect())
+        && allows_fallback
+        && !redirect_observed.load(Ordering::Relaxed)
+    {
+        info!("oauth token connection failed; retrying with system proxy");
+        let factory = factory
+            .clone()
+            .with_outbound_proxy_policy(OutboundProxyPolicy::RespectSystemProxy);
+        (client, result) = send_code_exchange_request(
+            &factory,
+            builder,
+            &token_endpoint,
+            client_id,
             redirect_uri,
             pkce,
-            resource: None,
-        })
-        .await
-    {
+            code,
+        )
+        .await?;
+    }
+    match result {
         Ok(tokens) => {
             info!("oauth token exchange succeeded");
-            Ok(tokens)
+            Ok((tokens, client))
         }
         Err(OAuthError::Rejected(rejection)) => {
             if let Some(error) = rejection.body_read_error {
@@ -767,6 +790,41 @@ pub(crate) async fn exchange_code_for_tokens(
         }
         Err(error @ OAuthError::InvalidResponse) => Err(io::Error::other(error)),
     }
+}
+
+async fn send_code_exchange_request(
+    factory: &HttpClientFactory,
+    builder: HttpClientBuilder,
+    token_endpoint: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    pkce: &PkceCodes,
+    code: &str,
+) -> io::Result<(HttpClient, Result<ExchangedTokens, OAuthError>)> {
+    let client = builder.build_respecting_outbound_proxy_policy(
+        factory,
+        token_endpoint,
+        ClientRouteClass::Auth,
+    )?;
+    let oauth = OAuthClient::new(
+        &client,
+        TokenEndpoint {
+            url: token_endpoint,
+            client_id,
+            encoding: TokenEncoding::Form,
+            timeout: None,
+            error_body_limit: ErrorBodyLimit::Unlimited,
+        },
+    );
+    let result = oauth
+        .exchange_code(AuthorizationCodeGrant {
+            code,
+            redirect_uri,
+            pkce,
+            resource: None,
+        })
+        .await;
+    Ok((client, result))
 }
 
 /// Persists exchanged credentials using the configured local auth store.
@@ -953,10 +1011,10 @@ fn html_escape(input: &str) -> String {
 
 /// Exchanges an authenticated ID token for an API-key style access token.
 pub(crate) async fn obtain_api_key(
+    client: &HttpClient,
     issuer: &str,
     client_id: &str,
     id_token: &str,
-    auth_route_config: &AuthRouteConfig,
 ) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
@@ -964,7 +1022,6 @@ pub(crate) async fn obtain_api_key(
         access_token: String,
     }
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
-    let client = create_raw_auth_client(&token_endpoint, auth_route_config)?;
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")

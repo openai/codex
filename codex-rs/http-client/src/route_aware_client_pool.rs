@@ -312,6 +312,16 @@ impl RouteAwareClientPool {
         self.http_client_factory.outbound_proxy_policy()
     }
 
+    pub fn allows_system_proxy_fallback(&self) -> bool {
+        self.http_client_factory.allows_system_proxy_fallback()
+    }
+
+    /// Changes routing while preserving transport settings and clients cached by resolved route.
+    pub fn with_outbound_proxy_policy(mut self, policy: OutboundProxyPolicy) -> Self {
+        self.http_client_factory = self.http_client_factory.with_outbound_proxy_policy(policy);
+        self
+    }
+
     /// Creates a pool with the shared default HTTP transport settings.
     pub fn new(http_client_factory: HttpClientFactory, route_class: ClientRouteClass) -> Self {
         Self::with_builder(http_client_factory, route_class, HttpClientBuilder::new())

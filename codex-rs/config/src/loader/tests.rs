@@ -1056,3 +1056,25 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
         0
     );
 }
+
+#[test]
+fn project_config_cannot_change_system_proxy_routing() {
+    for key in ["respect_system_proxy", "system_proxy_fallback"] {
+        for enabled in [false, true] {
+            let mut config: TomlValue =
+                toml::from_str(&format!("[features]\n{key} = {enabled}\nplugins = true"))
+                    .expect("valid project config");
+            let ignored = sanitize_project_config(
+                &mut config,
+                CredentialBrokerProjectState::Unconfigured,
+                &[],
+            );
+            assert_eq!(ignored, vec![format!("features.{key}")]);
+            assert_eq!(
+                config,
+                toml::from_str::<TomlValue>("[features]\nplugins = true")
+                    .expect("valid expected config"),
+            );
+        }
+    }
+}

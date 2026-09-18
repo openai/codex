@@ -125,6 +125,7 @@ fn request_builder_debug_redacts_url_secrets() {
         concat!(
             "RouteAwareRequestBuilder { pool: RouteAwareClientPool { ",
             "http_client_factory: HttpClientFactory { outbound_proxy_policy: ReqwestDefault, ",
+            "system_proxy_fallback: false, ",
             "network_policy: NetworkPolicy { managed: false, .. } }, ",
             "route_class: Api, .. }, method: Some(GET), ",
             "url: Some(\"<redacted>\"), .. }"

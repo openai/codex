@@ -1650,7 +1650,10 @@ impl Config {
         } else {
             OutboundProxyPolicy::ReqwestDefault
         };
-        let factory = HttpClientFactory::new(outbound_proxy_policy);
+        let mut factory = HttpClientFactory::new(outbound_proxy_policy);
+        if !self.respect_system_proxy && self.features.enabled(Feature::SystemProxyFallback) {
+            factory = factory.with_system_proxy_fallback();
+        }
         if self.features.enabled(Feature::Psp) {
             factory.with_chatgpt_cookies([HeaderValue::from_static("oai-chat-psp=true")])
         } else {
@@ -2976,17 +2979,8 @@ pub fn resolve_bootstrap_respect_system_proxy(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<bool> {
-    let configured_features = Features::from_sources(
-        FeatureConfigSource {
-            features: cfg.features.as_ref(),
-            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-        },
-        FeatureConfigSource::default(),
-        FeatureOverrides::default(),
-    );
-    let features =
-        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
-    Ok(features.get().enabled(Feature::RespectSystemProxy))
+    resolve_bootstrap_http_client_factory(cfg, feature_requirements)
+        .map(|factory| factory.outbound_proxy_policy() == OutboundProxyPolicy::RespectSystemProxy)
 }
 
 /// Resolves auth route settings for the initial cloud-config bootstrap.
@@ -3003,14 +2997,28 @@ pub fn resolve_bootstrap_http_client_factory(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<HttpClientFactory> {
-    resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
-        let outbound_proxy_policy = if respect_system_proxy {
-            OutboundProxyPolicy::RespectSystemProxy
-        } else {
-            OutboundProxyPolicy::ReqwestDefault
-        };
-        HttpClientFactory::new(outbound_proxy_policy)
-    })
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    let features =
+        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
+    let outbound_proxy_policy = if features.enabled(Feature::RespectSystemProxy) {
+        OutboundProxyPolicy::RespectSystemProxy
+    } else {
+        OutboundProxyPolicy::ReqwestDefault
+    };
+    let mut factory = HttpClientFactory::new(outbound_proxy_policy);
+    if outbound_proxy_policy == OutboundProxyPolicy::ReqwestDefault
+        && features.enabled(Feature::SystemProxyFallback)
+    {
+        factory = factory.with_system_proxy_fallback();
+    }
+    Ok(factory)
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(

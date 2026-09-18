@@ -32,7 +32,7 @@ use tokio::sync::OnceCell;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
-pub(crate) const CLOUD_CONFIG_BUNDLE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const CLOUD_CONFIG_BUNDLE_TIMEOUT: Duration = Duration::from_secs(20);
 const CLOUD_CONFIG_BUNDLE_MAX_ATTEMPTS: usize = 5;
 const CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
 const CLOUD_CONFIG_BUNDLE_TIMEOUT_RETRY_INTERVAL: Duration = Duration::from_secs(5);
