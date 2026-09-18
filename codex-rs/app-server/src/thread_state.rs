@@ -3,6 +3,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::ThreadHistoryTurnMetadata;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
@@ -168,6 +169,10 @@ impl ThreadState {
     /// Returns the same turn ID as `active_turn_snapshot` without cloning its items.
     pub(crate) fn active_turn_id(&self) -> Option<&str> {
         self.current_turn_history.active_turn_id()
+    }
+
+    pub(crate) fn active_turn_metadata_snapshot(&self) -> Option<ThreadHistoryTurnMetadata> {
+        self.current_turn_history.active_turn_metadata_snapshot()
     }
 
     pub(crate) fn register_shutdown_drain_waiter(&mut self) -> oneshot::Receiver<()> {

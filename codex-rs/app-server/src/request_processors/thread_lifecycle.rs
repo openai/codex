@@ -574,21 +574,31 @@ pub(super) async fn handle_pending_thread_resume_request(
     pending_thread_unloads: &Arc<Mutex<HashSet<ThreadId>>>,
     mut pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
-    let active_turn = {
+    let (active_turn_metadata, active_turn) = {
         let state = thread_state.lock().await;
-        state.active_turn_snapshot()
+        let needs_items = pending.include_turns
+            || pending
+                .initial_turns_page
+                .as_ref()
+                .is_some_and(|page| !matches!(page.items_view, Some(TurnItemsView::NotLoaded)));
+        let active_turn = if needs_items {
+            state.active_turn_snapshot()
+        } else {
+            None
+        };
+        (state.active_turn_metadata_snapshot(), active_turn)
     };
     tracing::debug!(
         thread_id = %conversation_id,
         request_id = ?pending.request_id,
-        active_turn_present = active_turn.is_some(),
-        active_turn_id = ?active_turn.as_ref().map(|turn| turn.id.as_str()),
-        active_turn_status = ?active_turn.as_ref().map(|turn| &turn.status),
+        active_turn_present = active_turn_metadata.is_some(),
+        active_turn_id = ?active_turn_metadata.as_ref().map(|turn| turn.turn_id.as_str()),
+        active_turn_status = ?active_turn_metadata.as_ref().map(|turn| &turn.status),
         "composing running thread resume response"
     );
     let has_live_in_progress_turn =
         matches!(conversation.agent_status().await, AgentStatus::Running)
-            || active_turn
+            || active_turn_metadata
                 .as_ref()
                 .is_some_and(|turn| matches!(turn.status, TurnStatus::InProgress));
 
@@ -619,6 +629,11 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status.clone(),
         has_live_in_progress_turn,
     );
+    let active_turn = if pending.initial_turns_page.is_some() {
+        active_turn.or_else(|| active_turn_metadata.map(Turn::from))
+    } else {
+        None
+    };
     let mut initial_turns_page = if let Some(mut page) = pending.paginated_initial_turns_page.take()
     {
         if let (Some(active_turn), Some(params)) =
