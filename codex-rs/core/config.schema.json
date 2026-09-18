@@ -7086,6 +7086,13 @@
       ],
       "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
     },
+    "model_post_turn_compact_threshold_percent": {
+      "description": "Percentage of the usable context window that triggers compaction after a final response. Existing auto-compaction limits still apply. Omitted or zero disables turn-end compaction; valid values are 0–100.",
+      "format": "uint8",
+      "maximum": 100.0,
+      "minimum": 0.0,
+      "type": "integer"
+    },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
       "type": "string"

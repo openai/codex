@@ -16,6 +16,7 @@ pub(crate) struct ContextWindowTokenStatus {
     pub(crate) auto_compact_window_prefill_tokens: Option<i64>,
     pub(crate) full_context_window_limit_reached: bool,
     pub(crate) token_limit_reached: bool,
+    pub(crate) turn_end_compaction_threshold_reached: bool,
 }
 
 fn tokens_remaining(limit: Option<i64>, used: i64) -> Option<i64> {
@@ -107,6 +108,13 @@ async fn context_window_token_status_with_config(
     let token_limit_reached = buffered_auto_compact_limit
         .is_some_and(|limit| auto_compact_scope_tokens >= limit)
         || full_context_window_limit_reached;
+    let post_turn_percent = config.model_post_turn_compact_threshold_percent;
+    let turn_end_compaction_threshold_reached = post_turn_percent > 0
+        && (token_limit_reached
+            || full_context_window_limit.is_some_and(|limit| {
+                i128::from(active_context_tokens) * 100
+                    >= i128::from(limit) * i128::from(post_turn_percent)
+            }));
 
     ContextWindowTokenStatus {
         active_context_tokens,
@@ -117,5 +125,6 @@ async fn context_window_token_status_with_config(
         auto_compact_window_prefill_tokens,
         full_context_window_limit_reached,
         token_limit_reached,
+        turn_end_compaction_threshold_reached,
     }
 }

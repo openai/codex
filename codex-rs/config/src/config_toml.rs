@@ -173,6 +173,12 @@ pub struct ConfigToml {
     /// only to tokens after the carried prefix in the current compaction window.
     pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
 
+    /// Percentage of the usable context window that triggers compaction after a final
+    /// response. Existing auto-compaction limits still apply. Omitted or zero disables
+    /// turn-end compaction; valid values are 0–100.
+    #[schemars(range(min = 0, max = 100))]
+    pub model_post_turn_compact_threshold_percent: Option<u8>,
+
     /// Default approval policy for executing commands.
     #[schemars(with = "Option<crate::schema::ConfigAskForApproval>")]
     pub approval_policy: Option<AskForApproval>,

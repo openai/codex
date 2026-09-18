@@ -465,6 +465,7 @@ pub enum CompactionPhase {
     StandaloneTurn,
     PreTurn,
     MidTurn,
+    PostTurn,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

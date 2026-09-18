@@ -701,6 +701,38 @@ pub(crate) async fn run_turn(
                     {
                         return Ok(None);
                     }
+                    // Token-budget resets do not summarize, so preserve their existing rollover
+                    // policy. Keep summarizing compaction in this task to serialize history updates.
+                    let config = &turn_context.config;
+                    if config.model_post_turn_compact_threshold_percent > 0
+                        && !config.features.enabled(Feature::TokenBudget)
+                        && super::context_window::context_window_token_status(
+                            sess.as_ref(),
+                            turn_context.as_ref(),
+                        )
+                        .await
+                        .turn_end_compaction_threshold_reached
+                        && !sess.input_queue.has_pending_input(&sess.active_turn).await
+                        && !cancellation_token.is_cancelled()
+                        && let Err(err) = run_auto_compact(
+                            &sess,
+                            Arc::clone(&step_context),
+                            /*fallback_step_context*/ None,
+                            &mut client_session,
+                            InitialContextInjection::DoNotInject,
+                            CompactionReason::ContextLimit,
+                            CompactionPhase::PostTurn,
+                        )
+                        .await
+                    {
+                        if matches!(
+                            err.details(),
+                            CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
+                        ) {
+                            return Err(err);
+                        }
+                        warn!(error = %err, "Post-turn compaction failed; preserving the completed turn");
+                    }
                     break;
                 }
                 continue;
