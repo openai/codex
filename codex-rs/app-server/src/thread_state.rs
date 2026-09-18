@@ -8,6 +8,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
+use codex_app_server_protocol::TurnItemsView;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
 use codex_file_watcher::WatchRegistration;
@@ -169,6 +170,14 @@ impl ThreadState {
     /// Returns the same turn ID as `active_turn_snapshot` without cloning its items.
     pub(crate) fn active_turn_id(&self) -> Option<&str> {
         self.current_turn_history.active_turn_id()
+    }
+
+    pub(crate) fn active_turn_snapshot_with_items_view(
+        &self,
+        items_view: TurnItemsView,
+    ) -> Option<Turn> {
+        self.current_turn_history
+            .active_turn_snapshot_with_items_view(items_view)
     }
 
     pub(crate) fn active_turn_metadata_snapshot(&self) -> Option<ThreadHistoryTurnMetadata> {

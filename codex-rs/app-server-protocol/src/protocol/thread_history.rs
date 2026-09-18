@@ -280,10 +280,15 @@ impl ThreadHistoryBuilder {
     }
 
     pub fn active_turn_snapshot(&self) -> Option<Turn> {
+        self.active_turn_snapshot_with_items_view(TurnItemsView::Full)
+    }
+
+    /// Snapshots the active or last finished turn, copying only the requested items.
+    pub fn active_turn_snapshot_with_items_view(&self, items_view: TurnItemsView) -> Option<Turn> {
         self.current_turn
             .as_ref()
-            .map(Turn::from)
-            .or_else(|| self.turns.last().map(Turn::from))
+            .or_else(|| self.turns.last())
+            .map(|turn| turn.snapshot(items_view))
     }
 
     /// Snapshots active turn metadata without cloning its items.
@@ -1714,6 +1719,19 @@ impl PendingTurn {
         self.started_at = started_at;
         self
     }
+
+    fn snapshot(&self, items_view: TurnItemsView) -> Turn {
+        Turn {
+            id: self.id.clone(),
+            items: items_view.project_items(&self.items),
+            items_view,
+            error: self.error.clone(),
+            status: self.status.clone(),
+            started_at: self.started_at,
+            completed_at: self.completed_at,
+            duration_ms: self.duration_ms,
+        }
+    }
 }
 
 impl From<PendingTurn> for Turn {
@@ -1733,16 +1751,7 @@ impl From<PendingTurn> for Turn {
 
 impl From<&PendingTurn> for Turn {
     fn from(value: &PendingTurn) -> Self {
-        Self {
-            id: value.id.clone(),
-            items: value.items.clone(),
-            items_view: TurnItemsView::Full,
-            error: value.error.clone(),
-            status: value.status.clone(),
-            started_at: value.started_at,
-            completed_at: value.completed_at,
-            duration_ms: value.duration_ms,
-        }
+        value.snapshot(TurnItemsView::Full)
     }
 }
 
@@ -3958,6 +3967,78 @@ mod tests {
                     text_elements: Vec::new(),
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn active_turn_summary_preserves_selection_and_completed_metadata() {
+        let mut builder = ThreadHistoryBuilder::new();
+        assert_eq!(
+            builder.active_turn_snapshot_with_items_view(TurnItemsView::Summary),
+            None
+        );
+        builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".into(),
+            root_turn_id: None,
+            trace_id: None,
+            started_at: Some(100),
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        builder.handle_event(&EventMsg::UserMessage(UserMessageEvent {
+            message: "first".into(),
+            ..Default::default()
+        }));
+        let first_user = builder.active_turn_snapshot().unwrap().items[0].clone();
+        builder.handle_event(&EventMsg::UserMessage(UserMessageEvent {
+            message: "steering".into(),
+            ..Default::default()
+        }));
+        for message in ["draft", "answer"] {
+            builder.handle_event(&EventMsg::AgentMessage(AgentMessageEvent {
+                message: message.into(),
+                phase: None,
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            }));
+        }
+        let final_agent = builder
+            .active_turn_snapshot()
+            .unwrap()
+            .items
+            .last()
+            .unwrap()
+            .clone();
+        builder.handle_event(&EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "not included in the summary".repeat(1024),
+        }));
+        let mut expected = builder.active_turn_snapshot().unwrap();
+        expected.items = vec![first_user, final_agent];
+        expected.items_view = TurnItemsView::Summary;
+        assert_eq!(
+            builder.active_turn_snapshot_with_items_view(TurnItemsView::Summary),
+            Some(expected.clone())
+        );
+        builder.handle_event(&EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".into(),
+            started_at: Some(100),
+            last_agent_message: None,
+            error: None,
+            completed_at: Some(102),
+            duration_ms: Some(2_000),
+            time_to_first_token_ms: None,
+        }));
+        expected.status = TurnStatus::Completed;
+        expected.completed_at = Some(102);
+        expected.duration_ms = Some(2_000);
+        assert_eq!(
+            builder.active_turn_snapshot_with_items_view(TurnItemsView::Summary),
+            Some(expected)
+        );
+        assert_eq!(
+            builder.active_turn_snapshot_with_items_view(TurnItemsView::NotLoaded),
+            builder.active_turn_metadata_snapshot().map(Turn::from)
         );
     }
 

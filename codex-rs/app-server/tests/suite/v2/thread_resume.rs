@@ -5298,15 +5298,19 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
         "hot paginated resume should wait for a real token usage update"
     );
 
-    for items_view in [TurnItemsView::Summary, TurnItemsView::Full] {
+    for (exclude_turns, items_view) in [
+        (true, None),
+        (true, Some(TurnItemsView::Full)),
+        (false, Some(TurnItemsView::Summary)),
+    ] {
         let resume_id = primary
             .send_thread_resume_request(ThreadResumeParams {
                 thread_id: thread.id.clone(),
-                exclude_turns: true,
+                exclude_turns,
                 initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
                     limit: Some(1),
                     sort_direction: Some(SortDirection::Desc),
-                    items_view: Some(items_view),
+                    items_view,
                 }),
                 ..Default::default()
             })
@@ -5317,8 +5321,17 @@ async fn thread_resume_rejoins_running_paginated_thread_with_initial_page() -> R
         assert_eq!(page.data.len(), 1);
         assert_eq!(page.data[0].id, running_turn.id);
         assert_eq!(page.data[0].status, TurnStatus::InProgress);
-        assert_eq!(page.data[0].items_view, items_view);
+        assert_eq!(
+            page.data[0].items_view,
+            items_view.unwrap_or(TurnItemsView::Summary)
+        );
         assert!(!page.data[0].items.is_empty());
+        if !exclude_turns {
+            let full_turn = resumed.thread.turns.last().expect("full active turn");
+            assert_eq!(full_turn.id, running_turn.id);
+            assert_eq!(full_turn.items_view, TurnItemsView::Full);
+            assert!(!full_turn.items.is_empty());
+        }
     }
 
     let asc_resume_id = primary

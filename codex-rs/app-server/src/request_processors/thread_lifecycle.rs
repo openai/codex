@@ -576,16 +576,16 @@ pub(super) async fn handle_pending_thread_resume_request(
 ) {
     let (active_turn_metadata, active_turn) = {
         let state = thread_state.lock().await;
-        let needs_items = pending.include_turns
-            || pending
+        let items_view = if pending.include_turns {
+            Some(TurnItemsView::Full)
+        } else {
+            pending
                 .initial_turns_page
                 .as_ref()
-                .is_some_and(|page| !matches!(page.items_view, Some(TurnItemsView::NotLoaded)));
-        let active_turn = if needs_items {
-            state.active_turn_snapshot()
-        } else {
-            None
+                .map(|page| page.items_view.unwrap_or(TurnItemsView::Summary))
         };
+        let active_turn =
+            items_view.and_then(|view| state.active_turn_snapshot_with_items_view(view));
         (state.active_turn_metadata_snapshot(), active_turn)
     };
     tracing::debug!(
