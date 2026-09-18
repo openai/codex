@@ -528,7 +528,7 @@ impl CodexThread {
         let task = active.as_ref()?.task.as_ref()?;
         Some(
             task.turn_context
-                .environments
+                .initial_environments
                 .environments
                 .iter()
                 .map(|environment| match environment {
