@@ -347,7 +347,7 @@ impl HistoryCell for ThreadRecapHistoryCell {
         if let Some(action) = &self.next_action {
             body.extend(prefix_lines(
                 raw_lines_from_source(action),
-                "Next: ".bold().cyan(),
+                "Next: ".bold(),
                 "".into(),
             ));
         }
@@ -380,7 +380,7 @@ impl HistoryCell for ThreadRecapHistoryCell {
             push_owned_lines(&wrapped, &mut lines);
             options.initial_indent = options.subsequent_indent.clone();
         }
-        lines
+        lines.into_iter().map(Line::dim).collect()
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
