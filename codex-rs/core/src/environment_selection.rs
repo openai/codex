@@ -1018,13 +1018,21 @@ impl TurnEnvironmentSnapshot {
 
     /// Returns the first selected environment's host folders, even if setup is not ready yet.
     pub(crate) fn primary_workspace_roots(&self) -> Vec<AbsolutePathBuf> {
+        self.primary_workspace_root_uris()
+            .iter()
+            .filter_map(|root| root.to_abs_path().ok())
+            .collect()
+    }
+
+    /// Returns the first selection's executor paths, even when setup is not ready yet.
+    pub(crate) fn primary_workspace_root_uris(&self) -> &[PathUri] {
         let selection = match self.environments.first() {
             Some(TurnEnvironmentState::Ready(environment)) => &environment.selection,
             Some(TurnEnvironmentState::Starting(environment)) => &environment.selection,
             Some(TurnEnvironmentState::Failed { selection, .. }) => selection,
-            None => return Vec::new(),
+            None => return &[],
         };
-        ThreadEnvironments::primary_workspace_roots_for(std::slice::from_ref(selection))
+        &selection.workspace_roots
     }
 
     /// Returns the primary environment's resolved permissions, or the provided fallback.

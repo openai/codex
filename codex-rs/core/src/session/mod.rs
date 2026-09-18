@@ -3753,8 +3753,8 @@ impl Session {
             if !discovery.sandbox_contexts().is_empty() {
                 extension_data.insert(discovery.sandbox_contexts().clone());
             }
-        } else if !environments
-            .permission_profile_or_else(|| turn_context.permission_profile())
+        } else if !turn_context
+            .permission_profile_for_environments(&environments)
             .file_system_sandbox_policy()
             .has_full_disk_read_access()
         {

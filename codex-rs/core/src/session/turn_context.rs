@@ -541,6 +541,22 @@ impl TurnContext {
             .permission_profile_or_else(|| self.config.permissions.effective_permission_profile())
     }
 
+    /// Uses this selection's permissions, or the turn's thread defaults for these folders.
+    pub(crate) fn permission_profile_for_environments(
+        &self,
+        environments: &TurnEnvironmentSnapshot,
+    ) -> PermissionProfile {
+        environments.permission_profile_or_else(|| {
+            self.config
+                .permissions
+                .permission_profile()
+                .clone()
+                .materialize_project_roots_with_path_uris(
+                    environments.primary_workspace_root_uris(),
+                )
+        })
+    }
+
     pub(crate) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
         self.permission_profile().file_system_sandbox_policy()
     }

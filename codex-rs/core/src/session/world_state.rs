@@ -137,9 +137,8 @@ impl Session {
             .current_for_prefix_rules(turn_context.allow_prefix_rules());
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
-            let permission_profile = step_context
-                .environments
-                .permission_profile_or_else(|| turn_context.permission_profile());
+            let permission_profile =
+                turn_context.permission_profile_for_environments(&step_context.environments);
             #[allow(deprecated)]
             let cwd = environment
                 .and_then(|environment| environment.cwd().to_abs_path().ok())

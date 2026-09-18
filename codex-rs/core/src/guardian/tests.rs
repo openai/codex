@@ -674,6 +674,72 @@ async fn background_approval_permissions_use_the_owning_environment() -> anyhow:
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn guardian_uses_thread_permissions_for_an_unavailable_captured_environment()
+-> anyhow::Result<()> {
+    let (session, mut turn) = crate::session::tests::make_session_and_context().await;
+    let original_root = test_path_buf("/original-workspace").abs();
+    let captured_root = test_path_buf("/captured-workspace").abs();
+    let thread_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                },
+                FileSystemAccessMode::Read,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: codex_protocol::permissions::FileSystemSpecialPath::project_roots(Some(
+                        "private".into(),
+                    )),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ]),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let permissions = &mut Arc::make_mut(&mut turn.config).permissions;
+    permissions.set_permission_profile(thread_profile)?;
+    permissions.set_workspace_roots(vec![original_root.clone()]);
+    let TurnEnvironmentState::Ready(original) = &mut turn.initial_environments.environments[0]
+    else {
+        panic!("initial environment should be ready");
+    };
+    original.config_mut().permission_profile =
+        PermissionProfileSnapshot::legacy(PermissionProfile::Disabled);
+    let mut selection = original.selection();
+    selection.cwd = PathUri::from_abs_path(&captured_root);
+    selection.workspace_roots = vec![selection.cwd.clone()];
+    selection.config = codex_protocol::protocol::EnvironmentConfigState::Failed("offline".into());
+    let captured = crate::environment_selection::TurnEnvironmentSnapshot {
+        environments: vec![TurnEnvironmentState::Failed {
+            selection,
+            error: "offline".into(),
+        }],
+    };
+    let turn = Arc::new(turn);
+    let context = GuardianReviewContext::from_resolved_settings(
+        Arc::clone(&turn),
+        &turn.initial_settings,
+        &captured,
+    );
+    let prompt = build_guardian_prompt_items_with_parent_turn(
+        &session,
+        session.conversation_history_snapshot().await.as_ref(),
+        Some(&context),
+        ApprovalRequestReasons::default(),
+        guardian_exec_command_request("shell"),
+        GuardianPromptMode::Full,
+        /*reviewed_node_repl_evidence_sequence*/ 0,
+    )
+    .await?;
+    let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
+    assert!(text.contains(captured_root.join("private").to_string_lossy().as_ref()));
+    assert!(!text.contains(original_root.join("private").to_string_lossy().as_ref()));
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_delta_mode_preserves_original_numbering() -> anyhow::Result<()> {
     let (session, turn) = guardian_test_session_and_turn_with_base_url("http://localhost").await;
     seed_guardian_parent_history(&session, &turn).await;

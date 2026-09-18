@@ -231,7 +231,7 @@ fn parent_turn_permissions(
         .and_then(|environment| environment.cwd().to_abs_path().ok());
     let permission_profile = environment
         .map(TurnEnvironment::permission_profile_with_workspace_roots)
-        .unwrap_or_else(|| turn.permission_profile());
+        .unwrap_or_else(|| turn.permission_profile_for_environments(context.environments()));
     let file_system_policy = permission_profile.file_system_sandbox_policy();
     // Remote restrictions must not be interpreted using the filesystem running Guardian.
     // Older executors may not report their temp folders. If a rule explicitly denies those
