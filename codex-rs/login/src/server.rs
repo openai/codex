@@ -21,6 +21,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -29,7 +31,6 @@ use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::login_callback_result_from_state;
-use crate::default_client::create_raw_auth_client;
 use crate::default_client::originator;
 use crate::outbound_proxy::AuthRouteConfig;
 use crate::pkce::PkceCodes;
@@ -43,6 +44,13 @@ use crate::token_data::parse_chatgpt_jwt_claims;
 use base64::Engine;
 use chrono::Utc;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClient;
+use codex_http_client::HttpClientBuilder;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::HttpError;
+use codex_http_client::HttpResponse;
+use codex_http_client::OutboundProxyPolicy;
 use codex_protocol::auth::AuthMode;
 use codex_utils_template::Template;
 use rand::RngCore;
@@ -412,7 +420,7 @@ async fn process_request(
             )
             .await
             {
-                Ok(tokens) => {
+                Ok((tokens, client)) => {
                     if let Err(message) = ensure_workspace_allowed(
                         opts.forced_chatgpt_workspace_id.as_deref(),
                         &tokens.id_token,
@@ -426,14 +434,10 @@ async fn process_request(
                         );
                     }
                     // Obtain API key via token-exchange and persist
-                    let api_key = obtain_api_key(
-                        &opts.issuer,
-                        &opts.client_id,
-                        &tokens.id_token,
-                        &opts.auth_route_config,
-                    )
-                    .await
-                    .ok();
+                    let api_key =
+                        obtain_api_key(&client, &opts.issuer, &opts.client_id, &tokens.id_token)
+                            .await
+                            .ok();
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
@@ -800,7 +804,7 @@ fn sanitize_url_for_logging(url: &str) -> String {
         Err(_) => "<invalid-url>".to_string(),
     }
 }
-/// Exchanges an authorization code for tokens.
+/// Exchanges an authorization code for tokens and returns the client for further token exchanges.
 ///
 /// The returned error remains suitable for user-facing CLI/browser surfaces, so backend-provided
 /// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
@@ -813,7 +817,7 @@ pub(crate) async fn exchange_code_for_tokens(
     pkce: &PkceCodes,
     code: &str,
     auth_route_config: &AuthRouteConfig,
-) -> io::Result<ExchangedTokens> {
+) -> io::Result<(ExchangedTokens, HttpClient)> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
         id_token: String,
@@ -821,29 +825,55 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    // The route selected for the issuer is reused for token exchange; the token endpoint path is
-    // not resolved separately.
-    let client = create_raw_auth_client(issuer.trim_end_matches('/'), auth_route_config)?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
+    let factory = auth_route_config.http_client_factory();
+    let allows_fallback = factory.allows_system_proxy_fallback();
+    let redirect_observed = Arc::new(AtomicBool::new(false));
+    let mut builder = HttpClientBuilder::new().without_request_logging();
+    if allows_fallback {
+        // Only bound connection establishment. A response timeout could mean the one-time code
+        // was consumed, so it must never cause another token POST.
+        builder = builder
+            .with_redirect_tracking(Arc::clone(&redirect_observed))
+            .connect_timeout(Duration::from_secs(/*secs*/ 10));
+    }
     info!(
         issuer = %sanitize_url_for_logging(issuer),
         token_endpoint = %sanitize_url_for_logging(&token_endpoint),
-        redirect_uri = %redirect_uri,
+        %redirect_uri,
         "starting oauth token exchange"
     );
-    let resp = client
-        .post(token_endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
-            urlencoding::encode(code),
-            urlencoding::encode(redirect_uri),
-            urlencoding::encode(client_id),
-            urlencoding::encode(&pkce.code_verifier)
-        ))
-        .send()
-        .await;
-    let resp = match resp {
+    let (mut client, mut result) = send_code_exchange_request(
+        factory,
+        builder.clone(),
+        &token_endpoint,
+        client_id,
+        redirect_uri,
+        pkce,
+        code,
+    )
+    .await?;
+    // A redirect means the original POST reached the server and may have consumed the code.
+    if matches!(&result, Err(error) if error.is_connect())
+        && allows_fallback
+        && !redirect_observed.load(Ordering::Relaxed)
+    {
+        info!("oauth token connection failed; retrying with system proxy");
+        let factory = factory
+            .clone()
+            .with_outbound_proxy_policy(OutboundProxyPolicy::RespectSystemProxy);
+        (client, result) = send_code_exchange_request(
+            &factory,
+            builder,
+            &token_endpoint,
+            client_id,
+            redirect_uri,
+            pkce,
+            code,
+        )
+        .await?;
+    }
+    let resp = match result {
         Ok(resp) => resp,
         Err(error) => {
             let error = redact_sensitive_error_url(error);
@@ -875,11 +905,43 @@ pub(crate) async fn exchange_code_for_tokens(
 
     let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
     info!(%status, "oauth token exchange succeeded");
-    Ok(ExchangedTokens {
-        id_token: tokens.id_token,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-    })
+    Ok((
+        ExchangedTokens {
+            id_token: tokens.id_token,
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+        },
+        client,
+    ))
+}
+
+async fn send_code_exchange_request(
+    factory: &HttpClientFactory,
+    builder: HttpClientBuilder,
+    token_endpoint: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    pkce: &PkceCodes,
+    code: &str,
+) -> io::Result<(HttpClient, Result<HttpResponse, HttpError>)> {
+    let client = builder.build_respecting_outbound_proxy_policy(
+        factory,
+        token_endpoint,
+        ClientRouteClass::Auth,
+    )?;
+    let result = client
+        .post(token_endpoint)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(format!(
+            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+            urlencoding::encode(code),
+            urlencoding::encode(redirect_uri),
+            urlencoding::encode(client_id),
+            urlencoding::encode(&pkce.code_verifier)
+        ))
+        .send()
+        .await;
+    Ok((client, result))
 }
 
 /// Persists exchanged credentials using the configured local auth store.
@@ -1135,10 +1197,10 @@ fn html_escape(input: &str) -> String {
 
 /// Exchanges an authenticated ID token for an API-key style access token.
 pub(crate) async fn obtain_api_key(
+    client: &HttpClient,
     issuer: &str,
     client_id: &str,
     id_token: &str,
-    auth_route_config: &AuthRouteConfig,
 ) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
@@ -1146,7 +1208,6 @@ pub(crate) async fn obtain_api_key(
         access_token: String,
     }
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
-    let client = create_raw_auth_client(&token_endpoint, auth_route_config)?;
     let resp = client
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")

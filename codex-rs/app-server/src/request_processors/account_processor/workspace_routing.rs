@@ -192,7 +192,7 @@ impl AccountRequestProcessor {
             _ = auth_changes.wait_for(|state| state.owner_generation != auth_state.owner_generation) => {
                 return Err(internal_error("account changed during workspace routing discovery"));
             }
-            result = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), read) => {
+            result = tokio::time::timeout(Duration::from_secs(/*secs*/ 15), read) => {
                 result.map_err(|_| internal_error("workspace routing discovery timed out"))?
             }
         };

@@ -24,6 +24,7 @@ codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
