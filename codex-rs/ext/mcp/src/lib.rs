@@ -10,7 +10,7 @@ use codex_mcp::hosted_plugin_runtime_mcp_server_config;
 #[cfg(test)]
 #[path = "event_stream_tests.rs"]
 mod event_stream_tests;
-mod executor_plugin;
+mod plugin;
 mod provider;
 mod stream_manager;
 
@@ -59,14 +59,14 @@ pub fn install(builder: &mut ExtensionRegistryBuilder<Config>) {
     builder.mcp_server_contributor(std::sync::Arc::new(HostedPluginRuntimeExtension));
 }
 
-/// Installs discovery for MCP servers declared by thread-selected executor plugins.
-pub fn install_executor_plugins(
+/// Installs discovery for MCP servers and apps declared by thread-selected plugins.
+pub fn install_plugins(
     builder: &mut ExtensionRegistryBuilder<Config>,
     environment_manager: std::sync::Arc<codex_exec_server::EnvironmentManager>,
 ) {
-    builder.mcp_server_contributor(std::sync::Arc::new(
-        executor_plugin::SelectedExecutorPluginMcpContributor::new(environment_manager),
-    ));
+    builder.mcp_server_contributor(std::sync::Arc::new(plugin::PluginContributor::new(
+        environment_manager,
+    )));
 }
 
 #[cfg(test)]

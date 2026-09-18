@@ -14,13 +14,13 @@ use thiserror::Error;
 
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 
-/// Loads MCP declarations from resolved plugins through their owning executor.
+/// Loads MCP declarations from resolved plugins.
 #[derive(Clone, Copy, Debug, Default)]
-pub(super) struct ExecutorPluginMcpProvider;
+pub(super) struct PluginMcpProvider;
 
-/// Failure to load an executor plugin's MCP declarations.
+/// Failure to load a plugin's MCP declarations.
 #[derive(Debug, Error)]
-pub(super) enum ExecutorPluginMcpProviderError {
+pub(super) enum PluginMcpProviderError {
     #[error("failed to read MCP config for selected plugin `{plugin_id}` at `{path}`: {source}")]
     ReadConfig {
         plugin_id: String,
@@ -47,13 +47,13 @@ pub(super) enum ExecutorPluginMcpProviderError {
     },
 }
 
-impl ExecutorPluginMcpProvider {
+impl PluginMcpProvider {
     /// Returns MCP servers declared by `plugin`, bound to its environment.
-    #[tracing::instrument(name = "mcp.executor_plugin.servers.load", skip_all)]
+    #[tracing::instrument(name = "mcp.plugin.servers.load", skip_all)]
     pub(super) async fn load(
         &self,
         plugin: &ResolvedExecutorPlugin,
-    ) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginMcpProviderError> {
+    ) -> Result<Vec<(String, McpServerConfig)>, PluginMcpProviderError> {
         let ResolvedPluginLocation::Environment { root, .. } = plugin.plugin().location();
 
         load_from_file_system(plugin.plugin(), root, plugin.file_system()).await
@@ -64,7 +64,7 @@ async fn load_from_file_system(
     plugin: &ResolvedPlugin,
     plugin_root: &PathUri,
     file_system: &dyn ExecutorFileSystem,
-) -> Result<Vec<(String, McpServerConfig)>, ExecutorPluginMcpProviderError> {
+) -> Result<Vec<(String, McpServerConfig)>, PluginMcpProviderError> {
     let ResolvedPluginLocation::Environment { environment_id, .. } = plugin.location();
     let plugin_id = plugin.selected_root_id();
     let (contents, config_path) = match plugin.manifest().paths.mcp_servers.as_ref() {
@@ -75,7 +75,7 @@ async fn load_from_file_system(
                 file_system
                     .read_file_text(path, ReadFileOptions::default(), /*sandbox*/ None)
                     .await
-                    .map_err(|source| ExecutorPluginMcpProviderError::ReadConfig {
+                    .map_err(|source| PluginMcpProviderError::ReadConfig {
                         plugin_id: plugin_id.to_string(),
                         path: path.clone(),
                         source,
@@ -90,7 +90,7 @@ async fn load_from_file_system(
         None => {
             let config_path = plugin_root
                 .join(DEFAULT_MCP_CONFIG_FILE)
-                .map_err(|source| ExecutorPluginMcpProviderError::InvalidConfigPath {
+                .map_err(|source| PluginMcpProviderError::InvalidConfigPath {
                     plugin_id: plugin_id.to_string(),
                     root: plugin_root.clone(),
                     relative_path: DEFAULT_MCP_CONFIG_FILE,
@@ -109,7 +109,7 @@ async fn load_from_file_system(
                     return Ok(Vec::new());
                 }
                 Err(source) => {
-                    return Err(ExecutorPluginMcpProviderError::ReadConfig {
+                    return Err(PluginMcpProviderError::ReadConfig {
                         plugin_id: plugin_id.to_string(),
                         path: config_path.clone(),
                         source,
@@ -120,7 +120,7 @@ async fn load_from_file_system(
         }
     };
     let parsed = parse_executor_plugin_mcp_config(plugin_root, &contents, environment_id).map_err(
-        |source| ExecutorPluginMcpProviderError::ParseConfig {
+        |source| PluginMcpProviderError::ParseConfig {
             plugin_id: plugin_id.to_string(),
             path: config_path,
             source,
@@ -132,7 +132,7 @@ async fn load_from_file_system(
             plugin = plugin_id,
             server = error.name,
             error = error.message,
-            "ignoring invalid executor plugin MCP server"
+            "ignoring invalid plugin MCP server"
         );
     }
 

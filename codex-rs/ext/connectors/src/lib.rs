@@ -1,6 +1,6 @@
-//! Executor-backed connector declaration loading.
+//! Plugin app declaration loading.
 
-mod executor_plugin;
+mod plugin_app;
 
-pub use executor_plugin::ExecutorPluginConnectorProvider;
-pub use executor_plugin::ExecutorPluginConnectorProviderError;
+pub use plugin_app::PluginAppProvider;
+pub use plugin_app::PluginAppProviderError;

@@ -1,5 +1,5 @@
 use super::DEFAULT_MCP_CONFIG_FILE;
-use super::ExecutorPluginMcpProviderError;
+use super::PluginMcpProviderError;
 use super::load_from_file_system;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
@@ -47,7 +47,7 @@ impl SyntheticExecutorFileSystem {
     fn unsupported<T>() -> FileSystemResult<T> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "operation is not used by executor MCP provider tests",
+            "operation is not used by plugin MCP provider tests",
         ))
     }
 }
@@ -176,7 +176,7 @@ async fn reads_declared_config_only_through_executor_file_system() {
     let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
     let servers = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
         .await
-        .expect("load executor MCP config");
+        .expect("load plugin MCP config");
 
     assert_eq!(
         servers,
@@ -263,7 +263,7 @@ async fn reads_manifest_object_config_without_executor_file_system_access() {
     let plugin_root_uri = PathUri::from_abs_path(&plugin_root);
     let servers = load_from_file_system(&plugin, &plugin_root_uri, &file_system)
         .await
-        .expect("load manifest object executor MCP config");
+        .expect("load manifest object plugin MCP config");
 
     assert_eq!(
         servers,
@@ -342,7 +342,7 @@ async fn malformed_declared_config_is_an_error() {
         .await
         .expect_err("malformed declared config should fail");
 
-    let ExecutorPluginMcpProviderError::ParseConfig {
+    let PluginMcpProviderError::ParseConfig {
         plugin_id,
         path,
         source: _,
@@ -380,7 +380,7 @@ async fn malformed_manifest_object_config_reports_actual_manifest_path() {
         .await
         .expect_err("malformed manifest object config should fail");
 
-    let ExecutorPluginMcpProviderError::ParseConfig {
+    let PluginMcpProviderError::ParseConfig {
         plugin_id,
         path,
         source: _,

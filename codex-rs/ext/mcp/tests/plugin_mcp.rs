@@ -158,8 +158,7 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
 }
 
 #[tokio::test]
-async fn managed_plugins_requirement_disables_selected_executor_plugin_capabilities() -> TestResult
-{
+async fn managed_plugins_requirement_disables_selected_plugin_capabilities() -> TestResult {
     let codex_home = tempfile::tempdir()?;
     let plugin_root = tempfile::tempdir()?;
     std::fs::create_dir_all(plugin_root.path().join(".codex-plugin"))?;
@@ -382,7 +381,7 @@ async fn raw_selected_plugin_contributions(
 ) -> Result<Vec<McpServerContribution>, Box<dyn std::error::Error>> {
     let mut builder = ExtensionRegistryBuilder::new();
     let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
-    codex_mcp_extension::install_executor_plugins(&mut builder, Arc::clone(&environment_manager));
+    codex_mcp_extension::install_plugins(&mut builder, Arc::clone(&environment_manager));
     let registry = builder.build();
     let thread_init = ExtensionDataInit::new();
     let selected_capability_roots = vec![SelectedCapabilityRoot {
