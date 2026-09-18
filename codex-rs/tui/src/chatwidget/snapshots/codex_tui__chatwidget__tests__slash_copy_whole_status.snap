@@ -7,7 +7,7 @@ expression: "whole_status.replace(&directory,\n\"[[workspace]]\").replace(crate:
 Visit https://chatgpt.com/codex/settings/usage for up-to-date
 information on rate limits and credits
 
- Model:                gpt-5.5 (reasoning medium, summaries auto)
+ Model:                GPT-5.5 (reasoning medium, summaries auto)
  Model provider:       openai
  Directory:            [[workspace]]
  Permissions:          Read Only (Ask for approval)

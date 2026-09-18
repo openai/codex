@@ -37,4 +37,12 @@ impl ModelCatalog {
     pub(crate) fn try_list_models(&self) -> Result<Vec<ModelPreset>, Infallible> {
         Ok(self.models.clone())
     }
+
+    pub(crate) fn display_name<'a>(&'a self, model: &'a str) -> &'a str {
+        self.models
+            .iter()
+            .find(|preset| preset.model == model)
+            .map(|preset| preset.display_name.as_str())
+            .unwrap_or_else(|| model_display_name(model))
+    }
 }

@@ -44,7 +44,9 @@ impl ChatWidget {
         let subtitle = subtitle.to_string();
         let mut header = ColumnRenderable::new();
         header.push(Line::from(title.bold()));
-        header.push(Line::from(subtitle.dim()));
+        if !subtitle.is_empty() {
+            header.push(Line::from(subtitle.dim()));
+        }
         if let Some(warning) = self.model_menu_warning_line() {
             header.push(warning);
         }
@@ -92,7 +94,7 @@ impl ChatWidget {
         let current_label = presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
-            .map(|preset| preset.model.to_string())
+            .map(|preset| preset.display_name.clone())
             .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
@@ -105,6 +107,10 @@ impl ChatWidget {
         }
 
         auto_presets.sort_by_key(|preset| Self::auto_model_order(&preset.model));
+        let mut model_ids: Vec<String> = auto_presets
+            .iter()
+            .map(|preset| preset.model.clone())
+            .collect();
         let mut items: Vec<SelectionItem> = auto_presets
             .into_iter()
             .map(|preset| {
@@ -137,7 +143,7 @@ impl ChatWidget {
                     )
                 };
                 SelectionItem {
-                    name: model.clone(),
+                    name: preset.display_name.clone(),
                     description,
                     is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
@@ -158,6 +164,7 @@ impl ChatWidget {
             .collect();
 
         if !other_presets.is_empty() {
+            model_ids.push("All models".to_string());
             let actions: Vec<SelectionAction> = vec![Box::new(|tx| {
                 tx.send(AppEvent::OpenAllModelsPopup);
             })];
@@ -181,13 +188,16 @@ impl ChatWidget {
             "Select Model",
             "Pick a quick auto mode or browse all models.",
         );
-        self.show_model_selection_view(SelectionViewParams {
-            view_id: Some(MODEL_SELECTION_VIEW_ID),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            header,
-            ..Default::default()
-        });
+        self.show_model_selection_view(
+            model_ids,
+            SelectionViewParams {
+                view_id: Some(MODEL_SELECTION_VIEW_ID),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                header,
+                ..Default::default()
+            },
+        );
     }
 
     pub(super) fn is_auto_model(model: &str) -> bool {
@@ -236,6 +246,7 @@ impl ChatWidget {
         }
 
         let mut items: Vec<SelectionItem> = Vec::new();
+        let model_ids = presets.iter().map(|preset| preset.model.clone()).collect();
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
@@ -255,7 +266,7 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.model.clone(),
+                name: preset.display_name.clone(),
                 description,
                 is_current,
                 is_default: preset.is_default,
@@ -269,17 +280,17 @@ impl ChatWidget {
             });
         }
 
-        let header = self.model_menu_header(
-            "Select Model and Effort",
-            "Access legacy models by running codex -m <model_name> or in your config.toml",
+        let header = self.model_menu_header("Select Model and Effort", "");
+        self.show_model_selection_view(
+            model_ids,
+            SelectionViewParams {
+                view_id: Some(view_id),
+                footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
+                items,
+                header,
+                ..Default::default()
+            },
         );
-        self.show_model_selection_view(SelectionViewParams {
-            view_id: Some(view_id),
-            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
-            items,
-            header,
-            ..Default::default()
-        });
     }
 
     fn model_selection_actions(
@@ -530,11 +541,7 @@ impl ChatWidget {
             .then(|| default_effort.clone());
 
         let model_slug = preset.model.to_string();
-        let model_label = if model_slug == LUNA_RESERVE_MODEL {
-            preset.display_name.clone()
-        } else {
-            model_slug.clone()
-        };
+        let model_label = preset.display_name.clone();
         let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
             if in_plan_mode {

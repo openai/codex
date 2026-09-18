@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "chat.last_terminal_title.as_deref().expect(\"terminal title\")"
+---
+GPT-5.4

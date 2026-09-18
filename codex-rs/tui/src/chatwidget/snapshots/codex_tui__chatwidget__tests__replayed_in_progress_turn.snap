@@ -7,4 +7,4 @@ expression: "normalize_completion_timestamps(& (render_bottom_popup(&chat, 80)))
 
 › Ask Codex to do anything
 
-  gpt-5.6-sol default · /tmp/project
+  GPT-5.6-Sol default · /tmp/project

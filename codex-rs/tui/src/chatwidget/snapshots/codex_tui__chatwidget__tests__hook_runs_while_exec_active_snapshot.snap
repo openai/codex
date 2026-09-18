@@ -14,7 +14,7 @@ exec and hook running:
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.6-sol default · /tmp/project                                            "
+"  GPT-5.6-Sol default · /tmp/project                                            "
 history after exec:
 • Ran echo done
   └ done
@@ -26,7 +26,7 @@ hook running after exec:
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.6-sol default · /tmp/project                                            "
+"  GPT-5.6-Sol default · /tmp/project                                            "
 quiet hook completed:
 "                                                                                "
 "• Working (0s • esc to interrupt)                                               "
@@ -34,4 +34,4 @@ quiet hook completed:
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.6-sol default · /tmp/project                                            "
+"  GPT-5.6-Sol default · /tmp/project                                            "

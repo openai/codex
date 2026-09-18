@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
 expression: "render_bottom_popup(&chat, 100)"
 ---
-  Select Reasoning Level for global.openai.gpt-6-astra
+  Select Reasoning Level for GPT-6-Astra (Global)
 
 › 1. Low (default)    Fast responses with lighter reasoning
   2. Medium           Balances speed and reasoning depth for everyday tasks

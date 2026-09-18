@@ -371,7 +371,7 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
             insta::assert_snapshot!(rendered, @r"
             › Ask Codex to do anything
 
-              gpt-6-astra high · <PROJECT>
+              GPT-6-Astra high · <PROJECT>
             ");
         }
         let expected_cwd = if override_cwd {

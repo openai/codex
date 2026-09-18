@@ -3,14 +3,13 @@ source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
 
-  1. gpt-6-astra (default)  Our most capable model for complex, demanding
+  1. GPT-6-Astra (default)  Our most capable model for complex, demanding
                             work.
-  2. gpt-5.6-sol            Latest frontier agentic coding model.
-  3. gpt-5.6-terra          Balanced agentic coding model for everyday work.
-  4. gpt-5.6-luna           Fast and affordable agentic coding model.
-› 5. gpt-5.5 (current)      Frontier model for complex coding, research, and
+  2. GPT-5.6-Sol            Latest frontier agentic coding model.
+  3. GPT-5.6-Terra          Balanced agentic coding model for everyday work.
+  4. GPT-5.6-Luna           Fast and affordable agentic coding model.
+› 5. GPT-5.5 (current)      Frontier model for complex coding, research, and
                             real-world work.
 
   Press enter to confirm or esc to go back

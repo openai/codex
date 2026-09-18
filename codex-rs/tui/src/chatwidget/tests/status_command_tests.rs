@@ -102,7 +102,7 @@ async fn status_command_uses_catalog_default_reasoning_when_config_empty() {
         other => panic!("expected status output, got {other:?}"),
     };
     assert!(
-        rendered.contains("gpt-5.5 (reasoning medium, summaries auto)"),
+        rendered.contains("GPT-5.5 (reasoning medium, summaries auto)"),
         "expected /status to render the catalog default reasoning effort, got: {rendered}"
     );
 }

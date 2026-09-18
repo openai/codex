@@ -23,6 +23,7 @@ fn insert_splash(app: &mut App, tui: &mut tui::Tui) {
             &app.config,
             &app.local_settings,
             "gpt-test",
+            &session.model,
             &session,
             /*is_first_event*/ false,
             /*tooltip_override*/ None,

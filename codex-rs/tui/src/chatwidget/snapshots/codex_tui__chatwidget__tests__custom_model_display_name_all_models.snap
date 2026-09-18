@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/model_display_name_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Select Model and Effort
+
+› 1. GPT-5.6 Luna (current)  Custom provider model
+
+  Press enter to confirm or esc to go back

@@ -10,7 +10,7 @@ expression: "format!(\"80 columns:\\n{}\\n120 columns:\\n{}\", hook_status_frame
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.6-sol default · /tmp/project                                            "
+"  GPT-5.6-Sol default · /tmp/project                                            "
 120 columns:
 "                                                                                                                        "
 "• Working (0s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close                        "
@@ -19,4 +19,4 @@ expression: "format!(\"80 columns:\\n{}\\n120 columns:\\n{}\", hook_status_frame
 "                                                                                                                        "
 "› Ask Codex to do anything                                                                                              "
 "                                                                                                                        "
-"  gpt-5.6-sol default · /tmp/project                                                                                    "
+"  GPT-5.6-Sol default · /tmp/project                                                                                    "

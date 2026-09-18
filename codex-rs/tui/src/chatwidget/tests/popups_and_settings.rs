@@ -3440,6 +3440,9 @@ async fn model_picker_refresh_preserves_highlight() {
             get_available_model(&chat, "gpt-5.5"),
             get_available_model(&chat, "gpt-5.6-terra"),
         ];
+        for preset in &mut presets {
+            preset.display_name = "Shared display name".to_string();
+        }
         chat.model_catalog = Arc::new(ModelCatalog::new(presets.clone()));
         chat.open_model_popup();
         chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -3448,6 +3451,7 @@ async fn model_picker_refresh_preserves_highlight() {
         }
         let before = render_bottom_popup(&chat, /*width*/ 80);
         presets.reverse();
+        presets[0].display_name = "Renamed model".to_string();
         if remove_selected {
             presets.remove(/*index*/ 0);
         }

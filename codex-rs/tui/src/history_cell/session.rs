@@ -130,6 +130,7 @@ pub(crate) fn new_session_info(
     config: &Config,
     local_settings: &crate::local_settings::LocalSettings,
     requested_model: &str,
+    model_display_name: &str,
     session: &ThreadSessionState,
     is_first_event: bool,
     tooltip_override: Option<String>,
@@ -138,7 +139,7 @@ pub(crate) fn new_session_info(
 ) -> SessionInfoCell {
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
-        session.model.clone(),
+        model_display_name.to_string(),
         session.reasoning_effort.clone(),
         show_fast_status,
         config.cwd.to_path_buf(),
@@ -227,6 +228,7 @@ pub(crate) fn has_yolo_permissions(
                 }
         )
 }
+/// Session banner with a model label already resolved for presentation by its caller.
 #[derive(Debug)]
 pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
@@ -266,7 +268,7 @@ impl SessionHeaderHistoryCell {
     ) -> Self {
         Self {
             version,
-            model: crate::model_catalog::model_display_name(&model).to_string(),
+            model,
             model_style,
             reasoning_effort,
             show_fast_status,

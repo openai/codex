@@ -247,7 +247,7 @@ impl App {
         version: &'static str,
     ) -> Vec<Line<'static>> {
         history_cell::SessionHeaderHistoryCell::new(
-            self.chat_widget.current_model().to_string(),
+            self.chat_widget.model_display_name().to_string(),
             self.chat_widget.current_reasoning_effort(),
             self.chat_widget.should_show_fast_status(
                 self.chat_widget.current_model(),

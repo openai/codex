@@ -1,11 +1,9 @@
 ---
-source: tui/src/chatwidget/tests/status_and_layout.rs
+source: tui/src/chatwidget/tests/model_display_name_tests.rs
 expression: normalized_backend_snapshot(terminal.backend())
 ---
-"                                                                                "
-"• Analyzing (0s • esc to interrupt)                                             "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  GPT-5.6-Sol default · /tmp/project                                            "
+"  GPT-5.6 Luna · GPT-5.6 Luna high                                              "

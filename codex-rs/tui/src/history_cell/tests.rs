@@ -730,6 +730,7 @@ async fn session_info_uses_availability_nux_tooltip_override() {
         &config,
         &crate::local_settings::LocalSettings::from(&config),
         "gpt-5",
+        "gpt-5",
         &session_configured_event("gpt-5"),
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
@@ -753,6 +754,7 @@ async fn session_info_availability_nux_tooltip_snapshot() {
         &config,
         &crate::local_settings::LocalSettings::from(&config),
         "gpt-5",
+        "gpt-5",
         &session_configured_event("gpt-5"),
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
@@ -770,6 +772,7 @@ async fn session_info_first_event_suppresses_tooltips_and_nux() {
     let cell = new_session_info(
         &config,
         &crate::local_settings::LocalSettings::from(&config),
+        "gpt-5",
         "gpt-5",
         &session_configured_event("gpt-5"),
         /*is_first_event*/ true,
@@ -790,6 +793,7 @@ async fn session_info_hides_tooltips_when_disabled() {
     let cell = new_session_info(
         &config,
         &crate::local_settings::LocalSettings::from(&config),
+        "gpt-5",
         "gpt-5",
         &session_configured_event("gpt-5"),
         /*is_first_event*/ false,

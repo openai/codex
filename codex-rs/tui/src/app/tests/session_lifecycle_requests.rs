@@ -2625,6 +2625,7 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
             &app.config,
             &app.local_settings,
             started.session.model.as_str(),
+            started.session.model.as_str(),
             &started.session,
             /*is_first_event*/ false,
             Some("This is a test announcement".to_string()),

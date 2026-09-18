@@ -3,10 +3,10 @@ source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
-  Access legacy models by running codex -m <model_name> or in your config.toml
 
-› 1. gpt-5.6-terra      Balanced agentic coding model for everyday work.
-  2. gpt-5.5 (current)  Frontier model for complex coding, research, and real-
-                        world work.
+› 1. Renamed model                  Balanced agentic coding model for everyday
+                                    work.
+  2. Shared display name (current)  Frontier model for complex coding,
+                                    research, and real-world work.
 
   Press enter to confirm or esc to go back

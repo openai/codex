@@ -1,4 +1,5 @@
 //! Accept current account-scoped model replies and refresh present pickers without reopening them.
+//! Preserve highlighted models by wire slug, independent of their display names.
 
 use super::model_popups::ALL_MODELS_SELECTION_VIEW_ID;
 use super::model_popups::MODEL_SELECTION_VIEW_ID;
@@ -54,16 +55,19 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn show_model_selection_view(&mut self, mut params: SelectionViewParams) {
+    pub(super) fn show_model_selection_view(
+        &mut self,
+        model_ids: Vec<String>,
+        mut params: SelectionViewParams,
+    ) {
         let selected_index = params
             .view_id
             .and_then(|view_id| self.bottom_pane.selected_index_for_present_view(view_id));
         let selected_model = selected_index.and_then(|index| self.model_popup_model_ids.get(index));
-        params.initial_selected_idx = params
-            .items
+        params.initial_selected_idx = model_ids
             .iter()
-            .position(|item| Some(&item.name) == selected_model);
-        self.model_popup_model_ids = params.items.iter().map(|item| item.name.clone()).collect();
+            .position(|model| Some(model) == selected_model);
+        self.model_popup_model_ids = model_ids;
         if let Some(view_id) = params.view_id.filter(|_| selected_index.is_some()) {
             self.bottom_pane
                 .replace_selection_view_if_present(view_id, params);
