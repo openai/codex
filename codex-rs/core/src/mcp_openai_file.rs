@@ -280,7 +280,8 @@ mod tests {
 
     fn set_primary_environment_cwd(turn_context: &mut TurnContext, cwd: &Path) {
         let cwd = AbsolutePathBuf::try_from(cwd).expect("absolute path");
-        let TurnEnvironmentState::Ready(primary) = &mut turn_context.environments.environments[0]
+        let TurnEnvironmentState::Ready(primary) =
+            &mut turn_context.initial_environments.environments[0]
         else {
             panic!("expected ready primary environment");
         };
@@ -364,7 +365,7 @@ mod tests {
             .expect("write local file");
         set_primary_environment_cwd(&mut turn_context, dir.path());
         let environment = turn_context
-            .environments
+            .initial_environments
             .primary()
             .expect("ready primary environment");
         let selection = environment.selection();
@@ -378,16 +379,16 @@ mod tests {
             /*non_blocking_snapshots*/ true,
         );
         environments.update_selections(std::slice::from_ref(&selection), &environment_config);
-        turn_context.environments = environments.snapshot().await;
+        turn_context.initial_environments = environments.snapshot().await;
         turn_context
-            .environments
+            .initial_environments
             .starting()
             .next()
             .expect("environment should initially be starting")
             .wait_until_ready()
             .await
             .expect("environment should become ready");
-        let step_environments = turn_context.environments.refresh_readiness();
+        let step_environments = turn_context.initial_environments.refresh_readiness();
 
         let mut config = (*turn_context.config).clone();
         config.chatgpt_base_url = format!("{}/backend-api", server.uri());

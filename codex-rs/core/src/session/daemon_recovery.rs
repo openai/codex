@@ -21,10 +21,13 @@ impl Session {
         let context = &task.turn_context;
         context.extension_data.get::<RecordedTurnInput>()?;
         // Remote identities/configuration are not persisted across daemon restarts.
-        if context.environments.environments.len() != 1 {
+        if context.initial_environments.environments.len() != 1 {
             return None;
         }
-        let environment = context.environments.single_local_environment()?.selection();
+        let environment = context
+            .initial_environments
+            .single_local_environment()?
+            .selection();
         if environment.config != EnvironmentConfigState::FromThread {
             return None;
         }
@@ -34,8 +37,9 @@ impl Session {
                 final_output_json_schema: context.final_output_json_schema.clone(),
                 service_tier: Some(
                     context
-                        .current_settings
+                        .next_step_input
                         .load()
+                        .settings
                         .service_tier
                         .clone()
                         .unwrap_or_else(|| {

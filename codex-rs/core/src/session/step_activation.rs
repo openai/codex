@@ -2,6 +2,7 @@
 
 use super::session::Session;
 use super::session::SessionConfiguration;
+use super::step_context::StepInputs;
 use super::step_settings::ResolvedStepSettings;
 use super::step_settings::StepSettingsConstraints;
 use super::step_settings::StepSettingsUpdate;
@@ -249,7 +250,7 @@ impl Session {
                             (
                                 Arc::clone(&task.turn_context),
                                 Arc::clone(&task.done),
-                                task.turn_context.current_settings.load_full(),
+                                task.turn_context.next_step_input.load_full(),
                             )
                         })
                 })
@@ -277,7 +278,7 @@ impl Session {
         // settings rules. The task can progress, finish, or be cancelled while
         // preparation awaits; no publication locks are held here.
         let prepared = self
-            .prepare_step_settings_activation(&turn_context, &current, &update)
+            .prepare_step_settings_activation(&turn_context, &current.settings, &update)
             .await;
         let active = self.active_turn.lock().await;
         let Some(task) = active.as_ref().and_then(|active| active.task.as_ref()) else {
@@ -288,7 +289,7 @@ impl Session {
         // A mismatch abandons the update without retrying or retargeting.
         if !Arc::ptr_eq(&task.done, &task_done)
             || !Arc::ptr_eq(&task.turn_context, &turn_context)
-            || !Arc::ptr_eq(&task.turn_context.current_settings.load_full(), &current)
+            || !Arc::ptr_eq(&task.turn_context.next_step_input.load_full(), &current)
             || task.cancellation_token.is_cancelled()
         {
             return TurnSettingsUpdateOutcome::TargetUnavailable;
@@ -316,7 +317,7 @@ impl Session {
                 }
                 check_legacy_turn_safety(
                     &turn_context,
-                    &current,
+                    &current.settings,
                     &destination,
                     &state.session_configuration.original_config_do_not_use,
                 )
@@ -327,8 +328,11 @@ impl Session {
         // Publish the immutable snapshot. Frozen initial settings, existing step
         // captures, and future thread settings are not changed.
         task.turn_context
-            .current_settings
-            .store(Arc::new(destination));
+            .next_step_input
+            .store(Arc::new(StepInputs {
+                settings: Arc::new(destination),
+                environments: current.environments.clone(),
+            }));
         TurnSettingsUpdateOutcome::Applied
     }
 

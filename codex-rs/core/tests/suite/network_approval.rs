@@ -23,6 +23,8 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -1637,7 +1639,19 @@ async fn unattributed_network_request_uses_active_turn_environment_fallback(
     skip_if_sandbox!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = managed_network_unified_exec_test(&server).await?;
+    let features = if approvals_reviewer == ApprovalsReviewer::User {
+        &[Feature::DeferredExecutor][..]
+    } else {
+        &[]
+    };
+    let test = managed_network_unified_exec_test_with_features(&server, features).await?;
+    let mut selection = local(test.config.cwd.clone());
+    if approvals_reviewer == ApprovalsReviewer::User {
+        let cwd = test.config.cwd.join("late-environment");
+        fs::create_dir(&cwd)?;
+        selection = local(cwd);
+        selection.config = EnvironmentConfigState::Pending;
+    }
     let pending_model = mount_response_once_match(
         &server,
         |request: &wiremock::Request| request_body_contains(request, "hold the active turn"),
@@ -1652,12 +1666,61 @@ async fn unattributed_network_request_uses_active_turn_environment_fallback(
     submit_managed_network_turn(
         &test,
         "hold the active turn",
-        vec![local(test.config.cwd.clone())],
+        vec![selection.clone()],
         approvals_reviewer,
         AskForApproval::OnRequest,
     )
     .await?;
     wait_for_response_request(&pending_model).await;
+
+    if approvals_reviewer == ApprovalsReviewer::User {
+        let root = SelectedCapabilityRoot {
+            id: "late-environment".into(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: selection.environment_id.clone(),
+                path: selection.cwd.clone(),
+            },
+        };
+        test.codex
+            .environment_ready(
+                &selection,
+                EnvironmentConfig {
+                    allow_login_shell: test.config.permissions.allow_login_shell,
+                    workspace_roots: selection.workspace_roots.clone(),
+                    permission_profile: PermissionProfileSnapshot::legacy(
+                        test.config.permissions.permission_profile().clone(),
+                    ),
+                    shell_environment_policy: test
+                        .config
+                        .permissions
+                        .shell_environment_policy
+                        .clone(),
+                    windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                    windows_sandbox_type: test.config.permissions.windows_sandbox_type,
+                    windows_sandbox_private_desktop: test
+                        .config
+                        .permissions
+                        .windows_sandbox_private_desktop,
+                    use_legacy_landlock: test.config.features.use_legacy_landlock(),
+                    exec_policy: None,
+                    mcp_policy: None,
+                    network_policy: None,
+                    selected_capability_roots: vec![root.clone()],
+                },
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+            while !test
+                .codex
+                .inspect_selected_capability_roots()
+                .ready_roots
+                .contains(&root)
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+    }
 
     let proxy_addr = test
         .session_configured
@@ -1727,7 +1790,7 @@ async fn unattributed_network_request_uses_active_turn_environment_fallback(
     let proxy_request = tokio::spawn(raw_http_proxy_request(proxy_addr, NETWORK_TEST_HOST));
     let approval = expect_network_approval(&test, LOCAL_ENVIRONMENT_ID).await?;
     assert_eq!(approval.command, ["network-access", NETWORK_TEST_TARGET]);
-    assert_eq!(approval.cwd, test.config.cwd.clone().into());
+    assert_eq!(approval.cwd, selection.cwd.into());
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
@@ -2433,6 +2496,26 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
 
     for (scenario, test) in scenarios {
         let mut remote = test.executor_environment().selection().clone();
+        let remote_private_path = remote.cwd.join("secondary-environment-private")?;
+        let permissions = test.config.permissions.permission_profile();
+        let mut filesystem = permissions.file_system_sandbox_policy();
+        filesystem.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: remote_private_path.clone(),
+            },
+            access: FileSystemAccessMode::Deny,
+            missing_path_behavior: None,
+        });
+        filesystem.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: "*.guardian-secret".into(),
+            },
+            FileSystemAccessMode::Deny,
+        ));
+        let remote_review_permissions = PermissionProfile::from_runtime_permissions(
+            &filesystem,
+            permissions.network_sandbox_policy(),
+        );
 
         for (suffix, allowed_domain, expected) in [
             (
@@ -2464,6 +2547,8 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             proxy_config.set_allowed_domains(vec![allowed_domain.to_string()]);
             let mut permission_profile = if restricted {
                 PermissionProfile::workspace_write()
+            } else if suffix == "REVIEWED" {
+                remote_review_permissions.clone()
             } else {
                 test.config.permissions.permission_profile().clone()
             };
@@ -2612,6 +2697,21 @@ PYTHON"#;
                     guardian_network_triggers(&[&guardian])?,
                     vec![(marker.clone(), command)]
                 );
+                let prompt = guardian
+                    .single_request()
+                    .message_input_texts("user")
+                    .join("");
+                let permissions = prompt
+                    .split_once("PARENT TURN PERMISSION CONTEXT START")
+                    .and_then(|(_, text)| text.split_once("PARENT TURN PERMISSION CONTEXT END"))
+                    .map(|(permissions, _)| permissions)
+                    .context("network Guardian permissions")?;
+                assert!(permissions.contains(&remote_private_path.inferred_native_path_string()));
+                let remote_glob = remote
+                    .cwd
+                    .join("*.guardian-secret")?
+                    .inferred_native_path_string();
+                assert!(permissions.contains(&format!("glob `{remote_glob}`")));
             }
             let output = responses
                 .function_call_output_text(&marker)

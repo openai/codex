@@ -1,3 +1,4 @@
+use super::step_context::StepInputs;
 use super::step_settings::ResolvedStepSettings;
 use super::token_budget::has_explicit_settings;
 use super::token_budget::resolve_token_budget;
@@ -320,8 +321,8 @@ pub struct TurnContext {
     /// Thread-owned plugin selection captured when this turn was admitted.
     pub(crate) disabled_plugin_ids: Vec<String>,
     pub(super) active_host_plugin_identities: Option<Vec<PluginIdentity>>,
-    /// Snapshot for the next step; request consumers use their captured StepContext.
-    pub(super) current_settings: ArcSwap<ResolvedStepSettings>,
+    /// Inputs for the next step; request consumers use their captured StepContext.
+    pub(super) next_step_input: ArcSwap<StepInputs>,
     /// Turn-wide telemetry; model-attributed step work should use `StepContext::session_telemetry`.
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
@@ -329,7 +330,9 @@ pub struct TurnContext {
     pub(crate) history_mode: ThreadHistoryMode,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
-    pub(crate) environments: TurnEnvironmentSnapshot,
+    /// Initial selection retained for legacy turn consumers. Step work uses StepContext.
+    // TODO(sayan): Migrate all remaining consumers to next_step_input's environments.
+    pub(crate) initial_environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -378,7 +381,7 @@ enum TurnContextBuildMode {
 impl TurnContext {
     /// Captures current model metadata without preparing a step.
     pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
-        Arc::clone(&self.current_settings.load().model_info)
+        Arc::clone(&self.next_step_input.load().settings.model_info)
     }
 
     /// Legacy: returns the frozen initial-turn model metadata.
@@ -534,7 +537,7 @@ impl TurnContext {
 
     /// Returns the selected environment's permissions, or the thread's permissions when none is ready.
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
-        self.environments
+        self.initial_environments
             .permission_profile_or_else(|| self.config.permissions.effective_permission_profile())
     }
 
@@ -556,7 +559,7 @@ impl TurnContext {
 
     /// Combines the selected environment's workspace roots with its permission profile roots.
     pub(crate) fn effective_workspace_roots(&self) -> Vec<PathUri> {
-        let Some(environment) = self.environments.primary() else {
+        let Some(environment) = self.initial_environments.primary() else {
             return self.config.effective_workspace_roots();
         };
 
@@ -673,14 +676,17 @@ impl TurnContext {
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: self.disabled_plugin_ids.clone(),
             active_host_plugin_identities: self.active_host_plugin_identities.clone(),
-            current_settings: ArcSwap::from(step_settings),
+            next_step_input: ArcSwap::from_pointee(StepInputs {
+                settings: step_settings,
+                environments: self.initial_environments.clone(),
+            }),
             session_telemetry,
             provider: self.provider.clone(),
             session_source: self.session_source.clone(),
             history_mode: self.history_mode,
             parent_thread_id: self.parent_thread_id,
             originator: self.originator.clone(),
-            environments: self.environments.clone(),
+            initial_environments: self.initial_environments.clone(),
             #[allow(deprecated)]
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
@@ -731,7 +737,7 @@ impl TurnContext {
         // The legacy rollout field still stores host-native paths. Keep its
         // runtime-root filtering and omit it for unrepresentable profile roots;
         // the authoritative permission profile retains its concrete entries.
-        let profile_roots = self.environments.primary().map_or_else(
+        let profile_roots = self.initial_environments.primary().map_or_else(
             || self.config.permissions.profile_workspace_roots(),
             |environment| {
                 environment
@@ -767,7 +773,7 @@ impl TurnContext {
             approvals_reviewer: Some(self.config.approvals_reviewer),
             sandbox_policy: self.sandbox_policy(),
             permission_profile: Some(self.permission_profile()),
-            active_permission_profile: self.environments.primary().map_or_else(
+            active_permission_profile: self.initial_environments.primary().map_or_else(
                 || self.config.permissions.active_permission_profile(),
                 TurnEnvironment::active_permission_profile,
             ),
@@ -989,14 +995,17 @@ impl Session {
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
             active_host_plugin_identities: None,
-            current_settings: ArcSwap::from(step_settings),
+            next_step_input: ArcSwap::from_pointee(StepInputs {
+                settings: step_settings,
+                environments: environments.clone(),
+            }),
             session_telemetry: session_telemetry_for_context,
             provider,
             session_source,
             history_mode: session_configuration.history_mode,
             parent_thread_id: session_configuration.parent_thread_id,
             originator: session_configuration.originator.clone(),
-            environments,
+            initial_environments: environments,
             #[allow(deprecated)]
             cwd,
             current_date: Some(current_date),
@@ -1260,7 +1269,7 @@ impl Session {
         let turn_context = Arc::new(turn_context);
         if git_enrichment_policy == GitEnrichmentPolicy::Fresh
             && turn_context
-                .environments
+                .initial_environments
                 .single_local_environment_cwd()
                 .is_some()
         {

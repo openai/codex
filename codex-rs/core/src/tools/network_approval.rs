@@ -648,11 +648,17 @@ impl NetworkApprovalService {
         {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
-        let active_turn = session.active_turn_context_and_strict_auto_review().await;
+        let active_turn = session
+            .active_turn_context_and_strict_auto_review()
+            .await
+            .map(|(turn, inputs, strict)| {
+                let environments = inputs.environments.refresh_readiness();
+                (turn, inputs, environments, strict)
+            });
         let Some(environment_id) = active_environment_id.or_else(|| {
             active_turn
                 .as_ref()
-                .and_then(|(turn_context, _, _)| turn_context.environments.primary())
+                .and_then(|(_, _, environments, _)| environments.primary())
                 .map(|environment| environment.selection.environment_id.clone())
         }) else {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
@@ -679,7 +685,9 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some((turn_context, step_settings, strict_auto_review)) = active_turn else {
+        let Some((turn_context, step_inputs, active_environments, strict_auto_review)) =
+            active_turn
+        else {
             if let Some(owner_call) = owner_call.as_ref() {
                 self.record_call_outcome(&owner_call.registration_id, policy_denial_message);
             }
@@ -709,12 +717,15 @@ impl NetworkApprovalService {
         pending_owner.disconnect = request.disconnect.clone();
         pending_owner.cancellation = request.cancellation.clone();
 
+        // Review under current settings, but an owned process keeps the environments it started in.
+        let review_environments = owner_call
+            .as_ref()
+            .map_or(&active_environments, |call| &call.environments);
         let permission_profile = owner_call
             .as_ref()
             .map(|call| &call.permission_profile)
             .or_else(|| {
-                turn_context
-                    .environments
+                review_environments
                     .turn_environments()
                     .find(|environment| environment.selection.environment_id == environment_id)
                     .map(TurnEnvironment::permission_profile)
@@ -728,12 +739,8 @@ impl NetworkApprovalService {
         }
         let review_context = GuardianReviewContext::from_resolved_settings(
             Arc::clone(&turn_context),
-            &step_settings,
-            // Review this new request under current settings, in its originating execution's
-            // environments. Completing the original turn does not transfer process ownership.
-            owner_call
-                .as_ref()
-                .map_or(&turn_context.environments, |call| &call.environments),
+            &step_inputs.settings,
+            review_environments,
         );
         if !allows_network_approval_flow(review_context.approval_policy) {
             if let Some(owner_call) = owner_call.as_ref() {
@@ -762,8 +769,7 @@ impl NetworkApprovalService {
         {
             cwd
         } else {
-            turn_context
-                .environments
+            review_environments
                 .turn_environments()
                 .find(|environment| environment.selection.environment_id == environment_id)
                 .and_then(|environment| environment.cwd().to_abs_path().ok())

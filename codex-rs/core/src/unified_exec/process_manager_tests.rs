@@ -463,7 +463,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         #[allow(deprecated)]
         sandbox_cwd: turn.cwd.clone().into(),
         turn_environment: turn
-            .environments
+            .initial_environments
             .primary()
             .cloned()
             .expect("primary environment"),
@@ -631,7 +631,9 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                 tty: false,
                 environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                 permissions: super::super::TerminalPermissions::for_launch(
-                    turn.environments.primary().expect("turn environment"),
+                    turn.initial_environments
+                        .primary()
+                        .expect("turn environment"),
                     &turn,
                     super::super::TerminalSandboxSource::Native,
                     crate::sandboxing::SandboxPermissions::UseDefault,

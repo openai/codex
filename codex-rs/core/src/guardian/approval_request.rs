@@ -42,6 +42,7 @@ pub(crate) enum GuardianApprovalRequest {
     #[cfg(unix)]
     Execve {
         id: String,
+        environment_id: String,
         source: GuardianCommandSource,
         program: String,
         argv: Vec<String>,
@@ -57,6 +58,7 @@ pub(crate) enum GuardianApprovalRequest {
     NetworkAccess {
         id: String,
         turn_id: String,
+        environment_id: String,
         target: String,
         host: String,
         protocol: NetworkApprovalProtocol,
@@ -82,6 +84,21 @@ pub(crate) enum GuardianApprovalRequest {
         reason: Option<String>,
         permissions: RequestPermissionProfile,
     },
+}
+
+impl GuardianApprovalRequest {
+    pub(super) fn background_environment_id(&self) -> Option<&str> {
+        match self {
+            Self::NetworkAccess { environment_id, .. } => Some(environment_id),
+            #[cfg(unix)]
+            Self::Execve { environment_id, .. } => Some(environment_id),
+            Self::ExecCommand { .. }
+            | Self::WriteStdin { .. }
+            | Self::ApplyPatch { .. }
+            | Self::McpToolCall { .. }
+            | Self::RequestPermissions { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -289,6 +306,7 @@ pub(crate) fn guardian_approval_request_to_json(
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             id: _,
+            environment_id: _,
             source,
             program,
             argv,
@@ -315,6 +333,7 @@ pub(crate) fn guardian_approval_request_to_json(
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            environment_id: _,
             target,
             host,
             protocol,
@@ -416,6 +435,7 @@ pub(crate) fn guardian_assessment_action(
         GuardianApprovalRequest::NetworkAccess {
             id: _id,
             turn_id: _turn_id,
+            environment_id: _,
             target,
             host,
             protocol,

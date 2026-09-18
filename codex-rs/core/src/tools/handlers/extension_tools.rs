@@ -430,7 +430,7 @@ mod tests {
         let model = turn.model_info().slug.clone();
         let truncation_policy = turn.model_info().truncation_policy.into();
         let expected_sandbox_cwds = turn
-            .environments
+            .initial_environments
             .turn_environments()
             .map(|environment| environment.cwd().clone())
             .collect::<Vec<_>>();

@@ -1955,10 +1955,16 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .await
         .expect("build resumed turn context");
     let resumed_turn = prepared_turn;
-    assert_eq!(resumed_turn.environments.turn_environments().count(), 1);
     assert_eq!(
         resumed_turn
-            .environments
+            .initial_environments
+            .turn_environments()
+            .count(),
+        1
+    );
+    assert_eq!(
+        resumed_turn
+            .initial_environments
             .primary()
             .expect("primary environment")
             .cwd(),
@@ -1966,7 +1972,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     );
     assert_ne!(
         resumed_turn
-            .environments
+            .initial_environments
             .primary()
             .expect("primary environment")
             .cwd(),
@@ -1992,10 +1998,13 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
         .await
         .expect("build forked turn context");
     let forked_turn = prepared_turn;
-    assert_eq!(forked_turn.environments.turn_environments().count(), 1);
+    assert_eq!(
+        forked_turn.initial_environments.turn_environments().count(),
+        1
+    );
     assert_eq!(
         forked_turn
-            .environments
+            .initial_environments
             .primary()
             .expect("primary environment")
             .cwd(),
@@ -2003,7 +2012,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
     );
     assert_ne!(
         forked_turn
-            .environments
+            .initial_environments
             .primary()
             .expect("primary environment")
             .cwd(),

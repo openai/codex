@@ -2735,7 +2735,8 @@ async fn deferred_executor_guardian_uses_newly_ready_step_environment() -> Resul
     let remote_cwd = test.cwd.path().join("guardian-remote").abs();
     let local_cwd = test.cwd.path().abs();
     fs::create_dir_all(remote_cwd.as_path())?;
-    let remote_denied_path = remote_cwd.canonicalize()?.join("private");
+    // Remote policy paths use the executor's spelling; only local paths are canonicalized here.
+    let remote_denied_path = remote_cwd.join("private");
     let local_denied_path = local_cwd.canonicalize()?.join("private");
     let remote_selection = TurnEnvironmentSelection {
         environment_id: REMOTE_ENVIRONMENT_ID.to_string(),

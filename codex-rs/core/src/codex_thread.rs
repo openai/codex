@@ -824,13 +824,13 @@ impl CodexThread {
 
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
-        if let Some((turn, settings, _)) = self
+        if let Some((turn, inputs, _)) = self
             .session
             .active_turn_context_and_strict_auto_review()
             .await
             && turn.sub_id == turn_id
         {
-            settings.approvals_reviewer()
+            inputs.settings.approvals_reviewer()
         } else {
             self.config_snapshot().await.approvals_reviewer
         }

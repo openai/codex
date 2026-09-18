@@ -1,3 +1,4 @@
+use super::step_context::StepInputs;
 use super::step_settings::ResolvedStepSettings;
 use super::*;
 use arc_swap::ArcSwap;
@@ -116,7 +117,7 @@ pub(super) async fn spawn_review_thread(
     let review_turn_id = sub_id.to_string();
     #[allow(deprecated)]
     let windows_sandbox_selection = parent_turn_context
-        .environments
+        .initial_environments
         .primary()
         .map(TurnEnvironment::windows_sandbox_selection_for_turn_metadata)
         .unwrap_or_else(|| {
@@ -161,14 +162,17 @@ pub(super) async fn spawn_review_thread(
         initial_settings: Arc::clone(&step_settings),
         disabled_plugin_ids: parent_turn_context.disabled_plugin_ids.clone(),
         active_host_plugin_identities: None,
-        current_settings: ArcSwap::from(step_settings),
+        next_step_input: ArcSwap::from_pointee(StepInputs {
+            settings: step_settings,
+            environments: parent_turn_context.initial_environments.clone(),
+        }),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         session_source,
         history_mode: parent_turn_context.history_mode,
         parent_thread_id: parent_turn_context.parent_thread_id,
         originator: parent_turn_context.originator.clone(),
-        environments: parent_turn_context.environments.clone(),
+        initial_environments: parent_turn_context.initial_environments.clone(),
         available_models,
         unified_exec_shell_mode,
         current_date: parent_turn_context.current_date.clone(),
@@ -202,7 +206,11 @@ pub(super) async fn spawn_review_thread(
         client_id: None,
     }];
     let tc = Arc::new(review_turn_context);
-    if tc.environments.single_local_environment_cwd().is_some() {
+    if tc
+        .initial_environments
+        .single_local_environment_cwd()
+        .is_some()
+    {
         tc.turn_metadata_state
             .spawn_git_enrichment_task(Arc::clone(&sess.services.git_root_discovery));
     }

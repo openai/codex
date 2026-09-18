@@ -230,7 +230,7 @@ fn plan_with_model(
     let mut registry = build_core_tool_registry(
         turn,
         model_info,
-        &turn.environments,
+        &turn.initial_environments,
         &mcp,
         inputs.tool_suggest_candidates.as_ref(),
         inputs.wait_for_environment_tool_config.as_ref(),
@@ -402,12 +402,12 @@ impl<'call> ToolExecutor<ExtensionToolCall<'call>> for DeferredExtensionTool {
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {
     let mut second_environment = turn
-        .environments
+        .initial_environments
         .primary()
         .expect("primary environment")
         .clone();
     second_environment.selection.environment_id = "secondary".to_string();
-    turn.environments
+    turn.initial_environments
         .environments
         .push(TurnEnvironmentState::Ready(second_environment));
 }
@@ -740,7 +740,7 @@ async fn internal_guardian_sessions_require_managed_secondary_environments() {
         session.allowed_tools = Some(Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()));
         set_feature(&mut turn, Feature::ViewImage, /*enabled*/ true);
         let TurnEnvironmentState::Ready(primary) = turn
-            .environments
+            .initial_environments
             .environments
             .first_mut()
             .expect("primary environment")
@@ -755,7 +755,7 @@ async fn internal_guardian_sessions_require_managed_secondary_environments() {
         let secondary_workspace_root =
             codex_utils_path_uri::PathUri::from_abs_path(&turn.config.cwd.join("secondary"));
         let TurnEnvironmentState::Ready(secondary) = turn
-            .environments
+            .initial_environments
             .environments
             .get_mut(1)
             .expect("secondary environment")
@@ -1008,7 +1008,7 @@ async fn exec_command_guidance_follows_executor_platform_and_fallbacks() {
                     ConfigShellToolType::UnifiedExec;
             });
             let TurnEnvironmentState::Ready(environment) = turn
-                .environments
+                .initial_environments
                 .environments
                 .first_mut()
                 .expect("primary environment")
@@ -1045,7 +1045,7 @@ async fn login_shell_parameter_follows_selected_environment() {
                     config.permissions.allow_login_shell = !allow_login_shell;
                 });
                 let TurnEnvironmentState::Ready(environment) = turn
-                    .environments
+                    .initial_environments
                     .environments
                     .first_mut()
                     .expect("primary environment")
@@ -1081,7 +1081,12 @@ async fn login_shell_parameter_is_available_when_any_environment_allows_it() {
             config.permissions.allow_login_shell = false;
         });
         duplicate_primary_environment(turn);
-        for (index, environment) in turn.environments.environments.iter_mut().enumerate() {
+        for (index, environment) in turn
+            .initial_environments
+            .environments
+            .iter_mut()
+            .enumerate()
+        {
             let TurnEnvironmentState::Ready(environment) = environment else {
                 panic!("environment should be ready");
             };
@@ -1102,7 +1107,7 @@ async fn disabling_shell_tools_disables_command_tools_for_all_environments() {
         });
 
         let TurnEnvironmentState::Ready(environment) = turn
-            .environments
+            .initial_environments
             .environments
             .first_mut()
             .expect("primary environment")
@@ -1238,12 +1243,12 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
         turn.unified_exec_shell_mode =
             codex_tools::UnifiedExecShellMode::ZshFork(zsh_fork_config_for_spec_plan_tests());
         let remote_cwd = turn
-            .environments
+            .initial_environments
             .primary()
             .expect("primary environment")
             .cwd()
             .clone();
-        turn.environments
+        turn.initial_environments
             .environments
             .push(TurnEnvironmentState::Ready(
                 crate::session::turn_context::TurnEnvironment::new(
@@ -1295,7 +1300,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
 #[tokio::test]
 async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
-        turn.environments.environments.clear();
+        turn.initial_environments.environments.clear();
         set_feature(turn, Feature::ShellTool, /*enabled*/ true);
         set_feature(turn, Feature::RequestPermissionsTool, /*enabled*/ true);
         update_turn_settings_for_test(turn, |settings| {
@@ -1358,8 +1363,8 @@ async fn environment_tools_follow_the_step_context() {
             Some(ApplyPatchToolType::Freeform);
     });
 
-    let environments = turn.environments.clone();
-    turn.environments.environments.clear();
+    let environments = turn.initial_environments.clone();
+    turn.initial_environments.environments.clear();
     let turn = Arc::new(turn);
     let mcp = Arc::new(codex_mcp::McpBinding::empty(mcp_config_for_test(
         &turn.config,

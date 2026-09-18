@@ -43,6 +43,10 @@ fn read_denials_use_target_paths_and_native_glob_semantics() {
         let matcher = ReadDenyMatcher::try_new_with_context(&policy, &context)
             .unwrap()
             .unwrap();
+        assert_eq!(
+            policy.get_unreadable_roots_with_context(&context),
+            Ok(vec![cwd.join("private").unwrap()]),
+        );
         for (path, expected) in [
             ("private", true),
             ("private/file", true),
@@ -208,6 +212,17 @@ fn malformed_or_unresolvable_denials_fail_closed() {
         path: uri("file:///C:/private"),
     })]);
     assert!(ReadDenyMatcher::try_new_with_context(&policy, &context).is_err());
+    let policy = FileSystemSandboxPolicy::restricted(vec![deny(FileSystemPath::Special {
+        value: FileSystemSpecialPath::Tmpdir,
+    })]);
+    assert!(
+        policy
+            .get_unreadable_roots_with_context(&FileSystemSandboxPolicyContext {
+                temporary_directories: None,
+                ..context
+            })
+            .is_err()
+    );
 }
 
 #[test]

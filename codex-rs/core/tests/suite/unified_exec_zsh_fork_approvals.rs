@@ -455,11 +455,12 @@ async fn unified_exec_zsh_fork_guardian_reviews_persistent_terminal_in_current_t
     skip_if_no_network!(Ok(()));
 
     let approval_policy = AskForApproval::OnRequest;
-    let permission_profile = restrictive_workspace_write_profile();
     let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
     let outside_path = outside_dir
         .path()
         .join("unified-exec-zsh-fork-current-turn.txt");
+    let initial_denied_path = outside_dir.path().join("original-environment-private");
+    let permission_profile = denied_read_permission_profile(&initial_denied_path)?;
     let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
 
     let outside_path_for_hook = outside_path.clone();
@@ -555,13 +556,28 @@ async fn unified_exec_zsh_fork_guardian_reviews_persistent_terminal_in_current_t
         unreachable!("completion wait only returns turn-complete events");
     };
 
-    submit_turn_with_session_permissions(
-        &test,
-        "run a command in the persistent terminal with Guardian approvals",
-        approval_policy,
-        ApprovalsReviewer::AutoReview,
-    )
-    .await?;
+    let next_cwd = test.config.cwd.join("next-turn");
+    fs::create_dir(&next_cwd)?;
+    let next_denied_path = next_cwd.join("next-environment-private");
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        denied_read_permission_profile(next_denied_path.as_path())?,
+        next_cwd.as_path(),
+    );
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "run a command in the persistent terminal with Guardian approvals".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(local_selections(next_cwd)),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                ..Default::default()
+            }),
+        )
+        .await?;
 
     let mut current_turn_id = None;
     let mut stdin_assessment = None;
@@ -630,6 +646,14 @@ async fn unified_exec_zsh_fork_guardian_reviews_persistent_terminal_in_current_t
     assert!(guardian_requests[0].body_contains_text(&environment));
     assert!(guardian_requests[0].body_contains_text("The `cwd` field is its launch directory"));
     assert!(guardian_requests[1].body_contains_text(&outside_path.to_string_lossy()));
+    let guardian_text = guardian_requests[1].message_input_texts("user").join("");
+    let permissions = guardian_text
+        .split_once("PARENT TURN PERMISSION CONTEXT START")
+        .and_then(|(_, text)| text.split_once("PARENT TURN PERMISSION CONTEXT END"))
+        .map(|(permissions, _)| permissions)
+        .context("intercepted command's Guardian permissions")?;
+    assert!(permissions.contains(initial_denied_path.to_string_lossy().as_ref()));
+    assert!(!permissions.contains(next_denied_path.to_string_lossy().as_ref()));
 
     Ok(())
 }

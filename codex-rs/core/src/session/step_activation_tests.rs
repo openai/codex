@@ -123,7 +123,7 @@ async fn instruction_refresh_serializes_reads_and_releases_on_cancellation() {
     session
         .services
         .agents_md_manager
-        .refresh(&turn.config, &turn.environments)
+        .refresh(&turn.config, &turn.initial_environments)
         .await
         .0
         .expect("install initial provider");
@@ -195,7 +195,7 @@ async fn thread_instruction_refresh_serializes_reads_and_releases_on_cancellatio
     session
         .services
         .agents_md_manager
-        .refresh(&turn.config, &turn.environments)
+        .refresh(&turn.config, &turn.initial_environments)
         .await
         .0
         .expect("install initial provider");
@@ -739,7 +739,7 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
         lookup,
     } = activation_fixture(models).await;
     let desired = desired_step_settings(&session).await;
-    let original = turn.current_settings.load_full();
+    let original = turn.next_step_input.load_full();
     let update_session = Arc::clone(&session);
     let turn_id = turn.sub_id.clone();
     let update = tokio::spawn(async move {
@@ -763,7 +763,7 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
             .expect("active task");
         (task.cancellation_token.clone(), Arc::clone(&task.done))
     };
-    let (expected_turn, expected_settings) = match change {
+    let (expected_turn, expected_inputs) = match change {
         TaskChangeDuringLookup::CancelledWithRejectedDestination => {
             cancellation_token.cancel();
             (Arc::clone(&turn), original)
@@ -787,7 +787,7 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
                 TaskChangeDuringLookup::FinishedAndReusedContext => Arc::clone(&turn),
                 TaskChangeDuringLookup::CancelledWithRejectedDestination => unreachable!(),
             };
-            let settings = replacement.current_settings.load_full();
+            let inputs = replacement.next_step_input.load_full();
             session
                 .spawn_task(
                     Arc::clone(&replacement),
@@ -798,8 +798,8 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
                     },
                 )
                 .await;
-            assert!(Arc::ptr_eq(&turn.current_settings.load_full(), &original));
-            (replacement, settings)
+            assert!(Arc::ptr_eq(&turn.next_step_input.load_full(), &original));
+            (replacement, inputs)
         }
     };
     lookup.release();
@@ -808,8 +808,8 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
         TurnSettingsUpdateOutcome::TargetUnavailable
     );
     assert!(Arc::ptr_eq(
-        &expected_turn.current_settings.load_full(),
-        &expected_settings,
+        &expected_turn.next_step_input.load_full(),
+        &expected_inputs,
     ));
     assert_eq!(desired_step_settings(&session).await, desired);
     session.abort_all_tasks(TurnAbortReason::Replaced).await;
@@ -826,7 +826,7 @@ enum ManagedAuthorizationChange {
 #[tokio::test]
 async fn reviewer_only_activation_enforces_managed_authority(required_review: bool) {
     let ActivationFixture { session, turn, .. } = activation_fixture(activation_models()).await;
-    let original = turn.current_settings.load_full();
+    let original = turn.next_step_input.load_full();
     let desired = desired_step_settings(&session).await;
     let source = RequirementSource::Unknown;
     let mut sourced = ConfigRequirementsWithSources::default();
@@ -870,7 +870,7 @@ async fn reviewer_only_activation_enforces_managed_authority(required_review: bo
             .await,
         TurnSettingsUpdateOutcome::Rejected { .. }
     ));
-    assert!(Arc::ptr_eq(&turn.current_settings.load_full(), &original));
+    assert!(Arc::ptr_eq(&turn.next_step_input.load_full(), &original));
     assert_eq!(desired_step_settings(&session).await, desired);
     session.abort_all_tasks(TurnAbortReason::Replaced).await;
 }
@@ -887,7 +887,7 @@ async fn delayed_activation_rechecks_live_managed_authorization(
         lookup,
         ..
     } = activation_fixture(activation_models()).await;
-    let original = turn.current_settings.load_full();
+    let original = turn.next_step_input.load_full();
     let desired = desired_step_settings(&session).await;
     let update_session = Arc::clone(&session);
     let turn_id = turn.sub_id.clone();
@@ -913,7 +913,7 @@ async fn delayed_activation_rechecks_live_managed_authorization(
     };
     let sourced = match change {
         ManagedAuthorizationChange::ApprovalPolicy => {
-            let allowed = if original.approval_policy() == AskForApproval::Never {
+            let allowed = if original.settings.approval_policy() == AskForApproval::Never {
                 AskForApproval::OnRequest
             } else {
                 AskForApproval::Never
@@ -924,7 +924,7 @@ async fn delayed_activation_rechecks_live_managed_authorization(
             }
         }
         ManagedAuthorizationChange::ApprovalsReviewer => {
-            let allowed = if original.approvals_reviewer() == ApprovalsReviewer::User {
+            let allowed = if original.settings.approvals_reviewer() == ApprovalsReviewer::User {
                 ApprovalsReviewer::AutoReview
             } else {
                 ApprovalsReviewer::User
@@ -954,10 +954,10 @@ async fn delayed_activation_rechecks_live_managed_authorization(
         match change {
             ManagedAuthorizationChange::ApprovalPolicy => requirements
                 .approval_policy
-                .can_set(&original.approval_policy()),
+                .can_set(&original.settings.approval_policy()),
             ManagedAuthorizationChange::ApprovalsReviewer => requirements
                 .approvals_reviewer
-                .can_set(&original.approvals_reviewer()),
+                .can_set(&original.settings.approvals_reviewer()),
         }
         .expect_err("the refreshed constraint rejects the admitted value")
     };
@@ -968,7 +968,7 @@ async fn delayed_activation_rechecks_live_managed_authorization(
             reason: expected_error.to_string(),
         }
     );
-    assert!(Arc::ptr_eq(&turn.current_settings.load_full(), &original,));
+    assert!(Arc::ptr_eq(&turn.next_step_input.load_full(), &original));
     assert_eq!(desired_step_settings(&session).await, desired);
     session.abort_all_tasks(TurnAbortReason::Replaced).await;
 }

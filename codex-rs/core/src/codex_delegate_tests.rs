@@ -189,7 +189,7 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     let cancel_token = CancellationToken::new();
     cancel_token.cancel();
-    let parent_environments = parent_ctx.environments.clone();
+    let parent_environments = parent_ctx.initial_environments.clone();
 
     let result = timeout(
         Duration::from_secs(/*secs*/ 1),
@@ -262,7 +262,7 @@ async fn delegate_start_analytics_honors_child_opt_out_with_enabled_parent() {
             Arc::clone(&parent_session.services.models_manager),
             Arc::clone(&parent_session),
             Arc::clone(&parent_ctx),
-            parent_ctx.environments.clone(),
+            parent_ctx.initial_environments.clone(),
             CancellationToken::new(),
             SubAgentSource::Review,
             codex_extension_api::SessionIsolation::Inherit,
@@ -338,7 +338,7 @@ async fn delegate_isolation_does_not_depend_on_attribution() {
             Arc::clone(&parent_session.services.models_manager),
             Arc::clone(&parent_session),
             Arc::clone(&parent_ctx),
-            parent_ctx.environments.clone(),
+            parent_ctx.initial_environments.clone(),
             CancellationToken::new(),
             subagent_source,
             isolation,
@@ -374,7 +374,7 @@ async fn run_codex_thread_interactive_rejects_approval_policy_that_can_prompt() 
         crate::session::tests::make_session_and_context_with_rx().await;
     let mut config = parent_ctx.config.as_ref().clone();
     config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-    let parent_environments = parent_ctx.environments.clone();
+    let parent_environments = parent_ctx.initial_environments.clone();
 
     let result = run_codex_thread_interactive(
         config,

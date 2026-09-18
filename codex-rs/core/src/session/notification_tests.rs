@@ -45,7 +45,10 @@ async fn task_finish_preserves_notification_budget_and_queued_user_input() {
     let mut current = turn.initial_settings.as_ref().clone();
     Arc::make_mut(&mut current.model_info).truncation_policy =
         codex_protocol::openai_models::TruncationPolicyConfig::tokens(/*limit*/ 400);
-    turn.current_settings.store(Arc::new(current));
+    turn.next_step_input.store(Arc::new(StepInputs {
+        settings: Arc::new(current),
+        environments: turn.next_step_input.load().environments.clone(),
+    }));
 
     session
         .on_task_finished(Arc::clone(&turn), /*task_result*/ Ok(None))

@@ -733,7 +733,7 @@ async fn review_guardian_mcp_elicitation(
     let Some(mcp_config) = session.services.mcp_runtime.current_config() else {
         return Ok(None);
     };
-    let step_settings = turn_context.current_settings.load_full();
+    let step_settings = Arc::clone(&turn_context.next_step_input.load().settings);
 
     // User approval skips ordinary CUA checks, not separate sensitive requests.
     let user_cua_execution = step_settings.approvals_reviewer() == ApprovalsReviewer::User
@@ -749,7 +749,7 @@ async fn review_guardian_mcp_elicitation(
 
     // Full Access skips inference, not the active-turn and cancellation checks.
     if (user_cua_execution
-        || turn_context.environments.has_full_access(
+        || turn_context.initial_environments.has_full_access(
             turn_context.approval_policy(),
             &turn_context
                 .config

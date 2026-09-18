@@ -1331,13 +1331,13 @@ async fn mcp_sandbox_cwd_uses_matching_server_environment_uri() -> anyhow::Resul
     let (_, mut turn_context) = make_session_and_context().await;
     let secondary_cwd = PathUri::parse("file:///C:/remote/project")?;
     let environment = turn_context
-        .environments
+        .initial_environments
         .primary()
         .expect("primary environment")
         .environment
         .clone();
     turn_context
-        .environments
+        .initial_environments
         .environments
         .push(TurnEnvironmentState::Ready(TurnEnvironment::new(
             TurnEnvironmentSelection {

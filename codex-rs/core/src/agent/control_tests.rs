@@ -900,7 +900,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
             .expect("known v2 agent should reload"),
         V2ReloadRoute::NestedParent => {
             let environment = parent_turn
-                .environments
+                .initial_environments
                 .primary()
                 .expect("parent environment");
             let mut owner_config = environment.config().clone();
@@ -950,12 +950,12 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         let reloaded_turn = reloaded_child.session.new_default_turn().await;
         assert_eq!(
             (
-                reloaded_turn.environments.to_selections(),
+                reloaded_turn.initial_environments.to_selections(),
                 reloaded_turn.permission_profile(),
                 reloaded_child.client_mcp_extensions(),
             ),
             (
-                parent_turn.environments.to_selections(),
+                parent_turn.initial_environments.to_selections(),
                 parent_turn.permission_profile(),
                 client_mcp_extensions,
             ),

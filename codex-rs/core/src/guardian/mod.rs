@@ -161,7 +161,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
                 .extension_data
                 .get::<codex_api::ResponseId>()
                 .map(|id| id.0.clone()),
-            environments: turn.environments.clone(),
+            environments: turn.initial_environments.clone(),
             model_info: Arc::clone(turn.model_info()),
             reasoning_effort: turn.reasoning_effort().cloned(),
             reasoning_summary: turn.reasoning_summary(),

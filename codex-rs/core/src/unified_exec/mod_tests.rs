@@ -119,7 +119,7 @@ async fn exec_command_with_tty(
                 /*network_policy_decider*/ None,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environments
+                turn.initial_environments
                     .primary()
                     .expect("turn environment")
                     .environment
@@ -147,7 +147,9 @@ async fn exec_command_with_tty(
             tty,
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             permissions: TerminalPermissions::for_launch(
-                turn.environments.primary().expect("turn environment"),
+                turn.initial_environments
+                    .primary()
+                    .expect("turn environment"),
                 turn,
                 TerminalSandboxSource::Native,
                 SandboxPermissions::UseDefault,
@@ -621,7 +623,9 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             tty: true,
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             permissions: TerminalPermissions::for_launch(
-                turn.environments.primary().expect("turn environment"),
+                turn.initial_environments
+                    .primary()
+                    .expect("turn environment"),
                 &turn,
                 TerminalSandboxSource::Native,
                 SandboxPermissions::UseDefault,
@@ -704,7 +708,9 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             tty: true,
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
             permissions: TerminalPermissions::for_launch(
-                turn.environments.primary().expect("turn environment"),
+                turn.initial_environments
+                    .primary()
+                    .expect("turn environment"),
                 &turn,
                 TerminalSandboxSource::Native,
                 SandboxPermissions::UseDefault,
@@ -850,7 +856,8 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
 
     let remote_test_env = remote_test_env().await?;
     let (_, mut turn) = make_session_and_context().await;
-    let TurnEnvironmentState::Ready(environment) = &mut turn.environments.environments[0] else {
+    let TurnEnvironmentState::Ready(environment) = &mut turn.initial_environments.environments[0]
+    else {
         panic!("expected ready primary environment");
     };
     environment.environment = Arc::new(remote_test_env.environment().clone());
@@ -876,7 +883,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
             Box::new(TestSpawnLifecycle {
                 inherited_fds: vec![42],
             }),
-            turn.environments
+            turn.initial_environments
                 .primary()
                 .expect("turn environment")
                 .environment
@@ -928,7 +935,9 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
         let mut store = manager.process_store.lock().await;
         let entry = store.processes.get_mut(&process_id).unwrap();
         entry.permissions = TerminalPermissions::for_launch(
-            turn.environments.primary().expect("turn environment"),
+            turn.initial_environments
+                .primary()
+                .expect("turn environment"),
             &turn,
             TerminalSandboxSource::Native,
             SandboxPermissions::RequireEscalated,
@@ -984,7 +993,7 @@ async fn stdin_approval_preserves_the_reviewed_terminal() -> anyhow::Result<()> 
         .get_mut(&process_id)
         .unwrap()
         .environment_id = turn
-        .environments
+        .initial_environments
         .primary()
         .unwrap()
         .selection

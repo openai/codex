@@ -253,7 +253,7 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         ..RequestPermissionProfile::default()
     };
     let environment = turn_context
-        .environments
+        .initial_environments
         .primary()
         .expect("primary environment")
         .selection();
@@ -459,7 +459,7 @@ async fn request_permissions_guardian_review_stops_when_cancelled(
         let cancellation_token = cancellation_token.clone();
         async move {
             let environment = turn_context
-                .environments
+                .initial_environments
                 .primary()
                 .expect("primary environment")
                 .selection();
@@ -568,7 +568,7 @@ async fn guardian_allows_exec_command_additional_permissions_requests_past_polic
         .set_permission_profile(codex_protocol::models::PermissionProfile::Disabled)
         .expect("test setup should allow disabling the permission profile");
     let TurnEnvironmentState::Ready(environment) =
-        &mut turn_context_raw.environments.environments[0]
+        &mut turn_context_raw.initial_environments.environments[0]
     else {
         panic!("primary environment should be ready");
     };
@@ -692,7 +692,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_exec_command_policy_s
         })
         .expect("test setup should allow external sandbox permissions");
     let TurnEnvironmentState::Ready(environment) =
-        &mut turn_context_raw.environments.environments[0]
+        &mut turn_context_raw.initial_environments.environments[0]
     else {
         panic!("primary environment should be ready");
     };
@@ -798,7 +798,8 @@ async fn network_approval_uses_published_task_authority_within_same_turn(
             .task
             .as_ref()
             .expect("active task");
-        let mut settings = task.turn_context.current_settings.load_full();
+        let current = task.turn_context.next_step_input.load_full();
+        let mut settings = Arc::clone(&current.settings);
         update_selected_settings_for_test(Arc::make_mut(&mut settings), |selected| {
             selected
                 .approval_policy
@@ -806,7 +807,12 @@ async fn network_approval_uses_published_task_authority_within_same_turn(
                 .expect("update policy");
             selected.approvals_reviewer = ApprovalsReviewer::User;
         });
-        task.turn_context.current_settings.store(settings);
+        task.turn_context
+            .next_step_input
+            .store(Arc::new(StepInputs {
+                settings,
+                environments: current.environments.clone(),
+            }));
     }
     let decision = session
         .services

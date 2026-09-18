@@ -333,6 +333,7 @@ impl ApprovalAction {
             #[cfg(unix)]
             Self::Execve {
                 id,
+                environment_id,
                 source,
                 program,
                 argv,
@@ -341,6 +342,7 @@ impl ApprovalAction {
                 ..
             } => crate::guardian::GuardianApprovalRequest::Execve {
                 id,
+                environment_id,
                 source,
                 program: program.to_string_lossy().into_owned(),
                 argv,
@@ -388,6 +390,7 @@ impl ApprovalAction {
             Self::NetworkAccess {
                 id,
                 turn_id,
+                environment_id,
                 target,
                 host,
                 protocol,
@@ -397,6 +400,7 @@ impl ApprovalAction {
             } => crate::guardian::GuardianApprovalRequest::NetworkAccess {
                 id,
                 turn_id,
+                environment_id,
                 target,
                 host,
                 protocol,

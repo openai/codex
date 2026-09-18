@@ -126,7 +126,7 @@ async fn permission_request_holds_an_elicitation_until_response() {
         let turn_context = turn_context.clone();
         async move {
             let environment = turn_context
-                .environments
+                .initial_environments
                 .primary()
                 .expect("primary environment")
                 .selection();

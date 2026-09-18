@@ -405,7 +405,7 @@ impl LocalAgentControl {
                     "cannot resume multi-agent v2 child {thread_id} with the current parent settings"
                 ))
             })?;
-            Some((parent, turn.environments.clone()))
+            Some((parent, turn.initial_environments.clone()))
         } else {
             None
         };

@@ -98,7 +98,11 @@ fn denied_reads_reject_file_system_changes_but_only_review_network_changes() {
 #[tokio::test]
 async fn captured_network_changes_require_review() -> anyhow::Result<()> {
     let (_session, mut turn) = make_session_and_context().await;
-    let mut environment = turn.environments.primary().expect("environment").clone();
+    let mut environment = turn
+        .initial_environments
+        .primary()
+        .expect("environment")
+        .clone();
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
     let mut proxy = NetworkProxyConfig {
@@ -159,7 +163,11 @@ async fn captured_network_changes_require_review() -> anyhow::Result<()> {
 #[tokio::test]
 async fn internal_grants_require_review_without_exposing_paths() -> anyhow::Result<()> {
     let (_session, turn) = make_session_and_context().await;
-    let mut environment = turn.environments.primary().expect("environment").clone();
+    let mut environment = turn
+        .initial_environments
+        .primary()
+        .expect("environment")
+        .clone();
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
     let grants = serde_json::from_value(json!({
@@ -195,7 +203,11 @@ async fn internal_grants_require_review_without_exposing_paths() -> anyhow::Resu
 #[tokio::test]
 async fn readable_snapshot_does_not_require_stdin_approval() -> anyhow::Result<()> {
     let (_session, turn) = make_session_and_context().await;
-    let mut environment = turn.environments.primary().expect("environment").clone();
+    let mut environment = turn
+        .initial_environments
+        .primary()
+        .expect("environment")
+        .clone();
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::read_only());
     let snapshot = turn.config.cwd.join("shell-snapshot.sh");
@@ -230,7 +242,11 @@ async fn enabling_windows_sandbox_respects_the_launch_backend(
     expected: SandboxPermissions,
 ) -> anyhow::Result<()> {
     let (_session, turn) = make_session_and_context().await;
-    let mut environment = turn.environments.primary().expect("environment").clone();
+    let mut environment = turn
+        .initial_environments
+        .primary()
+        .expect("environment")
+        .clone();
     environment.selection.cwd = PathUri::parse("file:///C:/workspace")?;
     environment.config_mut().permission_profile =
         PermissionProfileSnapshot::legacy(PermissionProfile::read_only());

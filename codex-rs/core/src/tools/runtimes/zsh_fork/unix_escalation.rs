@@ -282,7 +282,7 @@ impl CoreShellActionProvider {
         };
         match stopwatch
             .pause_for(async {
-                let (turn_context, step_settings, strict_auto_review) = self
+                let (turn_context, step_inputs, strict_auto_review) = self
                     .session
                     .active_turn_context_and_strict_auto_review()
                     .await
@@ -295,8 +295,8 @@ impl CoreShellActionProvider {
                 let approval_ctx = ApprovalContext {
                     review_context: GuardianReviewContext::from_resolved_settings(
                         Arc::clone(&turn_context),
-                        &step_settings,
-                        &turn_context.environments,
+                        &step_inputs.settings,
+                        self.review_context.environments(),
                     ),
                     // The running process can outlive its launching tool or code-mode cell.
                     cancellation_token: None,

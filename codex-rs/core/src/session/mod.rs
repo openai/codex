@@ -3294,14 +3294,14 @@ impl Session {
     )]
     pub(crate) async fn active_turn_context_and_strict_auto_review(
         &self,
-    ) -> Option<(Arc<TurnContext>, Arc<ResolvedStepSettings>, bool)> {
+    ) -> Option<(Arc<TurnContext>, Arc<step_context::StepInputs>, bool)> {
         let active = self.active_turn.lock().await;
         let active = active.as_ref()?;
         let task = active.task.as_ref()?;
         let turn_context = Arc::clone(&task.turn_context);
-        let step_settings = turn_context.current_settings.load_full();
+        let step_inputs = turn_context.next_step_input.load_full();
         let ts = active.turn_state.lock().await;
-        Some((turn_context, step_settings, ts.strict_auto_review_enabled()))
+        Some((turn_context, step_inputs, ts.strict_auto_review_enabled()))
     }
 
     pub(crate) async fn granted_session_permissions(
@@ -3695,9 +3695,10 @@ impl Session {
         required_servers: &[String],
         required_plugins: &HashSet<String>,
     ) -> CodexResult<Arc<StepContext>> {
-        // Capture once before asynchronous planning; all request consumers
-        // retain this immutable settings version even if the turn is updated.
-        let mut settings = turn_context.current_settings.load_full();
+        // Capture settings and selection together before asynchronous planning.
+        // Existing steps retain this version even if the turn is updated.
+        let inputs = turn_context.next_step_input.load_full();
+        let mut settings = Arc::clone(&inputs.settings);
         if matches!(
             turn_context.session_source,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
@@ -3722,8 +3723,8 @@ impl Session {
             settings.model_info.as_ref(),
         );
         let session_telemetry = settings.telemetry(&turn_context.session_telemetry);
-        // Keep selections fixed for the turn while allowing their startup work to finish.
-        let environments = turn_context.environments.refresh_readiness();
+        // Refresh only the captured step selection, without adopting newer inputs.
+        let environments = inputs.environments.refresh_readiness();
         let (loaded_agents_md, warnings) = self
             .services
             .agents_md_manager
