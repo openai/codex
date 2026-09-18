@@ -457,7 +457,8 @@ impl App {
         }
 
         if self.should_handle_unavailable_thread_key(key_event) {
-            self.chat_widget.handle_disconnected_key(key_event);
+            self.chat_widget
+                .handle_restricted_key(key_event, RestrictedInputMode::UnavailableThread);
             return;
         }
 

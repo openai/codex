@@ -48,6 +48,8 @@ mod pagination_completion_tests;
 mod patch_approval_tests;
 #[path = "tests/permission_selection_tests.rs"]
 mod permission_selection_tests;
+#[path = "tests/unavailable_commands_tests.rs"]
+mod unavailable_commands;
 
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;

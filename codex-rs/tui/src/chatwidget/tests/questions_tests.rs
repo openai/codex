@@ -1,5 +1,6 @@
 //! Verify question input delivery, retained drafts, and visible editor behavior.
 use super::*;
+use crate::bottom_pane::RestrictedInputMode;
 use codex_protocol::items::AsyncUserInputQuestion;
 use pretty_assertions::assert_eq;
 
@@ -398,12 +399,21 @@ async fn disconnected_questions_remain_editable_without_sending() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.add_async_questions("message", &questions());
     chat.pause_for_disconnect();
-    chat.handle_disconnected_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.handle_restricted_key(
+        KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+        RestrictedInputMode::Disconnected,
+    );
     chat.bottom_pane.handle_paste("offline draft".into());
-    chat.handle_disconnected_key(KeyEvent::from(KeyCode::Enter));
+    chat.handle_restricted_key(
+        KeyEvent::from(KeyCode::Enter),
+        RestrictedInputMode::Disconnected,
+    );
     assert_eq!(question_count(&chat), 2);
     assert!(op_rx.try_recv().is_err());
-    chat.handle_disconnected_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));
+    chat.handle_restricted_key(
+        KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL),
+        RestrictedInputMode::Disconnected,
+    );
     assert_eq!(question_count(&chat), 2);
 }
 

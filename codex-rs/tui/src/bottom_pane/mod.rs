@@ -221,6 +221,7 @@ pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::ComposerDraftSnapshot;
 pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
+pub(crate) use chat_composer::RestrictedInputMode;
 pub(crate) use chat_composer_history::HistoryEntry;
 pub(crate) use textarea::KillBufferSnapshot;
 
@@ -727,14 +728,19 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
-    /// Edit the draft without invoking popups, submissions, or remote actions.
-    pub(crate) fn handle_disconnected_key(&mut self, key: KeyEvent) {
+    /// Preserve restricted drafts, allowing recovery commands only for connected unavailable threads.
+    pub(crate) fn handle_restricted_key(
+        &mut self,
+        key: KeyEvent,
+        mode: RestrictedInputMode,
+    ) -> InputResult {
         self.view_stack.clear();
         self.delayed_approval_requests.clear();
         self.composer
             .set_input_enabled(/*enabled*/ true, /*placeholder*/ None);
-        self.composer.handle_disconnected_key(key);
+        let result = self.composer.handle_restricted_key(key, mode);
         self.request_redraw();
+        result
     }
 
     /// Forward a key event to the active view or the composer.
@@ -2632,7 +2638,10 @@ mod tests {
         assert_eq!(pane.composer_text(), "ya");
         assert!(pane.view_stack.is_empty());
         assert_eq!(pane.delayed_approval_requests.len(), 1);
-        pane.handle_disconnected_key(KeyEvent::new(KeyCode::Null, KeyModifiers::NONE));
+        pane.handle_restricted_key(
+            KeyEvent::new(KeyCode::Null, KeyModifiers::NONE),
+            RestrictedInputMode::Disconnected,
+        );
         pane.pre_draw_tick_at(Instant::now() + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
         pane.handle_paste(" kept".into());
         assert_eq!(pane.composer_text(), "ya kept");

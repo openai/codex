@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use crate::bottom_pane::RestrictedInputMode;
 use crate::history_cell::ThreadRecapLoadingCell;
 use base64::Engine;
 use codex_app_server_protocol::ImageReference;
@@ -1824,11 +1825,17 @@ async fn restore_thread_input_state_applies_running_state_policy() {
     );
 
     chat.pause_for_disconnect();
-    chat.handle_disconnected_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.handle_restricted_key(
+        KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+        RestrictedInputMode::Disconnected,
+    );
     assert!(!chat.has_queued_follow_up_messages());
     // Editing the last queued draft must not release the uncertain steer for replay.
     assert!(chat.capture_thread_input_state().unwrap().recovered_queue);
-    chat.handle_disconnected_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.handle_restricted_key(
+        KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+        RestrictedInputMode::Disconnected,
+    );
     assert_eq!(
         chat.composer_text_with_pending(),
         "submitted history\nqueued history"

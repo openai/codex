@@ -217,8 +217,10 @@ impl App {
                 }
                 ReconnectPresentation::Overview
             } else {
-                self.chat_widget
-                    .handle_disconnected_key(KeyEvent::new(KeyCode::Null, KeyModifiers::NONE));
+                self.chat_widget.handle_restricted_key(
+                    KeyEvent::new(KeyCode::Null, KeyModifiers::NONE),
+                    RestrictedInputMode::Disconnected,
+                );
                 ReconnectPresentation::Conversation
             };
             self.chat_widget.pause_for_disconnect();

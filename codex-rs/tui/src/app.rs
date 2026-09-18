@@ -33,6 +33,7 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpElicitationApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::PermissionsApprovalRequest;
+use crate::bottom_pane::RestrictedInputMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
@@ -890,7 +891,8 @@ impl App {
             if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
                 self.chat_widget.handle_disconnected_view_key(*key);
             } else {
-                self.chat_widget.handle_disconnected_key(*key);
+                self.chat_widget
+                    .handle_restricted_key(*key, RestrictedInputMode::Disconnected);
             }
             return Ok(AppRunControl::Continue);
         }
@@ -935,10 +937,10 @@ impl App {
                         && self.reconnect.presentation
                             == reconnect::ReconnectPresentation::Conversation
                     {
-                        self.chat_widget.handle_disconnected_key(KeyEvent::new(
-                            KeyCode::Null,
-                            KeyModifiers::NONE,
-                        ));
+                        self.chat_widget.handle_restricted_key(
+                            KeyEvent::new(KeyCode::Null, KeyModifiers::NONE),
+                            RestrictedInputMode::Disconnected,
+                        );
                     }
                 }
                 TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {

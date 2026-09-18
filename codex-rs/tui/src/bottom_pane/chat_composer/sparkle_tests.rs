@@ -3,6 +3,7 @@
 use super::*;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneParams;
+use crate::bottom_pane::RestrictedInputMode;
 use crate::bottom_pane::chat_composer_history::HistoryEntry;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
@@ -470,31 +471,37 @@ fn disconnected_sparkle_edits_are_tracked_between_renders() {
                 let initial = draw(&pane.composer, /*width*/ 80, now).0;
                 assert_eq!(dots(&initial).is_empty(), model == "gpt-5.5");
                 for key in [KeyCode::Null, KeyCode::Enter, KeyCode::Tab] {
-                    pane.handle_disconnected_key(KeyEvent::new(key, KeyModifiers::NONE));
+                    pane.handle_restricted_key(
+                        KeyEvent::new(key, KeyModifiers::NONE),
+                        RestrictedInputMode::Disconnected,
+                    );
                 }
-                pane.handle_disconnected_key(KeyEvent::new_with_kind(
-                    KeyCode::Char('x'),
-                    KeyModifiers::NONE,
-                    crossterm::event::KeyEventKind::Release,
-                ));
+                pane.handle_restricted_key(
+                    KeyEvent::new_with_kind(
+                        KeyCode::Char('x'),
+                        KeyModifiers::NONE,
+                        crossterm::event::KeyEventKind::Release,
+                    ),
+                    RestrictedInputMode::Disconnected,
+                );
                 assert_eq!(pane.composer.sparkle.draft.get(), SparkleDraft::Untouched);
                 assert_eq!(
                     dots(&draw(&pane.composer, /*width*/ 80, now).0),
                     dots(&initial)
                 );
                 for ch in input.chars() {
-                    pane.handle_disconnected_key(KeyEvent::new(
-                        KeyCode::Char(ch),
-                        KeyModifiers::NONE,
-                    ));
+                    pane.handle_restricted_key(
+                        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                        RestrictedInputMode::Disconnected,
+                    );
                 }
                 assert_eq!(pane.composer.current_text(), input, "{scenario}");
                 assert_eq!(pane.composer.sparkle.draft.get(), draft, "{scenario}");
                 for _ in input.chars() {
-                    pane.handle_disconnected_key(KeyEvent::new(
-                        KeyCode::Backspace,
-                        KeyModifiers::NONE,
-                    ));
+                    pane.handle_restricted_key(
+                        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                        RestrictedInputMode::Disconnected,
+                    );
                 }
                 assert_eq!(pane.composer.current_text(), "");
                 pane.select_sparkle_model("gpt-6-astra", &enabled());

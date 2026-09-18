@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/unavailable_commands_tests.rs
+expression: "history.replace(&app.config.cwd.display().to_string(), \"/project\")"
+---
+• Current working directory: /project

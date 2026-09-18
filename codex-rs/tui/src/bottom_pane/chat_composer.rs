@@ -122,9 +122,10 @@
 //! navigation slash commands remain available so users can leave or manage the view. Transcript
 //! exports also remain available, including an explicit destination filename.
 //!
-//! During reconnection, `handle_disconnected_key` edits the draft directly without popup dispatch,
+//! During reconnection, `handle_restricted_key` edits the draft directly without popup dispatch,
 //! composer shortcuts, or submission; `?` becomes literal input. Enter and Tab leave the draft
-//! intact until reconnection succeeds.
+//! intact until reconnection succeeds. When connected but the thread is unavailable, configured
+//! submit keys may dispatch explicitly allowed recovery and local commands; other drafts stay put.
 //! Collapsed pastes expand into editable text so the full draft can be copied before quitting.
 //!
 //! # Reasoning Effort Animations
@@ -351,6 +352,7 @@ mod inline_input;
 mod paste_input;
 mod popup_state;
 mod reconnect;
+pub(crate) use reconnect::RestrictedInputMode;
 mod slash_input;
 mod sparkle;
 mod vim_history;
