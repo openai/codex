@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/questions_tests.rs
+assertion_line: 859
+expression: "render_bottom_popup(&chat, 80)"
+---
+• Queued follow-up inputs
+
+  Same title?
+
+  My draft for the second question
+
+  enter submit   ctrl + ] skip   ⌥ + ↓ main prompt

@@ -453,7 +453,7 @@ fn merge_remapped_user_messages(messages: impl IntoIterator<Item = UserMessage>)
 }
 
 pub(super) fn user_message_for_restore(
-    message: UserMessage,
+    mut message: UserMessage,
     history_record: &UserMessageHistoryRecord,
 ) -> UserMessage {
     match history_record {
@@ -463,6 +463,10 @@ pub(super) fn user_message_for_restore(
             ..message
         },
         UserMessageHistoryRecord::Override(_) | UserMessageHistoryRecord::UserMessageText => {
+            if let Some(text) = crate::async_question_reply::display_text(&message.text) {
+                message.text = text;
+                message.text_elements.clear();
+            }
             message
         }
     }
@@ -478,7 +482,8 @@ pub(super) fn user_message_preview_text(
         }
         Some(UserMessageHistoryRecord::Override(_))
         | Some(UserMessageHistoryRecord::UserMessageText)
-        | None => message.text.clone(),
+        | None => crate::async_question_reply::display_text(&message.text)
+            .unwrap_or_else(|| message.text.clone()),
     }
 }
 
@@ -486,7 +491,10 @@ pub(super) fn user_message_display_for_history(
     message: UserMessage,
     history_record: &UserMessageHistoryRecord,
 ) -> UserMessageDisplay {
-    let message = user_message_for_restore(message, history_record);
+    let message = match history_record {
+        UserMessageHistoryRecord::UserMessageText => message,
+        UserMessageHistoryRecord::Override(_) => user_message_for_restore(message, history_record),
+    };
     ChatWidget::user_message_display_from_parts(
         message.text,
         message.text_elements,
@@ -551,6 +559,8 @@ pub(super) fn merge_user_messages_with_history_record(
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct UserMessageDisplay {
     pub(crate) message: String,
+    // Keep distinct replies distinct when their visible question and answer text match.
+    question_ids: Vec<String>,
     pub(crate) remote_image_urls: Vec<String>,
     pub(crate) local_images: Vec<PathBuf>,
     pub(crate) text_elements: Vec<TextElement>,
@@ -681,8 +691,25 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
+        let question_ids = crate::async_question_reply::parse(&message)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|reply| reply.question_item_id)
+            .collect();
+        let reply_text = crate::async_question_reply::display_text(&message);
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
+        if let Some(message) =
+            reply_text.or_else(|| crate::async_question_reply::display_text(message))
+        {
+            return UserMessageDisplay {
+                message,
+                question_ids,
+                text_elements: Vec::new(),
+                local_images,
+                remote_image_urls,
+            };
+        }
         let prompt_request_end = prompt_request_offset + message.len();
         // Prompt context uses the same delimiter and stripping behavior as the desktop app and IDE
         // extension. The raw user message goes to the agent, but every surface renders only the
@@ -705,6 +732,7 @@ impl ChatWidget {
 
         UserMessageDisplay {
             message: message.to_string(),
+            question_ids: Vec::new(),
             remote_image_urls,
             local_images,
             text_elements,

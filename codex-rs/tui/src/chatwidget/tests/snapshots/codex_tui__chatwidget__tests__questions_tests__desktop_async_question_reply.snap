@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/questions_tests.rs
+assertion_line: 856
+expression: "lines_to_single_string(&cells[0].transcript_lines(80))"
+---
+
+› > Same title?
+  
+  Answer from desktop

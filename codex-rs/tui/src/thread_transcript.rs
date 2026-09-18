@@ -119,10 +119,17 @@ pub(crate) fn thread_items_to_transcript_cells(
                         .map(codex_app_server_protocol::UserInput::into_core)
                         .collect(),
                 };
+                let message = item.message();
+                let reply_text = crate::async_question_reply::display_text(&message);
+                let text_elements = if reply_text.is_some() {
+                    Vec::new()
+                } else {
+                    item.text_elements()
+                };
                 cells.push(Arc::new(UserHistoryCell {
                     spoken: false,
-                    message: item.message(),
-                    text_elements: item.text_elements(),
+                    message: reply_text.unwrap_or(message),
+                    text_elements,
                     local_image_paths: item.local_image_paths(),
                     remote_image_urls: item.image_urls(),
                 }));

@@ -1,4 +1,4 @@
-//! Pending async questions are local drafts; handling one removes it immediately.
+//! Pending async questions retain drafts until handled locally or answered by another client.
 //! Message IDs survive removal so replay cannot reopen an answered or skipped question.
 
 use super::*;
@@ -12,7 +12,15 @@ impl AsyncQuestions {
         }
         let was_empty = self.state.pending.is_empty();
         let expires_at = (!self.expanded).then(|| Instant::now() + Duration::from_secs(30));
-        self.state.pending.extend(questions.iter().map(|question| {
+        for (index, question) in questions.iter().enumerate() {
+            // Match the desktop's JSON.stringify([tool name, item id, question index]).
+            let question_id =
+                serde_json::json!(["request_user_input_async", message_id, index]).to_string();
+            if self.state.answered_ids.contains(&question_id)
+                || self.state.answered_ids.contains(message_id)
+            {
+                continue;
+            }
             // Bound work before cloning or wrapping model-authored suggestions.
             let question = AsyncUserInputQuestion {
                 title: question.title.clone(),
@@ -31,14 +39,15 @@ impl AsyncQuestions {
                 .is_some_and(|options| !options.is_empty());
             let mut options_state = ScrollState::new();
             options_state.selected_idx = has_options.then_some(0);
-            PendingQuestion {
+            self.state.pending.push(PendingQuestion {
                 message_id: message_id.into(),
+                question_id,
                 question,
                 options_state,
                 draft: ComposerDraft::default(),
                 expires_at,
-            }
-        }));
+            });
+        }
         if was_empty {
             self.state.current_idx = 0;
             self.restore_current_draft();
@@ -120,15 +129,54 @@ impl AsyncQuestions {
             selected.to_string()
         };
         let text = text.trim();
-        let framing = AnsweredQuestion::new(&answer.question.title).render();
-        let limit = codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS - framing.chars().count();
-        if text.chars().count() > limit {
+        if text.is_empty() {
+            return;
+        }
+        let reply =
+            AnsweredQuestion::new(&answer.question_id, &answer.question.title, text).render();
+        if reply.chars().count() > codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS {
             self.composer.show_footer_flash(
-                format!("Answer too long; limit {limit} characters").into(),
+                "Answer too long; shorten it before sending".into(),
                 Duration::from_secs(5),
             );
-        } else if !text.is_empty() {
-            self.submission = Some(QuestionSubmission::Submit(format!("{framing}{text}")));
+        } else {
+            self.submission = Some(QuestionSubmission::Submit(reply));
+        }
+    }
+
+    pub(crate) fn resolve_answers(&mut self, question_ids: &[String]) {
+        // History can arrive before live questions or before restoring local drafts.
+        self.state.answered_ids.extend(question_ids.iter().cloned());
+        // Older desktop replies identify the whole source message instead of one question.
+        let answered = |question: &PendingQuestion| {
+            question_ids.contains(&question.question_id)
+                || question_ids.contains(&question.message_id)
+        };
+        if !self.state.pending.iter().any(answered) {
+            return;
+        }
+        let current_answered = self.current_answer().is_some_and(answered);
+        if current_answered {
+            self.composer.flush_pending_input();
+        }
+        let current_idx = self
+            .state
+            .pending
+            .iter()
+            .take(self.state.current_idx)
+            .filter(|question| !answered(question))
+            .count();
+        self.state.pending.retain(|question| !answered(question));
+        self.state.current_idx = if current_idx < self.state.pending.len() {
+            current_idx
+        } else {
+            0
+        };
+        self.expanded &= !self.state.pending.is_empty();
+        self.visible_options.set((0, 0));
+        if current_answered {
+            self.restore_current_draft();
+            self.composer.reset_vim_mode();
         }
     }
 
@@ -168,6 +216,8 @@ impl AsyncQuestions {
     pub(crate) fn restore(&mut self, saved: QuestionState) {
         self.visible_options.set((0, 0));
         let incoming = std::mem::replace(&mut self.state, saved);
+        let mut answered_ids = incoming.answered_ids;
+        answered_ids.extend(self.state.answered_ids.iter().cloned());
         self.state.pending.extend(
             incoming
                 .pending
@@ -180,5 +230,6 @@ impl AsyncQuestions {
             self.snooze_auto_resolution();
         }
         self.restore_current_draft();
+        self.resolve_answers(&answered_ids.into_iter().collect::<Vec<_>>());
     }
 }

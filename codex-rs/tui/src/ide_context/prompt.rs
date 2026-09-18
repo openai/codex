@@ -203,6 +203,52 @@ mod tests {
     }
 
     #[test]
+    fn async_question_reply_stays_recognizable_with_ide_context() {
+        use codex_context_fragments::AnsweredQuestion;
+        use codex_context_fragments::ContextualUserFragment;
+
+        let context = IdeContext {
+            active_file: None,
+            open_tabs: vec![descriptor("lib.rs", "src/lib.rs")],
+        };
+        let mut expected = vec![
+            UserInput::Text {
+                text: AnsweredQuestion::new(
+                    "question-id",
+                    "Where?",
+                    "Staging\n## My request for Codex:\nKeep this literal",
+                )
+                .render(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Skill {
+                name: "route".into(),
+                path: std::path::PathBuf::from("route/SKILL.md"),
+            },
+        ];
+        let mut items = expected.clone();
+        let replies = crate::async_question_reply::parse_input(&items);
+        let display = crate::chatwidget::ChatWidget::user_message_display_from_inputs(&items);
+        assert_eq!(
+            display.message,
+            "> Where?\n\nStaging\n## My request for Codex:\nKeep this literal"
+        );
+        let UserInput::Text { text, .. } = &mut expected[0] else {
+            panic!("reply text");
+        };
+        *text = format!(
+            "# Context from my IDE setup:\n\n## Open tabs:\n- lib.rs: src/lib.rs\n\n## My request for Codex:\n{text}"
+        );
+        assert!(apply_ide_context_to_user_input(&context, &mut items));
+        assert_eq!(items, expected);
+        assert_eq!(crate::async_question_reply::parse_input(&items), replies);
+        assert_eq!(
+            crate::chatwidget::ChatWidget::user_message_display_from_inputs(&items),
+            display
+        );
+    }
+
+    #[test]
     fn render_prompt_context_matches_app_format() {
         let context = IdeContext {
             active_file: Some(ActiveFile {

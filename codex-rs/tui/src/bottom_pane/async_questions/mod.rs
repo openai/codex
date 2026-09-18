@@ -1,5 +1,5 @@
 //! Inline editing for asynchronous questions. Legacy request_user_input keeps its own overlay.
-//! Only locally accepted submissions remove questions; arrival and expiry never steal focus.
+//! Local submissions and committed desktop replies remove questions; arrival never steals focus.
 
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
@@ -36,6 +36,7 @@ pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 #[derive(Debug, Clone, PartialEq)]
 struct PendingQuestion {
     message_id: String,
+    question_id: String,
     question: AsyncUserInputQuestion,
     options_state: ScrollState,
     draft: ComposerDraft,
@@ -49,6 +50,7 @@ pub(crate) struct QuestionState {
     current_idx: usize,
     expanded: bool,
     seen_ids: HashSet<String>,
+    answered_ids: HashSet<String>,
 }
 
 pub(crate) enum QuestionSubmission {

@@ -260,6 +260,15 @@ impl ChatWidget {
             ThreadItem::UserMessage {
                 content, client_id, ..
             } => {
+                if let Some(replies) = crate::async_question_reply::parse_input(&content) {
+                    let ids = replies
+                        .into_iter()
+                        .map(|reply| reply.question_item_id)
+                        .collect::<Vec<_>>();
+                    self.bottom_pane.question_editor().resolve_answers(&ids);
+                    self.refresh_pending_input_preview();
+                    self.request_redraw();
+                }
                 self.on_committed_user_message(
                     &content,
                     client_id.as_deref(),

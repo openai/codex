@@ -282,7 +282,9 @@ impl ChatWidget {
                 .retain(|binding| crate::task_mentions::valid_thread_path(&binding.path).is_none());
         }
 
-        let mentions = collect_tool_mentions(&text, &HashMap::new());
+        let reply_text = crate::async_question_reply::display_text(&text);
+        let mentions =
+            collect_tool_mentions(reply_text.as_deref().unwrap_or(&text), &HashMap::new());
         let bound_names: HashSet<String> = mention_bindings
             .iter()
             .map(|binding| binding.mention.clone())
@@ -513,6 +515,11 @@ impl ChatWidget {
             }
         };
         if let Some((text, elements)) = history {
+            let reply_text = crate::async_question_reply::display_text(text);
+            let (text, elements) = match &reply_text {
+                Some(text) => (text.as_str(), &[][..]),
+                None => (text.as_str(), elements),
+            };
             self.append_message_history_entry(encode_history_mentions_at_elements(
                 text,
                 &encoded_mentions,

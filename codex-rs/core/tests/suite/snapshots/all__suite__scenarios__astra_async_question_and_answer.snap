@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 304
 expression: "context_snapshot::format_context_snapshot(\"Astra asks who a launch update is for, keeps working, and receives the user's answer in the active turn.\",\n&entries, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
 Scenario: Astra asks who a launch update is for, keeps working, and receives the user's answer in the active turn.
@@ -41,9 +42,9 @@ Scenario: Astra asks who a launch update is for, keeps working, and receives the
 09:message/assistant:
     I drafted a short launch update.
 10:message/user:
-    > Who should receive the launch update?
-
-    Customers
+    <send_user_message_question_reply>
+    [{"answer":"Customers","question":"Who should receive the launch update?","questionItemId":"[\\"request_user_input_async\\",\\"audience-question\\",0]"}]
+    </send_user_message_question_reply>
 -- request 4 (request) --
 11:message/assistant:
     Here is the launch update for customers.

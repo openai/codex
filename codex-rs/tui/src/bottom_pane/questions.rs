@@ -20,7 +20,7 @@ impl BottomPane {
         }
     }
 
-    fn question_editor(&mut self) -> &mut AsyncQuestions {
+    pub(crate) fn question_editor(&mut self) -> &mut AsyncQuestions {
         self.questions.get_or_insert_with(|| {
             let mut questions = AsyncQuestions::new(
                 self.app_event_tx.clone(),
