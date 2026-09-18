@@ -655,3 +655,7 @@ mod tests {
         assert_eq!(selected_name, configured_or_default_theme);
     }
 }
+
+#[cfg(test)]
+#[path = "theme_picker_model_tests.rs"]
+mod model_tests;

@@ -14,6 +14,7 @@ use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
 use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfoEx;
+use windows_sys::Win32::System::Console::GetConsoleWindow;
 use windows_sys::Win32::System::Console::GetNumberOfConsoleInputEvents;
 use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::INPUT_RECORD;
@@ -23,11 +24,12 @@ use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Console::WriteConsoleInputW;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
+use windows_sys::Win32::UI::WindowsAndMessaging::GetClassNameW;
 
 const MAX_WINDOWS_PROBE_RECORDS: usize = 64 * 1_024;
 const WINDOWS_PROBE_READ_RECORDS: usize = 64;
 
-/// Prefer the terminal renderer's OSC colors while retaining the native console palette fallback.
+/// Prefer OSC colors; use native colors only when the renderer shares the console palette.
 ///
 /// Windows Terminal and xterm.js can render a theme unrelated to ConPTY's console color table.
 /// Their OSC responses share the input queue with user input, so the probe preserves and restores
@@ -46,6 +48,24 @@ pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColo
             "using Windows terminal OSC default colors"
         );
         return Ok(Some(colors));
+    }
+
+    // ConPTY's PseudoConsoleWindow can report itself as visible, but its palette does not
+    // describe the renderer. Only the native ConsoleWindowClass owns the visible colors.
+    // SAFETY: Both APIs inspect the process's console window without modifying it.
+    let mut window_class = [0_u16; 32];
+    let class_len = unsafe {
+        GetClassNameW(
+            GetConsoleWindow(),
+            window_class.as_mut_ptr(),
+            window_class.len() as i32,
+        )
+    };
+    if class_len == 0
+        || String::from_utf16_lossy(&window_class[..class_len as usize]) != "ConsoleWindowClass"
+    {
+        tracing::debug!("terminal colors unavailable; retaining terminal defaults");
+        return Ok(None);
     }
 
     let colors = query_console_default_colors(output).ok().flatten();

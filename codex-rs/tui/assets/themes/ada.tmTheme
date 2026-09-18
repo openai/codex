@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>name</key><string>Ada</string>
+  <key>settings</key>
+  <array>
+    <dict><key>settings</key><dict><key>foreground</key><string>#D0D0D0</string></dict></dict>
+    <dict>
+      <key>scope</key><string>codex.accent</string>
+      <key>settings</key><dict><key>foreground</key><string>#5FAFFF</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>comment, punctuation.definition.comment</string>
+      <key>settings</key><dict><key>foreground</key><string>#808080</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>string, punctuation.definition.string</string>
+      <key>settings</key><dict><key>foreground</key><string>#87FF87</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>keyword, storage, markup.heading</string>
+      <key>settings</key><dict><key>foreground</key><string>#5FAFFF</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>support.type, support.class, support.variable, entity.name.type</string>
+      <key>settings</key><dict><key>foreground</key><string>#5FD7FF</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>constant, constant.numeric</string>
+      <key>settings</key><dict><key>foreground</key><string>#AF87FF</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>punctuation, keyword.operator</string>
+      <key>settings</key><dict><key>foreground</key><string>#BCBCBC</string></dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>markup.inserted</string>
+      <key>settings</key><dict>
+        <key>foreground</key><string>#00AF00</string>
+        <key>background</key><string>#213A2B</string>
+      </dict>
+    </dict>
+    <dict>
+      <key>scope</key><string>markup.deleted</string>
+      <key>settings</key><dict>
+        <key>foreground</key><string>#FF5F5F</string>
+        <key>background</key><string>#4A221D</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>

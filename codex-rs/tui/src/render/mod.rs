@@ -2,6 +2,7 @@ use ratatui::layout::Rect;
 
 pub(crate) mod highlight;
 pub(crate) mod line_utils;
+mod model_themes;
 pub(crate) mod renderable;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

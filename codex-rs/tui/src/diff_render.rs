@@ -82,8 +82,9 @@ use crate::color::perceptual_distance;
 use crate::diff_model::FileChange;
 use crate::exec_command::relativize_to_home;
 use crate::render::Insets;
-use crate::render::highlight::DiffScopeBackgroundRgbs;
-use crate::render::highlight::diff_scope_background_rgbs;
+use crate::render::highlight::DiffScopeBackground;
+use crate::render::highlight::DiffScopeBackgrounds;
+use crate::render::highlight::diff_scope_backgrounds;
 use crate::render::highlight::exceeds_highlight_limits;
 use crate::render::highlight::highlight_code_to_styled_spans;
 use crate::render::line_utils::prefix_lines;
@@ -202,7 +203,7 @@ fn resolve_diff_backgrounds(
     theme: DiffTheme,
     color_level: DiffColorLevel,
 ) -> ResolvedDiffBackgrounds {
-    resolve_diff_backgrounds_for(theme, color_level, diff_scope_background_rgbs())
+    resolve_diff_backgrounds_for(theme, color_level, diff_scope_backgrounds())
 }
 
 /// Snapshot the current terminal environment into a reusable style context.
@@ -230,22 +231,28 @@ pub(crate) fn current_diff_render_style_context() -> DiffRenderStyleContext {
 /// Starts from the hardcoded fallback palette and then overrides with theme
 /// scope backgrounds when both (a) the color level is rich enough and (b) the
 /// theme defines a matching scope.  This means the fallback palette is always
-/// the baseline and theme scopes are strictly additive.
+/// the baseline. An explicit terminal-default marker disables that scope's fill.
 fn resolve_diff_backgrounds_for(
     theme: DiffTheme,
     color_level: DiffColorLevel,
-    scope_backgrounds: DiffScopeBackgroundRgbs,
+    scope_backgrounds: DiffScopeBackgrounds,
 ) -> ResolvedDiffBackgrounds {
     let mut resolved = fallback_diff_backgrounds(theme, color_level);
     let Some(level) = RichDiffColorLevel::from_diff_color_level(color_level) else {
         return resolved;
     };
 
-    if let Some(rgb) = scope_backgrounds.inserted {
-        resolved.add = Some(color_from_rgb_for_level(rgb, level));
-    }
-    if let Some(rgb) = scope_backgrounds.deleted {
-        resolved.del = Some(color_from_rgb_for_level(rgb, level));
+    for (target, background) in [
+        (&mut resolved.add, scope_backgrounds.inserted),
+        (&mut resolved.del, scope_backgrounds.deleted),
+    ] {
+        match background {
+            Some(DiffScopeBackground::Rgb(rgb)) => {
+                *target = Some(color_from_rgb_for_level(rgb, level))
+            }
+            Some(DiffScopeBackground::TerminalDefault) => *target = None,
+            None => {}
+        }
     }
     resolved
 }
@@ -878,7 +885,10 @@ fn push_wrapped_diff_line_inner_with_theme_and_color_level(
     };
 
     let line_bg = style_line_bg_for(kind, diff_backgrounds);
-    let gutter_style = style_gutter_for(kind, theme, color_level);
+    let mut gutter_style = style_gutter_for(kind, theme, color_level);
+    if line_bg.bg.is_none() {
+        gutter_style.bg = None;
+    }
 
     // When we have syntax spans, compose them with the diff style for a richer
     // view. The sign character keeps the diff color; content gets syntax colors
@@ -1939,9 +1949,9 @@ mod tests {
         let backgrounds = resolve_diff_backgrounds_for(
             DiffTheme::Dark,
             DiffColorLevel::TrueColor,
-            DiffScopeBackgroundRgbs {
-                inserted: Some((1, 2, 3)),
-                deleted: Some((4, 5, 6)),
+            DiffScopeBackgrounds {
+                inserted: Some(DiffScopeBackground::Rgb((1, 2, 3))),
+                deleted: Some(DiffScopeBackground::Rgb((4, 5, 6))),
             },
         );
         assert_eq!(
@@ -1955,12 +1965,43 @@ mod tests {
     }
 
     #[test]
+    fn explicit_default_scope_disables_only_its_diff_fill() {
+        for theme in [DiffTheme::Light, DiffTheme::Dark] {
+            for color_level in [
+                DiffColorLevel::TrueColor,
+                DiffColorLevel::Ansi256,
+                DiffColorLevel::Ansi16,
+            ] {
+                let backgrounds = resolve_diff_backgrounds_for(
+                    theme,
+                    color_level,
+                    DiffScopeBackgrounds {
+                        inserted: Some(DiffScopeBackground::TerminalDefault),
+                        deleted: None,
+                    },
+                );
+                assert_eq!(
+                    style_line_bg_for(DiffLineType::Insert, backgrounds),
+                    Style::default()
+                );
+                assert_eq!(
+                    style_line_bg_for(DiffLineType::Delete, backgrounds),
+                    style_line_bg_for(
+                        DiffLineType::Delete,
+                        fallback_diff_backgrounds(theme, color_level)
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
     fn theme_scope_backgrounds_quantize_to_ansi256() {
         let backgrounds = resolve_diff_backgrounds_for(
             DiffTheme::Dark,
             DiffColorLevel::Ansi256,
-            DiffScopeBackgroundRgbs {
-                inserted: Some((0, 95, 0)),
+            DiffScopeBackgrounds {
+                inserted: Some(DiffScopeBackground::Rgb((0, 95, 0))),
                 deleted: None,
             },
         );
@@ -1979,8 +2020,8 @@ mod tests {
         let backgrounds = resolve_diff_backgrounds_for(
             DiffTheme::Dark,
             DiffColorLevel::TrueColor,
-            DiffScopeBackgroundRgbs {
-                inserted: Some((12, 34, 56)),
+            DiffScopeBackgrounds {
+                inserted: Some(DiffScopeBackground::Rgb((12, 34, 56))),
                 deleted: None,
             },
         );
@@ -2027,9 +2068,9 @@ mod tests {
         let themed_backgrounds = resolve_diff_backgrounds_for(
             DiffTheme::Light,
             DiffColorLevel::Ansi16,
-            DiffScopeBackgroundRgbs {
-                inserted: Some((8, 9, 10)),
-                deleted: Some((11, 12, 13)),
+            DiffScopeBackgrounds {
+                inserted: Some(DiffScopeBackground::Rgb((8, 9, 10))),
+                deleted: Some(DiffScopeBackground::Rgb((11, 12, 13))),
             },
         );
         assert_eq!(

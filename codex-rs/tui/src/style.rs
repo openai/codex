@@ -58,6 +58,17 @@ pub(crate) fn table_separator_style() -> Style {
 
 /// Returns the shared accent style for active or selected TUI controls.
 pub(crate) fn accent_style() -> Style {
+    if matches!(
+        effective_stdout_color_level(),
+        StdoutColorLevel::TrueColor | StdoutColorLevel::Ansi256
+    ) && let Some(mut style) =
+        crate::render::highlight::foreground_style_for_scopes(&["codex.accent"])
+    {
+        if let Some(Color::Rgb(r, g, b)) = style.fg {
+            style = style.fg(best_color((r, g, b)));
+        }
+        return style.bold();
+    }
     accent_style_for(default_bg())
 }
 
@@ -188,6 +199,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn theme_accents_respect_terminal_color_depth() {
+        const CHILD: &str = "CODEX_ACCENT_COLOR_TEST_CHILD";
+        let Ok(level) = std::env::var(CHILD) else {
+            for level in ["0", "1", "2", "3"] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "style::tests::theme_accents_respect_terminal_color_depth",
+                    ])
+                    .env(CHILD, level)
+                    .env("FORCE_COLOR", level)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "level {level}: {}\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
+        let theme =
+            crate::render::highlight::resolve_theme_by_name("ada", /*codex_home*/ None).unwrap();
+        crate::render::highlight::set_syntax_theme(theme);
+        let expected = match level.as_str() {
+            "3" => Style::default().fg(rgb_color((95, 175, 255))).bold(),
+            "2" => Style::default()
+                .fg(crate::terminal_palette::indexed_color(/*index*/ 75))
+                .bold(),
+            "0" | "1" => accent_style_for(default_bg()),
+            _ => unreachable!(),
+        };
+        assert_eq!(accent_style(), expected);
     }
 
     #[test]
