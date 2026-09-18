@@ -1,4 +1,5 @@
 use super::*;
+use pretty_assertions::assert_eq;
 
 fn computer_item(
     id: &str,
@@ -56,6 +57,70 @@ async fn computer_activity_live_and_replay_group_identically() {
         "computer_activity_replayed",
         lines_to_single_string(&outputs[0].0)
     );
+}
+
+#[tokio::test]
+async fn computer_activity_keeps_reasoning_in_order_live_and_replayed() {
+    use codex_app_server_protocol::McpToolCallStatus;
+    let mut outputs = Vec::new();
+    for replay in [false, true] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        for id in ["1", "2"] {
+            let item = computer_item(id, McpToolCallStatus::Completed);
+            if replay {
+                chat.replay_thread_item(
+                    item.clone(),
+                    "turn-1".to_string(),
+                    ReplayKind::ThreadSnapshot,
+                );
+            } else {
+                chat.on_mcp_tool_call_started(computer_item(id, McpToolCallStatus::InProgress));
+                if id == "1" {
+                    chat.on_mcp_tool_call_completed(item.clone());
+                }
+            }
+            for part in ["Inspecting", "Checking"] {
+                let summary = format!("{part} action {id}");
+                if replay {
+                    chat.replay_thread_item(
+                        AppServerThreadItem::Reasoning {
+                            id: summary.clone(),
+                            summary: vec![summary],
+                            content: Vec::new(),
+                        },
+                        "turn-1".to_string(),
+                        ReplayKind::ThreadSnapshot,
+                    );
+                } else {
+                    chat.on_agent_reasoning_delta(summary);
+                    chat.on_agent_reasoning_final();
+                }
+            }
+            if !replay && id == "2" {
+                // Reasoning can arrive before a running call completes.
+                chat.on_mcp_tool_call_completed(item);
+            }
+        }
+        assert!(drain_insert_history(&mut rx).is_empty());
+        // A visible message commits the whole group, including trailing reasoning.
+        chat.prepare_assistant_message();
+        let cells = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(cell),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cells.len(), 1);
+        let cell = &cells[0];
+        outputs.push(format!(
+            "Compact:\n{}\nExpanded:\n{}\nRaw:\n{}",
+            lines_to_single_string(&cell.display_lines(/*width*/ 80)),
+            lines_to_single_string(&cell.transcript_lines(/*width*/ 100)),
+            lines_to_single_string(&cell.raw_lines()),
+        ));
+    }
+    assert_eq!(outputs[0], outputs[1]);
+    insta::assert_snapshot!(outputs[0]);
 }
 
 #[tokio::test]

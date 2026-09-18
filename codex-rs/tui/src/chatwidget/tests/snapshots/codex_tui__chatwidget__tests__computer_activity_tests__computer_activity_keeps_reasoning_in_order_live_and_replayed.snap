@@ -1,0 +1,29 @@
+---
+source: tui/src/chatwidget/tests/computer_activity_tests.rs
+assertion_line: 116
+expression: "outputs[0]"
+---
+Compact:
+• Used computer · 2 actions
+  ├ Inspect page 1
+  └ Inspect page 2
+
+Expanded:
+• Called cua_repl.js({"title":"Inspect page 1","code":"await cua.getState()"})
+  └ Full output for 1
+
+• Inspecting action 1
+
+• Checking action 1
+• Called cua_repl.js({"title":"Inspect page 2","code":"await cua.getState()"})
+  └ Full output for 2
+
+• Inspecting action 2
+
+• Checking action 2
+
+Raw:
+• Called cua_repl.js({"title":"Inspect page 1","code":"await cua.getState()"})
+  └ Full output for 1
+• Called cua_repl.js({"title":"Inspect page 2","code":"await cua.getState()"})
+  └ Full output for 2

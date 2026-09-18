@@ -451,7 +451,7 @@ impl ChatWidget {
                     && cell.is_exploring_cell()
                 {
                     // Replayed commands have completion events without matching starts.
-                    active.calls.extend(cell.calls);
+                    active.group.calls.extend(cell.group.calls);
                     self.bump_active_cell_revision();
                     self.request_redraw();
                 } else {

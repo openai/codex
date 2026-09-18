@@ -195,6 +195,15 @@ fn activity_marker(start_time: Option<Instant>, animations_enabled: bool) -> Spa
 }
 
 impl HistoryCell for ExecCell {
+    fn append_reasoning(&mut self, cell: Box<dyn HistoryCell>) -> Result<(), Box<dyn HistoryCell>> {
+        if self.is_exploring_cell() {
+            self.group.push_reasoning(cell);
+            Ok(())
+        } else {
+            Err(cell)
+        }
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
@@ -237,7 +246,7 @@ impl ExecCell {
             },
         ]));
 
-        let mut calls = self.calls.as_slice();
+        let mut calls = self.group.calls.as_slice();
         let mut out_indented = Vec::new();
         let nonzero_exit = |call: &ExecCall| {
             call.duration
@@ -352,7 +361,7 @@ impl ExecCell {
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let [call] = &self.calls.as_slice() else {
+        let [call] = &self.group.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
         let layout = EXEC_DISPLAY_LAYOUT;
@@ -908,7 +917,10 @@ mod tests {
         for line in 1..=160 {
             assert!(cell.append_output("call-id", &format!("line {line}\n")));
         }
-        let output = cell.calls[0].output.as_ref().expect("streamed output");
+        let output = cell.group.calls[0]
+            .output
+            .as_ref()
+            .expect("streamed output");
 
         let agent = output_lines(
             Some(output),
@@ -956,7 +968,7 @@ mod tests {
         assert!(cell.append_output("call-id", &output));
 
         let preview = cell.display_lines(/*width*/ 60);
-        cell.calls[0].start_time = None;
+        cell.group.calls[0].start_time = None;
         cell.mark_failed();
         let transcript = cell.transcript_lines(/*width*/ 60);
 

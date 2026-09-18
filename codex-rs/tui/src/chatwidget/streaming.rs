@@ -350,19 +350,13 @@ impl ChatWidget {
         if !self.reasoning_summary_parts.is_empty() {
             let reasoning_parts = std::mem::take(&mut self.reasoning_summary_parts);
             let cell = history_cell::new_reasoning_summary_block(reasoning_parts, &self.config.cwd);
-            if let Some(exec) = self
-                .transcript
-                .active_cell
-                .as_mut()
-                .and_then(|cell| cell.as_any_mut().downcast_mut::<ExecCell>())
-                && exec.is_exploring_cell()
-                && !exec.is_active()
-            {
-                // Keep adjacent exploration grouped while retaining reasoning in transcript order.
-                exec.reasoning.push((exec.calls.len(), cell));
-                self.bump_active_cell_revision();
-            } else {
-                self.add_boxed_history(cell);
+            let result = match self.transcript.active_cell.as_mut() {
+                Some(active) => active.append_reasoning(cell),
+                None => Err(cell),
+            };
+            match result {
+                Ok(()) => self.bump_active_cell_revision(),
+                Err(cell) => self.add_boxed_history(cell),
             }
         }
         self.reasoning_buffer.clear();

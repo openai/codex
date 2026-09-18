@@ -17,9 +17,7 @@ use ratatui::prelude::*;
 
 impl ExecCell {
     pub(super) fn detailed_lines(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = vec![];
-        let mut reasoning = self.reasoning.iter().peekable();
-        for (i, call) in self.iter_calls().enumerate() {
+        self.group.transcript_lines(width, mode, |i, call, lines| {
             if i > 0 {
                 lines.push("".into());
             }
@@ -42,7 +40,7 @@ impl ExecCell {
                         .map(|line| ansi_escape_line(line.as_ref()))
                     {
                         let wrapped = adaptive_wrap_line(&unwrapped, wrap_opts.clone());
-                        push_owned_lines(&wrapped, &mut lines);
+                        push_owned_lines(&wrapped, lines);
                     }
                 }
                 if let Some(duration) = call.duration {
@@ -59,18 +57,6 @@ impl ExecCell {
                     lines.push(result);
                 }
             }
-            if mode == HistoryRenderMode::Rich {
-                while let Some((_, cell)) =
-                    reasoning.next_if(|(after_calls, _)| *after_calls == i + 1)
-                {
-                    let reasoning_lines = cell.transcript_lines(width);
-                    if !reasoning_lines.is_empty() {
-                        lines.push("".into());
-                        lines.extend(reasoning_lines);
-                    }
-                }
-            }
-        }
-        lines
+        })
     }
 }

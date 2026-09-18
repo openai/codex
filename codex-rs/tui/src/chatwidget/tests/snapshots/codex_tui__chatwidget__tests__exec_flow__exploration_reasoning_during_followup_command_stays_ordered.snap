@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 212
+expression: lines_to_single_string(&transcript)
+---
+$ ls
+file.txt
+✓ • 5ms
+
+• Read the file next.
+
+$ cat file.txt
+contents
+✓ • 5ms
+
+• Waiting for the file.

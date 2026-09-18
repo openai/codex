@@ -42,7 +42,8 @@ fn computer_activity_active_and_interrupted() {
     cell.mark_failed();
     insta::assert_snapshot!("computer_activity_interrupted", render(&cell, /*width*/ 80));
     assert_eq!(
-        cell.calls
+        cell.group
+            .calls
             .iter()
             .map(McpToolCallCell::success)
             .collect::<Vec<_>>(),
@@ -125,7 +126,8 @@ fn computer_activity_completed_and_transport_errors_keep_full_details() {
     );
     cell.mark_failed();
     assert_eq!(
-        cell.calls
+        cell.group
+            .calls
             .iter()
             .map(McpToolCallCell::success)
             .collect::<Vec<_>>(),

@@ -197,6 +197,22 @@ async fn exploration_nonzero_exits_remain_visible_beside_successful_reads() {
 }
 
 #[tokio::test]
+async fn exploration_reasoning_during_followup_command_stays_ordered() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let first = begin_exec(&mut chat, "first", "ls");
+    end_exec(&mut chat, first, "file.txt\n", "", /*exit_code*/ 0);
+    chat.on_agent_reasoning_delta("Read the file next.".to_string());
+    chat.on_agent_reasoning_final();
+    let second = begin_exec(&mut chat, "second", "cat file.txt");
+    chat.on_agent_reasoning_delta("Waiting for the file.".to_string());
+    chat.on_agent_reasoning_final();
+    assert!(drain_insert_history(&mut rx).is_empty());
+    end_exec(&mut chat, second, "contents\n", "", /*exit_code*/ 0);
+    let transcript = chat.active_cell_transcript_lines(/*width*/ 80).unwrap();
+    insta::assert_snapshot!(lines_to_single_string(&transcript));
+}
+
+#[tokio::test]
 async fn adjacent_exploration_groups_across_reasoning_live_and_replayed() {
     let mut renders = Vec::new();
     for replay in [false, true] {
