@@ -71,17 +71,6 @@ pub(super) fn apply_to_config(
             }
         }
     }
-    if let Some(requirement) = requirements.windows_sandbox_private_desktop.as_ref() {
-        apply_exact_requirement(
-            "windows.sandbox_private_desktop",
-            &mut config
-                .windows
-                .get_or_insert_default()
-                .sandbox_private_desktop,
-            Some(requirement),
-            startup_warnings,
-        );
-    }
 }
 
 fn apply_exact_requirement<T>(

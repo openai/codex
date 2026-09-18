@@ -63,7 +63,6 @@ pub struct ExecRequest {
     // TODO(anp): Reconcile these backend copies with TurnEnvironment::sandbox_context
     // and exec_server_sandbox so local and remote launches use the same settings.
     pub windows_sandbox_level: WindowsSandboxLevel,
-    pub windows_sandbox_private_desktop: bool,
     pub permission_profile: PermissionProfile,
     pub(crate) windows_sandbox_filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
     pub arg0: Option<String>,
@@ -86,7 +85,6 @@ impl ExecRequest {
         sandbox: SandboxType,
         windows_sandbox_workspace_roots: Vec<AbsolutePathBuf>,
         windows_sandbox_level: WindowsSandboxLevel,
-        windows_sandbox_private_desktop: bool,
         permission_profile: PermissionProfile,
         arg0: Option<String>,
     ) -> Self {
@@ -106,7 +104,6 @@ impl ExecRequest {
             windows_sandbox_policy_cwd,
             windows_sandbox_workspace_roots,
             windows_sandbox_level,
-            windows_sandbox_private_desktop,
             permission_profile,
             windows_sandbox_filesystem_overrides: None,
             arg0,
@@ -131,7 +128,6 @@ impl ExecRequest {
             network_environment_id,
             sandbox,
             windows_sandbox_level,
-            windows_sandbox_private_desktop,
             permission_profile,
             arg0,
             ..
@@ -195,7 +191,6 @@ impl ExecRequest {
             windows_sandbox_policy_cwd,
             windows_sandbox_workspace_roots,
             windows_sandbox_level,
-            windows_sandbox_private_desktop,
             permission_profile,
             windows_sandbox_filesystem_overrides,
             arg0,

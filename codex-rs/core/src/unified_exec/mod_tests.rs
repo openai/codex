@@ -68,7 +68,6 @@ fn test_exec_request(
     cwd: AbsolutePathBuf,
     env: HashMap<String, String>,
 ) -> ExecRequest {
-    let windows_sandbox_private_desktop = false;
     let permission_profile = turn.permission_profile();
     let network = None;
     let arg0 = None;
@@ -88,7 +87,6 @@ fn test_exec_request(
             .collect::<std::io::Result<Vec<_>>>()
             .expect("test workspace roots are host-native"),
         turn.windows_sandbox_level,
-        windows_sandbox_private_desktop,
         permission_profile,
         arg0,
     )

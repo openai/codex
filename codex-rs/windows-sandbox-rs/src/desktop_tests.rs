@@ -198,7 +198,6 @@ fn legacy_desktop_reuses_only_equivalent_permissions() -> Result<()> {
     let _token = unsafe { OwnedHandle::from_raw_handle(security.h_token as *mut _) };
     let desktop = |deny_write_paths| {
         LaunchDesktop::prepare_legacy(
-            /*use_private_desktop*/ true,
             &permissions,
             &workspace,
             &env,

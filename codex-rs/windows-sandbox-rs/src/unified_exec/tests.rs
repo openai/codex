@@ -249,7 +249,6 @@ fn restricted_token_rejects_managed_network_before_spawn() {
             deny_write_paths_override: &[],
             tty: false,
             stdin_open: false,
-            use_private_desktop: false,
         })
         .await
         .expect_err("managed networking must fail before spawning an unelevated sandbox");
@@ -286,7 +285,6 @@ fn legacy_non_tty_cmd_emits_output() {
             &[],
             /*tty*/ false,
             /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
         )
         .await
         .expect("spawn legacy non-tty cmd session");
@@ -334,7 +332,6 @@ fn elevated_non_tty_cmd_forwards_env_output_and_exit() {
             &[],
             /*tty*/ false,
             /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
         )
         .await
         .unwrap_or_else(|err| {
@@ -390,7 +387,6 @@ fn registered_non_tty_cmd_forwards_env_output_and_exit() {
             &[],
             /*tty*/ false,
             /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
         )
         .await
         .expect("launch through the service-recorded alias and authenticated pipes");
@@ -433,7 +429,6 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
             &[],
             /*tty*/ false,
             /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
         )
         .await
         .expect_err("legacy deny-read should require the elevated backend");
@@ -474,8 +469,7 @@ fn legacy_non_tty_powershell_interrupt_terminates_process() {
             &[],
             /*tty*/ false,
             /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
-        )
+            )
         .await
         .expect("spawn legacy non-tty powershell session");
         println!("pwsh spawn returned");
@@ -705,7 +699,6 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
         HashMap::new(),
         Some(10_000),
         /*cancellation*/ None,
-        /*use_private_desktop*/ true,
     )
     .expect("run legacy capture powershell");
     let descendant_pid = fs::read_to_string(&ready_marker)
@@ -820,7 +813,6 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
             &[],
             /*tty*/ false,
             /*stdin_open*/ false,
-            /*use_private_desktop*/ true,
         )
         .await
         .expect("spawn legacy delete session");
@@ -902,7 +894,6 @@ fn legacy_capture_cancellation_terminates_descendants_without_timeout() {
         HashMap::new(),
         Some(30_000),
         /*cancellation*/ Some(cancellation),
-        /*use_private_desktop*/ true,
     )
     .expect("run legacy capture powershell with cancellation");
 
@@ -985,7 +976,6 @@ async fn assert_legacy_tty_descendant_lifecycle(
         &[],
         /*tty*/ true,
         /*stdin_open*/ false,
-        /*use_private_desktop*/ true,
     )
     .await
     .expect("spawn legacy sandbox ConPTY lifecycle test");
@@ -1069,7 +1059,6 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
             &[],
             /*tty*/ true,
             /*stdin_open*/ true,
-            /*use_private_desktop*/ true,
         )
         .await
         .expect("spawn legacy tty powershell session");
@@ -1094,7 +1083,6 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
         assert!(stdout.contains("second"), "stdout={stdout:?}");
     });
 }
-
 #[test]
 #[ignore = "TODO: legacy ConPTY cmd.exe exits with STATUS_DLL_INIT_FAILED in CI"]
 fn legacy_tty_cmd_emits_output_and_accepts_input() {
@@ -1120,65 +1108,10 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
             &[],
             /*tty*/ true,
             /*stdin_open*/ true,
-            /*use_private_desktop*/ true,
         )
         .await
         .expect("spawn legacy tty cmd session");
         println!("tty cmd spawn returned");
-
-        let writer = spawned.session.writer_sender();
-        writer
-            .send(b"echo second\n".to_vec())
-            .await
-            .expect("send second command");
-        writer
-            .send(b"exit\n".to_vec())
-            .await
-            .expect("send exit command");
-        spawned.session.close_stdin();
-
-        let (stdout, exit_code) =
-            collect_stdout_and_exit(spawned, codex_home.path(), Duration::from_secs(15)).await;
-        let stdout = String::from_utf8_lossy(&stdout);
-        assert_eq!(exit_code, 0, "stdout={stdout:?}");
-        assert!(stdout.contains("ready"), "stdout={stdout:?}");
-        assert!(stdout.contains("second"), "stdout={stdout:?}");
-    });
-}
-
-#[test]
-#[ignore = "TODO: legacy ConPTY cmd.exe exits with STATUS_DLL_INIT_FAILED in CI"]
-fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
-    let runtime = current_thread_runtime();
-    runtime.block_on(async move {
-        let cwd = sandbox_cwd();
-        let codex_home = sandbox_home("legacy-tty-cmd-default-desktop");
-        println!(
-            "tty cmd default desktop codex_home={}",
-            codex_home.path().display()
-        );
-        let permission_profile = PermissionProfile::workspace_write();
-        let spawned = spawn_windows_sandbox_session_legacy(
-            &permission_profile,
-            workspace_roots_for(cwd.as_path()).as_slice(),
-            codex_home.path(),
-            vec![
-                "C:\\Windows\\System32\\cmd.exe".to_string(),
-                "/K".to_string(),
-                "echo ready".to_string(),
-            ],
-            cwd.as_path(),
-            HashMap::new(),
-            Some(10_000),
-            &[],
-            &[],
-            /*tty*/ true,
-            /*stdin_open*/ true,
-            /*use_private_desktop*/ false,
-        )
-        .await
-        .expect("spawn legacy tty cmd session");
-        println!("tty cmd default desktop spawn returned");
 
         let writer = spawned.session.writer_sender();
         writer

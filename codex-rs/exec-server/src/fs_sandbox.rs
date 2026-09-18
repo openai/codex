@@ -197,8 +197,6 @@ impl FileSystemSandboxRunner {
                     use_legacy_landlock: sandbox_context.use_legacy_landlock,
                     windows_sandbox_level: windows_sandbox_level
                         .unwrap_or(WindowsSandboxLevel::Disabled),
-                    windows_sandbox_private_desktop: sandbox_context
-                        .windows_sandbox_private_desktop,
                 },
             })
             .map_err(|err| invalid_request(format!("failed to prepare fs sandbox: {err}")))
@@ -885,7 +883,7 @@ mod tests {
             ),
         ]);
         let sandbox_context = crate::FileSystemSandboxContext {
-            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::Elevated,
+            windows_sandbox_selection: codex_file_system::WindowsSandboxSelection::RestrictedToken,
             ..sandbox_context_with_cwd(&policy, cwd_uri)
         };
         selected.close().expect("remove selected directory");

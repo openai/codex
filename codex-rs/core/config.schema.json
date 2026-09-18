@@ -6207,10 +6207,6 @@
       "properties": {
         "sandbox": {
           "$ref": "#/definitions/WindowsSandboxModeToml"
-        },
-        "sandbox_private_desktop": {
-          "description": "Defaults to `true` for legacy sandboxes and `false` for MXC. Set to `false` to launch the final sandboxed child process on `Winsta0\\\\Default`.",
-          "type": "boolean"
         }
       },
       "type": "object"

@@ -452,9 +452,7 @@ fn run_restricted_child_blocking(
             /*logs_base_dir*/ None,
             /*stdio*/ None,
             /*console_mode*/ ConsoleMode::Inherit,
-            LaunchDesktop::prepare(
-                /*use_private_desktop*/ false, /*logs_base_dir*/ None,
-            )?,
+            LaunchDesktop::prepare(/*logs_base_dir*/ None)?,
         )?
     };
     let process = unsafe {

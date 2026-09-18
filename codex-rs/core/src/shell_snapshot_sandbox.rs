@@ -42,7 +42,6 @@ pub(crate) struct ShellSnapshotSandbox {
     sandbox_exe: Option<PathBuf>,
     use_legacy_landlock: bool,
     windows_sandbox_level: WindowsSandboxLevel,
-    windows_sandbox_private_desktop: bool,
     network: Option<NetworkProxy>,
     environment_id: String,
     additional_permissions: Option<AdditionalPermissionProfile>,
@@ -87,7 +86,6 @@ impl ShellSnapshotSandbox {
             sandbox_exe: attempt.sandbox_exe.cloned(),
             use_legacy_landlock: attempt.use_legacy_landlock,
             windows_sandbox_level: attempt.windows_sandbox_level,
-            windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             network: attempt.network_proxy(network).cloned(),
             environment_id: environment_id.to_string(),
             additional_permissions: additional_permissions.cloned(),
@@ -106,7 +104,6 @@ impl ShellSnapshotSandbox {
             &self.sandbox_exe,
             self.use_legacy_landlock,
             self.windows_sandbox_level,
-            self.windows_sandbox_private_desktop,
             self.network
                 .as_ref()
                 .map(|network| (network.http_addr(), network.socks_addr())),
@@ -175,7 +172,6 @@ impl ShellSnapshotSandbox {
                 sandbox_exe: self.sandbox_exe.as_deref(),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
-                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .context("failed to prepare shell snapshot sandbox")?;
         let workspace_roots = self

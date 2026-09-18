@@ -170,9 +170,6 @@ pub enum WindowsSandboxModeToml {
 #[schemars(deny_unknown_fields)]
 pub struct WindowsToml {
     pub sandbox: Option<WindowsSandboxModeToml>,
-    /// Defaults to `true` for legacy sandboxes and `false` for MXC. Set to `false`
-    /// to launch the final sandboxed child process on `Winsta0\\Default`.
-    pub sandbox_private_desktop: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]

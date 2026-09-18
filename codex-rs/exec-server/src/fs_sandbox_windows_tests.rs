@@ -254,7 +254,6 @@ fn powershell_command(script: &str, path: &Path) -> anyhow::Result<SandboxExecRe
         network_environment_id: None,
         sandbox: SandboxType::None,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        windows_sandbox_private_desktop: false,
         permission_profile: PermissionProfile::Disabled,
         arg0: None,
     })

@@ -506,11 +506,6 @@ async fn exec_command_uses_installed_environment_shell_policy_with_explicit_over
                 },
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&harness.test().config),
                 windows_sandbox_type: harness.test().config.permissions.windows_sandbox_type,
-                windows_sandbox_private_desktop: harness
-                    .test()
-                    .config
-                    .permissions
-                    .windows_sandbox_private_desktop,
                 use_legacy_landlock: harness.test().config.features.use_legacy_landlock(),
                 exec_policy: None,
                 mcp_policy: None,

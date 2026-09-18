@@ -301,7 +301,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         workspace_roots: Vec::new(),
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_type: SandboxType::None,
-        windows_sandbox_private_desktop: true,
         use_legacy_landlock: false,
         permission_profile: PermissionProfileSnapshot::legacy(permission_profile),
         shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -423,7 +422,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         use_legacy_landlock: false,
         windows_sandbox_type: SandboxType::None,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: Some(cancellation.clone()),
         network_proxy: None,
     };

@@ -201,3 +201,20 @@ include_view_image_tool = false
         "Codex is ignoring 3 unrecognized configuration settings. Check for typos or deprecated settings.\n  enterprise-managed (Defaults, cfg): `model_providers.custom.unknown_timeout` is ignored.\n  session-flags: `model_providers.custom.unknown_timeout` is ignored.\n  session-flags: `profiles.work.features.include_view_image_tool` is ignored. Use [features].view_image to configure the image tool."
     );
 }
+
+#[test]
+fn removed_private_desktop_setting_has_migration_hint() {
+    let config = ConfigLayerStack::new(
+        vec![layer(
+            ConfigLayerSource::SessionFlags,
+            "[windows]\nsandbox_private_desktop = false",
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        ignored_config_warning(&config, &[]).unwrap(),
+        "Codex is ignoring 1 unrecognized configuration setting. Check for typos or deprecated settings.\n  session-flags: `windows.sandbox_private_desktop` is ignored. Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+    );
+}

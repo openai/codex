@@ -721,10 +721,6 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
                 shell_environment_policy: Default::default(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
                 windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-                windows_sandbox_private_desktop: test
-                    .config
-                    .permissions
-                    .windows_sandbox_private_desktop,
                 use_legacy_landlock: test.config.features.use_legacy_landlock(),
                 exec_policy: Some(RequirementsExecPolicy::new(invalid_policy)),
                 mcp_policy: None,
@@ -752,10 +748,6 @@ async fn environment_command_restrictions_override_saved_prefix_approvals() -> R
                 shell_environment_policy: Default::default(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
                 windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-                windows_sandbox_private_desktop: test
-                    .config
-                    .permissions
-                    .windows_sandbox_private_desktop,
                 use_legacy_landlock: test.config.features.use_legacy_landlock(),
                 exec_policy: Some(RequirementsExecPolicy::new(environment_policy)),
                 mcp_policy: None,
@@ -864,10 +856,6 @@ async fn environment_command_policy_changes_invalidate_session_approvals() -> Re
                         shell_environment_policy: Default::default(),
                         windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
                         windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-                        windows_sandbox_private_desktop: test
-                            .config
-                            .permissions
-                            .windows_sandbox_private_desktop,
                         use_legacy_landlock: test.config.features.use_legacy_landlock(),
                         exec_policy: Some(RequirementsExecPolicy::new(policy)),
                         mcp_policy: None,

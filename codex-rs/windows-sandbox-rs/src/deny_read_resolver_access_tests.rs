@@ -135,7 +135,6 @@ fn protected_directory_does_not_discard_accessible_deny_matches() {
             env,
             /*timeout_ms*/ Some(30_000),
             /*cancellation*/ None,
-            /*use_private_desktop*/ true,
         )
         .expect("run protected-directory regression without backup privileges");
         let stdout = String::from_utf8_lossy(&result.stdout);

@@ -296,7 +296,6 @@ fn windows_sandbox_env_preserves_denied_reads_or_rejects_unsupported_backend() {
         use_legacy_landlock: false,
         windows_sandbox_type: SandboxType::WindowsRestrictedToken,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Elevated,
-        windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
         network_proxy: None,
     };
@@ -368,7 +367,6 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
         use_legacy_landlock: false,
         windows_sandbox_type: SandboxType::None,
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-        windows_sandbox_private_desktop: false,
         network_denial_cancellation_token: None,
         network_proxy: None,
     };
@@ -417,7 +415,6 @@ fn exec_server_env_keeps_command_native_and_carries_sandbox_context() {
             } else {
                 codex_file_system::WindowsSandboxSelection::Disabled
             },
-            windows_sandbox_private_desktop: false,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: false,
         })

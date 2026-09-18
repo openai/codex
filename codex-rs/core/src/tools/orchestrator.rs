@@ -92,7 +92,6 @@ impl ToolOrchestrator {
             use_legacy_landlock: attempt.use_legacy_landlock,
             windows_sandbox_type: attempt.windows_sandbox_type,
             windows_sandbox_level: attempt.windows_sandbox_level,
-            windows_sandbox_private_desktop: attempt.windows_sandbox_private_desktop,
             network_denial_cancellation_token: network_approval
                 .as_ref()
                 .map(ActiveNetworkApproval::cancellation_token),
@@ -308,7 +307,6 @@ impl ToolOrchestrator {
             use_legacy_landlock: sandbox_config.use_legacy_landlock,
             windows_sandbox_type,
             windows_sandbox_level: sandbox_config.windows_sandbox_level,
-            windows_sandbox_private_desktop: sandbox_config.windows_sandbox_private_desktop,
             network_denial_cancellation_token: None,
             network_proxy: None,
         };
@@ -483,7 +481,6 @@ impl ToolOrchestrator {
                     use_legacy_landlock: sandbox_config.use_legacy_landlock,
                     windows_sandbox_type,
                     windows_sandbox_level: sandbox_config.windows_sandbox_level,
-                    windows_sandbox_private_desktop: sandbox_config.windows_sandbox_private_desktop,
                     network_denial_cancellation_token: None,
                     network_proxy: None,
                 };

@@ -659,7 +659,6 @@ mod windows_impl {
         env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
         cancellation: Option<WindowsSandboxCancellationToken>,
-        use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         run_windows_sandbox_capture_with_filesystem_overrides(
             permission_profile,
@@ -672,7 +671,6 @@ mod windows_impl {
             cancellation,
             &[],
             &[],
-            use_private_desktop,
         )
     }
 
@@ -688,7 +686,6 @@ mod windows_impl {
         cancellation: Option<WindowsSandboxCancellationToken>,
         additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
-        use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         let additional_deny_read_paths = additional_deny_read_paths
             .iter()
@@ -749,7 +746,6 @@ mod windows_impl {
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
         let spawn_res = crate::LaunchDesktop::prepare_legacy(
-            use_private_desktop,
             &permissions,
             &current_dir,
             &env_map,
@@ -1041,7 +1037,6 @@ mod stub {
         _env_map: HashMap<String, String>,
         _timeout_ms: Option<u64>,
         _cancellation: Option<WindowsSandboxCancellationToken>,
-        _use_private_desktop: bool,
     ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }

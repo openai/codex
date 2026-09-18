@@ -145,13 +145,12 @@ impl DesktopPolicy {
 }
 
 pub struct LaunchDesktop {
-    _private_desktop: Option<PrivateDesktop>,
+    _private_desktop: PrivateDesktop,
     startup_name: Vec<u16>,
 }
 
 impl LaunchDesktop {
     pub(crate) fn prepare_legacy(
-        use_private_desktop: bool,
         permissions: &ResolvedWindowsSandboxPermissions,
         cwd: &Path,
         env: &HashMap<String, String>,
@@ -159,9 +158,6 @@ impl LaunchDesktop {
         additional_deny_write_paths: &[PathBuf],
         logs_base_dir: Option<&Path>,
     ) -> Result<Self> {
-        if !use_private_desktop {
-            return Self::prepare(/*use_private_desktop*/ false, logs_base_dir);
-        }
         Self::open_private(&Self::shared_legacy_name(
             permissions,
             cwd,
@@ -216,20 +212,13 @@ impl LaunchDesktop {
         Ok(desktop.name.clone())
     }
 
-    pub fn prepare(use_private_desktop: bool, logs_base_dir: Option<&Path>) -> Result<Self> {
-        if use_private_desktop {
-            let private_desktop = PrivateDesktop::create(logs_base_dir)?;
-            let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
-            Ok(Self {
-                _private_desktop: Some(private_desktop),
-                startup_name,
-            })
-        } else {
-            Ok(Self {
-                _private_desktop: None,
-                startup_name: to_wide("Winsta0\\Default"),
-            })
-        }
+    pub fn prepare(logs_base_dir: Option<&Path>) -> Result<Self> {
+        let private_desktop = PrivateDesktop::create(logs_base_dir)?;
+        let startup_name = to_wide(format!("Winsta0\\{}", private_desktop.name));
+        Ok(Self {
+            _private_desktop: private_desktop,
+            startup_name,
+        })
     }
 
     /// Opens the caller-owned private desktop without creating one or falling back to Default.
@@ -257,10 +246,10 @@ impl LaunchDesktop {
             anyhow::bail!("OpenDesktopW failed: {}", unsafe { GetLastError() });
         }
         Ok(Self {
-            _private_desktop: Some(PrivateDesktop {
+            _private_desktop: PrivateDesktop {
                 handle,
                 name: name.to_owned(),
-            }),
+            },
             startup_name: to_wide(format!("Winsta0\\{name}")),
         })
     }

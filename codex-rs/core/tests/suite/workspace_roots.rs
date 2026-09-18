@@ -279,10 +279,6 @@ async fn workspace_roots_allow_file_and_command_writes_in_secondary_root(
                     shell_environment_policy: Default::default(),
                     windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
                     windows_sandbox_type: SandboxType::WindowsRestrictedToken,
-                    windows_sandbox_private_desktop: test
-                        .config
-                        .permissions
-                        .windows_sandbox_private_desktop,
                     use_legacy_landlock: test.config.features.use_legacy_landlock(),
                     exec_policy: None,
                     mcp_policy: None,

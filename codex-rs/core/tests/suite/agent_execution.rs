@@ -386,10 +386,6 @@ async fn v2_residency_reload_preserves_inherited_environment_and_tools(
             shell_environment_policy: Default::default(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
             windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-            windows_sandbox_private_desktop: test
-                .config
-                .permissions
-                .windows_sandbox_private_desktop,
             use_legacy_landlock: test.config.features.use_legacy_landlock(),
             exec_policy: None,
             mcp_policy: None,

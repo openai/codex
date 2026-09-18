@@ -125,7 +125,6 @@ pub(crate) struct SessionConfiguration {
     // internal sandbox decisions should use the selected environment's configuration.
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
     pub(super) windows_sandbox_type: SandboxType,
-    pub(super) windows_sandbox_private_desktop: bool,
     pub(super) use_legacy_landlock: bool,
 
     /// Legacy thread cwd used when a turn does not select an environment.
@@ -180,7 +179,6 @@ impl SessionConfiguration {
             shell_environment_policy: self.shell_environment_policy.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_type: self.windows_sandbox_type,
-            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             use_legacy_landlock: self.use_legacy_landlock,
             exec_policy: None,
             mcp_policy: None,

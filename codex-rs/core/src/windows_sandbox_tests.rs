@@ -1,5 +1,4 @@
 use super::*;
-use codex_config::types::WindowsToml;
 use codex_features::Features;
 use codex_features::FeaturesToml;
 use codex_network_proxy::NetworkProxyConfig;
@@ -96,26 +95,6 @@ fn resolve_windows_sandbox_mode_falls_back_to_legacy_keys() {
         resolve_windows_sandbox_mode(&cfg),
         Some(WindowsSandboxModeToml::Unelevated)
     );
-}
-
-#[test]
-fn resolve_windows_sandbox_private_desktop_defaults_to_true() {
-    assert!(resolve_windows_sandbox_private_desktop(
-        &ConfigToml::default()
-    ));
-}
-
-#[test]
-fn resolve_windows_sandbox_private_desktop_respects_explicit_cfg_value() {
-    let cfg = ConfigToml {
-        windows: Some(WindowsToml {
-            sandbox_private_desktop: Some(false),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    assert!(!resolve_windows_sandbox_private_desktop(&cfg));
 }
 
 #[test]

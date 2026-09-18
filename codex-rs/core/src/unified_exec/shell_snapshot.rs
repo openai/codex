@@ -102,9 +102,6 @@ impl Session {
                             environment.config().windows_sandbox_level,
                             environment.cwd(),
                         ),
-                        windows_sandbox_private_desktop: environment
-                            .config()
-                            .windows_sandbox_private_desktop,
                         windows_sandbox_proxy_settings_mode: Some(
                             session.windows_sandbox_proxy_settings_mode,
                         ),

@@ -69,7 +69,6 @@ fn spawn_legacy_process(
     command: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
-    use_private_desktop: bool,
     private_desktop_name: Option<&str>,
     tty: bool,
     stdin_open: bool,
@@ -82,7 +81,6 @@ fn spawn_legacy_process(
     let launch_desktop = match private_desktop_name {
         Some(name) => LaunchDesktop::open_private(name)?,
         None => LaunchDesktop::prepare_legacy(
-            use_private_desktop,
             permissions,
             cwd,
             env_map,
@@ -328,7 +326,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     additional_deny_write_paths: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
-    use_private_desktop: bool,
     private_desktop_name: Option<String>,
 ) -> Result<SpawnedProcess> {
     let common = prepare_legacy_spawn_context(
@@ -408,7 +405,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
         &command,
         cwd,
         &env_map,
-        use_private_desktop,
         private_desktop_name.as_deref(),
         tty,
         stdin_open,

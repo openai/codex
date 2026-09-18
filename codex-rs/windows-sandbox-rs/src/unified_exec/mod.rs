@@ -23,7 +23,7 @@ use std::path::PathBuf;
 ///
 /// Callers should parse their own input shape first, then use this request to
 /// share the elevated-vs-legacy backend selection and session launch path.
-// TODO(anp): Reconcile Windows backend and desktop copies with the supplied sandbox
+// TODO(anp): Reconcile the Windows backend copy with the supplied sandbox
 // context (TurnEnvironment::sandbox_context for turns), preserving this launch snapshot.
 pub struct WindowsSandboxSessionRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
@@ -44,7 +44,6 @@ pub struct WindowsSandboxSessionRequest<'a> {
     pub deny_write_paths_override: &'a [AbsolutePathBuf],
     pub tty: bool,
     pub stdin_open: bool,
-    pub use_private_desktop: bool,
 }
 
 pub async fn spawn_windows_sandbox_session_for_level(
@@ -76,7 +75,6 @@ pub(crate) async fn spawn_windows_sandbox_session_with_desktop(
             request.deny_write_paths_override,
             request.tty,
             request.stdin_open,
-            request.use_private_desktop,
             private_desktop_name,
         )
         .await
@@ -99,7 +97,6 @@ pub(crate) async fn spawn_windows_sandbox_session_with_desktop(
             request.deny_write_paths_override,
             request.tty,
             request.stdin_open,
-            request.use_private_desktop,
             private_desktop_name,
         )
         .await
@@ -119,7 +116,6 @@ pub async fn spawn_windows_sandbox_session_legacy(
     additional_deny_write_paths: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
-    use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
     backends::legacy::spawn_windows_sandbox_session_legacy(
         permission_profile,
@@ -133,7 +129,6 @@ pub async fn spawn_windows_sandbox_session_legacy(
         additional_deny_write_paths,
         tty,
         stdin_open,
-        use_private_desktop,
         /*private_desktop_name*/ None,
     )
     .await
@@ -157,7 +152,6 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     deny_write_paths_override: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
-    use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
     backends::elevated::spawn_windows_sandbox_session_elevated_for_permission_profile(
         permission_profile,
@@ -177,7 +171,6 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
         deny_write_paths_override,
         tty,
         stdin_open,
-        use_private_desktop,
         /*private_desktop_name*/ None,
     )
     .await

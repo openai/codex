@@ -228,7 +228,6 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
         windows_sandbox_policy_cwd: cwd.clone().into(),
         windows_sandbox_workspace_roots: vec![cwd],
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-        windows_sandbox_private_desktop: false,
         permission_profile: permission_profile.clone(),
         windows_sandbox_filesystem_overrides: None,
         arg0: None,

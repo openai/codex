@@ -834,10 +834,6 @@ async fn environment_mcp_policy_filters_runtime_config_and_model_tools(
                 shell_environment_policy: Default::default(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&fixture.config),
                 windows_sandbox_type: fixture.config.permissions.windows_sandbox_type,
-                windows_sandbox_private_desktop: fixture
-                    .config
-                    .permissions
-                    .windows_sandbox_private_desktop,
                 use_legacy_landlock: fixture.config.features.use_legacy_landlock(),
                 exec_policy: None,
                 mcp_policy: Some(mcp_policy),
@@ -955,7 +951,6 @@ async fn future_environment_mcp_policy_applies_on_the_next_turn() -> anyhow::Res
         shell_environment_policy: Default::default(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&fixture.config),
         windows_sandbox_type: fixture.config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: fixture.config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: fixture.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: Some(EnvironmentMcpPolicy {
@@ -2051,10 +2046,6 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta(
                     shell_environment_policy: Default::default(),
                     windows_sandbox_level: WindowsSandboxLevel::from_config(&fixture.config),
                     windows_sandbox_type: fixture.config.permissions.windows_sandbox_type,
-                    windows_sandbox_private_desktop: fixture
-                        .config
-                        .permissions
-                        .windows_sandbox_private_desktop,
                     use_legacy_landlock: fixture.config.features.use_legacy_landlock(),
                     exec_policy: None,
                     mcp_policy: None,

@@ -569,8 +569,7 @@ async fn file_system_private_desktop_survives_helper_exits_and_separates_permiss
     let path = tmp.path().join("contents.txt");
     std::fs::write(&path, b"initial")?;
     let uri = PathUri::from_host_native_path(&path)?;
-    let mut sandbox = workspace_write_sandbox(tmp.path().to_path_buf());
-    sandbox.windows_sandbox_private_desktop = true;
+    let sandbox = workspace_write_sandbox(tmp.path().to_path_buf());
     let before = process_private_desktops()?;
     let write = file_system
         .write_file(
@@ -624,7 +623,6 @@ async fn file_system_private_desktop_survives_helper_exits_and_separates_permiss
 
     let mut readonly = read_only_sandbox_for_cwd(tmp.path().to_path_buf())?;
     readonly.windows_sandbox_selection = WindowsSandboxSelection::RestrictedToken;
-    readonly.windows_sandbox_private_desktop = true;
     file_system
         .write_file(
             &uri,

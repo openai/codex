@@ -399,10 +399,6 @@ fn map_requirements_to_api(
         }
         None => ConfigRequirementsToml::default(),
     };
-    let windows_sandbox_private_desktop = requirements
-        .windows
-        .as_ref()
-        .and_then(|windows| windows.sandbox_private_desktop);
 
     Some(ConfigRequirements {
         model_provider: requirements.model_provider,
@@ -539,7 +535,6 @@ fn map_requirements_to_api(
         feedback: requirements.feedback.map(|feedback| FeedbackRequirements {
             enabled: feedback.enabled,
         }),
-        windows_sandbox_private_desktop,
     })
 }
 
@@ -1105,7 +1100,6 @@ mod tests {
                     codex_config::WindowsSandboxImplementationToml::Elevated,
                     codex_config::WindowsSandboxImplementationToml::Unelevated,
                 ]),
-                sandbox_private_desktop: Some(false),
             }),
             ..ConfigRequirementsToml::default()
         });
@@ -1117,7 +1111,6 @@ mod tests {
                 WindowsSandboxImplementation::Unelevated,
             ])
         );
-        assert_eq!(mapped.windows_sandbox_private_desktop, Some(false));
     }
 
     #[test]

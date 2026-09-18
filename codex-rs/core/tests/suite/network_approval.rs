@@ -2494,10 +2494,6 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
                 windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
                 windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-                windows_sandbox_private_desktop: test
-                    .config
-                    .permissions
-                    .windows_sandbox_private_desktop,
                 use_legacy_landlock: test.config.features.use_legacy_landlock(),
                 exec_policy: None,
                 mcp_policy: None,
@@ -2680,7 +2676,6 @@ async fn escalated_owner_network_terminal_requires_stdin_approval(
         shell_environment_policy: test.config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
         windows_sandbox_type: test.config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: test.config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: test.config.features.use_legacy_landlock(),
         exec_policy: None,
         mcp_policy: None,

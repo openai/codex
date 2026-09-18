@@ -764,7 +764,6 @@ mod tests {
                     workspace_roots: Vec::new(),
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
                     windows_sandbox_type: codex_sandboxing::SandboxType::None,
-                    windows_sandbox_private_desktop: true,
                     use_legacy_landlock: false,
                     permission_profile: PermissionProfileSnapshot::legacy(
                         PermissionProfile::read_only(),

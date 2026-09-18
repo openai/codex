@@ -401,7 +401,6 @@ pub(crate) struct SandboxAttempt<'a> {
     pub use_legacy_landlock: bool,
     pub windows_sandbox_type: SandboxType,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
-    pub windows_sandbox_private_desktop: bool,
     pub network_denial_cancellation_token: Option<CancellationToken>,
     pub(crate) network_proxy: Option<&'a NetworkProxy>,
 }
@@ -494,7 +493,6 @@ impl<'a> SandboxAttempt<'a> {
                 sandbox_exe: self.sandbox_exe.map(std::path::PathBuf::as_path),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
-                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map_err(CodexErr::from)?;
         let workspace_roots = self
@@ -529,7 +527,6 @@ impl<'a> SandboxAttempt<'a> {
                 sandbox_exe: None,
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
-                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map_err(CodexErr::from)?;
         let mut exec_request = crate::sandboxing::ExecRequest::from_sandbox_exec_request(
@@ -550,7 +547,6 @@ impl<'a> SandboxAttempt<'a> {
                     self.windows_sandbox_level,
                     self.sandbox_cwd,
                 ),
-                windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
                 windows_sandbox_proxy_settings_mode: None,
                 use_legacy_landlock: self.use_legacy_landlock,
             });

@@ -39,7 +39,6 @@ const DENY_WRITE_PATHS_JSON_FLAG: &str = "--deny-write-paths-json";
 const ENV_JSON_FLAG: &str = "--env-json";
 const NETWORK_PROXY_RESTRICTING_SID_FLAG: &str = "--network-proxy-restricting-sid";
 const PERMISSION_PROFILE_FLAG: &str = "--permission-profile";
-const PRIVATE_DESKTOP_FLAG: &str = "--windows-sandbox-private-desktop";
 const PRIVATE_DESKTOP_NAME_FLAG: &str = "--windows-sandbox-private-desktop-name";
 const PRESERVE_PROXY_SETTINGS_FLAG: &str = "--preserve-proxy-settings";
 const PROXY_ENFORCED_FLAG: &str = "--proxy-enforced";
@@ -57,7 +56,6 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     env_map: &HashMap<String, String>,
     permission_profile: &PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
-    windows_sandbox_private_desktop: bool,
     proxy_enforced: bool,
     network_proxy_restricting_sid: Option<&str>,
     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
@@ -94,14 +92,14 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
         args.push(WORKSPACE_ROOT_FLAG.to_string());
         args.push(root.as_path().to_string_lossy().into_owned());
     }
-    if windows_sandbox_private_desktop {
+    let desktop_name = {
         // The caller owns the cache so the desktop survives this short-lived wrapper.
         let mut desktop_env = env_map.clone();
         let deny_write_paths = deny_write_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
             .collect::<Vec<_>>();
-        let desktop_name = if windows_sandbox_level == WindowsSandboxLevel::Elevated {
+        if windows_sandbox_level == WindowsSandboxLevel::Elevated {
             let common = prepare_spawn_context_common(
                 permission_profile,
                 workspace_roots,
@@ -204,11 +202,10 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
                 CloseHandle(security.h_token);
             }
             desktop_name?
-        };
-        args.push(PRIVATE_DESKTOP_FLAG.to_string());
-        args.push(PRIVATE_DESKTOP_NAME_FLAG.to_string());
-        args.push(desktop_name);
-    }
+        }
+    };
+    args.push(PRIVATE_DESKTOP_NAME_FLAG.to_string());
+    args.push(desktop_name);
     if proxy_enforced {
         args.push(PROXY_ENFORCED_FLAG.to_string());
     }
@@ -289,8 +286,7 @@ struct WindowsSandboxWrapperRequest {
     env_map: HashMap<String, String>,
     permission_profile: PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
-    windows_sandbox_private_desktop: bool,
-    private_desktop_name: Option<String>,
+    private_desktop_name: String,
     proxy_enforced: bool,
     network_proxy_restricting_sid: Option<String>,
     proxy_settings_mode: crate::WindowsSandboxProxySettingsMode,
@@ -326,9 +322,8 @@ async fn run_windows_sandbox_wrapper_request(request: WindowsSandboxWrapperReque
             deny_write_paths_override: request.deny_write_paths_override.as_slice(),
             tty: false,
             stdin_open: true,
-            use_private_desktop: request.windows_sandbox_private_desktop,
         },
-        request.private_desktop_name,
+        Some(request.private_desktop_name),
     )
     .await?;
 
@@ -343,7 +338,6 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
     let mut env_map = None;
     let mut permission_profile = None;
     let mut windows_sandbox_level = None;
-    let mut windows_sandbox_private_desktop = false;
     let mut private_desktop_name = None;
     let mut proxy_enforced = false;
     let mut network_proxy_restricting_sid = None;
@@ -386,7 +380,6 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
                 let value = next_flag_value(&mut args, &arg)?;
                 windows_sandbox_level = Some(parse_windows_sandbox_level(&value)?);
             }
-            PRIVATE_DESKTOP_FLAG => windows_sandbox_private_desktop = true,
             PRIVATE_DESKTOP_NAME_FLAG => {
                 private_desktop_name = Some(next_flag_value(&mut args, &arg)?);
             }
@@ -424,9 +417,8 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
         );
     }
     let command_cwd = command_cwd.ok_or_else(|| anyhow!("missing required {COMMAND_CWD_FLAG}"))?;
-    if windows_sandbox_private_desktop != private_desktop_name.is_some() {
-        bail!("{PRIVATE_DESKTOP_FLAG} requires {PRIVATE_DESKTOP_NAME_FLAG}");
-    }
+    let private_desktop_name = private_desktop_name
+        .ok_or_else(|| anyhow!("missing required {PRIVATE_DESKTOP_NAME_FLAG}"))?;
     if workspace_roots.is_empty() {
         workspace_roots.push(command_cwd.clone());
     }
@@ -439,7 +431,6 @@ fn parse_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<WindowsSandbo
             .ok_or_else(|| anyhow!("missing required {PERMISSION_PROFILE_FLAG}"))?,
         windows_sandbox_level: windows_sandbox_level
             .ok_or_else(|| anyhow!("missing required {SANDBOX_LEVEL_FLAG}"))?,
-        windows_sandbox_private_desktop,
         private_desktop_name,
         proxy_enforced,
         network_proxy_restricting_sid,

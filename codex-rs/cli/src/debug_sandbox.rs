@@ -496,7 +496,6 @@ async fn run_command_under_sandbox(
                 sandbox_exe: Some(codex_self_exe.as_path()),
                 use_legacy_landlock: false,
                 windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-                windows_sandbox_private_desktop: false,
             })?;
             let (program, args) = request
                 .command
@@ -587,7 +586,6 @@ async fn run_command_under_windows_session(
         deny_write_paths_override: empty_paths,
         tty: false,
         stdin_open: true,
-        use_private_desktop: config.permissions.windows_sandbox_private_desktop,
     })
     .await;
 

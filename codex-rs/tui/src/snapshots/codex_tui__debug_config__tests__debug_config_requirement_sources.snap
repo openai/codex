@@ -14,7 +14,6 @@ Requirements:
   - check_for_update_on_startup: false (source: MDM managed_config.toml (legacy))
   - allow_login_shell: false (source: MDM managed_config.toml (legacy))
   - feedback.enabled: false (source: MDM managed_config.toml (legacy))
-  - windows.sandbox_private_desktop: false (source: MDM managed_config.toml (legacy))
   - allowed_approval_policies: on-request (source: MDM managed_config.toml (legacy))
   - allowed_approvals_reviewers: auto_review (source: MDM managed_config.toml (legacy))
   - allowed_sandbox_modes: read-only (source: /etc/codex/requirements.toml)

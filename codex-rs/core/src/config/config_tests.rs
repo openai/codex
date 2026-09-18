@@ -1901,7 +1901,6 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
                 }),
                 windows: Some(WindowsToml {
                     sandbox: Some(WindowsSandboxModeToml::Elevated),
-                    sandbox_private_desktop: None,
                 }),
                 features,
                 ..Default::default()
@@ -3548,7 +3547,6 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
             }),
             windows: Some(WindowsToml {
                 sandbox: Some(WindowsSandboxModeToml::Elevated),
-                sandbox_private_desktop: None,
             }),
             ..Default::default()
         },
@@ -3613,7 +3611,6 @@ async fn implicit_builtin_workspace_profile_preserves_add_dir_metadata_carveouts
             )])),
             windows: Some(WindowsToml {
                 sandbox: Some(WindowsSandboxModeToml::Elevated),
-                sandbox_private_desktop: None,
             }),
             ..Default::default()
         },
@@ -13024,9 +13021,6 @@ allow_login_shell = true
 
 [feedback]
 enabled = true
-
-[windows]
-sandbox_private_desktop = true
 "#,
     )?;
 
@@ -13042,9 +13036,6 @@ allow_login_shell = false
 
 [feedback]
 enabled = false
-
-[windows]
-sandbox_private_desktop = false
 "#,
         required_sqlite_home.display(),
         required_log_dir.display(),
@@ -13058,7 +13049,6 @@ sandbox_private_desktop = false
     assert!(!config.check_for_update_on_startup);
     assert!(!config.permissions.allow_login_shell);
     assert!(!config.feedback_enabled);
-    assert!(!config.permissions.windows_sandbox_private_desktop);
     assert!(config.startup_warnings.iter().any(|warning| {
         warning.contains("Configured value for `check_for_update_on_startup` is overridden")
     }));

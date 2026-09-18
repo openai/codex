@@ -59,7 +59,6 @@ struct PreparedWindowsSandboxRequest {
     network_proxy_restricting_sid: Option<String>,
     proxy_settings_mode: WindowsSandboxProxySettingsMode,
     filesystem_overrides: Option<WindowsSandboxFilesystemOverrides>,
-    use_private_desktop: bool,
 }
 
 impl PreparedExecRequest {
@@ -74,7 +73,6 @@ impl PreparedExecRequest {
                 network_proxy_restricting_sid: request.network_proxy_restricting_sid.as_deref(),
                 proxy_settings_mode: request.proxy_settings_mode,
                 filesystem_overrides: request.filesystem_overrides.as_ref(),
-                use_private_desktop: request.use_private_desktop,
             })
     }
 }
@@ -90,9 +88,9 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     if let Some(sandbox) = params.sandbox.as_ref()
         && sandbox.windows_sandbox_selection == WindowsSandboxSelection::Mxc
     {
-        if params.arg0.is_some() || sandbox.windows_sandbox_private_desktop {
+        if params.arg0.is_some() {
             return Err(invalid_params(
-                "MXC custom argv0 and private-desktop launches are not supported".to_owned(),
+                "MXC custom argv0 is not supported".to_owned(),
             ));
         }
         if !codex_sandboxing::windows_mxc_available() {
@@ -271,7 +269,6 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             },
             use_legacy_landlock: sandbox_context.use_legacy_landlock,
             windows_sandbox_level: windows_sandbox_level.unwrap_or(WindowsSandboxLevel::Disabled),
-            windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
         },
     };
     let mut request = if sandbox == SandboxType::WindowsRestrictedToken {
@@ -312,7 +309,6 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
             network_proxy_restricting_sid,
             proxy_settings_mode: windows_sandbox_proxy_settings_mode,
             filesystem_overrides,
-            use_private_desktop: sandbox_context.windows_sandbox_private_desktop,
         })
     } else {
         None

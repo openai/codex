@@ -376,7 +376,6 @@ fn resolved_local_environments<const N: usize>(
                             workspace_roots: Vec::new(),
                             windows_sandbox_level: WindowsSandboxLevel::Disabled,
                             windows_sandbox_type: codex_protocol::sandbox::SandboxType::None,
-                            windows_sandbox_private_desktop: true,
                             use_legacy_landlock: false,
                             permission_profile: PermissionProfileSnapshot::legacy(
                                 PermissionProfile::read_only(),

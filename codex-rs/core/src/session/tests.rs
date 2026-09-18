@@ -4034,7 +4034,6 @@ async fn set_rate_limits_retains_previous_credits() {
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -4157,7 +4156,6 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -4777,7 +4775,6 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -5864,7 +5861,6 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -6046,7 +6042,6 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -6362,7 +6357,6 @@ async fn make_session_with_config_and_rx(
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -6495,7 +6489,6 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -8290,7 +8283,6 @@ where
         shell_environment_policy: config.permissions.shell_environment_policy.clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         windows_sandbox_type: config.permissions.windows_sandbox_type,
-        windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
         use_legacy_landlock: config.features.use_legacy_landlock(),
         legacy_fallback_cwd: config.cwd.clone(),
         runtime_workspace_roots: config.workspace_roots.clone(),
@@ -9113,7 +9105,6 @@ async fn capability_discovery_uses_environment_permission_profile() {
         .set_permission_profile(PermissionProfile::Disabled)
         .expect("unrestricted permission profile should be allowed");
     config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Unelevated);
-    config.permissions.windows_sandbox_private_desktop = true;
     config
         .features
         .disable(Feature::UseLegacyLandlock)
@@ -9139,7 +9130,6 @@ async fn capability_discovery_uses_environment_permission_profile() {
             NetworkSandboxPolicy::Restricted,
         ));
     environment_config.windows_sandbox_level = WindowsSandboxLevel::Elevated;
-    environment_config.windows_sandbox_private_desktop = false;
     environment_config.use_legacy_landlock = true;
     let expected_sandbox = FileSystemSandboxContext {
         permissions: environment.permission_profile().clone(),
@@ -9152,7 +9142,6 @@ async fn capability_discovery_uses_environment_permission_profile() {
         } else {
             codex_file_system::WindowsSandboxSelection::Disabled
         },
-        windows_sandbox_private_desktop: false,
         windows_sandbox_proxy_settings_mode: None,
         use_legacy_landlock: true,
     };

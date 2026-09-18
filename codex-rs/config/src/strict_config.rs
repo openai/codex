@@ -268,6 +268,9 @@ pub(crate) fn ignored_config_warning(
             .collect::<Vec<_>>()
             .as_slice()
         {
+            ["windows", "sandbox_private_desktop"] => {
+                " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+            }
             ["network_proxy"] => {
                 " Use [permissions.<name>.network] for network settings, or [experimental_network] in requirements.toml for enforced network policy."
             }

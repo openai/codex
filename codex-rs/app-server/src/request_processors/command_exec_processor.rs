@@ -299,10 +299,6 @@ impl CommandExecRequestProcessor {
             network_environment_id: None,
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
-            windows_sandbox_private_desktop: self
-                .config
-                .permissions
-                .windows_sandbox_private_desktop,
             justification: None,
             arg0: None,
         };

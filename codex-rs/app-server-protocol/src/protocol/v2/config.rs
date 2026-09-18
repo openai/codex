@@ -456,7 +456,6 @@ pub struct ConfigRequirements {
     pub check_for_update_on_startup: Option<bool>,
     pub allow_login_shell: Option<bool>,
     pub feedback: Option<FeedbackRequirements>,
-    pub windows_sandbox_private_desktop: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

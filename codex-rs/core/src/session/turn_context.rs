@@ -235,7 +235,6 @@ impl TurnEnvironment {
                 config.windows_sandbox_level,
                 self.cwd(),
             ),
-            windows_sandbox_private_desktop: config.windows_sandbox_private_desktop,
             windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: config.use_legacy_landlock,
         }

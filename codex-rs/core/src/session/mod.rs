@@ -841,7 +841,6 @@ impl Session {
             shell_environment_policy: config.permissions.shell_environment_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             windows_sandbox_type: config.permissions.windows_sandbox_type,
-            windows_sandbox_private_desktop: config.permissions.windows_sandbox_private_desktop,
             use_legacy_landlock: config.features.use_legacy_landlock(),
             legacy_fallback_cwd: config.cwd.clone(),
             runtime_workspace_roots: config.workspace_roots.clone(),

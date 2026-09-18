@@ -11452,9 +11452,6 @@ class ConfigRequirements(BaseModel):
     ] = None
     models: ModelsRequirements | None = None
     sqlite_home: Annotated[str | None, Field(alias="sqliteHome")] = None
-    windows_sandbox_private_desktop: Annotated[
-        bool | None, Field(alias="windowsSandboxPrivateDesktop")
-    ] = None
 
 
 class ConfigRequirementsReadResponse(BaseModel):
