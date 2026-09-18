@@ -528,6 +528,69 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multi_agent_catalog_parameters() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.workspace_roots = vec![config.cwd.clone()];
+        })
+        .with_model_info_override("gpt-6-astra", |model| {
+            model.model_messages.as_mut().expect("model messages").tools = Some(
+                serde_json::from_value(json!({"multi_agent": {"list_agents": {
+                    "parameters": json!({
+                        "type": "object",
+                        "properties": {"path_prefix": {
+                            "type": "string",
+                            "description": "Inspect agents within this task path.",
+                            "minLength": 1,
+                            "maxLength": 128,
+                        }},
+                        "required": ["path_prefix"],
+                        "additionalProperties": false,
+                    }).to_string(),
+                }}}))
+                .expect("catalog tool messages"),
+            );
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("agents-response"),
+                ev_function_call_with_namespace(
+                    "agents-call",
+                    "collaboration",
+                    "list_agents",
+                    r#"{"path_prefix":"/root"}"#,
+                ),
+                ev_completed("agents-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("final", "Only the root agent is working on this task."),
+                ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Check which agents are working under /root before delegating more work.")
+        .await?;
+    insta::assert_snapshot!(
+        "multi_agent_catalog_parameters",
+        context_snapshot::format_request_history_snapshot(
+            "Astra calls list_agents using the selected catalog parameter schema.",
+            &mock.requests(),
+            &ContextSnapshotOptions::default().include_request_settings(),
+        )
+    );
+    Ok(())
+}
+
 #[cfg_attr(windows, ignore = "the fixture uses a Unix shell command")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn astra_settings_release_check_with_direct_and_code_mode_tools() -> Result<()> {

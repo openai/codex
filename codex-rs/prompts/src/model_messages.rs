@@ -6,6 +6,7 @@
 use codex_protocol::openai_models::ConfirmationPolicies;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelMessages;
+use codex_protocol::openai_models::ToolMessage;
 use permissions::ResolvedApprovalMessages;
 use permissions::ResolvedPermissionMessages;
 
@@ -154,6 +155,15 @@ impl<'a> ResolvedModelMessages<'a> {
     /// Selects a V2 tool's static description by its name, independently of its runtime namespace.
     /// Missing text retains the tool's bundled description; an empty string replaces it.
     pub fn multi_agent_tool_description_override(&self, tool_name: &str) -> Option<&'a str> {
+        self.multi_agent_tool(tool_name)?.description.as_deref()
+    }
+
+    /// Selects a V2 tool's complete parameter schema; parsing belongs to the tool consumer.
+    pub fn multi_agent_tool_parameters_override(&self, tool_name: &str) -> Option<&'a str> {
+        self.multi_agent_tool(tool_name)?.parameters.as_deref()
+    }
+
+    fn multi_agent_tool(self, tool_name: &str) -> Option<&'a ToolMessage> {
         let tools = self
             .catalog_messages
             .and_then(|messages| messages.tools.as_ref())
@@ -167,7 +177,7 @@ impl<'a> ResolvedModelMessages<'a> {
             "list_agents" => &tools.list_agents,
             _ => return None,
         };
-        tool.as_ref()?.description.as_deref()
+        tool.as_ref()
     }
 
     /// Resolves persistent-mode instructions without deciding whether the mode is active.

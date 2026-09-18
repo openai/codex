@@ -1,9 +1,10 @@
-//! Applies captured Multi-Agent V2 description and namespace overrides to tool specifications.
-//! Execution and parameter schemas are delegated unchanged to the underlying runtime.
+//! Applies captured Multi-Agent V2 catalog overrides and namespaces to tool specifications.
+//! Parameter schemas retain harness-owned encryption annotations; execution is unchanged.
 
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
 use crate::tools::registry::CoreToolRuntime;
+use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExecutor;
@@ -12,6 +13,7 @@ use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
+use serde_json::Value;
 use std::sync::Arc;
 
 const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
@@ -20,14 +22,45 @@ pub(super) fn multi_agent_v2_handler(
     handler: impl CoreToolRuntime + 'static,
     namespace: Option<&str>,
     description_override: Option<&str>,
+    parameters_override: Option<&str>,
 ) -> Arc<dyn CoreToolRuntime> {
-    if namespace.is_none() && description_override.is_none() {
+    let parameters_override = parameters_override.map(|parameters| -> Result<JsonSchema, &str> {
+        let parameters: Value =
+            serde_json::from_str(parameters).map_err(|_| "schema is not valid JSON")?;
+        if !parameters.is_object() || parameters["type"] != "object" {
+            return Err("schema must declare an object type");
+        }
+        let mut parameters: JsonSchema = serde_json::from_value(parameters)
+            .map_err(|_| "schema uses unsupported JSON Schema structures")?;
+        if let ToolSpec::Function(tool) = handler.spec()
+            && let Some(properties) = tool.parameters.properties
+        {
+            // Argument transport requires these markers even without server encryption config.
+            for (name, schema) in properties {
+                if schema.encrypted == Some(true) {
+                    let property = parameters
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.get_mut(&name))
+                        .ok_or("schema omits an encrypted parameter")?;
+                    property.encrypted = Some(true);
+                }
+            }
+        }
+        Ok(parameters)
+    });
+    if let Some(Err(reason)) = &parameters_override {
+        tracing::warn!(tool = %handler.tool_name(), reason, "Invalid catalog tool parameters; using bundled parameters");
+    }
+    let parameters_override = parameters_override.and_then(Result::ok);
+    if namespace.is_none() && description_override.is_none() && parameters_override.is_none() {
         return Arc::new(handler);
     }
     Arc::new(MultiAgentV2ToolOverrides {
         handler: Arc::new(handler),
         namespace: namespace.map(str::to_owned),
         description_override: description_override.map(str::to_owned),
+        parameters_override,
     })
 }
 
@@ -35,6 +68,7 @@ struct MultiAgentV2ToolOverrides {
     handler: Arc<dyn CoreToolRuntime>,
     namespace: Option<String>,
     description_override: Option<String>,
+    parameters_override: Option<JsonSchema>,
 }
 
 impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
@@ -48,10 +82,13 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
 
     fn spec(&self) -> ToolSpec {
         let mut spec = self.handler.spec();
-        if let ToolSpec::Function(tool) = &mut spec
-            && let Some(description) = &self.description_override
-        {
-            tool.description.clone_from(description);
+        if let ToolSpec::Function(tool) = &mut spec {
+            if let Some(description) = &self.description_override {
+                tool.description.clone_from(description);
+            }
+            if let Some(parameters) = &self.parameters_override {
+                tool.parameters.clone_from(parameters);
+            }
         }
         match (&self.namespace, spec) {
             (Some(namespace), ToolSpec::Function(tool)) => {

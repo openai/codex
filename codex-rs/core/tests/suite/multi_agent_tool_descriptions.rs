@@ -1,4 +1,4 @@
-//! Verifies catalog descriptions reach V2 tools without changing their schemas or availability.
+//! Verifies V2 catalog tool messages change only their selected description or parameter schema.
 
 use anyhow::Result;
 use codex_core::config::AgentRoleConfig;
@@ -24,6 +24,30 @@ const TOOL_NAMES: [&str; 6] = [
     "list_agents",
 ];
 
+const CATALOG_PARAMETERS: &str = r#"{
+    "type": "object",
+    "title": "Catalog parameters",
+    "properties": {
+        "catalog_limit": {"type": "integer", "description": "Catalog limit."},
+        "message": {"type": "string", "description": "Catalog message.", "encrypted": false}
+    },
+    "required": ["catalog_limit"],
+    "additionalProperties": false,
+    "$defs": {"unused": {"type": "string"}}
+}"#;
+
+// The existing JsonSchema subset retains supported fields and drops unknown keywords.
+const EXPECTED_CATALOG_PARAMETERS: &str = r#"{
+    "type": "object",
+    "properties": {
+        "catalog_limit": {"type": "integer", "description": "Catalog limit."},
+        "message": {"type": "string", "description": "Catalog message.", "encrypted": false}
+    },
+    "required": ["catalog_limit"],
+    "additionalProperties": false,
+    "$defs": {"unused": {"type": "string"}}
+}"#;
+
 #[derive(Clone, Copy)]
 enum Exposure {
     Namespaced,
@@ -47,24 +71,43 @@ fn all_tool_messages(message: Value) -> Value {
     })
 }
 
-#[test_case(json!(null), Exposure::Namespaced; "missing_tools")]
-#[test_case(json!({}), Exposure::Namespaced; "missing_multi_agent")]
-#[test_case(json!({"multi_agent": null}), Exposure::Namespaced; "null_multi_agent")]
-#[test_case(json!({"multi_agent": {}}), Exposure::Namespaced; "missing_tools_in_family")]
-#[test_case(all_tool_messages(json!(null)), Exposure::Namespaced; "null_tool")]
-#[test_case(all_tool_messages(json!({})), Exposure::Namespaced; "missing_description")]
-#[test_case(all_tool_messages(json!({"description": null})), Exposure::Namespaced; "null_description")]
-#[test_case(all_tool_messages(json!({"description": "  Catalog TOOL_NAME description.\n{{literal_placeholder}}  "})), Exposure::Namespaced; "catalog_description")]
-#[test_case(all_tool_messages(json!({"description": ""})), Exposure::Namespaced; "empty_description")]
-#[test_case(json!({"multi_agent": {"send_message": {"description": "Catalog send."}}}), Exposure::Namespaced; "sparse_sibling_fallback")]
-#[test_case(all_tool_messages(json!({"description": "Catalog TOOL_NAME description."})), Exposure::Plain; "plain_tools")]
-#[test_case(all_tool_messages(json!({"description": "Catalog TOOL_NAME description."})), Exposure::CodeMode; "code_mode_declarations")]
-#[test_case(all_tool_messages(json!({"description": ""})), Exposure::CodeMode; "empty_code_mode_descriptions")]
-#[test_case(all_tool_messages(json!({"description": "Catalog TOOL_NAME description."})), Exposure::V1; "v1_unchanged")]
+#[test_case(json!(null), Exposure::Namespaced, None; "missing_tools")]
+#[test_case(json!({}), Exposure::Namespaced, None; "missing_multi_agent")]
+#[test_case(json!({"multi_agent": null}), Exposure::Namespaced, None; "null_multi_agent")]
+#[test_case(json!({"multi_agent": {}}), Exposure::Namespaced, None; "missing_tools_in_family")]
+#[test_case(all_tool_messages(json!(null)), Exposure::Namespaced, None; "null_tool")]
+#[test_case(all_tool_messages(json!({})), Exposure::Namespaced, None; "missing_description")]
+#[test_case(all_tool_messages(json!({"description": null})), Exposure::Namespaced, None; "null_description")]
+#[test_case(all_tool_messages(json!({"description": "  Catalog TOOL_NAME description.\n{{literal_placeholder}}  "})), Exposure::Namespaced, None; "catalog_description")]
+#[test_case(all_tool_messages(json!({"description": ""})), Exposure::Namespaced, None; "empty_description")]
+#[test_case(json!({"multi_agent": {"send_message": {"description": "Catalog send."}}}), Exposure::Namespaced, None; "sparse_sibling_fallback")]
+#[test_case(all_tool_messages(json!({"description": "Catalog TOOL_NAME description."})), Exposure::Plain, None; "plain_tools")]
+#[test_case(all_tool_messages(json!({"description": "Catalog TOOL_NAME description."})), Exposure::CodeMode, None; "code_mode_declarations")]
+#[test_case(all_tool_messages(json!({"description": ""})), Exposure::CodeMode, None; "empty_code_mode_descriptions")]
+#[test_case(all_tool_messages(json!({"description": "Catalog TOOL_NAME description."})), Exposure::V1, None; "v1_unchanged")]
+#[test_case(all_tool_messages(json!({"parameters": CATALOG_PARAMETERS})), Exposure::Namespaced, Some(EXPECTED_CATALOG_PARAMETERS); "catalog_parameters")]
+#[test_case(all_tool_messages(json!({"parameters": CATALOG_PARAMETERS})), Exposure::Plain, Some(EXPECTED_CATALOG_PARAMETERS); "plain_parameters")]
+#[test_case(all_tool_messages(json!({"parameters": CATALOG_PARAMETERS})), Exposure::CodeMode, Some(EXPECTED_CATALOG_PARAMETERS); "code_mode_parameters")]
+#[test_case(all_tool_messages(json!({"parameters": CATALOG_PARAMETERS})), Exposure::V1, None; "v1_parameters_unchanged")]
+#[test_case(json!({"multi_agent": {
+    "spawn_agent": {"parameters": null},
+    "send_message": {"parameters": "{"},
+    "followup_task": {"parameters": r#"{"type":"object","properties":{"message":true}}"#},
+    "wait_agent": {"parameters": r#"{"type":["object"]}"#},
+    "interrupt_agent": {"parameters": r#"[null,"object",null,null,null,null,null,{"message":{"type":"string"}},null,null,null,null,null,null,null]"#},
+    "list_agents": {"parameters": "{}"}
+}}), Exposure::Namespaced, None; "missing_or_invalid_parameters_fall_back")]
+#[test_case(json!({"multi_agent": {
+    "spawn_agent": {"parameters": r#"{"type":"object"}"#},
+    "send_message": {"parameters": r#"{"type":"object"}"#},
+    "followup_task": {"parameters": r#"{"type":"object"}"#}
+}}), Exposure::Namespaced, None; "missing_encrypted_parameters_fall_back")]
+#[test_case(json!({"multi_agent": {"send_message": {"parameters": CATALOG_PARAMETERS}}}), Exposure::Namespaced, Some(EXPECTED_CATALOG_PARAMETERS); "sparse_parameters")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn multi_agent_catalog_descriptions_preserve_outbound_schema(
+async fn multi_agent_catalog_messages_change_only_selected_tool_fields(
     tool_messages: Value,
     exposure: Exposure,
+    expected_parameters: Option<&str>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -200,6 +243,23 @@ async fn multi_agent_catalog_descriptions_preserve_outbound_schema(
                     format!("{description}{declaration}")
                 };
                 expected_tool["description"] = json!(replacement);
+            }
+            if let Some(parameters) = expected_parameters
+                && tool_messages["multi_agent"][name]["parameters"].is_string()
+            {
+                expected_tool["parameters"] = serde_json::from_str(parameters)?;
+                if matches!(name, "spawn_agent" | "send_message" | "followup_task") {
+                    expected_tool["parameters"]["properties"]["message"]["encrypted"] = json!(true);
+                }
+                if matches!(exposure, Exposure::CodeMode) {
+                    let description = expected_tool["description"].as_str().expect("description");
+                    let (prefix, signature) =
+                        description.rsplit_once("(args: ").expect("arguments");
+                    let (_, result) = signature.split_once("): Promise").expect("result type");
+                    expected_tool["description"] = json!(format!(
+                        "{prefix}(args: {{\n  // Catalog limit.\n  catalog_limit: number;\n  // Catalog message.\n  message?: string;\n}}): Promise{result}"
+                    ));
+                }
             }
         }
     }
