@@ -18,10 +18,9 @@ async fn enabled_request_logging_emits_transport_url_and_body() {
 
 #[tokio::test]
 async fn disabled_request_logging_suppresses_transport_url_and_body() {
-    let logs = capture_transport_logs(HttpClient::new_without_request_logging(
-        test_reqwest_client(),
-    ))
-    .await;
+    let logs =
+        capture_transport_logs(HttpClient::new(test_reqwest_client()).without_request_logging())
+            .await;
 
     assert!(logs.contains("log capture sentinel"));
     assert!(!logs.contains("url-secret"));

@@ -54,6 +54,12 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
         false
     }
 
+    /// Returns whether explicit provider configuration supplies API-key authentication.
+    /// This takes precedence over any unrelated first-party login used by the picker.
+    fn has_provider_api_key(&self) -> bool {
+        false
+    }
+
     /// Fetches the latest remote model catalog and optional ETag.
     fn list_models<'a>(
         &'a self,
@@ -476,9 +482,13 @@ impl OpenAiModelsManager {
         refresh_strategy: RefreshStrategy,
         http_client_factory: &HttpClientFactory,
     ) -> CoreResult<()> {
-        // Gate cache loading as well as requests; disabled sessions use bundled API-key models.
-        if self.supports_api_key_discovery()
-            && !self.api_key_model_discovery_enabled.load(Ordering::SeqCst)
+        // API-key discovery must be enabled and supported before reusing a remote catalog.
+        // Otherwise even a matching cache from an earlier run would bypass bundled-only behavior.
+        // Command-auth providers retain their existing discovery behavior.
+        if self.uses_api_key_auth()
+            && !self.endpoint_client.has_command_auth()
+            && (!self.endpoint_client.supports_api_key_models()
+                || !self.api_key_model_discovery_enabled.load(Ordering::SeqCst))
         {
             return Ok(());
         }
@@ -541,7 +551,12 @@ impl OpenAiModelsManager {
     fn supports_api_key_discovery(&self) -> bool {
         self.endpoint_client.supports_api_key_models()
             && !self.endpoint_client.has_command_auth()
-            && self
+            && self.uses_api_key_auth()
+    }
+
+    fn uses_api_key_auth(&self) -> bool {
+        self.endpoint_client.has_provider_api_key()
+            || self
                 .auth_manager
                 .as_ref()
                 .is_some_and(|auth_manager| auth_manager.auth_mode() == Some(AuthMode::ApiKey))

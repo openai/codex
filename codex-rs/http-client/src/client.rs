@@ -40,6 +40,12 @@ impl HttpClient {
         Self::from_parts(inner, RequestLogging::Disabled)
     }
 
+    /// Suppresses URL and response-header diagnostics while preserving this client's routing.
+    pub fn without_request_logging(mut self) -> Self {
+        self.request_logging = RequestLogging::Disabled;
+        self
+    }
+
     pub(crate) fn from_parts(inner: reqwest::Client, request_logging: RequestLogging) -> Self {
         Self {
             inner,

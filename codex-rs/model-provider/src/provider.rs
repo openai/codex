@@ -679,6 +679,7 @@ mod tests {
         ModelProviderInfo {
             name: "mock".into(),
             base_url: Some(base_url),
+            model_catalog_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -1380,33 +1381,50 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
                         models: remote_models.clone(),
                     }),
             )
-            .expect(1)
+            .expect(2)
             .mount(&server)
             .await;
 
         let mut provider_info = provider_for(server.uri());
         provider_info.experimental_bearer_token = Some("provider-token".into());
-        let provider = create_model_provider(
-            provider_info,
-            Some(AuthManager::from_auth_for_testing(
-                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-            )),
-        );
+        provider_info.model_catalog_url = Some(format!("{}/models", server.uri()).into());
+        provider_info.http_headers = Some(std::collections::HashMap::from([(
+            codex_login::default_client::RESIDENCY_HEADER_NAME.to_string(),
+            "us".into(),
+        )]));
+        for auth in [
+            None,
+            Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        ] {
+            // Disabled discovery must ignore the catalog cached by the enabled run.
+            for enabled in [true, false] {
+                let provider = create_model_provider(
+                    provider_info.clone(),
+                    auth.clone().map(AuthManager::from_auth_for_testing),
+                );
+                let manager =
+                    provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+                manager.set_api_key_model_discovery_enabled(enabled);
+                let refresh_strategy = if enabled {
+                    RefreshStrategy::Online
+                } else {
+                    RefreshStrategy::Offline
+                };
+                let catalog = manager
+                    .raw_model_catalog(
+                        refresh_strategy,
+                        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                    )
+                    .await;
 
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
-        let catalog = manager
-            .raw_model_catalog(
-                RefreshStrategy::Online,
-                HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-            )
-            .await;
-
-        assert!(
-            catalog
-                .models
-                .iter()
-                .any(|model| model.slug == "provider-model")
-        );
+                assert_eq!(
+                    catalog
+                        .models
+                        .iter()
+                        .any(|model| model.slug == "provider-model"),
+                    enabled
+                );
+            }
+        }
     }
 }

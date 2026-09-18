@@ -22,6 +22,7 @@ use codex_api::TransportError;
 use codex_api::build_session_headers;
 use codex_http_client::ClientRouteClass;
 use codex_login::CodexAuth;
+use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::add_originator_header;
 use codex_login::default_client::create_client_for_route_async;
 use codex_login::default_client::default_headers;
@@ -216,6 +217,7 @@ impl ConnectionPool {
                             self.config.http_client_factory.clone(),
                             url,
                             ClientRouteClass::Api,
+                            ClientRedirectPolicy::Default,
                         )
                         .await
                         .map_err(|error| {

@@ -273,6 +273,7 @@ pub async fn create_client_for_route_async(
     http_client_factory: HttpClientFactory,
     request_url: String,
     route_class: ClientRouteClass,
+    redirect_policy: ClientRedirectPolicy,
 ) -> std::io::Result<HttpClient> {
     let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
         .acquire()
@@ -284,7 +285,7 @@ pub async fn create_client_for_route_async(
             &http_client_factory,
             &request_url,
             route_class,
-            ClientRedirectPolicy::Default,
+            redirect_policy,
         )
         .map_err(std::io::Error::from)
     })

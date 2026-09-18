@@ -62,6 +62,7 @@ base_url = "http://localhost:11434/v1"
     let expected_provider = ModelProviderInfo {
         name: "Ollama".into(),
         base_url: Some("http://localhost:11434/v1".into()),
+        model_catalog_url: None,
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -96,6 +97,7 @@ query_params = { api-version = "2025-04-01-preview" }
     let expected_provider = ModelProviderInfo {
         name: "Azure".into(),
         base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
+        model_catalog_url: None,
         env_key: Some("AZURE_OPENAI_API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -134,6 +136,7 @@ supports_standalone_web_search = true
     let expected_provider = ModelProviderInfo {
         name: "Example".into(),
         base_url: Some("https://example.com".into()),
+        model_catalog_url: None,
         env_key: Some("API_KEY".into()),
         env_key_instructions: None,
         experimental_bearer_token: None,
@@ -317,6 +320,7 @@ fn test_create_amazon_bedrock_provider() {
         ModelProviderInfo {
             name: "Amazon Bedrock".to_string(),
             base_url: None,
+            model_catalog_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -813,4 +817,35 @@ refresh_interval_ms = 0
     let auth = provider.auth.expect("auth config should deserialize");
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
+}
+
+#[test]
+fn model_catalog_url_deserializes_without_changing_inference_routing() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Gateway"
+base_url = "https://gateway.example/v1"
+model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
+"#,
+    )
+    .unwrap();
+    assert!(!format!("{provider:?}").contains("catalog-secret"));
+    assert_eq!(
+        provider,
+        ModelProviderInfo {
+            name: "Gateway".to_string(),
+            base_url: Some("https://gateway.example/v1".to_string()),
+            model_catalog_url: Some(
+                "https://gateway.example/codex/catalog?token=catalog-secret".into()
+            ),
+            ..ModelProviderInfo::default()
+        }
+    );
+    assert_eq!(
+        provider
+            .to_api_provider(Some(AuthMode::ApiKey))
+            .unwrap()
+            .base_url,
+        "https://gateway.example/v1"
+    );
 }

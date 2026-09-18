@@ -61,6 +61,7 @@ mod tests {
         let provider = ModelProviderInfo {
             name: "Custom".to_string(),
             base_url: None,
+            model_catalog_url: None,
             env_key: Some("sk-should-not-leak".to_string()),
             env_key_instructions: None,
             experimental_bearer_token: None,

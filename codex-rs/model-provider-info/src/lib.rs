@@ -137,6 +137,9 @@ pub struct ModelProviderInfo {
     pub name: String,
     /// Base URL for the provider's OpenAI-compatible API.
     pub base_url: Option<String>,
+    /// Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery
+    /// uses the Codex backend unless `base_url` overrides the inference endpoint.
+    pub model_catalog_url: Option<RedactedString>,
     /// Environment variable that stores the user's API key for this provider.
     pub env_key: Option<String>,
 
@@ -510,6 +513,7 @@ other non-default provider fields are not supported"
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
             base_url,
+            model_catalog_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -554,6 +558,7 @@ other non-default provider fields are not supported"
             // this is unset. A configured value is therefore unambiguously an
             // endpoint override.
             base_url: None,
+            model_catalog_url: None,
             env_key: None,
             env_key_instructions: None,
             experimental_bearer_token: None,
@@ -734,6 +739,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
     ModelProviderInfo {
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
+        model_catalog_url: None,
         env_key: None,
         env_key_instructions: None,
         experimental_bearer_token: None,

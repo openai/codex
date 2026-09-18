@@ -87,3 +87,17 @@ fn cache_identity_distinguishes_auth_requirements_and_unknown_plans() {
     provider.requires_openai_auth = false;
     assert_ne!(key, identity(&provider, Some(&first)).unwrap());
 }
+
+#[test]
+fn cache_identity_tracks_catalog_url() {
+    let auth = CodexAuth::from_api_key("test-key");
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some("https://gateway.example/v1".into()));
+    let bundled = identity(&provider, Some(&auth)).unwrap();
+    provider.model_catalog_url = Some("https://gateway.example/catalog-one".into());
+    let first = identity(&provider, Some(&auth)).unwrap();
+    provider.model_catalog_url = Some("https://gateway.example/catalog-two".into());
+    let second = identity(&provider, Some(&auth)).unwrap();
+    assert_ne!(bundled, first);
+    assert_ne!(first, second);
+}

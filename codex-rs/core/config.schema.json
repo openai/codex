@@ -2549,6 +2549,10 @@
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
         },
+        "model_catalog_url": {
+          "description": "Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery uses the Codex backend unless `base_url` overrides the inference endpoint.",
+          "type": "string"
+        },
         "name": {
           "default": "",
           "description": "Friendly display name.",

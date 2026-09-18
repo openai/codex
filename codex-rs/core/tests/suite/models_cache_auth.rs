@@ -310,6 +310,11 @@ async fn auth_and_provider_switches_do_not_reuse_chatgpt_catalog() -> Result<()>
         .with_home(home.clone())
         .with_auth(CodexAuth::from_api_key("api-key"))
         .with_config(|config| {
+            config.model_provider.model_catalog_url = config
+                .model_provider
+                .base_url
+                .as_ref()
+                .map(|base_url| format!("{base_url}/models").into());
             config
                 .features
                 .enable(codex_features::Feature::ApiKeyModelDiscovery)

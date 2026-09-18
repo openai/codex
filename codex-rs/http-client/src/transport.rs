@@ -85,6 +85,7 @@ impl ReqwestTransport {
     }
 
     fn map_error(err: reqwest::Error) -> TransportError {
+        let err = err.without_url();
         if err.is_connect() {
             TransportError::Connection(err.without_url())
         } else if err.is_timeout() {
