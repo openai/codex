@@ -225,7 +225,7 @@ struct CachedFeaturedPluginIds {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct RemoteInstalledPluginsAuthIdentity {
+pub(crate) struct RemoteInstalledPluginsAuthIdentity {
     auth_mode: Option<AuthMode>,
     account_id: Option<String>,
     chatgpt_user_id: Option<String>,
@@ -233,7 +233,7 @@ struct RemoteInstalledPluginsAuthIdentity {
 }
 
 impl RemoteInstalledPluginsAuthIdentity {
-    fn from_auth(auth: Option<&CodexAuth>) -> Self {
+    pub(crate) fn from_auth(auth: Option<&CodexAuth>) -> Self {
         Self {
             auth_mode: auth.map(CodexAuth::api_auth_mode),
             account_id: auth.and_then(CodexAuth::get_account_id),

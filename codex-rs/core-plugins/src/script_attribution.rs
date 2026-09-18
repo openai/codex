@@ -124,6 +124,32 @@ impl PluginMeasurementTarget {
 }
 
 impl TrustedPluginRoots {
+    /// Called only after the authenticated remote bundle installer has prepared
+    /// an isolated store. Read declarations without loading plugin capabilities.
+    pub(crate) fn from_measurement_reference(
+        codex_home: &Path,
+        plugin_id: &PluginId,
+        version: &str,
+        remote_id: &str,
+    ) -> Option<Self> {
+        let store = PluginStore::try_new(codex_home.to_owned()).ok()?;
+        if store.active_plugin_version(plugin_id).as_deref() != Some(version)
+            || store.remote_plugin_id(plugin_id).ok()?.as_deref() != Some(remote_id)
+        {
+            return None;
+        }
+        let root = store.plugin_root(plugin_id, version).canonicalize().ok()?;
+        let metrics_operations_by_path = load_plugin_metrics_operations(&root).unwrap_or_default();
+        Some(Self {
+            roots: vec![TrustedPluginRoot {
+                plugin_id: plugin_id.clone(),
+                version: version.to_owned(),
+                root,
+                metrics_operations_by_path,
+            }],
+        })
+    }
+
     /// Adds already-trusted roots, preserving the existing root for each plugin and version.
     /// Distinct versions remain eligible for exact executor-version matching.
     pub fn extend(&mut self, other: &Self) {

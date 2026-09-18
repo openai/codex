@@ -1,3 +1,7 @@
+#[path = "plugin_measurement_catalog.rs"]
+mod measurement_catalog;
+pub(crate) use measurement_catalog::fetch_measurement_reference_bundle;
+
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::error_subtype::http_status_sub_error_type;
 use crate::http_client_selector::HttpClientSelector;
