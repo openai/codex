@@ -122,64 +122,98 @@ async fn guardian_network_approval_preserves_action_and_outcome_routing() -> Res
         .context("expected local sh")?
         .derive_exec_args(&first_command, /*use_login_shell*/ false);
     let denial = "The destination is outside the approved test boundary.";
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
+    let mut actions = Vec::new();
+    let mut outputs = Vec::new();
+    for (prompt, call_id, outcome, rationale) in [
+        (
+            "approve the network request",
+            first_call_id,
+            "allow",
+            "The test request is safe.",
+        ),
+        ("deny the network request", second_call_id, "deny", denial),
+    ] {
+        mount_sse_once_match(
+            &server,
+            move |request: &wiremock::Request| {
+                !is_guardian_request(request)
+                    && request_body_contains(request, prompt)
+                    && !request_body_contains(request, call_id)
+            },
             sse(vec![
-                ev_response_created("resp-guardian-network-parent-1"),
                 ev_function_call(
-                    first_call_id,
+                    call_id,
                     "exec_command",
                     &serde_json::to_string(&network_fetch_args(LOCAL_ENVIRONMENT_ID))?,
                 ),
-                ev_completed("resp-guardian-network-parent-1"),
+                ev_completed(&format!("{call_id}-start")),
             ]),
+        )
+        .await;
+        let guardian = mount_sse_once_match(
+            &server,
+            move |request: &wiremock::Request| guardian_request_is_for(request, call_id),
             sse(vec![
-                ev_response_created("resp-guardian-network-allow"),
                 ev_assistant_message(
-                    "msg-guardian-network-allow",
-                    r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The test request is safe."}"#,
-                ),
-                ev_completed("resp-guardian-network-allow"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian-network-parent-2"),
-                ev_assistant_message("msg-guardian-network-parent-2", "approved"),
-                ev_completed("resp-guardian-network-parent-2"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian-network-parent-3"),
-                ev_function_call(
-                    second_call_id,
-                    "exec_command",
-                    &serde_json::to_string(&network_fetch_args(LOCAL_ENVIRONMENT_ID))?,
-                ),
-                ev_completed("resp-guardian-network-parent-3"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian-network-deny"),
-                ev_assistant_message(
-                    "msg-guardian-network-deny",
+                    &format!("{call_id}-decision"),
                     &json!({
-                        "risk_level": "high",
-                        "user_authorization": "low",
-                        "outcome": "deny",
-                        "rationale": denial,
+                        "risk_level": if outcome == "allow" { "low" } else { "high" },
+                        "user_authorization": if outcome == "allow" { "high" } else { "low" },
+                        "outcome": outcome,
+                        "rationale": rationale,
                     })
                     .to_string(),
                 ),
-                ev_completed("resp-guardian-network-deny"),
+                ev_completed(&format!("{call_id}-guardian")),
             ]),
-            sse(vec![
-                ev_response_created("resp-guardian-network-parent-4"),
-                ev_assistant_message("msg-guardian-network-parent-4", "denied"),
-                ev_completed("resp-guardian-network-parent-4"),
-            ]),
-        ],
-    )
-    .await;
+        )
+        .await;
 
-    for prompt in ["approve the network request", "deny the network request"] {
+        // Process startup can outlast exec_command's first yield. Follow the returned
+        // session until its final output instead of consuming Guardian's next response.
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let parent = wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/v1/responses"))
+            .and(move |request: &wiremock::Request| {
+                !is_guardian_request(request) && request_body_contains(request, call_id)
+            })
+            .respond_with(move |request: &wiremock::Request| {
+                let body: Value = serde_json::from_slice(
+                    &decoded_request_body(request).expect("decode parent request"),
+                )
+                .expect("parse parent request");
+                let input = body["input"].as_array().expect("parent input");
+                let output = input
+                    .iter()
+                    .rev()
+                    .find(|item| item["type"] == "function_call_output")
+                    .and_then(|item| item["output"].as_str())
+                    .expect("network command or poll output");
+                let response_id = format!("{call_id}-{}", input.len());
+                let event = if let Some(session_id) = output
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Process running with session ID "))
+                {
+                    ev_function_call(
+                        &response_id,
+                        "write_stdin",
+                        &json!({
+                            "session_id": session_id.parse::<i32>().expect("session id"),
+                            "chars": "",
+                            "yield_time_ms": 1_000,
+                        })
+                        .to_string(),
+                    )
+                } else {
+                    output_tx
+                        .send(output.to_string())
+                        .expect("save final output");
+                    ev_assistant_message(&response_id, "done")
+                };
+                sse_response(sse(vec![event, ev_completed(&response_id)]))
+            })
+            .mount_as_scoped(&server)
+            .await;
         submit_managed_network_turn(
             &test,
             prompt,
@@ -189,9 +223,15 @@ async fn guardian_network_approval_preserves_action_and_outcome_routing() -> Res
         )
         .await?;
         wait_for_completion_without_network_prompt(&test).await;
+        outputs.push(
+            output_rx
+                .try_recv()
+                .context("expected final network output")?,
+        );
+        actions.extend(guardian_network_actions(&guardian)?);
+        drop(parent);
     }
 
-    let actions = guardian_network_actions(&responses)?;
     assert_eq!(actions.len(), 2);
     assert_eq!(
         actions[0],
@@ -224,17 +264,8 @@ async fn guardian_network_approval_preserves_action_and_outcome_routing() -> Res
         Some(second_command.as_str())
     );
 
-    let requests = responses.requests();
-    let approved_output = requests
-        .iter()
-        .find_map(|request| request.function_call_output_text(first_call_id))
-        .context("expected approved network tool output")?;
-    assert!(!approved_output.contains("rejected"));
-    let denied_output = requests
-        .iter()
-        .find_map(|request| request.function_call_output_text(second_call_id))
-        .context("expected denied network tool output")?;
-    assert!(denied_output.contains(denial));
+    assert!(!outputs[0].contains("rejected"));
+    assert!(outputs[1].contains(denial));
     Ok(())
 }
 
