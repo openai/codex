@@ -20,6 +20,7 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
@@ -345,6 +346,15 @@ async fn check_thread_title_generation(scenario: TitleScenario) -> color_eyre::R
                 app.handle_event(&mut tui, &mut app_server, *event).await?;
             }
             TitleDriveEvent::Server(event) => {
+                if let AppServerEvent::ServerNotification(notification) = &event
+                    && let ServerNotification::ThreadStarted(started) = notification.as_ref()
+                    && started.thread.ephemeral
+                {
+                    assert_eq!(
+                        started.thread.thread_source,
+                        Some(ThreadSource::Feature("thread_title".to_string())),
+                    );
+                }
                 if let AppServerEvent::ServerNotification(notification) = &event
                     && let ServerNotification::TurnCompleted(completed) = notification.as_ref()
                     && Some(&completed.thread_id) == temporary_thread_id.as_ref()

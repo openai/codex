@@ -6,6 +6,7 @@ use crate::test_support::PathBufExt;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
@@ -74,6 +75,7 @@ async fn preserves_custom_permissions_and_disables_required_mcp_servers() -> col
     let response = start_temporary_thread(
         &app_server.request_handle(),
         TemporaryStructuredThreadOptions {
+            thread_source: ThreadSource::Feature("thread_title".to_string()),
             model: "gpt-5.2".to_string(),
             model_provider: config.model_provider_id.clone(),
             cwd: config.cwd.display().to_string(),
@@ -88,11 +90,13 @@ async fn preserves_custom_permissions_and_disables_required_mcp_servers() -> col
             response.active_permission_profile.map(|profile| profile.id),
             response.model_provider,
             response.thread.ephemeral,
+            response.thread.thread_source,
         ),
         (
             Some("title-restricted".to_string()),
             config.model_provider_id,
             true,
+            Some(ThreadSource::Feature("thread_title".to_string())),
         )
     );
 

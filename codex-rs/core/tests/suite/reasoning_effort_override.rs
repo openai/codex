@@ -77,21 +77,36 @@ fn message(role: &str, text: &str) -> Value {
     })
 }
 
-#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "internal guardian")]
-#[test_case(SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())); "legacy guardian")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkerOverrides {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkerHistory {
+    Persisted,
+    Ephemeral,
+}
+
+#[test_case(SessionSource::Internal(InternalSessionSource::Guardian), ThreadSource::GuardianReview, WorkerHistory::Persisted, WorkerOverrides::Disabled; "internal guardian")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())), ThreadSource::GuardianReview, WorkerHistory::Persisted, WorkerOverrides::Disabled; "legacy guardian")]
+#[test_case(SessionSource::Internal(InternalSessionSource::MemoryConsolidation), ThreadSource::MemoryConsolidation, WorkerHistory::Persisted, WorkerOverrides::Disabled; "memory consolidation")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::MemoryConsolidation), ThreadSource::MemoryConsolidation, WorkerHistory::Persisted, WorkerOverrides::Disabled; "legacy memory consolidation")]
+#[test_case(SessionSource::Cli, ThreadSource::Feature("thread_title".to_string()), WorkerHistory::Ephemeral, WorkerOverrides::Disabled; "ephemeral thread title")]
+#[test_case(SessionSource::Cli, ThreadSource::Feature("thread_title".to_string()), WorkerHistory::Persisted, WorkerOverrides::Enabled; "persisted thread title")]
+#[test_case(SessionSource::Cli, ThreadSource::Feature("system".to_string()), WorkerHistory::Ephemeral, WorkerOverrides::Enabled; "other ephemeral thread")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sync_guardian_ignores_managed_reasoning_override(
+async fn worker_reasoning_overrides_follow_effective_client_policy(
     session_source: SessionSource,
+    thread_source: ThreadSource,
+    history: WorkerHistory,
+    overrides: WorkerOverrides,
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let mut mocks = Vec::new();
-    for id in [
-        "parent-medium",
-        "parent-high",
-        "reviewer-low",
-        "reviewer-high",
-    ] {
+    for id in ["parent-medium", "parent-high", "worker-low", "worker-high"] {
         mocks.push(
             responses::mount_sse_once(&server, responses::sse(vec![responses::ev_completed(id)]))
                 .await,
@@ -119,12 +134,13 @@ async fn sync_guardian_ignores_managed_reasoning_override(
     let parent = Arc::clone(&test.codex);
     parent.shutdown_and_wait().await?;
 
-    // Fork real parent history, including its trusted effort updates, into a reviewer.
-    let config = test.config.clone();
+    // Fork real parent history while managed requirements keep the feature enabled.
+    let mut config = test.config.clone();
+    config.ephemeral = history == WorkerHistory::Ephemeral;
     assert!(config.features.enabled(Feature::ReasoningEffortOverride));
     let mut options = StartThreadOptions::new(config);
     options.session_source = Some(session_source);
-    options.thread_source = Some(ThreadSource::GuardianReview);
+    options.thread_source = Some(thread_source);
     let forked = test
         .thread_manager
         .fork_thread(
@@ -144,7 +160,7 @@ async fn sync_guardian_ignores_managed_reasoning_override(
             },
         )
         .await?;
-        test.submit_text_turn("review an action").await?;
+        test.submit_text_turn("perform the worker task").await?;
     }
     test.codex.shutdown_and_wait().await?;
 
@@ -161,24 +177,50 @@ async fn sync_guardian_ignores_managed_reasoning_override(
             Value::from("medium"),
             Value::from("medium"),
             Value::from("low"),
-            Value::from("high"),
+            Value::from(if overrides == WorkerOverrides::Enabled {
+                "low"
+            } else {
+                "high"
+            }),
         ],
     );
     let inherited_updates = vec![
         effort_update(ReasoningEffort::Medium),
         effort_update(ReasoningEffort::High),
     ];
+    let mut worker_updates = inherited_updates.clone();
+    let expected_worker_requests = if overrides == WorkerOverrides::Enabled {
+        worker_updates.push(effort_update(ReasoningEffort::Low));
+        let first = worker_updates.clone();
+        worker_updates.push(effort_update(ReasoningEffort::High));
+        vec![first, worker_updates.clone()]
+    } else {
+        vec![vec![], vec![]]
+    };
     assert_eq!(
         requests.iter().map(effort_updates).collect::<Vec<_>>(),
-        vec![
-            vec![effort_update(ReasoningEffort::Medium)],
-            inherited_updates.clone(),
-            vec![],
-            vec![],
-        ],
+        [
+            vec![
+                vec![effort_update(ReasoningEffort::Medium)],
+                inherited_updates.clone(),
+            ],
+            expected_worker_requests
+        ]
+        .concat(),
     );
-    // Reviewers neither append new updates nor erase inherited durable history.
-    for thread in [&parent, &test.codex] {
+    // Fixed-effort workers neither append updates nor erase inherited live or durable history.
+    for (thread, expected) in [(&parent, inherited_updates), (&test.codex, worker_updates)] {
+        let context_updates = thread
+            .conversation_history_snapshot()
+            .await
+            .items()
+            .filter(|item| matches!(item, ResponseItem::ConfigurationUpdate { .. }))
+            .map(|item| serde_json::to_value(item).expect("serialize context update"))
+            .collect::<Vec<_>>();
+        assert_eq!(context_updates, expected);
+        if thread.config_snapshot().await.ephemeral {
+            continue;
+        }
         let saved_updates = thread
             .load_history(/*include_archived*/ false)
             .await?
@@ -192,7 +234,7 @@ async fn sync_guardian_ignores_managed_reasoning_override(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(saved_updates, inherited_updates);
+        assert_eq!(saved_updates, expected);
     }
     Ok(())
 }

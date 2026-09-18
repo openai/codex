@@ -124,7 +124,7 @@ impl App {
             && started.thread.ephemeral
             && matches!(
                 started.thread.thread_source.as_ref(),
-                Some(ThreadSource::Feature(feature)) if feature == "system"
+                Some(ThreadSource::Feature(feature)) if matches!(feature.as_str(), "system" | "thread_title")
             )
         {
             return;

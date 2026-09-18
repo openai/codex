@@ -15,6 +15,7 @@ use crate::temporary_structured_request::start_temporary_thread;
 use crate::temporary_structured_request::unsubscribe_temporary_thread;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::ThreadId;
 use codex_protocol::models::MessagePhase;
@@ -100,6 +101,7 @@ impl App {
         let effort = (model == THREAD_TITLE_MODEL).then_some(ReasoningEffort::Low);
         let config = self.chat_widget.config_ref();
         let options = TemporaryStructuredThreadOptions {
+            thread_source: ThreadSource::Feature("thread_title".to_string()),
             model,
             model_provider: config.model_provider_id.clone(),
             cwd: config.cwd.display().to_string(),

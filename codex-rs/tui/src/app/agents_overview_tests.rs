@@ -622,6 +622,15 @@ async fn finish_overview_refresh(
 
 #[tokio::test]
 async fn hidden_system_thread_does_not_refresh_shared_overview() {
+    check_hidden_thread_does_not_refresh_shared_overview("system").await;
+}
+
+#[tokio::test]
+async fn hidden_title_thread_does_not_refresh_shared_overview() {
+    check_hidden_thread_does_not_refresh_shared_overview("thread_title").await;
+}
+
+async fn check_hidden_thread_does_not_refresh_shared_overview(source: &str) {
     let mut app = make_test_app().await;
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
@@ -648,7 +657,7 @@ async fn hidden_system_thread_does_not_refresh_shared_overview() {
         ThreadStatus::Idle,
     );
     thread.ephemeral = true;
-    thread.thread_source = Some(ThreadSource::Feature("system".to_string()));
+    thread.thread_source = Some(ThreadSource::Feature(source.to_string()));
 
     app.handle_app_server_event(
         &app_server,
@@ -679,7 +688,7 @@ async fn hidden_system_thread_does_not_refresh_shared_overview() {
         "Persisted system thread",
         ThreadStatus::Idle,
     );
-    thread.thread_source = Some(ThreadSource::Feature("system".to_string()));
+    thread.thread_source = Some(ThreadSource::Feature(source.to_string()));
 
     app.handle_app_server_event(
         &app_server,

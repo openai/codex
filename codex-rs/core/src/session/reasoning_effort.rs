@@ -3,7 +3,7 @@
 //! Only trusted harness items establish overrides. Replay preserves startup prewarm's
 //! baseline while it is retained.
 //! Successful compaction retires the overrides and allows a fresh request baseline.
-//! Synchronous Guardian reviewers always use their selected request-level effort.
+//! Fixed-effort workers always use their selected request-level effort.
 //! Unsupported models use selected request effort without rewriting saved updates.
 
 use super::session::Session;
