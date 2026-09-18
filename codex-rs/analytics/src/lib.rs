@@ -82,7 +82,7 @@ pub use thread_hint::ThreadHintStatus;
 pub use thread_hint::ThreadHintStatusEvent;
 
 #[cfg(test)]
-mod analytics_client_tests;
+mod tests;
 
 pub fn now_unix_seconds() -> u64 {
     SystemTime::now()
