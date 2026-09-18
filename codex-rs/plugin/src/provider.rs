@@ -1,8 +1,12 @@
+//! Shared APIs for catalog discovery and root-at-a-time plugin resolution.
+
+use crate::PluginCatalog;
 use crate::manifest::PluginManifest;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_utils_path_uri::PathUri;
 use std::error::Error as StdError;
 use std::future::Future;
+use std::pin::Pin;
 use thiserror::Error;
 
 /// A plugin resource paired with the environment that owns its filesystem.
@@ -104,20 +108,34 @@ fn environment_resource(
     })
 }
 
-/// Resolves source-owned package roots into inert plugin descriptors.
+/// Error returned when a provider cannot produce a complete catalog snapshot.
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[error("{0}")]
+pub struct PluginProviderError(pub String);
+
+pub type PluginProviderFuture<'a, T> =
+    Pin<Box<dyn Future<Output = Result<T, PluginProviderError>> + Send + 'a>>;
+
+/// Discovers plugin metadata through batch listing or single-root resolution.
 ///
-/// Implementations must perform all filesystem access through the authority
-/// named by the selected root. `None` means the root contains no plugin
-/// manifest and may be handled as another standalone capability.
-pub trait PluginProvider: Send + Sync {
-    /// Source-specific resolution failure.
+/// Cloud providers implement `list`; executor providers continue implementing `resolve`.
+/// Each contributor invokes its provider's supported operation; the other is a no-op.
+pub trait PluginProvider<ListQuery = ()>: Send + Sync {
+    /// Error returned by root-at-a-time resolution.
     type Error: StdError + Send + Sync + 'static;
 
-    /// Resolves one selected root without activating any of its components.
+    /// Returns a complete snapshot.
+    fn list(&self, _query: ListQuery) -> PluginProviderFuture<'_, PluginCatalog> {
+        Box::pin(async { Ok(PluginCatalog::default()) })
+    }
+
+    /// Resolves one selected root using the filesystem authority named by that root.
     fn resolve(
         &self,
-        root: &SelectedCapabilityRoot,
-    ) -> impl Future<Output = Result<Option<ResolvedPlugin>, Self::Error>> + Send;
+        _root: &SelectedCapabilityRoot,
+    ) -> impl Future<Output = Result<Option<ResolvedPlugin>, Self::Error>> + Send {
+        async { Ok(None) }
+    }
 }
 
 #[cfg(test)]
