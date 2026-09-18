@@ -7,6 +7,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
 use crate::agent::types::AgentMetadata;
+use crate::agent::types::LiveAgent;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -54,7 +55,6 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
-use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -83,12 +83,6 @@ mod user_authorization;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct ListedAgent {
-    pub(crate) agent_name: String,
-    pub(crate) agent_status: AgentStatus,
-}
 
 /// Control-plane handle for multi-agent operations.
 /// `LocalAgentControl` is held by each session (via `SessionServices`). It provides capability to
@@ -527,7 +521,7 @@ impl LocalAgentControl {
         &self,
         current_session_source: &SessionSource,
         path_prefix: Option<&str>,
-    ) -> CodexResult<Vec<ListedAgent>> {
+    ) -> CodexResult<Vec<LiveAgent>> {
         let state = self.upgrade()?;
         let resolved_prefix = path_prefix
             .map(|prefix| {
@@ -561,9 +555,14 @@ impl LocalAgentControl {
             && let Some(root_thread_id) = self.state.agent_id_for_path(&root_path)
             && let Ok(root_thread) = state.get_thread(root_thread_id).await
         {
-            agents.push(ListedAgent {
-                agent_name: root_path.to_string(),
-                agent_status: root_thread.agent_status().await,
+            agents.push(LiveAgent {
+                thread_id: root_thread_id,
+                metadata: AgentMetadata {
+                    agent_id: Some(root_thread_id),
+                    agent_path: Some(root_path),
+                    ..Default::default()
+                },
+                status: root_thread.agent_status().await,
             });
         }
 
@@ -581,14 +580,10 @@ impl LocalAgentControl {
             let Ok(thread) = state.get_thread(thread_id).await else {
                 continue;
             };
-            let agent_name = metadata
-                .agent_path
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| thread_id.to_string());
-            agents.push(ListedAgent {
-                agent_name,
-                agent_status: thread.agent_status().await,
+            agents.push(LiveAgent {
+                thread_id,
+                metadata,
+                status: thread.agent_status().await,
             });
         }
 
