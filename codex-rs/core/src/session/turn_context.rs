@@ -359,9 +359,21 @@ pub struct TurnContext {
     pub(crate) cyber_access_program: Option<CyberAccessProgram>,
 }
 
-enum TurnMultiAgentRuntime {
-    ResolveAndStore,
-    Preview,
+/// Selects which preparation is needed when building a turn context.
+#[derive(Debug)]
+enum TurnContextBuildMode {
+    /// Resolves and stores model/multi-agent metadata and performs normal skill discovery.
+    /// Used for execution and initial context creation.
+    Full,
+
+    /// Prepares startup resources with normal skill discovery, without updating
+    /// shared model/multi-agent metadata.
+    StartupPrewarm,
+
+    /// Resolves and stores model/multi-agent metadata but skips skill discovery.
+    /// Only for injecting items into an initialized thread; must not initialize
+    /// context or capture an execution step.
+    InjectItems,
 }
 
 impl TurnContext {
@@ -1089,7 +1101,7 @@ impl Session {
             session_configuration,
             turn_environments,
             options,
-            TurnMultiAgentRuntime::ResolveAndStore,
+            TurnContextBuildMode::Full,
             self.git_enrichment_policy,
         )
         .await
@@ -1106,20 +1118,20 @@ impl Session {
             session_configuration,
             turn_environments,
             NewTurnContextOptions::default(),
-            TurnMultiAgentRuntime::Preview,
+            TurnContextBuildMode::StartupPrewarm,
             GitEnrichmentPolicy::Skip,
         )
         .await
     }
 
-    #[instrument(name = "turn_context.build", level = "trace", skip_all)]
+    #[instrument(name = "turn_context.build", level = "trace", skip_all, fields(?build_mode))]
     async fn new_turn_context_from_configuration(
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
         turn_environments: TurnEnvironmentSnapshot,
         options: NewTurnContextOptions,
-        multi_agent_runtime: TurnMultiAgentRuntime,
+        build_mode: TurnContextBuildMode,
         git_enrichment_policy: GitEnrichmentPolicy,
     ) -> Arc<TurnContext> {
         let primary_turn_environment = turn_environments.primary();
@@ -1145,15 +1157,15 @@ impl Session {
                 &session_configuration.model_info_overrides,
             )
             .await;
-        let multi_agent_version = match multi_agent_runtime {
-            TurnMultiAgentRuntime::ResolveAndStore => {
+        let multi_agent_version = match build_mode {
+            TurnContextBuildMode::Full | TurnContextBuildMode::InjectItems => {
                 // A background preview must not overwrite a newer turn's model metadata.
                 self.services
                     .thread_extension_data
                     .insert(model_info.clone());
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
             }
-            TurnMultiAgentRuntime::Preview => per_turn_config.multi_agent_version_for_model(
+            TurnContextBuildMode::StartupPrewarm => per_turn_config.multi_agent_version_for_model(
                 self.multi_agent_version()
                     .or(model_info.multi_agent_version),
             ),
@@ -1169,10 +1181,11 @@ impl Session {
             &plugin_outcome,
             per_turn_config.codex_home.as_path(),
         );
-        let skills_snapshot = if per_turn_config
-            .features
-            .enabled(Feature::SkipHostSkillDiscovery)
-            && !self.services.extensions.requires_host_skill_discovery()
+        let skills_snapshot = if matches!(build_mode, TurnContextBuildMode::InjectItems)
+            || (per_turn_config
+                .features
+                .enabled(Feature::SkipHostSkillDiscovery)
+                && !self.services.extensions.requires_host_skill_discovery())
         {
             // Executor and orchestrator catalogs are supplied independently of host skills.
             HostSkillsSnapshot::new(Arc::new(SkillLoadOutcome::default()))
@@ -1298,13 +1311,26 @@ impl Session {
 
     /// Builds a context without starting work or changing the current environments.
     pub(crate) async fn new_default_turn(&self) -> Arc<TurnContext> {
+        self.new_default_turn_for(TurnContextBuildMode::Full).await
+    }
+
+    /// Captures current recording settings without discovering skills.
+    /// This context must not be used to capture or execute a step.
+    pub(crate) async fn new_inject_items_context(&self) -> Arc<TurnContext> {
+        self.new_default_turn_for(TurnContextBuildMode::InjectItems)
+            .await
+    }
+
+    async fn new_default_turn_for(&self, build_mode: TurnContextBuildMode) -> Arc<TurnContext> {
         let session_configuration = self.default_turn_configuration().await;
         let turn_environments = self.services.turn_environments.snapshot().await;
-        self.new_turn_from_configuration(
+        self.new_turn_context_from_configuration(
             self.next_internal_sub_id(),
             session_configuration,
             turn_environments,
             NewTurnContextOptions::default(),
+            build_mode,
+            self.git_enrichment_policy,
         )
         .await
     }

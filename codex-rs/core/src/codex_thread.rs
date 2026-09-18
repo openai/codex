@@ -686,8 +686,18 @@ impl CodexThread {
             ));
         }
 
-        let turn_context = self.session.new_default_turn().await;
+        let had_reference_context = self.session.reference_context_item().await.is_some();
+        let mut turn_context = if had_reference_context {
+            self.session.new_inject_items_context().await
+        } else {
+            self.session.new_default_turn().await
+        };
         if self.session.reference_context_item().await.is_none() {
+            // Compaction can clear the reference while the recording context is built.
+            // Initial context must capture a step with a complete skills snapshot.
+            if had_reference_context {
+                turn_context = self.session.new_default_turn().await;
+            }
             // This history-only API runs without run_turn, so it owns its initial step.
             let step_context = self
                 .session
