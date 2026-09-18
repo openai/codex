@@ -35,15 +35,15 @@ fn map_api_error_preserves_retry_delay() {
         assert_eq!(
             (
                 err.to_codex_protocol_error(),
-                err.retry_delay(),
-                err.is_retryable(),
+                err.retry_delay(/*retry_count*/ 1),
+                err.server_retry_delay(),
                 err.http_status_code_value(),
                 err.to_string(),
             ),
             (
                 expected_code,
                 Some(retry_delay),
-                true,
+                Some(retry_delay),
                 None,
                 expected_message.to_string(),
             )
@@ -71,7 +71,10 @@ fn map_api_error_distinguishes_capacity_from_slow_down() {
             ),
         }));
         assert_eq!(
-            (err.to_codex_protocol_error(), err.is_retryable()),
+            (
+                err.to_codex_protocol_error(),
+                err.retry_delay(/*retry_count*/ 1).is_some()
+            ),
             (expected, retryable)
         );
     }
@@ -188,7 +191,7 @@ fn map_api_error_preserves_bio_policy() {
     });
     assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BioPolicy);
     assert_eq!(err.to_string(), "This request was blocked by bio policy.");
-    assert!(!err.is_retryable());
+    assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
 }
 
 #[test]
@@ -223,7 +226,7 @@ fn map_api_error_maps_http_and_wrapped_websocket_bio_policy() {
             };
             assert_eq!(message, expected);
             assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BioPolicy);
-            assert!(!err.is_retryable());
+            assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
         }
     }
 }
@@ -263,7 +266,7 @@ fn assert_misalignment_policy_violation_from_http_body(status: http::StatusCode)
     };
     assert_eq!(message, "This request violated the misalignment policy.");
     assert_eq!(misalignment, &None);
-    assert!(!err.is_retryable());
+    assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
 }
 
 #[test]
@@ -305,7 +308,7 @@ fn map_api_error_preserves_misalignment_details_from_403_body() {
             }),
         })
     );
-    assert!(!err.is_retryable());
+    assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
 }
 
 #[test]
@@ -352,7 +355,7 @@ fn map_api_error_preserves_misalignment_details_from_wrapped_websocket_error() {
             }),
         })
     );
-    assert!(!err.is_retryable());
+    assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
 }
 
 #[test]

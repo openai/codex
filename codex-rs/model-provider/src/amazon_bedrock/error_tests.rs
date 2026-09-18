@@ -208,6 +208,12 @@ fn credential_export_errors_distinguish_configuration_failures_from_retryable_au
             unreachable!("all test cases are transport errors");
         };
         assert_eq!(provider.is_recoverable_auth_error(transport), recoverable);
-        assert_eq!(provider.map_api_error(error).is_retryable(), retryable);
+        assert_eq!(
+            provider
+                .map_api_error(error)
+                .retry_delay(/*retry_count*/ 1)
+                .is_some(),
+            retryable
+        );
     }
 }

@@ -324,10 +324,11 @@ async fn credential_export_reuses_cache_and_coalesces_refreshes() -> io::Result<
     }
     let (credentials, refresh) = tokio::join!(credentials, refresh);
     assert_eq!(credentials?, rotated);
-    assert!(
-        !refresh
+    assert_eq!(
+        refresh
             .expect_err("queued login recovery must still run")
-            .is_retryable()
+            .retry_delay(/*retry_count*/ 1),
+        None
     );
     assert!(exporter.cached.lock().await.is_none());
 

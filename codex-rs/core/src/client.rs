@@ -2577,7 +2577,7 @@ async fn handle_unauthorized(
                     original_error = %original,
                     "provider authentication recovery failed"
                 );
-                return Err(if error.is_retryable() {
+                return Err(if error.retry_delay(/*retry_count*/ 1).is_some() {
                     original
                 } else {
                     error

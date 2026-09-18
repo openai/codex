@@ -98,6 +98,7 @@ where
                     .should_retry(&err, attempt, policy.max_attempts) =>
             {
                 let retry_attempt = attempt + 1;
+                // TODO(anp): Respect Retry-After from HTTP responses before retrying the request.
                 let delay = backoff(policy.base_delay, retry_attempt);
                 crate::record_retry!(retry_attempt, delay, RetryOperation::HttpRequest);
                 tokio::time::sleep(delay).await;

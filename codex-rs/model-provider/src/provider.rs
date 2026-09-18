@@ -993,7 +993,7 @@ mod tests {
             .recover_from_unauthorized()
             .await
             .expect_err("non-aws command should be rejected");
-        assert!(!error.is_retryable());
+        assert_eq!(error.retry_delay(/*retry_count*/ 1), None);
         assert_eq!(error.to_string(), "AWS auth refresh command must be `aws`");
 
         let (first_result, second_result) = tokio::join!(
