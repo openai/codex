@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
 tokio-util.workspace = true
 

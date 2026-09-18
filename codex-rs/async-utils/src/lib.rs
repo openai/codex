@@ -1,3 +1,7 @@
+mod backoff;
+
+pub use backoff::backoff;
+
 use std::future::Future;
 use tokio_util::sync::CancellationToken;
 
