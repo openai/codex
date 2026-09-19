@@ -87,6 +87,8 @@ use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_sandbox;
 use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
@@ -2547,6 +2549,124 @@ async fn code_mode_resumed_wait_does_not_certify_a_reused_runtime_cell() -> Resu
     assert_eq!(metadata["cell_id"], "call-fresh");
     assert_eq!(metadata["tool_calls_complete"], true);
     resumed.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+struct MappingPressureObserver {
+    finished: AtomicUsize,
+    release: Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl ToolLifecycleContributor for MappingPressureObserver {
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if input.tool_name.name == "exec" && input.call_id.starts_with("seed-") {
+                assert_eq!(input.outcome, ToolCallOutcome::Completed { success: true });
+                if self.finished.fetch_add(1, Ordering::SeqCst) == 511 {
+                    self.release
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap()
+                        .send(())
+                        .unwrap();
+                }
+            }
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_recovers_complete_inventory_after_orphaned_mapping_pressure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let empty_calls = (0..256)
+        .map(|index| ev_custom_tool_call(&format!("seed-{index}"), "exec", "void 0;"))
+        .collect::<Vec<_>>();
+    let mut seed = empty_calls.clone();
+    seed.push(ev_completed("resp-seed"));
+    let (release, pressure_reached) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(seed),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(empty_calls),
+            },
+            StreamingSseChunk {
+                // Reused IDs leave 256 orphan mappings once both batches finish.
+                // Keep this response open so attachment cannot drain them first.
+                gate: Some(pressure_reached),
+                body: sse(vec![
+                    ev_custom_tool_call(
+                        "call-fresh",
+                        "exec",
+                        r#"await tools.test_sync_tool({}); text("recovered");"#,
+                    ),
+                    ev_completed("resp-pressure"),
+                ]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        }],
+    ])
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(Arc::new(MappingPressureObserver {
+        finished: AtomicUsize::new(0),
+        release: Mutex::new(Some(release)),
+    }));
+    let base_url = format!("{}/v1", server.uri());
+    let config_server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url);
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
+        })
+        .build_with_auto_env(&config_server)
+        .await?;
+    test.submit_turn("Record a fresh call after orphaned mapping pressure")
+        .await?;
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 3);
+    let request: Value = serde_json::from_slice(&requests[2])?;
+    let output = request["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "custom_tool_call_output" && item["call_id"] == "call-fresh")
+        .unwrap();
+    assert_eq!(
+        output["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .rfind(|text| !text.trim().is_empty()),
+        Some("recovered"),
+    );
+    let metadata = &output["internal_chat_message_metadata_passthrough"];
+    assert_eq!(
+        metadata["executed_tool_calls"],
+        serde_json::json!([{"name": "test_sync_tool", "arguments": {}}]),
+    );
+    assert_eq!(metadata["cell_id"], "call-fresh");
+    assert_eq!(metadata["tool_calls_complete"], true);
+    server.shutdown().await;
     Ok(())
 }
 

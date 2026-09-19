@@ -157,21 +157,34 @@ impl ExecutedToolCallRecorderState {
     }
 
     fn register_cell(&mut self, cell_id: &CellId, output_call_id: &str) {
-        if self.cells.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS && !self.cells.contains_key(cell_id)
+        if self.output_cells.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS {
+            // Ended empty cells can leave mappings without any records to attach.
+            // Reclaim those only under pressure, preserving late partial records otherwise.
+            self.output_cells
+                .retain(|_, cell_id| self.cells.contains_key(cell_id));
+        }
+        while (self.cells.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS
+            && !self.cells.contains_key(cell_id))
+            || self.pending_nested_calls >= MAX_PENDING_EXECUTED_TOOL_CALLS
         {
             let output_cells = self.output_cells.values().collect::<HashSet<_>>();
             let finished_cell = self.cells.iter().find_map(|(id, cell)| {
-                // A finished cell can still have missing or truncated tool call records.
-                (matches!(
-                    cell.completion,
-                    CellCompletion::Complete | CellCompletion::Incomplete
-                ) && cell.pending_calls.is_empty()
+                // Preserve late records until pressure, and never discard the cell
+                // whose output is about to make those records attachable again.
+                (id != cell_id
+                    && matches!(
+                        cell.completion,
+                        CellCompletion::Complete | CellCompletion::Incomplete
+                    )
                     && !output_cells.contains(id))
-                .then(|| id.clone())
+                .then(|| (id.clone(), cell.pending_calls.len()))
             });
-            if let Some(id) = finished_cell {
-                self.cells.remove(&id);
-            }
+            let Some((id, pending_calls)) = finished_cell else {
+                break;
+            };
+            self.invalidate_cell(&id);
+            self.cells.remove(&id);
+            self.pending_nested_calls = self.pending_nested_calls.saturating_sub(pending_calls);
         }
         if (self.cells.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS
             && !self.cells.contains_key(cell_id))

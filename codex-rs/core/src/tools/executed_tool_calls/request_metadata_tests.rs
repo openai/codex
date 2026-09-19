@@ -1334,6 +1334,70 @@ fn result_metadata_shedding_preserves_completion_after_compaction() {
 }
 
 #[test]
+fn mapping_pressure_preserves_existing_cells_and_late_partial_records() {
+    let recorder = new_recorder(InitialHistory::New);
+    let late = CellId::new("late".to_string());
+    recorder.register_cell(&late, "late-output");
+    recorder.finish_cell_recording(&late);
+    let late_call = record_nested_call(&recorder, &late, "late-call");
+
+    let active = CellId::new("active".to_string());
+    recorder.start_cell(&active, "active-output");
+    let active_call = record_nested_call(&recorder, &active, "active-call");
+    let finished = CellId::new("finished".to_string());
+    recorder.start_cell(&finished, "finished-output");
+    let finished_call = record_nested_call(&recorder, &finished, "finished-call");
+    recorder.finish_cell_recording(&finished);
+    let orphan = CellId::new("orphan".to_string());
+    for index in 3..MAX_PENDING_EXECUTED_TOOL_CALLS {
+        recorder.register_cell(&orphan, &format!("orphan-output-{index}"));
+    }
+    recorder.finish_cell_recording(&orphan);
+    recorder.register_cell(&active, "active-pressure-output");
+
+    // Callbacks can arrive after their orphan output mappings were reclaimed.
+    for index in 0..MAX_PENDING_EXECUTED_TOOL_CALLS {
+        record_nested_call(&recorder, &orphan, &format!("orphan-late-{index}"));
+    }
+    let fresh = CellId::new("fresh".to_string());
+    recorder.start_cell(&fresh, "fresh-output");
+    let fresh_call = record_nested_call(&recorder, &fresh, "fresh-call");
+    recorder.finish_cell_recording(&fresh);
+
+    let mut items = [
+        exec_input("late-output"),
+        exec_output("late-output"),
+        exec_input("active-output"),
+        exec_output("active-output"),
+        exec_input("finished-output"),
+        exec_output("finished-output"),
+        exec_input("fresh-output"),
+        exec_output("fresh-output"),
+    ];
+    let mut expected = items.clone();
+    for (index, origin, call, complete) in [
+        (1, None, late_call, false),
+        (3, Some("active-output"), active_call, false),
+        (5, Some("finished-output"), finished_call, true),
+        (7, Some("fresh-output"), fresh_call, true),
+    ] {
+        expected[index].append_executed_tool_calls(vec![call]);
+        if let Some(origin) = origin {
+            expected[index].set_tool_call_cell_id(origin);
+        }
+        if complete {
+            expected[index].mark_tool_calls_complete();
+        }
+    }
+    recorder.attach_to_prompt(&mut items, &mut HashMap::new());
+    assert_eq!(items, expected);
+    assert_eq!(
+        recorder.lock_state().as_ref().unwrap().pending_nested_calls,
+        0
+    );
+}
+
+#[test]
 fn finished_cells_without_more_waits_do_not_block_new_calls() {
     let recorder = new_recorder(InitialHistory::Forked(Vec::new()));
     let call = ExecutedToolCall::new("nested_tool".to_string(), json!({}));
