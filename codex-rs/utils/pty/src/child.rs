@@ -1,4 +1,4 @@
-//! Uniform child-process API for local MCP servers, with platform-specific spawning.
+//! Uniform child-process API for local subprocesses, with platform-specific spawning.
 //!
 //! Commands must use the launcher's cleared environment, process group, and default
 //! argv[0]. Both implementations expose Tokio stdio handles and kill on drop.
@@ -9,15 +9,15 @@ use std::process::Stdio;
 use tokio::process::Command;
 
 #[cfg(target_os = "macos")]
-#[path = "macos_stdio.rs"]
+#[path = "macos_child.rs"]
 mod macos;
 
 #[cfg(target_os = "macos")]
-pub(super) use macos::LocalChild;
+pub use macos::Child;
 #[cfg(not(target_os = "macos"))]
-pub(super) use tokio::process::Child as LocalChild;
+pub use tokio::process::Child;
 
-pub(super) fn spawn(mut command: Command) -> io::Result<LocalChild> {
+pub fn spawn(mut command: Command) -> io::Result<Child> {
     command
         .kill_on_drop(true)
         .stdin(Stdio::piped())
@@ -25,7 +25,7 @@ pub(super) fn spawn(mut command: Command) -> io::Result<LocalChild> {
         .stderr(Stdio::piped());
     #[cfg(target_os = "macos")]
     {
-        LocalChild::spawn(command)
+        Child::spawn(command)
     }
     #[cfg(not(target_os = "macos"))]
     {

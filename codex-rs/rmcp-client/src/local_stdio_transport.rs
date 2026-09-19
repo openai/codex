@@ -18,12 +18,11 @@ use tokio::process::ChildStdout;
 use tokio::process::Command;
 
 use crate::bounded_stdio_transport::BoundedStdioTransport;
-use crate::local_child;
-use crate::local_child::LocalChild;
 use crate::protocol_mode::McpProtocolMode;
+use codex_utils_pty::Child;
 
 pub(super) struct LocalStdioTransport {
-    child: LocalChild,
+    child: Child,
     transport: StdioTransport,
 }
 
@@ -40,7 +39,7 @@ impl LocalStdioTransport {
         program_name: String,
         protocol_mode: McpProtocolMode,
     ) -> io::Result<(Self, Option<ChildStderr>)> {
-        let mut child = local_child::spawn(command)?;
+        let mut child = codex_utils_pty::spawn_child(command)?;
         let stdin = child
             .stdin
             .take()

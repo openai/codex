@@ -19,7 +19,7 @@ use std::path::Path;
 use std::process::ExitStatus;
 use std::ptr;
 
-use tokio::process::Child;
+use tokio::process::Child as TokioChild;
 use tokio::process::ChildStderr;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
@@ -29,19 +29,19 @@ use tokio::signal::unix::SignalKind;
 use tokio::signal::unix::signal;
 
 /// Matches Tokio's child API while keeping native spawning private to macOS.
-pub(crate) struct LocalChild {
+pub struct Child {
     inner: ChildKind,
-    pub(crate) stdin: Option<ChildStdin>,
-    pub(crate) stdout: Option<ChildStdout>,
-    pub(crate) stderr: Option<ChildStderr>,
+    pub stdin: Option<ChildStdin>,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
 }
 
 enum ChildKind {
-    Tokio(Child),
+    Tokio(TokioChild),
     Native(NativeChild),
 }
 
-impl LocalChild {
+impl Child {
     /// Uses native spawning for relative paths and bare names, retaining Tokio's
     /// fallback for unsuccessful PATH searches and executable text without a shebang.
     pub(super) fn spawn(mut command: Command) -> io::Result<Self> {
@@ -66,14 +66,14 @@ impl LocalChild {
         })
     }
 
-    pub(crate) fn id(&self) -> Option<u32> {
+    pub fn id(&self) -> Option<u32> {
         match &self.inner {
             ChildKind::Tokio(child) => child.id(),
             ChildKind::Native(child) => child.id(),
         }
     }
 
-    pub(crate) async fn wait(&mut self) -> io::Result<ExitStatus> {
+    pub async fn wait(&mut self) -> io::Result<ExitStatus> {
         self.stdin.take();
         match &mut self.inner {
             ChildKind::Tokio(child) => child.wait().await,
@@ -81,7 +81,7 @@ impl LocalChild {
         }
     }
 
-    pub(crate) async fn kill(&mut self) -> io::Result<()> {
+    pub async fn kill(&mut self) -> io::Result<()> {
         self.stdin.take();
         match &mut self.inner {
             ChildKind::Tokio(child) => child.kill().await,
@@ -411,5 +411,5 @@ impl Drop for Attributes {
 }
 
 #[cfg(test)]
-#[path = "macos_stdio_tests.rs"]
+#[path = "macos_child_tests.rs"]
 mod tests;

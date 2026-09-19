@@ -10,9 +10,10 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 portable-pty = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]

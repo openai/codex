@@ -1,3 +1,6 @@
+mod child;
+pub use child::Child;
+pub use child::spawn as spawn_child;
 pub mod pipe;
 mod process;
 pub mod process_group;

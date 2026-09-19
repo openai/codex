@@ -11,7 +11,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 async fn native_output(command: Command) -> anyhow::Result<std::process::Output> {
-    let mut child = crate::local_child::spawn(command)?;
+    let mut child = crate::spawn_child(command)?;
     assert!(matches!(child.inner, ChildKind::Native(_)));
     drop(child.stdin.take());
     let mut stdout = child.stdout.take().expect("piped stdout");
@@ -213,7 +213,7 @@ async fn launch_failures_preserve_os_errors() -> anyhow::Result<()> {
             .env_clear()
             .env("PATH", root.path())
             .current_dir(cwd);
-        let error = crate::local_child::spawn(command)
+        let error = crate::spawn_child(command)
             .err()
             .expect("spawn should fail");
         assert_eq!(error.raw_os_error(), Some(errno));
@@ -233,7 +233,7 @@ async fn executable_text_without_shebang_retains_command_fallback() -> anyhow::R
             .current_dir(root.path())
             .env_clear()
             .env("PATH", ".");
-        let mut child = crate::local_child::spawn(command)?;
+        let mut child = crate::spawn_child(command)?;
         let mut output = Vec::new();
         child
             .stdout
