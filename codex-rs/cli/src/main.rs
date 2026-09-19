@@ -1172,7 +1172,8 @@ fn main() -> anyhow::Result<()> {
     codex_build_info::initialize!();
     let remote_control_disabled = codex_app_server::take_remote_control_disabled_env();
     arg0_dispatch_or_else(move |arg0_paths: Arg0DispatchPaths| async move {
-        cli_main(arg0_paths, remote_control_disabled).await?;
+        // Keep the CLI dispatcher off the runtime's stack while the TUI rebuilds a thread.
+        Box::pin(cli_main(arg0_paths, remote_control_disabled)).await?;
         Ok(())
     })
 }

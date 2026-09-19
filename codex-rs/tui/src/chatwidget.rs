@@ -317,6 +317,7 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod activity_groups;
+mod activity_presentation;
 mod command_lifecycle;
 mod connector_mentions;
 mod connectors;
@@ -2037,30 +2038,9 @@ impl ChatWidget {
         &self,
         width: u16,
     ) -> Option<Vec<HyperlinkLine>> {
-        let mut lines = Vec::new();
-        if let Some(cell) = self.transcript.active_cell.as_ref() {
-            lines.extend(cell.transcript_hyperlink_lines(width));
-        }
-        for cell in self
-            .realtime_conversation
-            .pending_history_cells
-            .iter()
-            .chain(self.realtime_conversation.live_transcript_cells())
-        {
-            let realtime_lines = cell.transcript_hyperlink_lines(width);
-            if !realtime_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
-            }
-            lines.extend(realtime_lines);
-        }
-        if let Some(rate_limit_reset_hint) = self.pending_rate_limit_reset_hint() {
-            let hint_lines = rate_limit_reset_hint.transcript_hyperlink_lines(width);
-            if !hint_lines.is_empty() && !lines.is_empty() {
-                lines.push(HyperlinkLine::from(""));
-            }
-            lines.extend(hint_lines);
-        }
-        (!lines.is_empty()).then_some(lines)
+        self.active_cell_hyperlink_lines_with(width, |cell, width| {
+            cell.transcript_hyperlink_lines(width)
+        })
     }
 
     #[cfg(test)]

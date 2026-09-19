@@ -131,7 +131,7 @@ impl App {
                 display_label: active.id,
             })
         });
-        let local_settings = crate::local_settings::LocalSettings::from(&config);
+        let local_settings = self.local_settings.reloaded(&config);
         if let Some(draft) = startup_draft.as_deref_mut() {
             draft.apply_config(&config);
         }

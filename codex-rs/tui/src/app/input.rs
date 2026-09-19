@@ -32,7 +32,7 @@ impl App {
                 && (previous_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)
                     || next_agent_shortcut_matches(key_event, /*allow_word_motion_fallback*/ true)))
             && !keymap_action_ids()
-                .filter(|action| active_contexts.contains(action.context))
+                .filter(|action| active_contexts.contains_action(*action))
                 .any(|action| {
                     bindings_for_action(&self.keymap, action.context.config_name(), action.action)
                         .is_some_and(|bindings| bindings.is_pressed(key_event))
@@ -58,6 +58,44 @@ impl App {
         {
             self.cancel_pending_key_chord();
             return Some(key_event);
+        }
+        if tui.is_owned_screen()
+            && self.overlay.is_none()
+            && self.chat_widget.no_modal_or_popup_active()
+            && self.transcript_view.owns_interaction_key(key_event)
+            && (self.transcript_view.has_active_interaction()
+                || self.backtrack.overlay_preview_active
+                || crate::transcript_view::JumpTarget::from_key(key_event).is_none())
+        {
+            let close_chord = tui.is_owned_screen()
+                && self.overlay.is_none()
+                && self.transcript_view.is_detailed()
+                && !self.transcript_view.has_active_interaction()
+                && !self.backtrack.overlay_preview_active
+                && match self.key_chord_matcher.clone().advance(
+                    key_event,
+                    &self.keymap.chords,
+                    self.active_keymap_contexts(),
+                    tokio::time::Instant::now(),
+                ) {
+                    crate::keymap::KeyChordMatch::Completed(event) => {
+                        self.keymap.pager.close_transcript.is_pressed(event)
+                    }
+                    crate::keymap::KeyChordMatch::Pending(prefix) => {
+                        self.keymap.chords.bindings.iter().any(|binding| {
+                            binding.action.context == crate::keymap::KeymapContext::Pager
+                                && binding.action.action == "close_transcript"
+                                && binding.chord.prefix == prefix
+                        })
+                    }
+                    crate::keymap::KeyChordMatch::PassThrough
+                    | crate::keymap::KeyChordMatch::Cancelled
+                    | crate::keymap::KeyChordMatch::Ignored => false,
+                };
+            if !close_chord {
+                self.cancel_pending_key_chord();
+                return Some(key_event);
+            }
         }
         let contexts = self.active_keymap_contexts();
         let was_pending = self.key_chord_matcher.is_pending();
@@ -137,7 +175,7 @@ impl App {
         self.chat_widget.set_footer_hint_override(items);
     }
 
-    fn active_keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+    pub(super) fn active_keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
         use crate::keymap::KeymapContext;
         use crate::keymap::KeymapContextSet;
 
@@ -150,6 +188,11 @@ impl App {
             let contexts = contexts
                 .with(KeymapContext::Global)
                 .with(KeymapContext::Chat);
+            let contexts = if self.transcript_view.is_detailed() {
+                contexts.with_transcript_close()
+            } else {
+                contexts
+            };
             if voice_available {
                 contexts.with(KeymapContext::Voice)
             } else {
@@ -242,6 +285,14 @@ impl App {
             self.chat_widget.set_raw_output_mode_and_notify(enabled);
         } else {
             self.chat_widget.set_raw_output_mode(enabled);
+        }
+        if tui.is_owned_screen() {
+            self.transcript_view.set_presentation(
+                self.transcript_view.is_detailed(),
+                self.chat_widget.history_render_mode(),
+            );
+            tui.frame_requester().schedule_frame();
+            return;
         }
         if self.overlay.is_some() {
             self.schedule_immediate_resize_reflow(tui);
@@ -474,7 +525,7 @@ impl App {
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
             // handles it.
-            if self.should_handle_backtrack_esc(key_event) {
+            if !tui.is_owned_screen() && self.should_handle_backtrack_esc(key_event) {
                 self.chat_widget.prepare_composer_sparkle_key(key_event);
                 self.handle_backtrack_esc_key(tui);
             } else if self.should_reject_side_backtrack_esc(key_event) {

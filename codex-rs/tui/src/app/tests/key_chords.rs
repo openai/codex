@@ -120,7 +120,7 @@ async fn completed_global_chord_reuses_the_existing_action_handler() -> Result<(
 async fn completed_global_chords_toggle_output_and_request_external_editor() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
     let config = toml::from_str(
-        "[global]\ntoggle_raw_output = [\"ctrl-x r\"]\nopen_external_editor = [\"ctrl-x e\"]",
+        "[global]\ntoggle_raw_output = [\"ctrl-x r\", \"pageup\"]\nopen_external_editor = [\"ctrl-x e\"]",
     )?;
     app.keymap = RuntimeKeymap::from_config(&config).expect("valid global chords");
     app.chat_widget.apply_keymap_update(config, &app.keymap);
@@ -129,6 +129,30 @@ async fn completed_global_chords_toggle_output_and_request_external_editor() -> 
         press(&mut app, &mut tui, &mut app_server, key).await?;
     }
     assert!(app.chat_widget.raw_output_mode());
+    tui.set_owned_screen(/*owned*/ true)?;
+    press(&mut app, &mut tui, &mut app_server, KeyCode::PageUp.into()).await?;
+    assert!(!app.chat_widget.raw_output_mode());
+    let config = toml::from_str(
+        "[composer]\nsubmit = 'pageup'\n[editor]\nmove_line_start = 'pagedown'\n[global]\nopen_external_editor = 'ctrl-x e'",
+    )?;
+    app.keymap = RuntimeKeymap::from_config(&config).expect("valid composer and editor bindings");
+    app.chat_widget.apply_keymap_update(config, &app.keymap);
+    app.chat_widget.apply_external_edit("draft".to_string());
+    assert!(!app.handle_owned_transcript_event(
+        &mut tui,
+        &mut app_server,
+        &TuiEvent::Key(KeyCode::PageUp.into()),
+    )?);
+    press(
+        &mut app,
+        &mut tui,
+        &mut app_server,
+        KeyCode::PageDown.into(),
+    )
+    .await?;
+    app.chat_widget.insert_str("X");
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "Xdraft");
+    tui.set_owned_screen(/*owned*/ false)?;
 
     for key in [ctrl('x'), KeyCode::Char('e').into()] {
         press(&mut app, &mut tui, &mut app_server, key).await?;
@@ -639,18 +663,69 @@ async fn command_center_chords_do_not_capture_search_text() -> Result<()> {
 
 #[tokio::test]
 async fn transcript_fixed_keys_take_precedence_over_pager_chord_prefixes() -> Result<()> {
-    let (mut app, mut tui, app_server) = chord_app().await?;
+    let (mut app, mut tui, mut app_server) = chord_app().await?;
     app.keymap = RuntimeKeymap::from_config(&serde_json::from_value(serde_json::json!({
-        "pager": {"scroll_up": ["ctrl-space x", "ctrl-home x", "ctrl-end x"]}
+        "global": {"copy": ["ctrl-x ctrl-u"]},
+        "pager": {
+            "scroll_up": ["ctrl-space x", "ctrl-home x", "ctrl-end x"],
+            "close_transcript": ["ctrl-x ctrl-u"]
+        }
     }))?)
     .expect("valid pager chords");
-    app.open_transcript_overlay(&mut tui);
-    for code in [KeyCode::Home, KeyCode::End, KeyCode::Char(' ')] {
-        let key = KeyEvent::new(code, KeyModifiers::CONTROL);
-        assert_eq!(app.route_key_chord_event(&mut tui, key), Some(key));
-        assert!(!app.key_chord_matcher.is_pending());
+    app.chat_widget.insert_str("draft");
+    for owned in [true, false] {
+        tui.set_owned_screen(owned)?;
+        app.open_transcript_overlay(&mut tui);
+        for code in [KeyCode::Home, KeyCode::End, KeyCode::Char(' ')] {
+            let key = KeyEvent::new(code, KeyModifiers::CONTROL);
+            assert_eq!(app.route_key_chord_event(&mut tui, key), Some(key));
+            assert!(!app.key_chord_matcher.is_pending());
+        }
+        press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
+        press(&mut app, &mut tui, &mut app_server, ctrl('u')).await?;
+        assert!(app.overlay.is_none());
+        assert!(!app.transcript_view.is_detailed());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
     }
-    app.close_transcript_overlay(&mut tui);
+    app.transcript_cells = vec![std::sync::Arc::new(
+        crate::history_cell::PlainHistoryCell::new(
+            (0..50).map(|_| "transcript row".into()).collect(),
+        ),
+    )];
+    tui.set_owned_screen(/*owned*/ true)?;
+    let home = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+    for (binding, keys) in [
+        ("ctrl-home", vec![home]),
+        ("ctrl-home ctrl-u", vec![home, ctrl('u')]),
+        ("ctrl-x ctrl-home", vec![ctrl('x'), home]),
+    ] {
+        app.keymap = RuntimeKeymap::from_config(&toml::from_str(&format!(
+            "[pager]\nclose_transcript = '{binding}'\n[global]\nopen_external_editor = '{binding}'"
+        ))?)
+        .expect("valid close binding");
+        app.open_transcript_overlay(&mut tui);
+        app.render_owned_transcript(
+            &mut tui,
+            ratatui::layout::Size::new(/*width*/ 80, /*height*/ 12),
+        )?;
+        app.transcript_view
+            .scroll(&app.transcript_cells, /*rows*/ -10);
+        assert!(app.transcript_view.can_return_to_latest());
+        for key in &keys {
+            press(&mut app, &mut tui, &mut app_server, *key).await?;
+        }
+        assert!(!app.transcript_view.is_detailed());
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
+        for key in keys {
+            press(&mut app, &mut tui, &mut app_server, key).await?;
+        }
+        assert_eq!(
+            app.chat_widget.external_editor_state(),
+            crate::chatwidget::ExternalEditorState::Requested
+        );
+        app.reset_external_editor_state(&mut tui);
+    }
+    tui.set_owned_screen(/*owned*/ false)?;
     app_server.shutdown().await?;
     Ok(())
 }

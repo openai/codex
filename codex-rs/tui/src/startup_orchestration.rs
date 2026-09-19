@@ -776,7 +776,8 @@ pub(super) async fn run_main_inner(
         tracing::warn!("Could not save screen-reader detection: {err}");
     }
 
-    let app_result = run_ratatui_app(
+    // Keep the large app future off the enclosing CLI startup stack during transitions.
+    let app_result = Box::pin(run_ratatui_app(
         cli,
         arg0_paths,
         loader_overrides,
@@ -796,7 +797,7 @@ pub(super) async fn run_main_inner(
         daemon_startup_warning,
         launch_telemetry,
         startup_draft,
-    )
+    ))
     .await
     .map_err(|err| {
         err.downcast::<std::io::Error>()

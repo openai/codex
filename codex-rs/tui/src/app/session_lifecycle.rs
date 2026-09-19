@@ -770,7 +770,11 @@ impl App {
         }
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
-        Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
+        if tui.is_owned_screen() {
+            tui.terminal.clear_visible_screen()?;
+        } else {
+            Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
+        }
         Ok(())
     }
 
@@ -978,7 +982,7 @@ impl App {
                         tracing::warn!("failed to unsubscribe tracked thread {thread_id}: {err}");
                     }
                 }
-                self.local_settings = crate::local_settings::LocalSettings::from(&config);
+                self.local_settings = self.local_settings.reloaded(&config);
                 self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
                 self.config = config;
 

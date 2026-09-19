@@ -5,6 +5,8 @@
 //! them and rewrapping does not turn a reading position into an unrelated screen row.
 
 mod activity;
+mod composer_gap;
+mod follow_control;
 mod footer;
 mod input;
 mod layout;
@@ -73,6 +75,8 @@ struct VisibleRow {
 
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
+    follow_control: follow_control::FollowControl,
+    copy_feedback: Option<composer_gap::CopyFeedback>,
     position: Position,
     cache: LayoutCache,
     live: Option<Arc<TextLayout>>,
@@ -98,6 +102,8 @@ impl Default for TranscriptView {
     fn default() -> Self {
         Self {
             position: Position::Latest,
+            follow_control: follow_control::FollowControl::default(),
+            copy_feedback: None,
             cache: LayoutCache::default(),
             live: None,
             live_separated: None,
@@ -121,6 +127,10 @@ impl Default for TranscriptView {
 }
 
 impl TranscriptView {
+    pub(crate) fn is_detailed(&self) -> bool {
+        self.detailed
+    }
+
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
         self.cache.begin_frame();
         self.sync_history_tail(cells);

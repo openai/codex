@@ -41,6 +41,7 @@ impl TranscriptView {
                 )
                 .into(),
                 cursor_column: None,
+                is_interactive: true,
             });
         }
 
@@ -102,6 +103,7 @@ impl TranscriptView {
                 )
                 .into(),
                 cursor_column: None,
+                is_interactive: false,
             }
         })
     }

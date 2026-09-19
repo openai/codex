@@ -1,0 +1,39 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+80 columns · LoadingOlder
+  ↑ Loading earlier messages… · esc latest
+
+80 columns · LoadingBeginning
+  ↑ Loading earlier messages… · esc latest
+
+80 columns · Failed
+  Retry history: ⌥+</ctrl+home.  esc latest
+
+80 columns · Complete
+  esc latest
+
+40 columns · LoadingOlder
+  ↑ Loading… · esc latest
+
+40 columns · LoadingBeginning
+  ↑ Loading… · esc latest
+
+40 columns · Failed
+  Retry: ⌥+</ctrl+home
+
+40 columns · Complete
+  esc latest
+
+28 columns · LoadingOlder
+  ↑ Loading… · esc latest
+
+28 columns · LoadingBeginning
+  ↑ Loading… · esc latest
+
+28 columns · Failed
+  Retry: ⌥+</ctrl+home
+
+28 columns · Complete
+  esc latest

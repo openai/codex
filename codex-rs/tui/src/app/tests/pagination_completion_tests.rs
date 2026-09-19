@@ -15,13 +15,16 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput as CoreUserInput;
 use codex_state::SqliteConfig;
 
-#[tokio::test]
-async fn older_pagination_completion_footers_follow_answers_without_overlap_duplicates()
--> Result<()> {
+pub(super) async fn completed_history_app(
+    names: &[&str],
+) -> Result<(App, tempfile::TempDir, ThreadId)> {
     let mut app = make_test_app().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    // The inline scrollback row cap fixes the page boundary used by this regression.
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
+    app.local_settings.tui.alternate_screen = codex_config::types::AltScreenMode::Never;
     app.local_settings.tui.terminal_resize_reflow_max_rows = Some(2);
     let completed_at = chrono::Local
         .with_ymd_and_hms(
@@ -48,7 +51,7 @@ async fn older_pagination_completion_footers_follow_answers_without_overlap_dupl
         .take(/*n*/ 1)
         .map(serde_json::from_str::<serde_json::Value>)
         .collect::<Result<Vec<_>, _>>()?;
-    for (index, name) in ["Oldest", "Middle", "Newest"].into_iter().enumerate() {
+    for (index, name) in names.iter().enumerate() {
         let turn_id = format!("turn-{index}");
         let finished = completed_at.timestamp() + index as i64 * 60;
         let mut events = vec![EventMsg::TurnStarted(TurnStartedEvent {
@@ -112,6 +115,14 @@ async fn older_pagination_completion_footers_follow_answers_without_overlap_dupl
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(path, format!("{records}\n"))?;
+    Ok((app, codex_home, thread_id))
+}
+
+#[tokio::test]
+async fn older_pagination_completion_footers_follow_answers_without_overlap_duplicates()
+-> Result<()> {
+    let (mut app, _codex_home, thread_id) =
+        completed_history_app(&["Oldest", "Middle", "Newest"]).await?;
     let (mut app_server, _requests, proxy) = start_recording_app_server(
         &app.config,
         /*blocked_thread_list*/ None,

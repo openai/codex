@@ -8,6 +8,10 @@ use tempfile::TempDir;
 #[test]
 fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
     for (raw, eligible) in [
+        ("features.transcript_v2=true", true),
+        ("features.transcript_v2=false", true),
+        ("features={transcript_v2=true}", true),
+        ("features.transcript_v2='true'", false),
         ("features.worktrees=true", true),
         ("features.worktrees=false", true),
         ("features={worktrees=true}", true),

@@ -32,6 +32,8 @@ impl App {
             let range = start..newer_index;
             self.native_history
                 .consolidate(&self.transcript_cells[range.clone()], &older);
+            self.transcript_view
+                .replace_group(&self.transcript_cells, range.clone(), &older);
             if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
                 overlay.regroup_cells(range.clone(), Arc::clone(&older));
             }
@@ -51,6 +53,11 @@ impl App {
             else {
                 return;
             };
+            self.transcript_view.absorb_tail_into_live(
+                &self.transcript_cells,
+                previous_revision,
+                hydrated_revision,
+            );
             if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
                 overlay.absorb_tail_into_live(previous_revision, hydrated_revision);
             }
@@ -69,6 +76,8 @@ impl App {
         let range = start..newer_index + 1;
         self.native_history
             .consolidate(&self.transcript_cells[range.clone()], &group);
+        self.transcript_view
+            .replace_group(&self.transcript_cells, range.clone(), &group);
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             overlay.regroup_cells(range.clone(), Arc::clone(&group));
         }

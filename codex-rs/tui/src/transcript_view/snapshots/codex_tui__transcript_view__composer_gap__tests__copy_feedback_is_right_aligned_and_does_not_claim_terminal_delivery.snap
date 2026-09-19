@@ -1,0 +1,31 @@
+---
+source: tui/src/transcript_view/composer_gap_tests.rs
+assertion_line: 30
+expression: "snapshots.join(\"\\n\\n\")"
+---
+Ok(Confirmed), 80 columns
+                                              Copied 24 chars to host clipboard
+
+Ok(Confirmed), 32 columns
+                Copied 24 chars
+
+Ok(Confirmed), 18 columns
+  Copied 24 chars
+
+Ok(Unconfirmed), 80 columns
+                                        Copy sent to terminal · paste to verify
+
+Ok(Unconfirmed), 32 columns
+       Copy sent · verify paste
+
+Ok(Unconfirmed), 18 columns
+ Copy unconfirmed
+
+Err("unavailable"), 80 columns
+                                               Copy failed · /export saves chat
+
+Err("unavailable"), 32 columns
+          Copy failed · /export
+
+Err("unavailable"), 18 columns
+      Copy failed

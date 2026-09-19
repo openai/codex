@@ -662,6 +662,10 @@ where
 }
 
 impl Tui {
+    pub(crate) fn is_alt_screen_enabled(&self) -> bool {
+        self.alt_screen_enabled
+    }
+
     pub(crate) fn new(
         terminal: Terminal,
         enhanced_keys_supported: bool,
@@ -714,6 +718,17 @@ impl Tui {
             let _ = self.set_owned_screen(/*owned*/ false);
         }
         self.alt_screen_enabled = enabled;
+    }
+
+    /// Defer a fresh fullscreen launch until its first synchronized frame is ready.
+    pub(crate) fn prepare_owned_screen(&mut self, owned: bool) -> Result<()> {
+        if owned && self.alt_screen_enabled && !self.is_alt_screen_active() {
+            self.owned_screen = true;
+            self.frame_requester.schedule_frame();
+            Ok(())
+        } else {
+            self.set_owned_screen(owned)
+        }
     }
 
     /// Own the terminal for the session, unless alternate-screen rendering is disabled.
@@ -1165,6 +1180,11 @@ impl Tui {
                 )?;
             }
 
+            if self.owned_screen && !self.is_alt_screen_active() {
+                self.enter_alt_screen()?;
+                pending_viewport_area = None;
+            }
+
             let terminal = &mut self.terminal;
             if let Some(new_area) = pending_viewport_area.take() {
                 terminal.set_viewport_area(new_area);
@@ -1305,6 +1325,10 @@ impl Tui {
                     self.owned_screen,
                     self.overlay_input.captures_mouse(self.owned_screen),
                 )?;
+            }
+
+            if self.owned_screen && !self.is_alt_screen_active() {
+                self.enter_alt_screen()?;
             }
 
             let terminal = &mut self.terminal;

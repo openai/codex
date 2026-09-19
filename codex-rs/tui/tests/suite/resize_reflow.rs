@@ -12,6 +12,7 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
 use wiremock::MockServer;
+use wiremock::matchers::body_string_contains;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux and a locally built codex binary; run with --ignored for manual resize smoke"]
@@ -29,9 +30,8 @@ async fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
     let server = MockServer::start().await;
-    let _response_mock = responses::mount_sse_once(&server, resize_reflow_sse()).await;
-    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
-    write_config(codex_home.path(), &repo_root)?;
+    let _response_mock = mount_resize_response(&server).await;
+    write_config(codex_home.path(), &repo_root, &server.uri())?;
     write_auth(codex_home.path())?;
 
     let session_name = format!("codex-resize-reflow-smoke-{}", std::process::id());
@@ -60,8 +60,6 @@ async fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -
             .arg(codex)
             .arg("-c")
             .arg("analytics.enabled=false")
-            .arg("-c")
-            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root)
@@ -196,9 +194,8 @@ async fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
     let server = MockServer::start().await;
-    let _response_mock = responses::mount_sse_once(&server, resize_reflow_sse()).await;
-    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
-    write_config(codex_home.path(), &repo_root)?;
+    let _response_mock = mount_resize_response(&server).await;
+    write_config(codex_home.path(), &repo_root, &server.uri())?;
     write_auth(codex_home.path())?;
 
     let session_name = format!("codex-resize-width-{}", std::process::id());
@@ -227,8 +224,6 @@ async fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()
             .arg(codex)
             .arg("-c")
             .arg("analytics.enabled=false")
-            .arg("-c")
-            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root)
@@ -327,8 +322,7 @@ async fn tmux_scrolled_composer_resize_preserves_visible_draft_text() -> Result<
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
     let server = MockServer::start().await;
-    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
-    write_config(codex_home.path(), &repo_root)?;
+    write_config(codex_home.path(), &repo_root, &server.uri())?;
     write_auth(codex_home.path())?;
 
     let session_name = format!("codex-resize-scrolled-composer-{}", std::process::id());
@@ -358,8 +352,6 @@ async fn tmux_scrolled_composer_resize_preserves_visible_draft_text() -> Result<
             .arg("gpt-5.6-terra")
             .arg("-c")
             .arg("analytics.enabled=false")
-            .arg("-c")
-            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root),
@@ -453,9 +445,8 @@ async fn run_repeated_resize_smoke() -> Result<()> {
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
     let server = MockServer::start().await;
-    let _response_mock = responses::mount_sse_once(&server, resize_reflow_sse()).await;
-    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
-    write_config(codex_home.path(), &repo_root)?;
+    let _response_mock = mount_resize_response(&server).await;
+    write_config(codex_home.path(), &repo_root, &server.uri())?;
     write_auth(codex_home.path())?;
 
     let session_name = format!("codex-resize-repeat-{}", std::process::id());
@@ -484,8 +475,6 @@ async fn run_repeated_resize_smoke() -> Result<()> {
             .arg(codex)
             .arg("-c")
             .arg("analytics.enabled=false")
-            .arg("-c")
-            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root)
@@ -598,12 +587,23 @@ fn codex_binary(repo_root: &Path) -> Result<PathBuf> {
     Ok(fallback)
 }
 
-fn write_config(codex_home: &Path, repo_root: &Path) -> Result<()> {
+fn write_config(codex_home: &Path, repo_root: &Path, server_url: &str) -> Result<()> {
     let repo_root_display = repo_root.display();
     let config = format!(
         r#"model = "gpt-5.4"
-model_provider = "openai"
+model_provider = "resize_mock"
 suppress_unstable_features_warning = true
+
+# The resize fixture serves HTTP SSE only, not WebSocket upgrades.
+[model_providers.resize_mock]
+name = "Resize mock"
+base_url = "{server_url}/v1"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[notice.model_migrations]
+"gpt-5.4" = "gpt-5.6-terra"
 
 [projects."{repo_root_display}"]
 trust_level = "trusted"
@@ -619,6 +619,28 @@ fn write_auth(codex_home: &Path) -> Result<()> {
         r#"{"OPENAI_API_KEY":"dummy","tokens":null,"last_refresh":null}"#,
     )?;
     Ok(())
+}
+
+// Title generation and the visible turn race; neither may consume the other's response.
+async fn mount_resize_response(server: &MockServer) -> responses::ResponseMock {
+    let _title = responses::mount_sse_once_match(
+        server,
+        body_string_contains(r#"\"thread_source\":\"system\""#),
+        responses::sse(vec![
+            responses::ev_assistant_message(
+                "resize-title",
+                r#"{"title":"Test terminal resizing"}"#,
+            ),
+            responses::ev_completed("resize-title"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once_match(
+        server,
+        body_string_contains(r#"\"thread_source\":\"user\""#),
+        resize_reflow_sse(),
+    )
+    .await
 }
 
 fn resize_reflow_sse() -> String {

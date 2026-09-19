@@ -138,6 +138,9 @@ impl TranscriptView {
         event: MouseEvent,
         cells: &[Arc<dyn HistoryCell>],
     ) -> Option<ViewAction> {
+        if let Some(action) = self.handle_follow_control_mouse(event) {
+            return Some(action);
+        }
         let inside = self
             .area
             .contains(ScreenPosition::new(event.column, event.row));

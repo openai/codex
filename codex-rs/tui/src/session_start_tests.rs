@@ -1,3 +1,5 @@
+//! Archived-session confirmation retries retain the first request settings.
+
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
 use app_test_support::create_fake_rollout;
@@ -15,10 +17,16 @@ async fn start_session(
     action: SessionStartAction,
     confirm: impl AsyncFnOnce() -> Result<UnarchiveChoice>,
 ) -> Result<SessionStartOutcome> {
-    let initial_result = action.start(app_server, config, target).await;
+    let local_settings = LocalSettings::from(config);
+    let initial_result = action
+        .start(app_server, config, &local_settings, target)
+        .await;
     complete_session_start(
         app_server,
-        config,
+        SessionStartConfig {
+            config,
+            local_settings: &local_settings,
+        },
         &crate::AppServerTarget::Embedded,
         target,
         action,
@@ -63,6 +71,7 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
         };
         let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
         let prompts = Cell::new(0);
+        let local_settings = LocalSettings::from(&config);
 
         let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:4500")?;
         for server_target in [
@@ -74,10 +83,15 @@ async fn archived_session_requires_confirmation_before_resume_or_fork() -> Resul
             crate::AppServerTarget::Embedded,
         ] {
             for choice in [UnarchiveChoice::Cancel, UnarchiveChoice::Quit] {
-                let initial = action.start(&mut app_server, &config, &target).await;
+                let initial = action
+                    .start(&mut app_server, &config, &local_settings, &target)
+                    .await;
                 let outcome = complete_session_start(
                     &mut app_server,
-                    &config,
+                    SessionStartConfig {
+                        config: &config,
+                        local_settings: &local_settings,
+                    },
                     &server_target,
                     &target,
                     action,

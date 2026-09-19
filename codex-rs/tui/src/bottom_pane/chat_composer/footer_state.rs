@@ -1,18 +1,124 @@
 //! Footer and status-row presentation state for the chat composer.
 //! Owners schedule flash expiry redraws; replacing a draft clears its flash.
+//! Borrowed transcript feedback uses one resolved presentation for height, paint, and cursor.
 
 use std::time::Instant;
 
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use crate::bottom_pane::footer::CollaborationModeIndicator;
 use crate::bottom_pane::footer::FooterMode;
 use crate::bottom_pane::footer::GoalStatusIndicator;
+use crate::bottom_pane::footer::inset_footer_hint_area;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::ShortcutHint;
 use std::time::Duration;
 
+/// Per-frame transcript feedback rendered by the composer footer owner.
+pub(crate) struct TranscriptFooter {
+    pub(crate) text: ratatui::text::Text<'static>,
+    /// Caret in the first footer row, measured from its inset content area.
+    pub(crate) cursor_column: Option<u16>,
+    pub(crate) is_interactive: bool,
+}
+
+/// Borrowed presentation shared by composer measurement, painting, and cursor placement.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ComposerRenderOptions<'a> {
+    pub(crate) textarea_right_reserve: u16,
+    pub(crate) footer: Option<&'a TranscriptFooter>,
+}
+
 impl super::ChatComposer {
+    pub(crate) fn cursor_pos_with_options(
+        &self,
+        area: Rect,
+        options: ComposerRenderOptions<'_>,
+    ) -> Option<(u16, u16)> {
+        let options = self.resolve_render_options(options);
+        if let Some(footer) = options.footer.filter(|footer| footer.is_interactive) {
+            let [_, _, _, popup_rect] = self.layout_areas_with_options(area, options);
+            let area = inset_footer_hint_area(self.footer_hint_area(popup_rect, options));
+            return footer
+                .cursor_column
+                .filter(|column| *column < area.width && area.height > 0)
+                .map(|column| (area.x + column, area.y));
+        }
+        if !self.draft.input_enabled || self.attachments.selected_remote_image_index.is_some() {
+            return None;
+        }
+
+        if let Some(pos) = self
+            .vim_search_cursor_pos(area)
+            .or_else(|| self.history_search_cursor_pos(area))
+        {
+            return Some(pos);
+        }
+
+        let [_, _, textarea_rect, _] = self.layout_areas_with_options(area, options);
+        let state = *self.draft.textarea_state.borrow();
+        self.draft
+            .textarea
+            .cursor_pos_with_state(textarea_rect, state)
+    }
+
+    pub(super) fn resolve_render_options<'a>(
+        &self,
+        mut options: ComposerRenderOptions<'a>,
+    ) -> ComposerRenderOptions<'a> {
+        options.footer = options.footer.filter(|footer| {
+            matches!(self.popups.active, super::ActivePopup::None)
+                && self.history_search.is_none()
+                && self.draft.textarea.vim_query().is_none()
+                && !self.quit_shortcut_hint_visible()
+                && (footer.is_interactive
+                    || (!self.footer.flash_visible()
+                        && self.footer.hint_override.is_none()
+                        && matches!(
+                            self.footer_mode(),
+                            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                        )))
+        });
+        options
+    }
+
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn shortcut_overlay_visible(&self) -> bool {
+        self.footer_mode() == FooterMode::ShortcutOverlay
+            && matches!(self.popups.active, super::ActivePopup::None)
+            && self.custom_footer_height().is_none()
+    }
+
+    pub(super) fn footer_hint_height(&self, options: ComposerRenderOptions<'_>) -> u16 {
+        options.footer.map_or_else(
+            || {
+                self.custom_footer_height()
+                    .unwrap_or_else(|| super::super::footer::footer_height(&self.footer_props()))
+            },
+            |footer| footer.text.height().try_into().unwrap_or(u16::MAX),
+        )
+    }
+
+    pub(super) fn footer_hint_area(
+        &self,
+        popup_rect: ratatui::layout::Rect,
+        options: ComposerRenderOptions<'_>,
+    ) -> ratatui::layout::Rect {
+        let footer_hint_height = self.footer_hint_height(options);
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
+        if footer_spacing > 0 && footer_hint_height > 0 {
+            let [_, hint_rect] = ratatui::layout::Layout::vertical([
+                ratatui::layout::Constraint::Length(footer_spacing),
+                ratatui::layout::Constraint::Length(footer_hint_height),
+            ])
+            .areas(popup_rect);
+            hint_rect
+        } else {
+            popup_rect
+        }
+    }
+
     pub(crate) fn footer_flash_delay(&self) -> Option<Duration> {
         self.footer
             .flash

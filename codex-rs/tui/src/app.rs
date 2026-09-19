@@ -197,19 +197,19 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use uuid::Uuid;
-mod activity_groups;
 mod agent_message_consolidation;
 mod agent_navigation;
 mod agent_picker;
 mod agent_status_feed;
+#[cfg(any(unix, windows))]
 mod agents_overview;
 mod agents_overview_actions;
 mod agents_overview_details;
 mod agents_overview_threads;
 mod agents_overview_usage;
 mod agents_overview_view;
-mod native_history;
 pub(crate) use agents_overview::AGENTS_OVERVIEW_VIEW_ID;
+mod activity_groups;
 mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
@@ -231,6 +231,8 @@ mod misalignment_policy;
 mod model_defaults;
 mod new_session;
 pub(crate) use new_session::has_launch_setting;
+mod native_history;
+mod owned_transcript;
 mod pending_interactive_replay;
 mod permission_shortcuts;
 mod pets;
@@ -571,6 +573,7 @@ pub(crate) struct App {
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
     native_history: native_history::NativeHistory,
+    pub(crate) transcript_view: crate::transcript_view::TranscriptView,
     last_rendered_history_tail: Option<history_ui::RenderedHistoryTail>,
     last_thread_usage_status_cell: Option<history_ui::ThreadUsageStatusHistory>,
     pub(crate) pending_thread_usage_history_refresh: bool,
@@ -849,9 +852,20 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        let transcript_owns_input = match (&event, &self.overlay) {
+            (TuiEvent::Key(key), Some(Overlay::Transcript(overlay))) => {
+                overlay.owns_interaction_key(*key)
+            }
+            (TuiEvent::Key(key), None) => {
+                tui.is_owned_screen()
+                    && self.chat_widget.no_modal_or_popup_active()
+                    && self.transcript_view.owns_interaction_key(*key)
+            }
+            _ => false,
+        };
         if self.reconnect.offline
+            && !transcript_owns_input
             && let TuiEvent::Key(key) = &event
-            && !matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(*key))
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && let KeyCode::Char(character) = key.code
@@ -871,9 +885,16 @@ impl App {
             self.handle_draw_pre_render(tui, screen_size)?;
         }
 
+        if matches!(&event, TuiEvent::Paste(_) | TuiEvent::FocusLost) {
+            self.cancel_pending_key_chord();
+        }
+
         let event = if let TuiEvent::Key(mut key_event) = event {
             let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-            if self.should_recover_vim_insert_escape(key_event) {
+            if self.should_recover_vim_insert_escape(key_event)
+                && !(tui.is_owned_screen()
+                    && crate::transcript_view::JumpTarget::from_key(key_event).is_some())
+            {
                 // Restore both strokes before chords or global shortcuts can consume them.
                 if let Some(escape) = self.route_key_chord_event(tui, escape) {
                     self.handle_key_event(tui, app_server, escape).await;
@@ -889,6 +910,9 @@ impl App {
             event
         };
 
+        if self.handle_owned_transcript_event(tui, app_server, &event)? {
+            return Ok(AppRunControl::Continue);
+        }
         if self.reconnect.offline
             && !matches!(&self.overlay, Some(Overlay::Transcript(_)))
             && let TuiEvent::Key(key) = &event
@@ -949,7 +973,7 @@ impl App {
                     }
                 }
                 TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {
-                    if self.backtrack_render_pending {
+                    if self.backtrack_render_pending && !tui.is_owned_screen() {
                         self.rebuild_transcript_after_backtrack(tui, screen_size.into())?;
                         self.backtrack_render_pending = false;
                     }
@@ -966,6 +990,12 @@ impl App {
                     self.chat_widget.pre_draw_tick();
                     self.refresh_agents_overview_usage(app_server, tui.frame_requester());
                     let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;
+                    if tui.is_owned_screen()
+                        && self.transcript_view.history
+                            != crate::pager_overlay::TranscriptHistoryState::Failed
+                    {
+                        self.request_owned_history(tui, app_server);
+                    }
                     if !had_active_view
                         && self.chat_widget.has_active_view()
                         && self.startup_protected_input_boundary
@@ -1022,6 +1052,9 @@ impl App {
         self.sync_thread_title_progress();
         self.chat_widget
             .set_sparkle_terminal_focus(tui.is_terminal_focused());
+        if tui.is_owned_screen() {
+            return self.render_owned_transcript(tui, screen_size);
+        }
         let dashboard_visible = self
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)

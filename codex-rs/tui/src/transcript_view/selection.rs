@@ -214,6 +214,7 @@ impl TranscriptView {
 
     /// End the pointer gesture without discarding selected text when input ownership changes.
     pub(crate) fn end_drag(&mut self) {
+        self.follow_control = Default::default();
         if !self.has_selection_range()
             && self
                 .selection

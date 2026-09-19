@@ -1,4 +1,6 @@
 //! Exercises stack-sensitive session transitions through the real TUI event loop.
+//!
+//! Uses the CLI binary when available (including Bazel CI) to cover its dispatch frames.
 
 use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
@@ -17,6 +19,11 @@ use wiremock::matchers::body_string_contains;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Result<()> {
+    let start = if codex_utils_cargo_bin::cargo_bin("codex").is_ok() {
+        PtyCodex::start_cli
+    } else {
+        PtyCodex::start
+    };
     let repository = tempfile::tempdir_in("/tmp")?;
     let root = repository.path().canonicalize()?;
     let status = Command::new("git")
@@ -63,9 +70,19 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
             server.uri()
         ),
     )?;
+    // Title generation can include the user prompt and race the actual user turn.
+    let _title = responses::mount_sse_once_match(
+        &server,
+        body_string_contains(r#"\"thread_source\":\"system\""#),
+        responses::sse(vec![
+            responses::ev_assistant_message("title", r#"{"title":"Stack transition test"}"#),
+            responses::ev_completed("title-response"),
+        ]),
+    )
+    .await;
     let _reply = responses::mount_sse_once_match(
         &server,
-        body_string_contains("marker requested by this test"),
+        body_string_contains(r#"\"thread_source\":\"user\""#),
         responses::sse(vec![
             responses::ev_assistant_message("saved", "STACK_SAVED_HISTORY"),
             responses::ev_completed("saved-response"),
@@ -77,11 +94,12 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
         codex_home.path(),
         /*desktop*/ None,
     )?);
-    // The launcher gives codex-main and Tokio workers explicit 16 MiB stacks.
-    let mut terminal = PtyCodex::start(
+    // Both launchers give codex-main and Tokio workers explicit 16 MiB stacks.
+    let mut terminal = start(
         &root,
         codex_home,
         &[
+            "--no-alt-screen",
             "-c",
             "features.worktrees=true",
             "-c",
@@ -93,11 +111,23 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     terminal.wait_for_screen("STACK_SAVED_HISTORY")?;
     terminal.wait_for_screen("Ask Codex to do anything")?;
 
-    submit(&mut terminal, "/side")?;
-    terminal.wait_for_screen("Side from main thread")?;
-    terminal.ensure_running()?;
-    terminal.write_input(b"\x03")?;
-    terminal.wait_for_screen("STACK_SAVED_HISTORY")?;
+    // Starting and closing a side conversation both rebuild the displayed chat widget.
+    // Repeat through the real event loop, whose dev-build frames share the production stack.
+    for attempt in 1..=3 {
+        submit(&mut terminal, "/side")?;
+        terminal.wait_for_screen("Side from main thread")?;
+        terminal.ensure_running()?;
+        terminal.write_input(b"\x03")?;
+        terminal.wait_for_screen("STACK_SAVED_HISTORY")?;
+        terminal.wait_for_screen("Ask Codex to do anything")?;
+        terminal.ensure_running()?;
+
+        let draft = format!("SIDE_STACK_DRAFT_{attempt}");
+        terminal.write_input(draft.as_bytes())?;
+        terminal.wait_for_screen(&draft)?;
+        terminal.write_input(b"\x15")?;
+        terminal.wait_for_screen("Ask Codex to do anything")?;
+    }
 
     submit(&mut terminal, "/resume")?;
     terminal.wait_for_screen("Resume a previous session")?;
@@ -112,7 +142,10 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     let fork_bucket = forked[0].root.parent().expect("bucket");
     terminal.wait_for_screen(&format!(
         "/{}/",
-        fork_bucket.file_name().unwrap().to_string_lossy()
+        fork_bucket
+            .file_name()
+            .expect("forked worktree bucket name")
+            .to_string_lossy()
     ))?;
     terminal.ensure_running()?;
 
@@ -140,7 +173,10 @@ async fn picker_side_worktree_fork_and_cd_run_on_the_production_stack() -> Resul
     let second_bucket = second.root.parent().expect("bucket");
     terminal.wait_for_screen(&format!(
         "/{}/",
-        second_bucket.file_name().unwrap().to_string_lossy()
+        second_bucket
+            .file_name()
+            .expect("new worktree bucket name")
+            .to_string_lossy()
     ))?;
     terminal.ensure_running()?;
     Ok(())

@@ -457,6 +457,10 @@ fn resize_keeps_the_logical_reading_anchor() {
         "final answer\n"
     );
     assert!(!view.is_following());
+    assert!(!view.unseen_activity);
+    cells.push(cell("new output"));
+    render(&mut view, &cells, /*width*/ 20, /*height*/ 2);
+    assert!(view.unseen_activity);
 }
 
 #[test]

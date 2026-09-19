@@ -41,9 +41,22 @@ pub(crate) const KEY_CHORD_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct KeymapContextSet(u16);
 
+const TRANSCRIPT_CLOSE: u16 = 1 << 15;
+
 impl KeymapContextSet {
     pub(crate) const fn new(context: KeymapContext) -> Self {
         Self(context_bit(context))
+    }
+
+    pub(crate) const fn with_transcript_close(self) -> Self {
+        Self(self.0 | TRANSCRIPT_CLOSE)
+    }
+
+    pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
+        self.contains(action.context)
+            || (self.0 & TRANSCRIPT_CLOSE != 0
+                && action.context == KeymapContext::Pager
+                && action.action == "close_transcript")
     }
 
     pub(crate) const fn with(self, context: KeymapContext) -> Self {
@@ -281,11 +294,20 @@ impl KeyChordMatcher {
             if crate::key_hint::plain(KeyCode::Esc).is_press(key_event) {
                 return KeyChordMatch::Cancelled;
             }
-            if let Some(binding) = keymap.bindings.iter().find(|binding| {
-                contexts.contains(binding.action.context)
-                    && binding.chord.prefix == pending.prefix
-                    && chord_stroke_matches(binding.chord.completion, key_event)
-            }) {
+            if let Some(binding) = keymap
+                .bindings
+                .iter()
+                .filter(|binding| {
+                    contexts.contains_action(binding.action)
+                        && binding.chord.prefix == pending.prefix
+                        && chord_stroke_matches(binding.chord.completion, key_event)
+                })
+                .min_by_key(|binding| {
+                    !(contexts.0 & TRANSCRIPT_CLOSE != 0
+                        && binding.action.context == KeymapContext::Pager
+                        && binding.action.action == "close_transcript")
+                })
+            {
                 let Some(dispatch_event) = dispatch_event(binding.action) else {
                     return KeyChordMatch::Ignored;
                 };
@@ -297,7 +319,7 @@ impl KeyChordMatcher {
             .bindings
             .iter()
             .find(|binding| {
-                contexts.contains(binding.action.context)
+                contexts.contains_action(binding.action)
                     && chord_stroke_matches(binding.chord.prefix, key_event)
             })
             .map(|binding| binding.chord.prefix)

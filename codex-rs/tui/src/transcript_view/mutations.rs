@@ -55,7 +55,13 @@ impl TranscriptView {
         range: Range<usize>,
         replacement: &Arc<dyn HistoryCell>,
     ) {
-        if range.is_empty() || self.snapshot().is_some() {
+        if range.is_empty() {
+            return;
+        }
+        if range.end == cells.len() && self.last_tail == cells.last().map(EntryKey::cell) {
+            self.last_tail = Some(EntryKey::cell(replacement));
+        }
+        if self.snapshot().is_some() {
             return;
         }
         let reading = match self.position {

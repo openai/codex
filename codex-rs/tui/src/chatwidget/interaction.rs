@@ -5,6 +5,10 @@ use crate::bottom_pane::BottomPaneView;
 use crate::clipboard_copy::CopyFormat;
 
 impl ChatWidget {
+    pub(crate) fn shortcut_overlay_visible(&self) -> bool {
+        self.bottom_pane.shortcut_overlay_visible()
+    }
+
     pub(crate) fn set_agents_navigation_enabled(&mut self, enabled: bool) {
         self.bottom_pane.set_agents_navigation_enabled(enabled);
     }
@@ -260,6 +264,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        if items.is_some() {
+            // Active input instructions supersede transient feedback from a previous action.
+            self.bottom_pane
+                .show_footer_flash(Line::default(), Duration::ZERO);
+        }
         self.bottom_pane.set_footer_hint_override(items);
     }
 

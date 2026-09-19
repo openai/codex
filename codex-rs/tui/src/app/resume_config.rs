@@ -139,7 +139,7 @@ impl App {
             /*startup_draft*/ None,
         )
         .await?;
-        resume_config.1 = crate::local_settings::LocalSettings::from(&resume_config.0);
+        resume_config.1 = self.local_settings.reloaded(&resume_config.0);
         Ok(resume_config)
     }
 

@@ -39,6 +39,8 @@ use crate::terminal_palette::effective_stdout_color_level;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
 pub(crate) use bottom_pane_view::ViewCompletion;
+pub(crate) use chat_composer::ComposerRenderOptions;
+pub(crate) use chat_composer::TranscriptFooter;
 use codex_app_server_protocol::SkillMetadata;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_features::Features;
@@ -152,7 +154,6 @@ pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
-pub(crate) use picker_style::selection_style;
 use slash_commands::ServiceTierCommand;
 mod feedback_note_view;
 mod feedback_view;
@@ -163,6 +164,8 @@ pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_success_cell;
 pub(crate) use feedback_view::feedback_upload_consent_params;
+pub(crate) use footer::inset_footer_hint_area;
+pub(crate) use picker_style::selection_style;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
@@ -313,6 +316,11 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
+    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_footer_flash(line, duration);
+        self.request_redraw();
+    }
+
     pub fn new(params: BottomPaneParams) -> Self {
         Self::new_with_composer_config(params, ChatComposerConfig::default())
     }
@@ -1658,6 +1666,11 @@ impl BottomPane {
             && !self.inline_banner_accepts_dismissal()
     }
 
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn shortcut_overlay_visible(&self) -> bool {
+        self.no_modal_or_popup_active() && self.composer.shortcut_overlay_visible()
+    }
+
     /// Return true when no popups or modal views are active, regardless of task state.
     pub(crate) fn can_launch_external_editor(&self) -> bool {
         self.view_stack.is_empty()
@@ -2011,6 +2024,16 @@ impl BottomPane {
         &'_ self,
         composer_right_reserve: u16,
     ) -> RenderableItem<'_> {
+        self.as_renderable_with_options(ComposerRenderOptions {
+            textarea_right_reserve: composer_right_reserve,
+            ..ComposerRenderOptions::default()
+        })
+    }
+
+    pub(crate) fn as_renderable_with_options<'a>(
+        &'a self,
+        options: ComposerRenderOptions<'a>,
+    ) -> RenderableItem<'a> {
         if (self.is_task_running || !self.view_stack.is_empty())
             && let Some(banner) = &self.inline_banner
         {
@@ -2104,12 +2127,12 @@ impl BottomPane {
             flex2.push(/*flex*/ 1, RenderableItem::Owned(flex.into()));
             let composer: RenderableItem<'_> = if let Some(questions) = question_editor {
                 RenderableItem::Borrowed(questions.as_ref())
-            } else if composer_right_reserve == 0 {
+            } else if options.textarea_right_reserve == 0 && options.footer.is_none() {
                 RenderableItem::Borrowed(&self.composer)
             } else {
                 RenderableItem::Owned(Box::new(ChatComposerRightReserveRenderable {
                     composer: &self.composer,
-                    right_reserve: composer_right_reserve,
+                    options,
                 }))
             };
             flex2.push(/*flex*/ 0, composer);
@@ -2160,27 +2183,22 @@ impl BottomPane {
 
 struct ChatComposerRightReserveRenderable<'a> {
     composer: &'a chat_composer::ChatComposer,
-    right_reserve: u16,
+    options: ComposerRenderOptions<'a>,
 }
 
 impl Renderable for ChatComposerRightReserveRenderable<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.composer.render_with_mask_and_textarea_right_reserve(
-            area,
-            buf,
-            /*mask_char*/ None,
-            self.right_reserve,
-        );
+        self.composer
+            .render_with_options(area, buf, /*mask_char*/ None, self.options);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         self.composer
-            .desired_height_with_textarea_right_reserve(width, self.right_reserve)
+            .desired_height_with_options(width, self.options)
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.composer
-            .cursor_pos_with_textarea_right_reserve(area, self.right_reserve)
+        self.composer.cursor_pos_with_options(area, self.options)
     }
 
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
@@ -2202,12 +2220,6 @@ impl Renderable for BottomPane {
     fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
         self.as_renderable().cursor_style(area)
     }
-}
-
-/// Transcript status and selection feedback, shared with the composer in fullscreen mode.
-pub(crate) struct TranscriptFooter {
-    pub(crate) text: ratatui::text::Text<'static>,
-    pub(crate) cursor_column: Option<u16>,
 }
 
 #[cfg(test)]

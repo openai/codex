@@ -36,7 +36,7 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         self.transcript_cells.push(cell.clone());
-        let deferred = self.native_history.insert(&cell);
+        let deferred = tui.is_owned_screen() || self.native_history.insert(&cell);
         self.render_inserted_history_cell(tui, &cell, deferred);
         // A committed cell can unblock a settled /usage card that was waiting
         // behind a transient active cell or a provisional stream tail.
@@ -125,6 +125,11 @@ impl App {
     }
 
     pub(crate) fn refresh_thread_usage_history_tail(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        if tui.is_owned_screen() {
+            self.pending_thread_usage_history_refresh = false;
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
         let Some(status_history) = self.last_thread_usage_status_cell.as_ref() else {
             self.pending_thread_usage_history_refresh = false;
             return Ok(());
@@ -297,6 +302,18 @@ impl App {
     }
 
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
+        if tui.is_owned_screen() {
+            if !self.transcript_cells.iter().any(|cell| {
+                cell.as_any().is::<history_cell::SessionInfoCell>()
+                    || cell.as_any().is::<history_cell::SessionHeaderHistoryCell>()
+            }) {
+                let header: Arc<dyn HistoryCell> =
+                    Arc::new(self.clear_ui_header_cell(CODEX_CLI_VERSION));
+                self.transcript_cells.insert(/*index*/ 0, header);
+            }
+            tui.frame_requester().schedule_frame();
+            return;
+        }
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
@@ -348,6 +365,7 @@ impl App {
         self.overlay = None;
         self.transcript_cells.clear();
         self.native_history = Default::default();
+        self.transcript_view = crate::transcript_view::TranscriptView::default();
         self.last_rendered_history_tail = None;
         self.last_thread_usage_status_cell = None;
         self.pending_thread_usage_history_refresh = false;

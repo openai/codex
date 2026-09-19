@@ -70,7 +70,9 @@ impl App {
         if !app_server.is_older_history_page_pending(thread_id, cursor) {
             return Ok(());
         }
-        if self.chat_widget.thread_id() != Some(thread_id) {
+        if self.chat_widget.thread_id() != Some(thread_id)
+            || (tui.is_owned_screen() && !self.scrollback_has_older_history)
+        {
             app_server.cancel_older_history_page(thread_id, cursor);
             return Ok(());
         }
@@ -120,12 +122,18 @@ impl App {
             visibility,
         );
         let inserted = self.prepend_older_transcript_cells(cells, width);
+        self.transcript_view
+            .history_loaded(&self.transcript_cells, inserted.clone());
         if !inserted.is_empty() {
             self.join_older_activity_group(inserted.end, &turns);
         }
         merge_older_turns(&mut store.lock().await.turns, turns);
         self.scrollback_has_older_history = app_server.has_older_history(thread_id);
 
+        if tui.is_owned_screen() {
+            self.finish_owned_history_page(tui, app_server, thread_id);
+            return Ok(());
+        }
         self.finish_inline_history_page(tui, app_server, thread_id, width);
         Ok(())
     }
@@ -190,6 +198,8 @@ impl App {
             self.transcript_cells.remove(index);
         }
         self.native_history.retain(&self.transcript_cells);
+        self.transcript_view
+            .history_loaded(&self.transcript_cells, 0..0);
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             overlay.replace_cells(self.transcript_cells.clone());
         }
@@ -258,6 +268,40 @@ impl App {
         let inserted = index..index + cells.len();
         self.transcript_cells.splice(index..index, cells);
         inserted
+    }
+
+    /// Continue explicit history traversal without rewriting native scrollback.
+    fn finish_owned_history_page(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        let previous = self.transcript_view.history;
+        self.transcript_view.history = if self.scrollback_has_older_history {
+            TranscriptHistoryState::Partial
+        } else {
+            TranscriptHistoryState::Complete
+        };
+        let continue_to_start = previous == TranscriptHistoryState::LoadingBeginning;
+        if continue_to_start && !self.scrollback_has_older_history {
+            self.transcript_view
+                .jump_to_entry(&self.transcript_cells, /*index*/ 0);
+        }
+        if self.scrollback_has_older_history
+            && (continue_to_start || self.transcript_view.needs_history(&self.transcript_cells))
+            && self.request_older_history_page(app_server, thread_id)
+        {
+            self.transcript_view.history = if continue_to_start {
+                TranscriptHistoryState::LoadingBeginning
+            } else {
+                TranscriptHistoryState::LoadingOlder
+            };
+        }
+        if self.backtrack.overlay_preview_active {
+            self.apply_backtrack_selection_internal(self.backtrack.nth_user_message);
+        }
+        tui.frame_requester().schedule_frame();
     }
 
     /// Preserve the legacy overlay and inline scrollback refill behavior.

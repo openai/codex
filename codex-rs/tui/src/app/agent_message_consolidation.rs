@@ -40,7 +40,9 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.insert_cell(cell.clone());
             }
-            self.native_history.defer(&cell);
+            if !tui.is_owned_screen() {
+                self.native_history.defer(&cell);
+            }
             self.transcript_cells.push(cell);
         }
 
@@ -65,6 +67,8 @@ impl App {
             );
             self.native_history
                 .consolidate(&self.transcript_cells[start..end], &consolidated);
+            self.transcript_view
+                .replace_range(&self.transcript_cells, start..end, &consolidated);
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
 
@@ -89,6 +93,12 @@ impl App {
         tui: &mut tui::Tui,
         scrollback_reflow: ConsolidationScrollbackReflow,
     ) -> Result<()> {
+        if tui.is_owned_screen() {
+            self.transcript_reflow.clear_pending_reflow();
+            self.transcript_reflow.clear_stream_flags();
+            tui.frame_requester().schedule_frame();
+            return Ok(());
+        }
         match scrollback_reflow {
             ConsolidationScrollbackReflow::IfResizeReflowRan => {
                 self.maybe_finish_stream_reflow(tui)?;

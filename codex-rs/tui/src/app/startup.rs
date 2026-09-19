@@ -6,6 +6,7 @@
 use super::reconnect::ReconnectState;
 use super::*;
 use crate::session_start::SessionStartAction;
+use crate::session_start::SessionStartConfig;
 use crate::session_start::SessionStartOutcome;
 use crate::session_start::cancel_session_start;
 use crate::session_start::complete_session_start;
@@ -181,7 +182,9 @@ impl App {
             Ok(())
         }
 
-        let mut local_settings = crate::local_settings::LocalSettings::from(&config);
+        // Adopt actual launch ownership before constructing session-local preferences.
+        tui.prepare_owned_screen(config.features.enabled(Feature::TranscriptV2))?;
+        let mut local_settings = crate::local_settings::LocalSettings::for_tui(&config, tui);
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -514,7 +517,10 @@ impl App {
                     let action = SessionStartAction::Resume(model_settings);
                     let resumed = complete_session_start(
                         &mut app_server,
-                        &config,
+                        SessionStartConfig {
+                            config: &config,
+                            local_settings: &local_settings,
+                        },
                         &app_server_target,
                         &target_session,
                         action,
@@ -610,7 +616,10 @@ impl App {
                 let action = SessionStartAction::Fork(permission_mode);
                 let forked = complete_session_start(
                     &mut app_server,
-                    &config,
+                    SessionStartConfig {
+                        config: &config,
+                        local_settings: &local_settings,
+                    },
                     &app_server_target,
                     &target_session,
                     action,
@@ -741,6 +750,7 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             key_chord_matcher: KeyChordMatcher::default(),
             transcript_cells: Vec::new(),
+            transcript_view: Default::default(),
             native_history: Default::default(),
             last_rendered_history_tail: None,
             last_thread_usage_status_cell: None,
