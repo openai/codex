@@ -87,18 +87,17 @@ impl AsyncQuestions {
         use ratatui::text::Line;
         use ratatui::widgets::Widget;
 
-        let row_width = area.width.saturating_add(1);
         let input = self.other_input_area(area);
         let named_area = Rect::new(area.x, area.y, area.width, input.y.saturating_sub(area.y));
         let mut rows = self.option_rows();
         rows.pop();
         let mut state = ScrollState::default();
         while state.scroll_top + 1 < rows.len()
-            && measure_rows_height(&rows, &state, rows.len(), row_width) > named_area.height
+            && measure_rows_height(&rows, &state, rows.len(), named_area.width) > named_area.height
         {
             state.scroll_top += 1;
         }
-        if measure_rows_height(&rows, &state, rows.len(), row_width) <= named_area.height {
+        if measure_rows_height(&rows, &state, rows.len(), named_area.width) <= named_area.height {
             self.visible_options
                 .set((state.scroll_top, rows.len() - state.scroll_top));
         }

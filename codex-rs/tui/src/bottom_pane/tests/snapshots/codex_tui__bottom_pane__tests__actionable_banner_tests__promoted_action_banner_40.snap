@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/tests/actionable_banner_tests.rs
+expression: rendered
+---
+                                        
+  Usage limit reached                   
+  Review your usage or keep working     
+  with another model.                   
+                                        
+                                        
+› 1. View usage                         
+                                        
+  f3 select · f2 back

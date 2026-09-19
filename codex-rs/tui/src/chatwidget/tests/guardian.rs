@@ -206,7 +206,7 @@ async fn auto_review_denials_popup_lists_stored_auto_review_denials() {
 
     chat.open_auto_review_denials_popup();
 
-    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    let popup = render_bottom_popup(&chat, /*width*/ 40);
     assert_chatwidget_snapshot!("auto_review_denials_popup", popup);
 }
 

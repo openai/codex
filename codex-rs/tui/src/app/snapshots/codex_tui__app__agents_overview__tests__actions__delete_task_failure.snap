@@ -7,6 +7,7 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
   id 00000000-0000-0000-0000-000000000001 (code -32600)
   Work may have stopped. Resume the task to continue, or retry the action.
 
+
 › 1. Back to agents
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

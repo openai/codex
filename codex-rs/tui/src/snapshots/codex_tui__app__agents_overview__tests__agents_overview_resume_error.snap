@@ -5,6 +5,7 @@ expression: "render_bottom_popup(&app.chat_widget, 96)"
   Unable to resume session
   The session is unavailable.
 
+
 › 1. Return to command center
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

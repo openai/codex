@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/tests/picker_hint_tests.rs
+expression: rendered
+---
+  Choose an action                                          
+                                                            
+                                                            
+› 1. Continue                                               
+                                                            
+  f3 select · f2 back

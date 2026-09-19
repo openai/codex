@@ -385,6 +385,7 @@ impl App {
                 let allow_background = running_side_thread_id.is_none()
                     && !self.chat_widget.has_queued_follow_up_messages();
                 self.chat_widget.show_selection_view(SelectionViewParams {
+                    appearance: crate::bottom_pane::SelectionAppearance::Picker,
                     title: Some("Task is still running".to_string()),
                     subtitle: Some("Choose what happens to the current task.".to_string()),
                     footer_hint: Some(standard_popup_hint_line()),
@@ -419,7 +420,7 @@ impl App {
                         ..Default::default()
                     })
                     .collect(),
-                    ..Default::default()
+                    ..SelectionViewParams::picker()
                 });
                 return;
             }

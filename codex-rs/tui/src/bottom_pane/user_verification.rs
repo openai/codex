@@ -90,6 +90,7 @@ impl UserVerificationView {
             .collect();
         let header = prompt_header(&request);
         let params = SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             footer_note: Some(
                 accept_cancel_hint_line(
                     list_keymap.primary_hint(ListAction::Accept),
@@ -101,7 +102,9 @@ impl UserVerificationView {
             ),
             items,
             header,
-            ..Default::default()
+            header_view_all_hint: approval_keymap
+                .primary_hint("open_fullscreen", &approval_keymap.open_fullscreen),
+            ..SelectionViewParams::picker()
         };
         Self {
             request,

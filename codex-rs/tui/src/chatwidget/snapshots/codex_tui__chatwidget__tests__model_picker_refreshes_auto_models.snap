@@ -1,12 +1,14 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3393
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model
   Pick a quick auto mode or browse all models.
 
-  1. GPT-5.5               Auto model
-› 2. All models (current)  Choose a specific model and reasoning level
-                           (current: GPT-5.5)
 
-  Press enter to confirm or esc to go back
+  1. GPT-5.5               Auto model
+› 2. All models (current)  Choose a specific model and reasoning level (current:
+                           GPT-5.5)
+
+  enter select · esc back

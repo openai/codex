@@ -388,6 +388,7 @@ pub(crate) fn build_theme_picker_params(
         }) as Box<dyn Fn(&crate::app_event_sender::AppEventSender) + Send + Sync>,
     );
     SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         title: Some("Select Syntax Theme".to_string()),
         subtitle: Some(theme_picker_subtitle(
             codex_home_owned.as_deref(),
@@ -405,7 +406,7 @@ pub(crate) fn build_theme_picker_params(
         preserve_side_content_bg: true,
         on_selection_changed,
         on_cancel,
-        ..Default::default()
+        ..SelectionViewParams::picker()
     }
 }
 

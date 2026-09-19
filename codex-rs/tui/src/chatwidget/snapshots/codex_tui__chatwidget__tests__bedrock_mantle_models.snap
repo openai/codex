@@ -1,8 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
+assertion_line: 42
 expression: "render_bottom_popup(&chat, 100)"
 ---
   Select Model and Effort
+
 
 › 1. GPT-5.6 Sol (current)  Latest frontier agentic coding model.
   2. GPT-6-Astra            Our most capable model for complex, demanding work.
@@ -11,4 +13,4 @@ expression: "render_bottom_popup(&chat, 100)"
   5. GPT-5.5                Frontier model for complex coding, research, and real-world work.
   6. GPT-5.4                Strong model for everyday coding.
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

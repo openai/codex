@@ -54,7 +54,6 @@ impl Renderable for AsyncQuestions {
             .bold()
             .render(sections.question_area, buf);
 
-        // The shared measurer reserves a scrollbar column; this renderer uses the full width.
         let option_rows = self.option_rows();
 
         if self.other_selected() {
@@ -69,7 +68,7 @@ impl Renderable for AsyncQuestions {
                         std::slice::from_ref(row),
                         &super::ScrollState::default(),
                         /*max_results*/ 1,
-                        sections.options_area.width.saturating_add(1),
+                        sections.options_area.width,
                     )
                 })
                 .collect();

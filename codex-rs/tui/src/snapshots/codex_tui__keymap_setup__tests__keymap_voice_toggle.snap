@@ -9,12 +9,11 @@ expression: "render_picker(build_keymap_action_menu_params(\"chat\".into(),\n\"t
   Config `tui.keymap.chat.toggle_voice`
   Start or stop a voice conversation.
 
+
 › 1. Replace binding                   Capture a replacement key for `f8`.
   2. Add alternate binding             Keep `f8` and add another key.
-  3. Replace with key chord            Replace `f8` with a two-stroke key
-                                       chord.
-  4. Add alternate key chord           Keep `f8` and add a two-stroke key
-                                       chord.
+  3. Replace with key chord            Replace `f8` with a two-stroke key chord.
+  4. Add alternate key chord           Keep `f8` and add a two-stroke key chord.
   –  Remove custom binding (disabled)  No custom root override to remove.
   5. Back to shortcuts                 Return to the shortcut list.
 

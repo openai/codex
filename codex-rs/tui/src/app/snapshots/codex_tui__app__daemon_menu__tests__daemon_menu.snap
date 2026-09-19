@@ -5,7 +5,8 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
   Daemon
   Running daemon: v0.153.0
 
+
 › 1. Install latest public stable
   2. Use this CLI build
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

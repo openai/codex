@@ -1,4 +1,7 @@
-//! Transient single-key and chord capture for the `/keymap` shortcut editor.
+//! Transient single-key and chord capture inside the shared `/keymap` panel.
+//!
+//! Content is measured at the inset width, including wrapped action identifiers.
+//! Raw key capture remains independent of list navigation bindings.
 
 use super::key_event_to_config_key_spec;
 use crate::app_event::AppEvent;
@@ -7,7 +10,12 @@ use crate::app_event::KeymapEditIntent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::menu_surface_padding_height;
+use crate::bottom_pane::popup_content_width;
+use crate::bottom_pane::render_menu_surface;
 use crate::render::renderable::Renderable;
+use crate::style::accent_color;
+use crate::wrapping::word_wrap_lines;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -63,7 +71,7 @@ impl KeymapCaptureView {
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let wrap_width = usize::from(width.max(1));
-        let mut lines = vec![
+        let header = vec![
             Line::from("Remap Shortcut".bold()),
             Line::from(vec![
                 "Action: ".dim(),
@@ -71,8 +79,12 @@ impl KeymapCaptureView {
                 "  ".into(),
                 format!("{}.{}", self.context, self.action).dim(),
             ]),
-            Line::from(vec!["Current: ".dim(), self.current_binding.clone().cyan()]),
+            Line::from(vec![
+                "Current: ".dim(),
+                self.current_binding.clone().fg(accent_color()),
+            ]),
         ];
+        let mut lines = word_wrap_lines(&header, wrap_width);
 
         let instructions = match (self.capture_mode, self.first_stroke.as_deref()) {
             (KeymapCaptureMode::SingleKey, _) => "Press the new key now. Esc cancels.".to_string(),
@@ -107,11 +119,13 @@ impl KeymapCaptureView {
 
 impl Renderable for KeymapCaptureView {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(self.lines(area.width)).render(area, buf);
+        let content_area = render_menu_surface(area, buf);
+        Paragraph::new(self.lines(content_area.width)).render(content_area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.lines(width).len() as u16
+        (self.lines(popup_content_width(width)).len() as u16)
+            .saturating_add(menu_surface_padding_height())
     }
 }
 

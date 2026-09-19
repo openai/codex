@@ -213,13 +213,14 @@ impl App {
             .collect();
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(AGENT_PICKER_VIEW_ID),
             title: Some("Subagents".to_string()),
             subtitle: Some(AgentNavigationState::picker_subtitle()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 

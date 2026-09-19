@@ -153,7 +153,7 @@ impl From<ActionableBanner> for SelectionViewParams {
             header: Box::new(BannerContent(lines)),
             items: banner.actions,
             initial_selected_idx: banner.initial_selected_idx,
-            ..Default::default()
+            ..Self::picker()
         }
     }
 }

@@ -3096,7 +3096,12 @@ impl App {
             Ok(runtime_keymap) => runtime_keymap,
             Err(err) => {
                 let params = crate::keymap_setup::build_keymap_conflict_params(
-                    context, action, key, intent, err,
+                    context,
+                    action,
+                    key,
+                    intent,
+                    err,
+                    &self.keymap,
                 );
                 self.chat_widget.show_selection_view(params);
                 return;

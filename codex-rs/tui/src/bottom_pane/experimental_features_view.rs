@@ -421,12 +421,7 @@ impl Renderable for ExperimentalFeaturesView {
         let header_height = header.desired_height(content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_width = Self::rows_width(content_area.width);
-        let rows_height = measure_rows_height(
-            &rows,
-            &self.state,
-            MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
-        );
+        let rows_height = measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, rows_width);
         let [header_area, _, list_area] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
@@ -472,12 +467,7 @@ impl Renderable for ExperimentalFeaturesView {
     fn desired_height(&self, width: u16) -> u16 {
         let rows = self.build_rows();
         let rows_width = Self::rows_width(width);
-        let rows_height = measure_rows_height(
-            &rows,
-            &self.state,
-            MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
-        );
+        let rows_height = measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, rows_width);
 
         let mut height = self
             .header(width.saturating_sub(4))

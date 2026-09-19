@@ -166,6 +166,7 @@ impl ChatWidget {
             );
         }
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PRECAUTION_VIEW),
             header: Box::new(
                 Paragraph::new(vec![
@@ -178,7 +179,7 @@ impl ChatWidget {
             ),
             items,
             allow_cancel: false,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 
@@ -203,6 +204,7 @@ impl ChatWidget {
         let can_continue = review.continuation_message().is_some();
         self.bottom_pane.dismiss_view_by_id(PRECAUTION_VIEW);
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PRECAUTION_VIEW),
             title: Some("Chat paused as a precaution".to_string()),
             items: vec![
@@ -223,7 +225,7 @@ impl ChatWidget {
                 },
             ],
             allow_cancel: false,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

@@ -6,11 +6,13 @@ expression: "render_snapshot(&pane, area)"
   Usage limit reached                       
   Your included usage is depleted.          
   Choose an action to continue.             
+                                            
 › 1. Open usage settings                    
   2. Notify owner                           
   3. Extra action                           
                                             
   Press a number to choose · esc to dismiss 
+  · type to continue                        
                                             
 › Ask Codex to do anything                  
                                             

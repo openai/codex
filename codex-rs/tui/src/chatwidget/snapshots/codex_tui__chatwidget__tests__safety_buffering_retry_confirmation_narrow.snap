@@ -13,5 +13,6 @@ expression: "render_bottom_popup(&chat, 40)"
   using Faster Model, which may be
   less capable on complex tasks.
 
+
 › 1. Keep waiting
   2. Stop and retry

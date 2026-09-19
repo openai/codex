@@ -33,6 +33,21 @@ pub(crate) fn standard_popup_hint_line_for_keymap(list_keymap: &ListKeymap) -> L
     )
 }
 
+/// Compact footer for shared pickers, using only the configured list actions.
+pub(crate) fn picker_hint_line_for_keymap(list_keymap: &ListKeymap) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (action, label) in [(ListAction::Accept, "select"), (ListAction::Cancel, "back")] {
+        if let Some(hint) = list_keymap.primary_hint(action) {
+            if !spans.is_empty() {
+                spans.push(" · ".dim());
+            }
+            spans.extend(hint.spans());
+            spans.push(format!(" {label}").dim());
+        }
+    }
+    spans.into()
+}
+
 pub(crate) fn accept_cancel_hint_line(
     accept: Option<ShortcutHint>,
     accept_label: &'static str,

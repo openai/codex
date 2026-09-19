@@ -42,15 +42,14 @@ impl ChatWidget {
     pub(super) fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
         let title = title.to_string();
         let subtitle = subtitle.to_string();
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from(title.bold()));
+        let mut header = vec![Line::from(title.bold())];
         if !subtitle.is_empty() {
             header.push(Line::from(subtitle.dim()));
         }
         if let Some(warning) = self.model_menu_warning_line() {
             header.push(warning);
         }
-        Box::new(header)
+        Box::new(Paragraph::new(header).wrap(Wrap { trim: false }))
     }
 
     fn model_menu_warning_line(&self) -> Option<Line<'static>> {
@@ -191,11 +190,11 @@ impl ChatWidget {
         self.show_model_selection_view(
             model_ids,
             SelectionViewParams {
+                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 view_id: Some(MODEL_SELECTION_VIEW_ID),
-                footer_hint: Some(standard_popup_hint_line()),
                 items,
                 header,
-                ..Default::default()
+                ..SelectionViewParams::picker()
             },
         );
     }
@@ -284,11 +283,11 @@ impl ChatWidget {
         self.show_model_selection_view(
             model_ids,
             SelectionViewParams {
+                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 view_id: Some(view_id),
-                footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
                 items,
                 header,
-                ..Default::default()
+                ..SelectionViewParams::picker()
             },
         );
     }
@@ -451,9 +450,9 @@ impl ChatWidget {
         })];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some(PLAN_MODE_REASONING_SCOPE_TITLE.to_string()),
             subtitle: Some(subtitle),
-            footer_hint: Some(standard_popup_hint_line()),
             items: vec![
                 SelectionItem {
                     name: PLAN_MODE_REASONING_SCOPE_PLAN_ONLY.to_string(),
@@ -470,7 +469,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
         self.notify(Notification::PlanModePrompt {
             title: PLAN_MODE_REASONING_SCOPE_TITLE.to_string(),
@@ -639,17 +638,17 @@ impl ChatWidget {
             });
         }
 
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from(
+        let header = Paragraph::new(Line::from(
             format!("Select Reasoning Level for {model_label}").bold(),
-        ));
+        ))
+        .wrap(Wrap { trim: false });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
             items,
             initial_selected_idx,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 
@@ -707,14 +706,16 @@ impl ChatWidget {
             });
         }
 
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Advanced Reasoning".bold()));
-        header.push(Line::from("⚠ Consumes usage limits faster".cyan()));
+        let header = Paragraph::new(vec![
+            Line::from("Advanced Reasoning".bold()),
+            Line::from("⚠ Consumes usage limits faster".cyan()),
+        ])
+        .wrap(Wrap { trim: false });
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(header),
-            footer_hint: Some(standard_popup_hint_line()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

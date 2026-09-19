@@ -47,6 +47,7 @@ impl ChatWidget {
             };
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(USAGE_MENU_VIEW_ID),
             title: Some("Usage".to_string()),
             subtitle: Some("View account usage or redeem an earned reset.".to_string()),
@@ -108,6 +109,7 @@ impl ChatWidget {
         let request_id = self.take_next_rate_limit_reset_request_id();
         self.pending_rate_limit_reset_request_id = Some(request_id);
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),
             subtitle: Some("Checking your available resets...".to_string()),
@@ -207,6 +209,7 @@ impl ChatWidget {
             ..Default::default()
         });
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),
             subtitle: Some(format!(
@@ -247,6 +250,7 @@ impl ChatWidget {
             |reset_detail| format!("{reset_title} · {reset_detail}"),
         );
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_CONFIRMATION_VIEW_ID),
             title: Some("Use this reset?".to_string()),
             subtitle: Some(subtitle),
@@ -295,6 +299,7 @@ impl ChatWidget {
 
     fn rate_limit_reset_message_params(message: &str) -> SelectionViewParams {
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),
             subtitle: Some(message.to_string()),
@@ -309,6 +314,7 @@ impl ChatWidget {
 
     fn reset_refresh_params(message: &str) -> SelectionViewParams {
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),
             subtitle: Some(message.to_string()),
@@ -342,6 +348,7 @@ impl ChatWidget {
         self.bottom_pane
             .dismiss_view_by_id(RATE_LIMIT_RESET_VIEW_ID);
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),
             subtitle: Some("Resetting your usage...".to_string()),
@@ -407,6 +414,7 @@ impl ChatWidget {
                 self.pending_rate_limit_reset_request_id = None;
                 self.pending_rate_limit_reset_idempotency_key = Some(idempotency_key.clone());
                 self.replace_rate_limit_reset_popup(SelectionViewParams {
+                    appearance: crate::bottom_pane::SelectionAppearance::Picker,
                     view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
                     title: Some("Usage limit resets".to_string()),
                     subtitle: Some("Couldn't reset usage. Please try again.".to_string()),
@@ -466,6 +474,7 @@ impl ChatWidget {
 
     fn rate_limit_reset_success_loading_params() -> SelectionViewParams {
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_RESET_VIEW_ID),
             title: Some("Usage limit resets".to_string()),
             subtitle: Some("Usage reset. Checking your remaining resets...".to_string()),

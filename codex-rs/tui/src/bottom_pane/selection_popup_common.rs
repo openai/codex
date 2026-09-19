@@ -23,7 +23,6 @@ use super::scroll_state::ScrollState;
 use super::selection_row_layout::SelectionDescriptionLayout;
 use super::selection_row_layout::build_full_line;
 use super::selection_row_layout::line_to_owned;
-use super::selection_row_layout::wrap_stacked_row;
 
 /// Render-ready representation of one row in a selection popup.
 ///
@@ -39,8 +38,8 @@ pub(crate) struct GenericDisplayRow {
     pub display_shortcut: Option<ShortcutHint>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
-    pub category_tag: Option<String>,      // optional right-side category label
-    pub disabled_reason: Option<String>,   // optional disabled message
+    pub category_tag: Option<String>,
+    pub disabled_reason: Option<String>, // optional disabled message
     pub is_disabled: bool,
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
 }
@@ -50,15 +49,12 @@ pub(crate) struct GenericDisplayRow {
 /// Callers should use the same mode for both measurement and rendering, or the
 /// popup can reserve the wrong number of lines and clip content.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum ColumnWidthMode {
     /// Derive column placement from only the visible viewport rows.
     #[default]
     AutoVisible,
     /// Derive column placement from all rows so scrolling does not shift columns.
     AutoAllRows,
-    /// Use a fixed two-column split: 30% left (name), 70% right (description).
-    Fixed,
 }
 
 /// Column-width behavior plus an optional shared left-column width override.
@@ -86,11 +82,6 @@ impl ColumnWidthConfig {
         self
     }
 }
-
-// Fixed split used by explicitly fixed column mode: 30% label, 70%
-// description.
-const FIXED_LEFT_COLUMN_NUMERATOR: usize = 3;
-const FIXED_LEFT_COLUMN_DENOMINATOR: usize = 10;
 
 const MENU_SURFACE_INSET_V: u16 = 1;
 const MENU_SURFACE_INSET_H: u16 = 2;
@@ -149,58 +140,42 @@ fn compute_desc_col(
         return 0;
     }
 
-    let max_desc_col = content_width.saturating_sub(1) as usize;
-    // Reuse the existing fixed split constants to derive the auto cap:
-    // if fixed mode is 30/70 (label/description), auto mode caps label width
-    // at 70% to keep at least 30% available for descriptions.
-    let max_auto_desc_col = max_desc_col.min(
-        ((content_width as usize * (FIXED_LEFT_COLUMN_DENOMINATOR - FIXED_LEFT_COLUMN_NUMERATOR))
-            / FIXED_LEFT_COLUMN_DENOMINATOR)
-            .max(1),
-    );
-    match column_width.mode {
-        ColumnWidthMode::Fixed => ((content_width as usize * FIXED_LEFT_COLUMN_NUMERATOR)
-            / FIXED_LEFT_COLUMN_DENOMINATOR)
-            .clamp(1, max_desc_col),
-        ColumnWidthMode::AutoVisible | ColumnWidthMode::AutoAllRows => {
-            let max_name_width = match column_width.mode {
-                ColumnWidthMode::AutoVisible => rows_all
-                    .iter()
-                    .enumerate()
-                    .skip(start_idx)
-                    .take(visible_items)
-                    .map(|(_, row)| {
-                        let mut spans = row.name_prefix_spans.clone();
-                        spans.push(row.name.clone().into());
-                        if row.disabled_reason.is_some() {
-                            spans.push(" (disabled)".dim());
-                        }
-                        line_width(&Line::from(spans))
-                    })
-                    .max()
-                    .unwrap_or(0),
-                ColumnWidthMode::AutoAllRows => rows_all
-                    .iter()
-                    .map(|row| {
-                        let mut spans = row.name_prefix_spans.clone();
-                        spans.push(row.name.clone().into());
-                        if row.disabled_reason.is_some() {
-                            spans.push(" (disabled)".dim());
-                        }
-                        line_width(&Line::from(spans))
-                    })
-                    .max()
-                    .unwrap_or(0),
-                ColumnWidthMode::Fixed => 0,
-            };
+    // Leave at least 30% of the content width available for descriptions.
+    let max_desc_col = usize::from(content_width.saturating_sub(/*rhs*/ 1));
+    let max_auto_desc_col =
+        max_desc_col.min((usize::from(content_width) * 70 / 100).max(/*other*/ 1));
+    let (start, count) = match column_width.mode {
+        ColumnWidthMode::AutoVisible => (start_idx, visible_items),
+        ColumnWidthMode::AutoAllRows => (0, rows_all.len()),
+    };
+    let max_name_width = rows_all
+        .iter()
+        .skip(start)
+        .take(count)
+        .map(|row| {
+            let mut spans = row.name_prefix_spans.clone();
+            spans.push(row.name.clone().into());
+            if row.disabled_reason.is_some() {
+                spans.push(" (disabled)".dim());
+            }
+            line_width(&Line::from(spans))
+        })
+        .max()
+        .unwrap_or(/*default*/ 0);
 
-            column_width
-                .name_column_width
-                .map(|width| width.max(max_name_width))
-                .unwrap_or(max_name_width)
-                .saturating_add(2)
-                .min(max_auto_desc_col)
-        }
+    let desc_col = column_width
+        .name_column_width
+        .map(|width| width.max(max_name_width))
+        .unwrap_or(max_name_width)
+        .saturating_add(/*rhs*/ 2)
+        .min(max_auto_desc_col);
+    if column_width
+        .description_layout
+        .should_hide(content_width, desc_col)
+    {
+        0
+    } else {
+        desc_col
     }
 }
 
@@ -208,7 +183,9 @@ fn compute_desc_col(
 fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usize {
     let max_indent = max_width.saturating_sub(1) as usize;
     let indent = row.wrap_indent.unwrap_or_else(|| {
-        if row.description.is_some() || row.disabled_reason.is_some() {
+        if desc_col == 0 {
+            line_width(&Line::from(row.name_prefix_spans.clone()))
+        } else if row.description.is_some() || row.disabled_reason.is_some() {
             desc_col
         } else {
             0
@@ -219,7 +196,7 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
 
 fn should_wrap_name_in_column(row: &GenericDisplayRow) -> bool {
     // This path intentionally targets plain option rows that opt into wrapped
-    // labels. Styled/fuzzy-matched rows keep the legacy combined-line path.
+    // labels. Styled/fuzzy-matched rows use the combined-line path.
     row.wrap_indent.is_some()
         && row.description.is_some()
         && row.disabled_reason.is_none()
@@ -317,10 +294,7 @@ fn wrap_row_lines(
     width: u16,
     description_layout: SelectionDescriptionLayout,
 ) -> Vec<Line<'static>> {
-    if description_layout.should_stack(width, desc_col) {
-        return wrap_stacked_row(row, width);
-    }
-    if should_wrap_name_in_column(row) {
+    if desc_col > 0 && should_wrap_name_in_column(row) {
         let wrapped = wrap_two_column_row(row, desc_col, width);
         if !wrapped.is_empty() {
             return wrapped;
@@ -753,11 +727,12 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
 
 /// Compute the number of terminal rows required to render up to `max_results`
 /// items from `rows_all` given the current scroll/selection state and the
-/// available `width`. Accounts for description wrapping and alignment so the
-/// caller can allocate sufficient vertical space.
+/// available `width`. Pass the render area's width after applying caller insets;
+/// this helper does not reserve a scrollbar column. Accounts for description
+/// wrapping and alignment so the caller can allocate sufficient vertical space.
 ///
 /// This function matches [`render_rows`] semantics (`AutoVisible` column
-/// sizing). Mixing it with stable or fixed render modes can under- or
+/// sizing). Mixing it with stable render modes can under- or
 /// over-estimate required height.
 pub(crate) fn measure_rows_height(
     rows_all: &[GenericDisplayRow],
@@ -798,7 +773,8 @@ fn measure_rows_height_inner(
         return 1; // placeholder "no matches" line
     }
 
-    let content_width = width.saturating_sub(1).max(1);
+    // Match the renderer's full row width so exact-fit descriptions do not reserve an extra line.
+    let content_width = width.max(/*other*/ 1);
 
     let visible_items = max_results.min(rows_all.len());
     let mut start_idx = state.scroll_top.min(rows_all.len().saturating_sub(1));
@@ -849,6 +825,113 @@ mod tests {
     use ratatui::layout::Rect;
     use ratatui::style::Color;
     use ratatui::style::Modifier;
+
+    #[test]
+    fn narrow_description_columns_hide_without_stacking() {
+        let rows = [
+            GenericDisplayRow {
+                name: "日本語".into(),
+                name_prefix_spans: vec!["› 1. ".into()],
+                description: Some("Details".into()),
+                ..Default::default()
+            },
+            GenericDisplayRow {
+                name: "Blocked".into(),
+                name_prefix_spans: vec!["  2. ".into()],
+                disabled_reason: Some("Unavailable".into()),
+                is_disabled: true,
+                ..Default::default()
+            },
+        ];
+        let state = ScrollState::new();
+        let columns = ColumnWidthConfig::new(
+            ColumnWidthMode::AutoAllRows,
+            /*name_column_width*/ None,
+        )
+        .with_description_layout(SelectionDescriptionLayout::HideWhenNarrow {
+            min_description_width: 24,
+        });
+        let mut snapshots = Vec::new();
+        for width in [48, 49, 80] {
+            let height = measure_rows_height_with_col_width_mode(
+                &rows, &state, /*max_results*/ 2, width, columns,
+            );
+            assert_eq!(height, 2);
+            let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+            let mut wrapped = Buffer::empty(area);
+            render_rows_with_col_width_mode(
+                area,
+                &mut wrapped,
+                &rows,
+                &state,
+                /*max_results*/ 2,
+                "",
+                columns,
+            );
+            let mut single_line = Buffer::empty(area);
+            render_rows_single_line_with_col_width_mode(
+                area,
+                &mut single_line,
+                &rows,
+                &state,
+                /*max_results*/ 2,
+                "",
+                columns,
+            );
+            assert_eq!(wrapped, single_line);
+            let text = wrapped
+                .content
+                .chunks(usize::from(width))
+                .map(|row| {
+                    row.iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.contains("Details"), width >= 49);
+            assert_eq!(text.contains("Unavailable"), width >= 49);
+            assert!(text.contains("Blocked (disabled)"));
+            snapshots.push(format!("width={width}\n{text}"));
+        }
+        insta::assert_snapshot!("description_column_visibility", snapshots.join("\n\n"));
+    }
+
+    #[test]
+    fn exact_fit_description_reserves_only_the_rendered_row() {
+        let rows = [GenericDisplayRow {
+            name: "/model".to_string(),
+            description: Some("fits exactly".to_string()),
+            ..Default::default()
+        }];
+        let state = ScrollState::new();
+        let width = 20;
+        let height = measure_rows_height(&rows, &state, /*max_results*/ 1, width);
+        let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let rendered = render_rows(
+            area,
+            &mut buf,
+            &rows,
+            &state,
+            /*max_results*/ 1,
+            "no matches",
+        );
+        assert_eq!(height, rendered);
+        let text = buf
+            .content()
+            .chunks(usize::from(width))
+            .map(|row| {
+                row.iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(text, @"/model  fits exactly");
+    }
 
     #[test]
     fn one_cell_width_falls_back_without_panic_for_wrapped_two_column_rows() {

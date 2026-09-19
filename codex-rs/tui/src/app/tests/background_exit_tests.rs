@@ -221,16 +221,11 @@ async fn daemon_ctrl_c_shows_background_exit_menu_and_escape_dismisses_it() -> R
     open_running_task_exit_menu(&mut app, &mut tui, &mut app_server).await;
 
     assert!(!app.chat_widget.no_modal_or_popup_active());
-    assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 90), @r"
-      Task is still running
-      Choose what happens to the current task.
-
-    › 1. Cancel task        Stop the current task and stay in Codex
-      2. Run in background  Exit Codex and leave the task running
-      3. Exit               Stop the current task and exit Codex
-
-      Press enter to confirm or esc to go back
-    ");
+    for width in [40, 90] {
+        let rendered = render_bottom_popup(&app.chat_widget, width);
+        assert!(rendered.contains("enter select · esc back"), "{rendered}");
+        insta::assert_snapshot!(format!("running_task_exit_picker_{width}"), rendered);
+    }
 
     app.handle_key_event(
         &mut tui,
@@ -489,14 +484,15 @@ async fn daemon_ctrl_c_hides_background_exit_for_running_background_side_thread(
         prepare_background_exit_test(&app, &mut app_event_rx, &mut op_rx).await?;
 
     open_running_task_exit_menu(&mut app, &mut tui, &mut app_server).await;
-    assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 90), @r"
+    assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 90), @"
       Task is still running
       Choose what happens to the current task.
+
 
     › 1. Cancel task  Stop the current task and stay in Codex
       2. Exit         Stop the current task and exit Codex
 
-      Press enter to confirm or esc to go back
+      enter select · esc back
     ");
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));

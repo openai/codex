@@ -206,6 +206,7 @@ impl ChatWidget {
             }
             SlashCommand::Archive => {
                 self.bottom_pane.show_selection_view(SelectionViewParams {
+                    appearance: crate::bottom_pane::SelectionAppearance::Picker,
                     title: Some("Archive this session?".to_string()),
                     subtitle: Some(
                         "Are you sure? This will archive the current session".to_string(),
@@ -228,12 +229,13 @@ impl ChatWidget {
                             ..Default::default()
                         },
                     ],
-                    ..Default::default()
+                    ..SelectionViewParams::picker()
                 });
                 self.request_redraw();
             }
             SlashCommand::Delete => {
                 self.bottom_pane.show_selection_view(SelectionViewParams {
+                    appearance: crate::bottom_pane::SelectionAppearance::Picker,
                     title: Some("Delete this session?".to_string()),
                     subtitle: Some(
                         "Cannot be undone. Subagent threads will also be deleted.".to_string(),
@@ -261,7 +263,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                     ],
-                    ..Default::default()
+                    ..SelectionViewParams::picker()
                 });
                 self.request_redraw();
             }

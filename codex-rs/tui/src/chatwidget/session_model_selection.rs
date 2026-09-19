@@ -56,15 +56,15 @@ impl ChatWidget {
         let mut hints = Vec::new();
         if let Some(accept) = keymap.primary_hint(ListAction::Accept) {
             let label = if effort == Some(ReasoningEffortConfig::Ultra) {
-                " to apply · "
+                " apply · "
             } else {
-                " to set as default · "
+                " default · "
             };
-            hints.extend([accept.into(), label.into()]);
+            hints.extend([accept.into(), label.dim()]);
         }
-        hints.extend([key.into(), " for this session".into()]);
+        hints.extend([key.into(), " session".dim()]);
         if let Some(cancel) = keymap.primary_hint(ListAction::Cancel) {
-            hints.extend([" · ".into(), cancel.into(), " to go back".into()]);
+            hints.extend([" · ".dim(), cancel.into(), " back".dim()]);
         }
         let warning = effort
             .as_ref()

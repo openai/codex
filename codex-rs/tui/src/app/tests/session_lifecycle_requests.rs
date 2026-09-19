@@ -4335,10 +4335,11 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                   Subagents
                   Select an agent to watch. ⌥+← previous, ⌥+→ next.
 
+
                 › 1. • Main [default] (current)  [root]
                   2. • /root/worker              [child]
 
-                  Press enter to confirm or esc to go back
+                  enter select · esc back
                 "
                 );
                 assert_eq!(take_backfill_counts(&requests), (0, 0));
@@ -4653,9 +4654,10 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
                   Unable to complete action
                   Couldn't load this conversation. Please try again.
 
+
                 › 1. Return to command center
 
-                  Press enter to confirm or esc to go back
+                  enter select · esc back
                 ");
             }
             assert_eq!(app.current_displayed_thread_id(), Some(current_id));

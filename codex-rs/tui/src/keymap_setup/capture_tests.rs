@@ -16,6 +16,8 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -38,13 +40,21 @@ fn ctrl_key(code: KeyCode) -> KeyEvent {
 }
 
 fn capture_lines_at_width(view: &KeymapCaptureView, width: u16) -> String {
-    view.lines(width)
-        .into_iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
+    let area = Rect::new(
+        /*x*/ 0,
+        /*y*/ 0,
+        width,
+        view.desired_height(width),
+    );
+    let mut buf = Buffer::empty(area);
+    view.render(area, &mut buf);
+    (0..area.height)
+        .map(|y| {
+            (0..area.width)
+                .map(|x| buf[(x, y)].symbol())
                 .collect::<String>()
+                .trim_end()
+                .to_owned()
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -75,30 +85,35 @@ fn chord_capture_instruction_snapshots() {
 fn chord_capture_instructions_wrap_to_narrow_panes() {
     let (mut view, _rx) = capture_view();
 
-    insta::assert_snapshot!(capture_lines_at_width(&view, /*width*/ 24), @r"
+    insta::assert_snapshot!(capture_lines_at_width(&view, /*width*/ 24), @"
+
     Remap Shortcut
-    Action: Jump Top  list.jump_top
+    Action: Jump Top
+    list.jump_top
     Current: home
     Press the first key,
     then the second. Esc
     cancels.
     ");
-    assert_eq!(view.desired_height(/*width*/ 24), 6);
+    assert_eq!(view.desired_height(/*width*/ 24), 9);
 
     view.handle_key_event(KeyEvent::new(
         KeyCode::F(/*n*/ 24),
         KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT,
     ));
 
-    insta::assert_snapshot!(capture_lines_at_width(&view, /*width*/ 24), @r"
+    insta::assert_snapshot!(capture_lines_at_width(&view, /*width*/ 24), @"
+
     Remap Shortcut
-    Action: Jump Top  list.jump_top
+    Action: Jump Top
+    list.jump_top
     Current: home
-    First key: ctrl-alt-
-    shift-f24. Press the
-    second key. Esc cancels.
+    First key: ctrl-
+    alt-shift-f24. Press
+    the second key. Esc
+    cancels.
     ");
-    assert_eq!(view.desired_height(/*width*/ 24), 6);
+    assert_eq!(view.desired_height(/*width*/ 24), 10);
 }
 
 #[test]

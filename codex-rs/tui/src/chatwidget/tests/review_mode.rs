@@ -1113,7 +1113,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
             subject: "Fix bug Y".to_string(),
         },
     ];
-    super::show_review_commit_picker_with_entries(&mut chat, entries);
+    chat.show_review_commits(entries);
 
     // Render the bottom pane and inspect the lines for subjects and absence of time words.
     let width = 72;

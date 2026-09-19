@@ -5,8 +5,7 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc::unbounded_channel;
 
-fn render_view_lines(view: &UserVerificationView, width: u16) -> String {
-    let height = view.desired_height(width);
+fn render_view_lines(view: &UserVerificationView, width: u16, height: u16) -> String {
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
     view.render(Rect::new(0, 0, width, height), &mut buf);
     (0..buf.area.height)
@@ -60,16 +59,16 @@ fn prompt_snapshot() {
     let (view, _app_rx) = make_view();
     assert_snapshot!(
         "user_verification_prompt",
-        render_view_lines(&view, /*width*/ 80)
+        render_view_lines(&view, /*width*/ 80, view.desired_height(/*width*/ 80))
     );
 }
 
 #[test]
-fn title_wraps_at_narrow_widths() {
+fn clipped_prompt_exposes_fullscreen_hint() {
     let (view, _app_rx) = make_view();
     assert_snapshot!(
         "user_verification_narrow",
-        render_view_lines(&view, /*width*/ 20)
+        render_view_lines(&view, /*width*/ 40, /*height*/ 8)
     );
 }
 
@@ -79,7 +78,7 @@ fn waiting_snapshot_and_duplicate_approval_suppression() {
     view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_snapshot!(
         "user_verification_waiting",
-        render_view_lines(&view, /*width*/ 80)
+        render_view_lines(&view, /*width*/ 80, view.desired_height(/*width*/ 80))
     );
     view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(
@@ -167,7 +166,7 @@ fn long_url_tokens_remain_visible_in_a_narrow_verification_prompt() {
     });
     assert_snapshot!(
         "user_verification_long_urls",
-        render_view_lines(&view, /*width*/ 30)
+        render_view_lines(&view, /*width*/ 30, view.desired_height(/*width*/ 30))
     );
 }
 

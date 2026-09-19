@@ -315,6 +315,8 @@ impl ApprovalOverlay {
             footer_hint: Some(approval_footer_hint(request, approval_keymap, list_keymap)),
             items,
             header,
+            header_view_all_hint: approval_keymap
+                .primary_hint("open_fullscreen", &approval_keymap.open_fullscreen),
             ..Default::default()
         };
 
@@ -2508,3 +2510,7 @@ mod tests {
         assert_eq!(decision, Some(CommandExecutionApprovalDecision::Accept));
     }
 }
+
+#[cfg(test)]
+#[path = "approval_overlay/clipping_tests.rs"]
+mod clipping_tests;

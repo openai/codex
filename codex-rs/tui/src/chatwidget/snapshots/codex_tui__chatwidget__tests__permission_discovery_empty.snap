@@ -5,7 +5,8 @@ expression: "render_bottom_popup(&chat, 100)"
   Update Model Permissions
   No permission profiles returned by the server.
 
+
 ›    current-profile (current) (disabled)  Current permission profile. (disabled: Not available on
                                            this server.)
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

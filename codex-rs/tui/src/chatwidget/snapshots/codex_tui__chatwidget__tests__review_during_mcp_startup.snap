@@ -1,12 +1,13 @@
 ---
 source: tui/src/chatwidget/tests/mcp_startup.rs
-expression: render_bottom_popup(&chat, 80)
+expression: "render_bottom_popup(&chat, 80)"
 ---
   Select a review preset
+
 
 › 1. Review against a base branch  (PR Style)
   2. Review uncommitted changes
   3. Review a commit
   4. Custom review instructions
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

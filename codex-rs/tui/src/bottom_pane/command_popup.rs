@@ -21,6 +21,7 @@ use crate::slash_command::SlashCommand;
 // `quit` is an alias of `exit`, and `btw` is an alias of `side`, so we skip
 // those aliases here.
 const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Btw];
+const COMMAND_LEFT_INSET: u16 = 2;
 const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
     ColumnWidthMode::AutoAllRows,
     /*name_column_width*/ None,
@@ -137,7 +138,7 @@ impl CommandPopup {
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            width,
+            width.saturating_sub(COMMAND_LEFT_INSET),
             COMMAND_COLUMN_WIDTH,
         )
     }
@@ -269,7 +270,10 @@ impl WidgetRef for CommandPopup {
         let rows = self.rows_from_matches(self.filtered());
         render_rows_with_col_width_mode(
             area.inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+                /*top*/ 0,
+                COMMAND_LEFT_INSET,
+                /*bottom*/ 0,
+                /*right*/ 0,
             )),
             buf,
             &rows,
@@ -368,6 +372,51 @@ mod tests {
             rows.first().and_then(|row| row.description.as_deref()),
             Some("Fastest inference with increased plan usage")
         );
+    }
+
+    #[test]
+    fn command_popup_wrap_boundary_preserves_following_choice() {
+        let mut popup = CommandPopup::new(
+            CommandPopupFlags {
+                service_tier_commands_enabled: true,
+                ..CommandPopupFlags::default()
+            },
+            vec![
+                ServiceTierCommand {
+                    id: "priority".to_string(),
+                    name: "tier-one".to_string(),
+                    description: "Use faster inference".to_string(),
+                },
+                ServiceTierCommand {
+                    id: "default".to_string(),
+                    name: "tier-two".to_string(),
+                    description: "Keep default speed".to_string(),
+                },
+            ],
+        );
+        popup.on_composer_text_change("/tier".to_string());
+
+        // The first description exactly fits at width 33, including the left inset.
+        // Rendering at the requested height must also retain the second choice
+        // when the first description wraps one column below that boundary.
+        let mut snapshots = Vec::new();
+        for width in [32, 33, 34] {
+            let area = Rect::new(
+                /*x*/ 0,
+                /*y*/ 0,
+                width,
+                popup.calculate_required_height(width),
+            );
+            let mut buf = Buffer::empty(area);
+            popup.render_ref(area, &mut buf);
+
+            let snapshot = format!("{buf:?}");
+            assert!(snapshot.contains("/tier-two"));
+            assert!(snapshot.contains("Keep default speed"));
+            snapshots.push(format!("width {width}\n{snapshot}"));
+        }
+
+        insta::assert_snapshot!("command_popup_wrap_boundary", snapshots.join("\n\n"));
     }
 
     #[test]

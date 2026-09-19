@@ -49,11 +49,12 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Skills".to_string()),
             subtitle: Some("Choose an action".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

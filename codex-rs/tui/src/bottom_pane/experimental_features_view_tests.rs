@@ -2,6 +2,52 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn experimental_features_keep_following_choice_at_wrap_boundary() {
+    let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();
+    let view = ExperimentalFeaturesView::new(
+        vec![
+            ExperimentalFeatureItem {
+                key: "first".into(),
+                name: "First feature".into(),
+                description: "A description that fits exactly at this boundary.".into(),
+                enabled: true,
+                writable: true,
+            },
+            ExperimentalFeatureItem {
+                key: "last".into(),
+                name: "Last feature".into(),
+                description: "Keep this choice visible.".into(),
+                enabled: false,
+                writable: true,
+            },
+        ],
+        ThreadId::new(),
+        /*catalog_rx*/ None,
+        AppEventSender::new(app_tx),
+        crate::keymap::RuntimeKeymap::defaults().list,
+    );
+
+    let mut snapshots = Vec::new();
+    for width in [70, 71, 72] {
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            view.desired_height(width),
+        );
+        let mut buffer = Buffer::empty(area);
+        view.render(area, &mut buffer);
+        let text = buffer_text(&buffer);
+        assert!(
+            text.contains("Last feature"),
+            "missing last choice at width {width}"
+        );
+        snapshots.push(format!("width={width}\n{text}"));
+    }
+    insta::assert_snapshot!(snapshots.join("\n\n"));
+}
+
+#[test]
 fn experimental_features_analytics_plan_history() {
     let feature = Feature::AnalyticsPlanHistory;
     let stage = feature.stage();

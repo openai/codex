@@ -7,7 +7,8 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
   Manage this server on its host. Local daemon updates are unavailable for
   remote connections.
 
+
 ›    Install latest public stable
      Use this CLI build
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

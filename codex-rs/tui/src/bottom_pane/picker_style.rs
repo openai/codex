@@ -24,7 +24,7 @@ pub(crate) enum PickerSurface {
     Panel,
 }
 
-pub(super) fn active_tab_style() -> Style {
+pub(crate) fn active_tab_style() -> Style {
     let fallback = Style::default()
         .fg(Color::Reset)
         .bg(Color::Reset)

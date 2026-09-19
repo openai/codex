@@ -1,7 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-expression: contents
+assertion_line: 1743
+expression: normalize_snapshot_paths(contents)
 ---
+
+
   Would you like to make the following edits?
 
   Description: The model wants to apply changes

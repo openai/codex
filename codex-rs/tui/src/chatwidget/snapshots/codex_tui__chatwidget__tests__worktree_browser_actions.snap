@@ -1,13 +1,13 @@
 ---
 source: tui/src/chatwidget/tests/worktree_picker_tests.rs
-assertion_line: 137
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Worktree: Fix login form
   /repo/worktree
 
+
 › 1. Resume owner thread
   2. Copy working directory
   3. Delete worktree
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

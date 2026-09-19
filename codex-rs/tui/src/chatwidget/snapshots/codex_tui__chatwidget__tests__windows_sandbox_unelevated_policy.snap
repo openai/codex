@@ -5,7 +5,8 @@ expression: "render_bottom_popup(&chat, 100)"
   Set up the Codex agent sandbox to protect your files and control network access. Learn more
   <https://developers.openai.com/codex/windows>
 
+
 › 1. Use non-admin sandbox (higher risk if prompt injected)
   2. Quit
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

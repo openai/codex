@@ -317,6 +317,7 @@ impl App {
             },
         ];
         self.chat_widget.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Replace goal?".to_string()),
             subtitle: Some(format!(
                 "New objective: {}",
@@ -324,7 +325,7 @@ impl App {
             )),
             footer_hint: Some(standard_popup_hint_line()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

@@ -6,6 +6,7 @@ expression: "render_bottom_popup(&chat, 80)"
   We couldn’t confirm the agent was acting safely and following your
   instructions. To continue working, start or resume another chat.
 
+
 › 1. New chat
   2. Agent command center
   3. Resume another chat

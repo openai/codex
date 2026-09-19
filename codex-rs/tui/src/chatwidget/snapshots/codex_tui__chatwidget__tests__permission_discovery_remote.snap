@@ -1,9 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/permissions.rs
-assertion_line: 46
 expression: "render_bottom_popup(&chat, 110)"
 ---
   Update Model Permissions
+
 
 › 1. Ask for approval (current)  Codex can read and edit files in the current workspace, and run commands.
                                  Approval is required to access the internet or edit other files.
@@ -16,4 +16,4 @@ expression: "render_bottom_popup(&chat, 110)"
                                  files or access the internet. (disabled: Disabled by requirements.)
   2. server-only                 Description from the connected server.
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

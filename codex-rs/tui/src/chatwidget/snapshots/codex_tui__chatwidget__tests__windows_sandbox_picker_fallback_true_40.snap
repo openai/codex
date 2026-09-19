@@ -1,0 +1,20 @@
+---
+source: tui/src/chatwidget/tests/permissions.rs
+expression: rendered
+---
+  Couldn't set up your sandbox with
+  Administrator permissions
+
+  You can still use Codex in a
+  non-admin sandbox. It carries
+  greater risk if prompt injected.
+  Learn more
+  <https://developers.openai.com/codex
+  /windows>
+
+
+  1. Try setting up admin sandbox again
+› 2. Use Codex with non-admin sandbox
+  3. Quit
+
+  f3 select · f2 back

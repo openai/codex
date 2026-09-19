@@ -7,6 +7,7 @@ expression: "format!(\"{errors}\\n{}\", render_bottom_popup(&app.chat_widget, 80
   We couldn’t confirm the agent was interpreting your instructions correctly.
   Review what we detected before deciding to continue.
 
+
 › 1. Review findings
   2. New chat
   3. Resume another chat

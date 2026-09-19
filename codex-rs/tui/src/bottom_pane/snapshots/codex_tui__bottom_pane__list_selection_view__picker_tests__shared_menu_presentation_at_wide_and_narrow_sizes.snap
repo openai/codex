@@ -1,0 +1,48 @@
+---
+source: tui/src/bottom_pane/selection_picker_tests.rs
+assertion_line: 103
+expression: "snapshots.join(\"\\n\\n\")"
+---
+80x24
+
+  Choose an option
+  A menu with descriptions and disabled choices.
+
+
+› 1. Recommended option                                 The description column
+                                                        is visible when it fits.
+  2. A long option label that still wraps at narrow wi… Additional details
+     Unavailable (disabled)                             This option needs a
+                                                        connected server.
+
+
+
+
+
+
+
+
+
+
+
+
+
+  enter select · esc back
+
+40x16
+
+  Choose an option
+  A menu with descriptions and
+  disabled choices.
+
+
+› 1. Recommended option
+  2. A long option label that still
+     wraps at narrow widths
+     Unavailable (disabled)
+
+
+
+
+
+  enter select · esc back

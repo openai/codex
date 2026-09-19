@@ -1,10 +1,12 @@
 ---
 source: tui/src/chatwidget/tests/model_display_name_tests.rs
+assertion_line: 49
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Reasoning Level for GPT-5.6 Luna
 
+
   1. Low                       Quick answers
 › 2. High (default) (current)  Deeper reasoning
 
-  enter to set as default · s for this session · esc to go back
+  enter default · s session · esc back

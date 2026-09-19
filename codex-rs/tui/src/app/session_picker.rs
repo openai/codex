@@ -144,6 +144,7 @@ impl App {
             .is_some()
         {
             self.chat_widget.show_selection_view(SelectionViewParams {
+                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 title: Some("Unable to resume session".to_string()),
                 subtitle: Some(message.clone()),
                 items: vec![SelectionItem {
@@ -151,7 +152,7 @@ impl App {
                     dismiss_on_select: true,
                     ..Default::default()
                 }],
-                ..Default::default()
+                ..SelectionViewParams::picker()
             });
         }
         self.chat_widget.add_error_message(message);

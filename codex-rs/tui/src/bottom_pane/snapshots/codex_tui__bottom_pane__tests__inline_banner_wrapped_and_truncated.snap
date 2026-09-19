@@ -11,10 +11,12 @@ expression: "render_snapshot(&pane, area)"
   A long description wraps to fit the       
   available terminal width.                 
   …                                         
+                                            
 › 1. Open usage settings                    
   2. Notify owner                           
                                             
   Press a number to choose · esc to dismiss 
+  · type to continue                        
                                             
 › Ask Codex to do anything                  
                                             

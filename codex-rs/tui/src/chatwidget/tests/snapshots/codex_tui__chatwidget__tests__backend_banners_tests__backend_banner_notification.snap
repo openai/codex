@@ -4,6 +4,7 @@ expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 70))"
 ---
   Selected model usage exhausted
   Ask your owner for credits or switch to another model.
+
 › 1. Notify owner
 
   Press a number to choose

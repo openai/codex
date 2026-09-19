@@ -1,9 +1,9 @@
 ---
 source: tui/src/chatwidget/tests/worktree_picker_tests.rs
-assertion_line: 71
 expression: popup
 ---
   Worktrees
+
 
 › 1. Continue current conversation  Preserve this conversation in the new
                                     checkout
@@ -12,4 +12,4 @@ expression: popup
   3. Browse worktrees               Resume an owner thread or copy a working
                                     directory
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

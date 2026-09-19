@@ -48,6 +48,7 @@ impl ChatWidget {
             });
         })];
         self.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Resume paused goal?".to_string()),
             subtitle: Some(format!("Goal: {objective}")),
             footer_hint: Some(standard_popup_hint_line()),
@@ -67,7 +68,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

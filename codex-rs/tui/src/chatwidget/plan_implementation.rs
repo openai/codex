@@ -75,6 +75,7 @@ pub(super) fn selection_view_params(
     );
 
     SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
         subtitle: None,
         footer_hint: Some(standard_popup_hint_line()),
@@ -109,6 +110,6 @@ pub(super) fn selection_view_params(
                 ..Default::default()
             },
         ],
-        ..Default::default()
+        ..SelectionViewParams::picker()
     }
 }

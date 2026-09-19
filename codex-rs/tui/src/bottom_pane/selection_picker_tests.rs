@@ -1,4 +1,4 @@
-//! Opt-in panels retain controls and page by the results that actually fit.
+//! Picker panels retain controls and page by the results that actually fit.
 
 use super::*;
 use crate::app_event::AppEvent;
@@ -10,7 +10,7 @@ fn browser() -> ListSelectionView {
     let (tx, _rx) = unbounded_channel::<AppEvent>();
     ListSelectionView::new(
         SelectionViewParams {
-            appearance: SelectionAppearance::Picker,
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             picker_surface: PickerSurface::Panel,
             max_visible_rows: 24,
             title: Some("Keymap".to_owned()),
@@ -57,6 +57,75 @@ fn render_browser(view: &ListSelectionView, width: u16, height: u16) -> (String,
         .collect::<Vec<_>>()
         .join("\n");
     (text, buf)
+}
+
+#[test]
+fn shared_menu_presentation_at_wide_and_narrow_sizes() {
+    let keymap = crate::keymap::RuntimeKeymap::defaults().list;
+    let (tx, _rx) = unbounded_channel();
+    let view = ListSelectionView::new(
+        SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
+            title: Some("Choose an option".into()),
+            subtitle: Some("A menu with descriptions and disabled choices.".into()),
+            items: vec![
+                SelectionItem {
+                    name: "Recommended option".into(),
+                    description: Some("The description column is visible when it fits.".into()),
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "A long option label that still wraps at narrow widths".into(),
+                    description: Some("Additional details".into()),
+                    ..Default::default()
+                },
+                SelectionItem {
+                    name: "Unavailable".into(),
+                    disabled_reason: Some("This option needs a connected server.".into()),
+                    ..Default::default()
+                },
+            ],
+            footer_hint: Some(super::super::popup_consts::picker_hint_line_for_keymap(
+                &keymap,
+            )),
+            ..SelectionViewParams::picker()
+        },
+        AppEventSender::new(tx),
+        keymap,
+    );
+    let mut snapshots = Vec::new();
+    for (width, height) in [(80, 24), (40, 16)] {
+        let (text, buffer) = render_browser(&view, width, height);
+        let selected_y = text.lines().position(|line| line.starts_with('›')).unwrap() as u16;
+        assert_eq!(
+            (0..width)
+                .map(|x| buffer[(x, selected_y)].bg)
+                .collect::<Vec<_>>(),
+            vec![selection_style().bg.unwrap(); usize::from(width)]
+        );
+        assert!(text.contains("enter select · esc back"));
+        snapshots.push(format!("{width}x{height}\n{text}"));
+    }
+    insta::assert_snapshot!(snapshots.join("\n\n"));
+}
+
+#[test]
+fn tiny_viewports_preserve_query_and_selection_when_enlarged() {
+    let mut view = browser();
+    view.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    view.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let selected = view.selected_actual_idx();
+    let before = render_browser(&view, /*width*/ 80, /*height*/ 24).0;
+
+    for (width, height) in [(0, 0), (1, 1), (4, 1), (12, 3), (40, 8)] {
+        render_browser(&view, width, height);
+        assert_eq!(
+            (view.search_query.as_str(), view.selected_actual_idx()),
+            ("2", selected)
+        );
+    }
+
+    assert_eq!(render_browser(&view, /*width*/ 80, /*height*/ 24).0, before);
 }
 
 #[test]

@@ -391,12 +391,8 @@ impl Renderable for MemoriesSettingsView {
         let header_height = header.desired_height(content_area.width.saturating_sub(4));
         let rows = self.build_rows();
         let rows_width = Self::rows_width(content_area.width);
-        let rows_height = measure_rows_height(
-            &rows,
-            self.active_state(),
-            MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
-        );
+        let rows_height =
+            measure_rows_height(&rows, self.active_state(), MAX_POPUP_ROWS, rows_width);
         let [header_area, _, list_area, _, docs_area] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
@@ -446,12 +442,8 @@ impl Renderable for MemoriesSettingsView {
         };
         let rows = self.build_rows();
         let rows_width = Self::rows_width(width);
-        let rows_height = measure_rows_height(
-            &rows,
-            self.active_state(),
-            MAX_POPUP_ROWS,
-            rows_width.saturating_add(1),
-        );
+        let rows_height =
+            measure_rows_height(&rows, self.active_state(), MAX_POPUP_ROWS, rows_width);
 
         let docs_height = if self.reset_confirmation.is_some() {
             0
@@ -475,3 +467,7 @@ fn memories_settings_hint_line(keymap: &ListKeymap) -> Line<'static> {
     }
     Line::from(spans)
 }
+
+#[cfg(test)]
+#[path = "memories_settings_view_tests.rs"]
+mod tests;

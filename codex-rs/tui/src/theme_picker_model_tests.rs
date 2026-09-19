@@ -49,7 +49,9 @@ fn model_theme_files_preview_select_and_restore() {
             let lines = highlight::highlight_code_to_lines(code, "rust");
             assert!(lines.iter().all(|line| line.style.bg.is_none()
                 && line.spans.iter().all(|span| span.style.bg.is_none())));
-            let area = Rect::new(0, 0, 54, 4);
+            let area = Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 54, /*height*/ 4,
+            );
             let mut buffer = Buffer::empty(area);
             ThemePreviewNarrowRenderable.render(area, &mut buffer);
             if matches!(name, "dali" | "davinci") {

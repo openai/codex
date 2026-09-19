@@ -124,7 +124,7 @@ async fn session_model_selection_hides_conflicting_shortcut() {
     let preset = get_available_model(&chat, "gpt-5.5");
     chat.open_reasoning_popup(preset);
     let popup = render_bottom_popup(&chat, /*width*/ 100);
-    assert!(!popup.contains("for this session"), "{popup}");
+    assert!(!popup.contains("s session"), "{popup}");
     while rx.try_recv().is_ok() {}
     chat.handle_key_event(KeyEvent::from(KeyCode::Char('s')));
     assert!(

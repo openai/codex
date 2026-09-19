@@ -1,0 +1,33 @@
+---
+source: tui/src/chatwidget/tests/permission_picker_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+specialty=None 40x10
+
+  Enable full access?
+  When Codex runs with full access, it
+  can edit any file on your computer
+  and run commands with network,
+  without your approval. Exercise
+  [… 9 lines]
+› 1. Yes, continue anyway
+  2. Cancel
+  enter select · esc back
+
+specialty=Some("cyber") 40x16
+
+  Enable full access?
+
+  When Codex runs with full access, it
+  can edit any file on your computer
+  and run commands with network,
+  without your approval.
+
+  Cyber models carry a higher risk of
+  dangerous actions. Ensure proper
+  safeguards are in place before
+  granting full access. We strongly
+  [… 13 lines]
+› 1. Yes, continue anyway
+  2. Cancel
+  enter select · esc back

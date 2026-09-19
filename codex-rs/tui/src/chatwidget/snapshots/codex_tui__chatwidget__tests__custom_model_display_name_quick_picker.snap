@@ -1,12 +1,14 @@
 ---
 source: tui/src/chatwidget/tests/model_display_name_tests.rs
+assertion_line: 33
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model
   Pick a quick auto mode or browse all models.
 
-  1. Auto Fast             Custom provider model
-› 2. All models (current)  Choose a specific model and reasoning level
-                           (current: GPT-5.6 Luna)
 
-  Press enter to confirm or esc to go back
+  1. Auto Fast             Custom provider model
+› 2. All models (current)  Choose a specific model and reasoning level (current:
+                           GPT-5.6 Luna)
+
+  enter select · esc back

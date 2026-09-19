@@ -227,12 +227,13 @@ impl ChatWidget {
             },
         ]);
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(SAFETY_BUFFERING_PROMPT_VIEW_ID),
             header: Box::new(SafetyBufferingHeader(header)),
             footer_note: Some(Line::from(SAFETY_BUFFERING_FOOTER).dim()),
             footer_hint: Some(Line::default()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 
@@ -258,6 +259,7 @@ impl ChatWidget {
         self.bottom_pane
             .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(SAFETY_BUFFERING_PROMPT_VIEW_ID),
             header: Box::new(SafetyBufferingHeader(vec![
                     "Stop this attempt and retry?".bold().into(),
@@ -289,7 +291,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 }

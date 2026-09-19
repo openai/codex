@@ -1,10 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/worktree_picker_tests.rs
-assertion_line: 90
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Managed worktrees
 
+
 ›    Loading worktrees…
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

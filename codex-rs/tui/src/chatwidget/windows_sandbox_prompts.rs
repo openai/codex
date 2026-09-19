@@ -112,6 +112,7 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -124,7 +125,7 @@ impl ChatWidget {
                     });
                 }) as _
             }),
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 
@@ -246,6 +247,7 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: None,
             footer_hint: Some(standard_popup_hint_line()),
             items,
@@ -258,7 +260,7 @@ impl ChatWidget {
                     });
                 }) as _
             }),
-            ..Default::default()
+            ..SelectionViewParams::picker()
         });
     }
 

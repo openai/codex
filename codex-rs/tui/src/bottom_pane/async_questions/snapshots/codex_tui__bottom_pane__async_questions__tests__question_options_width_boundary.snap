@@ -1,0 +1,23 @@
+---
+source: tui/src/bottom_pane/async_questions/state_tests.rs
+expression: "format!(\"Full height:\\n{}\\n\\nClipped:\\n{}\", buffer_text(&buffer),\nbuffer_text(&clipped),)"
+---
+Full height:
+
+  Second
+
+  › 1. abcdefgh
+       ijklmno
+    2. pqrstuvw
+       xyzabcd
+    3. Other
+
+  enter submit
+  ctrl+] skip
+  ⌥+↓ main prompt
+
+
+Clipped:
+
+  Second
+  › 1. abcdefgh

@@ -4,6 +4,7 @@ expression: popup
 ---
   Select Reasoning Level for GPT-5.5
 
+
   1. Low               Fast responses with lighter reasoning
   2. Medium (default)  Balances speed and reasoning depth for everyday tasks
 › 3. High (current)    Greater reasoning depth for complex problems
@@ -11,4 +12,4 @@ expression: popup
   5. Persistent        Continue working until put to sleep
   6. More reasoning…   Max and Ultra consume usage limits faster
 
-  enter to set as default · s for this session · esc to go back
+  enter default · s session · esc back

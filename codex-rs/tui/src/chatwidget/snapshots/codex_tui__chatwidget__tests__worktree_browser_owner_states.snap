@@ -1,14 +1,14 @@
 ---
 source: tui/src/chatwidget/tests/worktree_picker_tests.rs
-assertion_line: 237
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Managed worktrees
   Select a worktree to resume, copy its path, or delete it
 
 
-› Fix settings   Archived · updated 1d ago · /repo/archived
-  /repo/missing  Owner thread unavailable
-  /repo/empty    No attached thread
 
-  Press enter to confirm or esc to go back
+› Fix settings   Archived · updated 1d ago · /repo/archived
+  /repo/missing  Owner thread unavailable · /repo/missing
+  /repo/empty    No attached thread · /repo/empty
+
+  enter select · esc back

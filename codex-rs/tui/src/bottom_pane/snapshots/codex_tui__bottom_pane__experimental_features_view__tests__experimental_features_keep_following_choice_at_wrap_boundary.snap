@@ -1,0 +1,39 @@
+---
+source: tui/src/bottom_pane/experimental_features_view_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+width=70
+
+  Experimental features
+  Checked features are configured on. Some experimental features
+  take effect only in new tasks or after restarting the Codex
+  server.
+
+› [x] First feature  A description that fits exactly at this
+                     boundary.
+  [ ] Last feature   Keep this choice visible.
+
+  Press space to select or enter to save
+
+width=71
+
+  Experimental features
+  Checked features are configured on. Some experimental features take
+  effect only in new tasks or after restarting the Codex server.
+
+› [x] First feature  A description that fits exactly at this
+                     boundary.
+  [ ] Last feature   Keep this choice visible.
+
+  Press space to select or enter to save
+
+width=72
+
+  Experimental features
+  Checked features are configured on. Some experimental features take
+  effect only in new tasks or after restarting the Codex server.
+
+› [x] First feature  A description that fits exactly at this boundary.
+  [ ] Last feature   Keep this choice visible.
+
+  Press space to select or enter to save

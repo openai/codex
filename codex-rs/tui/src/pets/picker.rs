@@ -117,6 +117,7 @@ pub(crate) fn build_pet_picker_params(
         .collect();
 
     SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some(PET_PICKER_VIEW_ID),
         title: Some("Select Pet".to_string()),
         subtitle: Some("Choose a pet to wake in the terminal.".to_string()),
@@ -131,7 +132,7 @@ pub(crate) fn build_pet_picker_params(
         stacked_side_content: Some(Box::new(())),
         preserve_side_content_bg: true,
         on_selection_changed,
-        ..Default::default()
+        ..SelectionViewParams::picker()
     }
 }
 

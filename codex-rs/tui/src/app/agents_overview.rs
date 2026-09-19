@@ -21,7 +21,7 @@ use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::bottom_pane::SelectionDescriptionLayout;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
-use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
+use crate::bottom_pane::popup_consts::picker_hint_line_for_keymap;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::startup_draft::StartupDraftPump;
 use codex_app_server_protocol::SessionSource;
@@ -74,6 +74,7 @@ impl App {
         if matches!(self.app_server_target, AppServerTarget::Embedded) {
             let workload_identity_selected = codex_login::is_workload_identity_selected();
             self.chat_widget.show_selection_view(SelectionViewParams {
+                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 title: Some("Shared agents unavailable".to_string()),
                 subtitle: Some(
                     if workload_identity_selected {
@@ -91,7 +92,7 @@ impl App {
                             .dim(),
                     )
                 }),
-                footer_hint: Some(standard_popup_hint_line_for_keymap(&self.keymap.list)),
+                footer_hint: Some(picker_hint_line_for_keymap(&self.keymap.list)),
                 items: [
                     #[cfg(any(unix, windows))]
                     (!workload_identity_selected).then(|| SelectionItem {
@@ -112,7 +113,7 @@ impl App {
                 .into_iter()
                 .flatten()
                 .collect(),
-                description_layout: SelectionDescriptionLayout::StackBelowWhenNarrow {
+                description_layout: SelectionDescriptionLayout::HideWhenNarrow {
                     min_description_width: 28,
                 },
                 ..Default::default()

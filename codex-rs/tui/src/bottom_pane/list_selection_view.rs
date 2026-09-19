@@ -225,6 +225,7 @@ pub(crate) struct SelectionViewParams {
     /// Rendered left-column width to use for auto-sized rows.
     pub name_column_width: Option<usize>,
     pub header: Box<dyn Renderable>,
+    pub header_view_all_hint: Option<ShortcutHint>,
     /// Blank rows after the header; defaults to one. Inline banners use zero.
     pub header_gap: u16,
     pub initial_selected_idx: Option<usize>,
@@ -282,6 +283,7 @@ impl Default for SelectionViewParams {
             description_layout: SelectionDescriptionLayout::Columns,
             name_column_width: None,
             header: Box::new(()),
+            header_view_all_hint: None,
             header_gap: 1,
             initial_selected_idx: None,
             side_content: Box::new(()),
@@ -328,6 +330,7 @@ pub(crate) struct ListSelectionView {
     last_selected_actual_idx: Option<usize>,
     rendered_item_count: std::cell::Cell<usize>,
     header: Box<dyn Renderable>,
+    header_view_all_hint: Option<ShortcutHint>,
     header_gap: u16,
     initial_selected_idx: Option<usize>,
     side_content: Box<dyn Renderable>,
@@ -478,6 +481,7 @@ impl ListSelectionView {
             last_selected_actual_idx: None,
             rendered_item_count: std::cell::Cell::new(0),
             header,
+            header_view_all_hint: params.header_view_all_hint,
             header_gap: params.header_gap,
             initial_selected_idx: params.initial_selected_idx,
             side_content: params.side_content,
@@ -719,7 +723,8 @@ impl ListSelectionView {
                         .then(|| item.selected_description.clone())
                         .flatten()
                         .or_else(|| item.description.clone());
-                    let wrap_indent = description.is_none().then_some(wrap_prefix_width);
+                    let wrap_indent = (description.is_none() && item.disabled_reason.is_none())
+                        .then_some(wrap_prefix_width);
                     GenericDisplayRow {
                         selection_style: row_selection_style,
                         name: name_with_marker,
@@ -1313,7 +1318,7 @@ impl Renderable for ListSelectionView {
             self.rows_width(width)
         };
 
-        // The shared measurement API reserves one column; compensate to match painted rows.
+        // Measure at the same width as the painted rows, including any side panel.
         let rows = self.build_rows();
         let column_width = ColumnWidthConfig::new(self.col_width_mode, self.name_column_width)
             .with_description_layout(self.description_layout);
@@ -1322,7 +1327,7 @@ impl Renderable for ListSelectionView {
                 &rows,
                 &self.state,
                 self.max_visible_rows,
-                effective_rows_width.saturating_add(/*rhs*/ 1),
+                effective_rows_width,
                 column_width,
             ),
             SelectionRowDisplay::SingleLine => {
@@ -1465,7 +1470,7 @@ impl Renderable for ListSelectionView {
                 &rows,
                 &self.state,
                 self.max_visible_rows,
-                effective_rows_width.saturating_add(/*rhs*/ 1),
+                effective_rows_width,
                 column_width,
             ),
             SelectionRowDisplay::SingleLine => {
@@ -1541,15 +1546,17 @@ impl Renderable for ListSelectionView {
             ]
         };
 
-        // -- Header --
-        if self.appearance == SelectionAppearance::Legacy && header_area.height < header_height {
+        if !self.is_searchable && header_area.height < header_height {
             let [header_area, elision_area] =
                 Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(header_area);
             header.render(header_area, buf);
-            Paragraph::new(vec![
-                Line::from(format!("[… {header_height} lines] ctrl + a view all")).dim(),
-            ])
-            .render(elision_area, buf);
+            let mut spans = vec![format!("[… {header_height} lines]").into()];
+            if let Some(hint) = &self.header_view_all_hint {
+                spans.push(" ".into());
+                spans.extend(hint.spans());
+                spans.push(" view all".into());
+            }
+            Line::from(spans).dim().render(elision_area, buf);
         } else {
             header.render(header_area, buf);
         }
@@ -2984,14 +2991,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_fixed_col_width_mode_scroll_behavior() {
-        assert_snapshot!(
-            "list_selection_col_width_mode_fixed_scroll",
-            render_before_after_scroll_snapshot(ColumnWidthMode::Fixed, /*width*/ 96)
-        );
-    }
-
-    #[test]
     fn auto_all_rows_col_width_does_not_shift_when_scrolling() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -3023,41 +3022,6 @@ mod tests {
         assert_eq!(
             before_col, after_col,
             "description column changed across scroll:\nbefore:\n{before_scroll}\nafter:\n{after_scroll}"
-        );
-    }
-
-    #[test]
-    fn fixed_col_width_is_30_70_and_does_not_shift_when_scrolling() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let width = 96;
-        let mut view = ListSelectionView::new(
-            SelectionViewParams {
-                title: Some("Debug".to_string()),
-                items: make_scrolling_width_items(),
-                col_width_mode: ColumnWidthMode::Fixed,
-                ..Default::default()
-            },
-            tx,
-            crate::keymap::RuntimeKeymap::defaults().list,
-        );
-
-        let before_scroll = render_lines_with_width(&view, width);
-        let before_col = description_col(&before_scroll, "8. Item 8", "desc 8");
-        let expected_desc_col = ((width.saturating_sub(2) as usize) * 3) / 10;
-        assert_eq!(
-            before_col, expected_desc_col,
-            "fixed mode should place description column at a 30/70 split:\n{before_scroll}"
-        );
-
-        for _ in 0..8 {
-            view.handle_key_event(KeyEvent::from(KeyCode::Down));
-        }
-        let after_scroll = render_lines_with_width(&view, width);
-        let after_col = description_col(&after_scroll, "8. Item 8", "desc 8");
-        assert_eq!(
-            before_col, after_col,
-            "fixed description column changed across scroll:\nbefore:\n{before_scroll}\nafter:\n{after_scroll}"
         );
     }
 

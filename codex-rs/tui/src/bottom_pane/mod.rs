@@ -176,11 +176,14 @@ pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
+mod picker_presets;
 mod picker_style;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_picker_layout;
 mod selection_popup_common;
+pub(crate) use selection_popup_common::menu_surface_padding_height;
+pub(crate) use selection_popup_common::render_menu_surface;
 mod selection_row_layout;
 mod selection_tabs;
 mod startup;
@@ -1335,7 +1338,12 @@ impl BottomPane {
         if params.footer_hint.is_none()
             || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
         {
-            params.footer_hint = Some(self.standard_popup_hint_line());
+            params.footer_hint = Some(match params.appearance {
+                SelectionAppearance::Picker => {
+                    popup_consts::picker_hint_line_for_keymap(&self.keymap.list)
+                }
+                SelectionAppearance::Legacy => self.standard_popup_hint_line(),
+            });
         }
     }
 
@@ -2204,6 +2212,8 @@ impl Renderable for BottomPane {
 mod tests {
     #[path = "actionable_banner_tests.rs"]
     mod actionable_banner_tests;
+    #[path = "picker_hint_tests.rs"]
+    mod picker_hint_tests;
 
     use super::*;
     use crate::app::app_server_requests::ResolvedAppServerRequest;
@@ -3356,6 +3366,7 @@ mod tests {
 
         pane.set_task_running(/*running*/ true);
         pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Agents".to_string()),
             items: vec![SelectionItem {
                 name: "Main".to_string(),
@@ -3459,6 +3470,7 @@ mod tests {
         keymap.list.cancel = vec![crate::key_hint::plain(KeyCode::Char('q'))];
         pane.set_keymap_bindings(&keymap);
         pane.show_selection_view(SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Agents".to_string()),
             items: vec![SelectionItem {
                 name: "Main".to_string(),

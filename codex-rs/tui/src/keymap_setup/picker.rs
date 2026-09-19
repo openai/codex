@@ -1,5 +1,7 @@
 //! Shortcut picker construction for `/keymap`.
-//! Reserve the opt-in panel viewport so tab and search changes keep controls anchored.
+//!
+//! Keep the shared picker panel and reserved result viewport on the production
+//! factory so tabs and search stay anchored in the live picker.
 
 use codex_config::types::TuiKeymap;
 use ratatui::style::Styled;
@@ -11,7 +13,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::PickerSurface;
-use crate::bottom_pane::SelectionAppearance;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionTab;
@@ -296,8 +297,8 @@ fn build_keymap_picker_params_for_action(
     tabs.push(keymap_debug_tab());
 
     SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some(KEYMAP_PICKER_VIEW_ID),
-        appearance: SelectionAppearance::Picker,
         picker_surface: PickerSurface::Panel,
         max_visible_rows: 24,
         reserve_result_rows: true,
