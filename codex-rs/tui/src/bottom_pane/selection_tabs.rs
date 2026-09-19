@@ -82,10 +82,15 @@ pub(super) fn render_tab_bar(
     }
 }
 
-/// Render a fixed-height tab strip while keeping the active tab visible.
-fn render_filled_tab_bar(labels: &[&str], active_idx: usize, area: Rect, buf: &mut Buffer) {
+/// Render a fixed-height tab strip and return the visible tab hit targets.
+pub(crate) fn render_filled_tab_bar(
+    labels: &[&str],
+    active_idx: usize,
+    area: Rect,
+    buf: &mut Buffer,
+) -> Vec<(usize, Rect)> {
     if labels.is_empty() || area.is_empty() {
-        return;
+        return Vec::new();
     }
     let active_idx = active_idx.min(labels.len() - 1);
     let widths = labels
@@ -117,6 +122,7 @@ fn render_filled_tab_bar(labels: &[&str], active_idx: usize, area: Rect, buf: &m
         x += 2;
     }
     let right = area.right().saturating_sub(u16::from(show_right) * 2);
+    let mut regions = Vec::new();
     for idx in start..end {
         let width = widths[idx].min(usize::from(right.saturating_sub(x))) as u16;
         let line = Line::from(format!(" {} ", labels[idx]));
@@ -128,6 +134,7 @@ fn render_filled_tab_bar(labels: &[&str], active_idx: usize, area: Rect, buf: &m
         };
         let tab = Rect::new(x, area.y, width, /*height*/ 1);
         line.render(tab, buf);
+        regions.push((idx, tab));
         x = x.saturating_add(width).saturating_add(/*rhs*/ 1);
     }
     if show_right {
@@ -141,6 +148,7 @@ fn render_filled_tab_bar(labels: &[&str], active_idx: usize, area: Rect, buf: &m
             buf,
         );
     }
+    regions
 }
 
 fn tab_bar_lines(tabs: &[SelectionTab], active_idx: usize, width: u16) -> Vec<Line<'static>> {

@@ -1,13 +1,14 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5348
 expression: terminal.backend()
 ---
 "                                                                                                    "
 "› @left  @bound                                                                                     "
 "                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"> left  Plugin used to test bound mention fallback.                                           Plugin"
-"                                                                                                    "
-"  enter insert · esc close · ←/→ switch search modes     [All Results]   Filesystem Only    Plugins "
+"  Mentions                                                                                          "
+"  Files, directories, plugins, skills and tasks                                                     "
+"   All Results   Filesystem Only   Plugins                                                          "
+"  left                                                                                              "
+"› left  Plugin used to test bound mention fallback.                                           Plugin"
+"  enter/tab insert · esc close · ↑/↓ select · ←/→ filter                                            "

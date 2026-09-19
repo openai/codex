@@ -1,0 +1,114 @@
+---
+source: tui/src/bottom_pane/skill_popup.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+name="Shared", width=32
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 5 },
+    content: [
+        "                                ",
+        "› Shared  [App]                 ",
+        "  Shared  [Skill]               ",
+        "                                ",
+        "  enter insert · esc close      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 10, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 15, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 8, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 10, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 7, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+
+name="Shared", width=72
+Buffer {
+    area: Rect { x: 0, y: 0, width: 72, height: 5 },
+    content: [
+        "                                                                        ",
+        "› Shared  [App] Secondary details                                       ",
+        "  Shared  [Skill] Secondary details                                     ",
+        "                                                                        ",
+        "  enter insert · esc close                                              ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 10, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 33, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 8, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 10, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 35, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 7, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+
+name="Shared mention with a very long name", width=32
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 5 },
+    content: [
+        "                                ",
+        "› Shared mention with a …  [App]",
+        "  Shared mention with …  [Skill]",
+        "                                ",
+        "  enter insert · esc close      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 27, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 8, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 25, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 7, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+
+name="Shared mention with a very long name", width=72
+Buffer {
+    area: Rect { x: 0, y: 0, width: 72, height: 5 },
+    content: [
+        "                                                                        ",
+        "› Shared mention with a ver...  [App] Secondary details                 ",
+        "  Shared mention with a ver...  [Skill] Secondary details               ",
+        "                                                                        ",
+        "  enter insert · esc close                                              ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 32, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 55, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 8, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 32, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 57, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 7, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 20, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 26, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

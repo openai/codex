@@ -6,7 +6,7 @@ command during startup:
 
 › /status
 
-  /status      show current session configuration and token usage
+› /status      show current session configuration and token usage
   /statusline  configure which items appear in the status line
 
 after command:

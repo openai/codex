@@ -1,0 +1,7 @@
+---
+source: tui/src/bottom_pane/mentions_v2/render_tests.rs
+expression: text(&buffer)
+---
+› 界.rs           src/            File
+  界.rs           tests/          File
+  a_very_long_f…  deep/           File

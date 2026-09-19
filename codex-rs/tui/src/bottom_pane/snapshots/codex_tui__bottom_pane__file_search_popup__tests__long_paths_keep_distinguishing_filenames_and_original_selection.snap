@@ -1,0 +1,57 @@
+---
+source: tui/src/bottom_pane/file_search_popup.rs
+assertion_line: 291
+expression: "snapshots.join(\"\\n\\n\")"
+---
+["src", "shared", "long_directory"], width 28
+
+› src/share…/parser_alpha.rs
+  src/shared…/parser_beta.rs
+
+
+["src", "shared", "long_directory"], width 40
+
+› src/shared/long_direc…/parser_alpha.rs
+  src/shared/long_direct…/parser_beta.rs
+
+
+["src", "shared", "long_directory"], width 80
+
+› src/shared/long_directory/parser_alpha.rs
+  src/shared/long_directory/parser_beta.rs
+
+
+["long_directory_name_that_fills_row"], width 28
+
+› long_dire…/parser_alpha.rs
+  long_direc…/parser_beta.rs
+
+
+["long_directory_name_that_fills_row"], width 40
+
+› long_directory_name_t…/parser_alpha.rs
+  long_directory_name_th…/parser_beta.rs
+
+
+["long_directory_name_that_fills_row"], width 80
+
+› long_directory_name_that_fills_row/parser_alpha.rs
+  long_directory_name_that_fills_row/parser_beta.rs
+
+
+["長いディレクトリ名", "e\u{301}tudes"], width 28
+
+› 長 い デ ィ …/parser_alpha.rs
+  長 い デ ィ レ …/parser_beta.rs
+
+
+["長いディレクトリ名", "e\u{301}tudes"], width 40
+
+› 長 い デ ィ レ ク ト リ 名 /ét…/parser_alpha.rs
+  長 い デ ィ レ ク ト リ 名 /étu…/parser_beta.rs
+
+
+["長いディレクトリ名", "e\u{301}tudes"], width 80
+
+› 長 い デ ィ レ ク ト リ 名 /études/parser_alpha.rs
+  長 い デ ィ レ ク ト リ 名 /études/parser_beta.rs

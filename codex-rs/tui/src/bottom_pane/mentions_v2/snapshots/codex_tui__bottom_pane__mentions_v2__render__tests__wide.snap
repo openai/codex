@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/mentions_v2/render_tests.rs
+expression: text(&buffer)
+---
+  Mentions
+  Files, directories, plugins, skills and tasks
+
+   All Results   Filesystem Only   Plugins
+
+  Type to search mentions
+
+› Plugin 00  Tools and workflows                                          Plugin
+  Plugin 01  Tools and workflows                                          Plugin
+  Plugin 02  Tools and workflows                                          Plugin
+  Plugin 03  Tools and workflows                                          Plugin
+  Plugin 04  Tools and workflows                                          Plugin
+  Plugin 05  Tools and workflows                                          Plugin
+  Plugin 06  Tools and workflows                                          Plugin
+  Plugin 07  Tools and workflows                                          Plugin
+↓
+  enter/tab insert · esc close · ↑/↓ select · ←/→ filter

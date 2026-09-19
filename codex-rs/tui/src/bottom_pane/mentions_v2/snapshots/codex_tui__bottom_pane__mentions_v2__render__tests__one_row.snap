@@ -1,0 +1,5 @@
+---
+source: tui/src/bottom_pane/mentions_v2/render_tests.rs
+expression: text(&buffer)
+---
+› plain.rs   src/                 File

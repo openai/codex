@@ -1,13 +1,14 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5348
 expression: terminal.backend()
 ---
 "                                                                                                    "
 "› @migr                                                                                             "
 "                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"> Review database migration  /workspace/project                                               Task  "
-"  migration                  /another/project                                                 Task  "
-"                                                                                                    "
-"  enter insert · esc close · ←/→ switch search modes     [All Results]   Filesystem Only    Plugins "
+"  Mentions                                                                                          "
+"  Files, directories, plugins, skills and tasks                                                     "
+"   All Results   Filesystem Only   Plugins                                                          "
+"  migr                                                                                              "
+"› Review database migration  /workspace/project                                               Task  "
+"  enter/tab insert · esc close · ↑/↓ select · ←/→ filter                                            "

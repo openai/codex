@@ -8,6 +8,6 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  1password  [Skill] Example skill used in tests.                                                   "
+"› 1password  [Skill] Example skill used in tests.                                                   "
 "                                                                                                    "
-"  Press enter to insert or esc to close                                                             "
+"  enter insert · esc close                                                                          "

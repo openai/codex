@@ -2,6 +2,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
+use super::picker_style::selection_style;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::ColumnWidthConfig;
@@ -13,15 +14,12 @@ use super::slash_commands::BuiltinCommandFlags;
 use super::slash_commands::ServiceTierCommand;
 use super::slash_commands::SlashCommandItem;
 use super::slash_commands::commands_for_input;
-use crate::render::Insets;
-use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 
 // Hide alias commands in the default popup list so each unique action appears once.
 // `quit` is an alias of `exit`, and `btw` is an alias of `side`, so we skip
 // those aliases here.
 const ALIAS_COMMANDS: &[SlashCommand] = &[SlashCommand::Quit, SlashCommand::Btw];
-const COMMAND_LEFT_INSET: u16 = 2;
 const COMMAND_COLUMN_WIDTH: ColumnWidthConfig = ColumnWidthConfig::new(
     ColumnWidthMode::AutoAllRows,
     /*name_column_width*/ None,
@@ -138,7 +136,7 @@ impl CommandPopup {
             &rows,
             &self.state,
             MAX_POPUP_ROWS,
-            width.saturating_sub(COMMAND_LEFT_INSET),
+            width,
             COMMAND_COLUMN_WIDTH,
         )
     }
@@ -206,17 +204,22 @@ impl CommandPopup {
     ) -> Vec<GenericDisplayRow> {
         matches
             .into_iter()
-            .map(|(item, indices)| {
+            .enumerate()
+            .map(|(index, (item, indices))| {
                 let name = format!("/{}", item.command());
                 let description = item.description().to_string();
                 GenericDisplayRow {
-                    selection_style: None,
+                    category_tag: None,
                     name,
-                    name_prefix_spans: Vec::new(),
+                    name_prefix_spans: vec![if self.state.selected_idx == Some(index) {
+                        "› ".into()
+                    } else {
+                        "  ".into()
+                    }],
+                    selection_style: Some(selection_style()),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
-                    category_tag: None,
                     wrap_indent: None,
                     is_disabled: false,
                     disabled_reason: None,
@@ -269,12 +272,7 @@ impl WidgetRef for CommandPopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let rows = self.rows_from_matches(self.filtered());
         render_rows_with_col_width_mode(
-            area.inset(Insets::tlbr(
-                /*top*/ 0,
-                COMMAND_LEFT_INSET,
-                /*bottom*/ 0,
-                /*right*/ 0,
-            )),
+            area,
             buf,
             &rows,
             &self.state,

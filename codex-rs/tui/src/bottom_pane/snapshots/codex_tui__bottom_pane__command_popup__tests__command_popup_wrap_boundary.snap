@@ -6,16 +6,17 @@ width 32
 Buffer {
     area: Rect { x: 0, y: 0, width: 32, height: 3 },
     content: [
-        "  /tier-one  Use faster         ",
+        "› /tier-one  Use faster         ",
         "             inference          ",
         "  /tier-two  Keep default speed ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 23, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 22, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 13, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 23, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 13, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 22, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 3, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 7, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 13, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -27,12 +28,12 @@ width 33
 Buffer {
     area: Rect { x: 0, y: 0, width: 33, height: 2 },
     content: [
-        "  /tier-one  Use faster inference",
+        "› /tier-one  Use faster inference",
         "  /tier-two  Keep default speed  ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 13, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
         x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 7, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
@@ -45,13 +46,14 @@ width 34
 Buffer {
     area: Rect { x: 0, y: 0, width: 34, height: 2 },
     content: [
-        "  /tier-one  Use faster inference ",
+        "› /tier-one  Use faster inference ",
         "  /tier-two  Keep default speed   ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 33, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 13, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 33, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 7, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 13, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,

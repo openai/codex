@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/mentions_v2/render_tests.rs
+expression: text(&buffer)
+---
+  Mentions
+  Files, directories, plugins, skills and tasks
+
+   All Results   Filesystem Only   Plugins
+
+  new-query
+
+  loading...
+
+
+
+
+
+
+
+
+  enter/tab insert · esc close · ↑/↓ select · ←/→ filter

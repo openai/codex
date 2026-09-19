@@ -38,6 +38,7 @@ pub(crate) struct GenericDisplayRow {
     pub display_shortcut: Option<ShortcutHint>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
+    /// Required result identity, retained even when the description column hides.
     pub category_tag: Option<String>,
     pub disabled_reason: Option<String>, // optional disabled message
     pub is_disabled: bool,
@@ -277,7 +278,7 @@ fn wrap_standard_row(
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
 
-    let full_line = build_full_line(row, desc_col, description_layout);
+    let full_line = build_full_line(row, desc_col, width, description_layout);
     let continuation_indent = wrap_indent(row, desc_col, width);
     let options = RtOptions::new(width.max(1) as usize)
         .initial_indent(Line::from(""))
@@ -616,31 +617,6 @@ pub(crate) fn render_rows_with_col_width_mode(
     )
 }
 
-/// Render rows as a single line each (no wrapping), truncating overflow with an ellipsis.
-///
-/// This path always uses viewport-local width alignment and is best for dense
-/// list UIs where multi-line descriptions would add too much vertical churn.
-/// Returns the number of terminal lines actually rendered.
-pub(crate) fn render_rows_single_line(
-    area: Rect,
-    buf: &mut Buffer,
-    rows_all: &[GenericDisplayRow],
-    state: &ScrollState,
-    max_results: usize,
-    empty_message: &str,
-) -> u16 {
-    render_rows_single_line_with_col_width_mode(
-        area,
-        buf,
-        rows_all,
-        state,
-        max_results,
-        empty_message,
-        ColumnWidthConfig::default(),
-    )
-    .lines
-}
-
 /// Render a list of rows as a single line each (no wrapping), truncating overflow with an
 /// ellipsis while honoring the configured column width behavior.
 /// Returns the terminal lines and selectable items actually rendered.
@@ -695,7 +671,8 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
             break;
         }
 
-        let mut full_line = build_full_line(row, desc_col, column_width.description_layout);
+        let mut full_line =
+            build_full_line(row, desc_col, area.width, column_width.description_layout);
         apply_row_state_style(
             std::slice::from_mut(&mut full_line),
             Some(i) == state.selected_idx && !row.is_disabled,
@@ -957,8 +934,13 @@ mod tests {
                 match_indices: match_index.map(|index| vec![index]),
                 ..Default::default()
             };
-            let text =
-                build_full_line(&row, desc_col, SelectionDescriptionLayout::Columns).to_string();
+            let text = build_full_line(
+                &row,
+                desc_col,
+                /*width*/ 80,
+                SelectionDescriptionLayout::Columns,
+            )
+            .to_string();
 
             assert!(text.starts_with(expected), "unexpected row: {text:?}");
         }
@@ -987,6 +969,7 @@ mod tests {
             let line = build_full_line(
                 row,
                 /*desc_col*/ 4,
+                area.width,
                 SelectionDescriptionLayout::Columns,
             );
             let name = line.spans.first().expect("fuzzy-matched name span");

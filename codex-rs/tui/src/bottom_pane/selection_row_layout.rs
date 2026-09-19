@@ -118,27 +118,64 @@ fn append_shortcut(row: &GenericDisplayRow, spans: &mut Vec<Span<'static>>) {
 pub(super) fn build_full_line(
     row: &GenericDisplayRow,
     desc_col: usize,
+    width: u16,
     description_layout: SelectionDescriptionLayout,
 ) -> Line<'static> {
     let description = (desc_col > 0)
         .then(|| combined_description(row, description_layout))
         .flatten();
     let name_prefix_width = line_width(&Line::from(row.name_prefix_spans.clone()));
-    let name_limit = description
-        .as_ref()
-        .map(|_| desc_col.saturating_sub(2).saturating_sub(name_prefix_width))
+    // Category tags identify the result even when secondary descriptions hide.
+    // Reserve their cells before truncating the name on narrow rows.
+    let metadata_col = row
+        .category_tag
+        .as_deref()
+        .map(|tag| {
+            let desired_col = if desc_col > 0 {
+                desc_col
+            } else {
+                name_prefix_width + display_width(&row.name) + 2
+            };
+            desired_col.min(usize::from(width).saturating_sub(display_width(tag)))
+        })
+        .or_else(|| description.as_ref().map(|_| desc_col));
+    let name_limit = metadata_col
+        .map(|column| {
+            column
+                .saturating_sub(/*rhs*/ 2)
+                .saturating_sub(name_prefix_width)
+        })
         .unwrap_or(usize::MAX);
-    let name_spans = build_name_spans(row, name_limit);
+    let name_limit = if row.category_tag.is_some() && display_width(&row.name) > name_limit {
+        name_limit.saturating_sub(/*rhs*/ 1)
+    } else {
+        name_limit
+    };
+    let name_spans = if row.category_tag.is_some()
+        && metadata_col.is_some_and(|column| column <= name_prefix_width)
+    {
+        Vec::new()
+    } else {
+        build_name_spans(row, name_limit)
+    };
     let name_width = name_prefix_width + line_width(&Line::from(name_spans.clone()));
 
     let mut spans = row.name_prefix_spans.clone();
     spans.extend(name_spans);
     append_shortcut(row, &mut spans);
-    if let Some(description) = description {
-        let gap = desc_col.saturating_sub(name_width);
+    if let Some(metadata_col) = metadata_col {
+        let gap = metadata_col.saturating_sub(name_width);
         if gap > 0 {
             spans.push(" ".repeat(gap).into());
         }
+    }
+    if let Some(tag) = &row.category_tag {
+        spans.push(tag.clone().dim());
+        if description.is_some() {
+            spans.push(" ".dim());
+        }
+    }
+    if let Some(description) = description {
         spans.push(description.dim());
     }
     Line::from(spans)

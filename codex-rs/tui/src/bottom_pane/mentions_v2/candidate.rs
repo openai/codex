@@ -31,7 +31,7 @@ impl MentionType {
 
     pub(super) fn span(self, base_style: Style) -> Span<'static> {
         let style = match self {
-            Self::Plugin => base_style.magenta(),
+            Self::Plugin => base_style.fg(crate::style::accent_color()),
             Self::Skill => base_style.dim(),
             Self::Task => base_style.cyan(),
             Self::File => base_style.cyan(),

@@ -1,3 +1,5 @@
+//! Own live mention candidates and asynchronous file search while reserving a stable picker viewport.
+
 use codex_file_search::FileMatch;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -7,6 +9,7 @@ use super::candidate::Candidate;
 use super::candidate::SearchResult;
 use super::candidate::Selection;
 use super::filter::filtered_candidates;
+use super::render::POPUP_HEIGHT;
 use super::render::render_popup;
 use super::search_mode::SearchMode;
 use crate::bottom_pane::popup_consts::MAX_POPUP_ROWS;
@@ -92,8 +95,7 @@ impl Popup {
     }
 
     pub(crate) fn calculate_required_height(&self, _width: u16) -> u16 {
-        let visible = self.rows.len().clamp(1, MAX_POPUP_ROWS);
-        (visible as u16).saturating_add(2)
+        POPUP_HEIGHT
     }
 
     /// Rebuilds cached rows and keeps selection valid after search inputs change.
@@ -120,6 +122,7 @@ impl WidgetRef for Popup {
             &self.state,
             self.file_search.empty_message(),
             self.search_mode,
+            &self.query,
         );
     }
 }

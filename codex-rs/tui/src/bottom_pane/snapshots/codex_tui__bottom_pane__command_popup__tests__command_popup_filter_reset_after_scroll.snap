@@ -5,14 +5,15 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 72, height: 3 },
     content: [
-        "  /status      show current session configuration and token usage       ",
+        "› /status      show current session configuration and token usage       ",
         "  /statusline  configure which items appear in the status line          ",
         "  /stop        stop all background terminals                            ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 65, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 15, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 65, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 3, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 5, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 15, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,

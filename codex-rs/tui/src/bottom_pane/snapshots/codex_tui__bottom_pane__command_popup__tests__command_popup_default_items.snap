@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
+assertion_line: 523
 expression: commands
 ---
 /model - choose what model and reasoning effort to use

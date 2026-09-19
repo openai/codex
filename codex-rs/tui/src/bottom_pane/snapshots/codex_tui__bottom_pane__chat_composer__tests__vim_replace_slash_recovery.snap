@@ -10,4 +10,4 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"  /diff  show git diff (including untracked files)                                                  "
+"› /diff  show git diff (including untracked files)                                                  "
