@@ -261,6 +261,17 @@ async fn test_review_params() -> GuardianReviewSessionParams {
 
 #[tokio::test]
 async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
+    struct SharedProvider;
+    impl codex_extension_api::ThreadInstructionsProvider for SharedProvider {
+        fn share_with_subagents(&self) -> bool {
+            true
+        }
+
+        fn load_thread_instructions(&self) -> codex_extension_api::LoadInstructionsFuture<'_> {
+            panic!("isolated reviewers must not load the parent's provider")
+        }
+    }
+
     let mut params = test_review_params().await;
     let latest = Some(Instructions {
         text: "latest thread instructions".to_string(),
@@ -274,6 +285,7 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
     parent.services.agents_md_manager = Arc::new(AgentsMdManager::new(SessionInstructions {
         user: latest_global.clone(),
         thread: latest.clone(),
+        thread_provider: Some(Arc::new(SharedProvider)),
         ..Default::default()
     }));
     // Reproduce an update between reuse-key capture and reviewer creation.
@@ -306,7 +318,9 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
     let review = manager.trunk().await.expect("prewarmed reviewer");
 
     assert_eq!(review.reuse_key, expected_key);
-    assert_eq!(review.session.inherited_instructions().await.thread, latest);
+    let inherited = review.session.inherited_instructions().await;
+    assert_eq!(inherited.thread, latest);
+    assert!(inherited.thread_provider.is_none());
     manager.shutdown().await;
 }
 

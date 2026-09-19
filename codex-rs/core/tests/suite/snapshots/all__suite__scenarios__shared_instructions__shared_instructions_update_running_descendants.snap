@@ -1,0 +1,126 @@
+---
+source: core/tests/suite/scenarios_shared_instructions.rs
+expression: "context_snapshot::format_request_history_snapshot(\"A host replaces the provider after the parent restarts, then updates and clears instructions for surviving children and grandchildren.\",\n&request_history, &ContextSnapshotOptions::default(),)"
+---
+Scenario: A host replaces the provider after the parent restarts, then updates and clears instructions for surviving children and grandchildren.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Escalation Requests
+
+    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+    - Pipes: |
+    - Logical operators: &&, ||
+    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+    ### Examples
+    Good examples of prefixes:
+    - ["npm", "run", "dev"]
+    - ["gh", "pr", "check"]
+    - ["cargo", "test"]
+    </permissions instructions>
+01:message/user[2]:
+    [01] # AGENTS.md instructions
+
+        <INSTRUCTIONS>
+        Ask before sending email.
+        </INSTRUCTIONS>
+    [02] <environment_context>
+          <cwd><CWD></cwd>
+          <shell><HOST_SHELL></shell>
+          <current_date><CURRENT_DATE></current_date>
+          <timezone><HOST_TIMEZONE></timezone>
+          <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+          <subagents>
+            - <UUID 1>
+          </subagents>
+        </environment_context>
+02:message/user:
+    continue with the current instructions
+-- request 2 (turn) --
+03:message/user:
+    # AGENTS.md instructions
+
+    <INSTRUCTIONS>
+    These AGENTS.md instructions replace all previously provided AGENTS.md instructions.
+
+    Never send email.
+    </INSTRUCTIONS>
+04:message/user:
+    continue with the current instructions
+-- request 3 (turn) --
+05:message/user:
+    # AGENTS.md instructions
+
+    <INSTRUCTIONS>
+    The previously provided AGENTS.md instructions no longer apply.
+    </INSTRUCTIONS>
+06:message/user:
+    continue with the current instructions
+-- request 4 (turn) --
+07:message/user:
+    continue with the current instructions
+
+## Window 2 (after request 4: input diverged at item 01, settings changed (prompt_cache_key))
+-- request 5 (turn) --
+00:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The san... permits reading files. Network access is restricted. [hash=be7da4425f89053c]
+    # Escalation Requests
+
+    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+    - Pipes: |
+    - Logical operators: &&, ||
+    <OMITTED 44 LINES; ~790 TOKENS; hash=3a8900343e968d61>
+    NEVER provide a prefix_rule if your command uses a heredoc or herestring.
+
+    ### Examples
+    Good examples of prefixes:
+    - ["npm", "run", "dev"]
+    - ["gh", "pr", "check"]
+    - ["cargo", "test"]
+    </permissions instructions>
+01:message/user[2]:
+    [01] # AGENTS.md instructions
+
+        <INSTRUCTIONS>
+        Ask before sending email.
+        </INSTRUCTIONS>
+    [02] <environment_context>
+          <cwd><CWD></cwd>
+          <shell><HOST_SHELL></shell>
+          <current_date><CURRENT_DATE></current_date>
+          <timezone><HOST_TIMEZONE></timezone>
+          <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+        </environment_context>
+02:message/user:
+    continue with the current instructions
+-- request 6 (turn) --
+03:message/user:
+    # AGENTS.md instructions
+
+    <INSTRUCTIONS>
+    These AGENTS.md instructions replace all previously provided AGENTS.md instructions.
+
+    Never send email.
+    </INSTRUCTIONS>
+04:message/user:
+    continue with the current instructions
+-- request 7 (turn) --
+05:message/user:
+    # AGENTS.md instructions
+
+    <INSTRUCTIONS>
+    The previously provided AGENTS.md instructions no longer apply.
+    </INSTRUCTIONS>
+06:message/user:
+    continue with the current instructions
+-- request 8 (turn) --
+07:message/user:
+    continue with the current instructions

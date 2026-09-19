@@ -109,9 +109,10 @@ impl UserInstructionsProvider for WarningInstructionsProvider {
     }
 }
 
-struct RecordingThreadInstructionsProvider {
+pub(super) struct RecordingThreadInstructionsProvider {
     loaded: Mutex<LoadedUserInstructions>,
     load_count: AtomicUsize,
+    shared: bool,
 }
 
 impl RecordingThreadInstructionsProvider {
@@ -122,21 +123,27 @@ impl RecordingThreadInstructionsProvider {
                 warnings: Vec::new(),
             }),
             load_count: AtomicUsize::new(0),
+            shared: false,
         }
     }
 
-    fn with_text(text: impl Into<String>) -> Self {
+    pub(super) fn with_text(text: impl Into<String>) -> Self {
         Self::new(Some(Instructions {
             text: text.into(),
             source: None,
         }))
     }
 
-    fn load_count(&self) -> usize {
+    pub(super) fn shared(mut self) -> Self {
+        self.shared = true;
+        self
+    }
+
+    pub(super) fn load_count(&self) -> usize {
         self.load_count.load(Ordering::SeqCst)
     }
 
-    fn set_instructions(&self, instructions: Option<Instructions>) {
+    pub(super) fn set_instructions(&self, instructions: Option<Instructions>) {
         self.loaded
             .lock()
             .expect("instruction snapshot lock")
@@ -152,6 +159,10 @@ impl RecordingThreadInstructionsProvider {
 }
 
 impl ThreadInstructionsProvider for RecordingThreadInstructionsProvider {
+    fn share_with_subagents(&self) -> bool {
+        self.shared
+    }
+
     fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_> {
         self.load_count.fetch_add(1, Ordering::SeqCst);
         let loaded = self
@@ -218,7 +229,7 @@ fn remove_agents_md_world_state_section(rollout_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
+pub(super) fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("user")
         .into_iter()
@@ -231,7 +242,7 @@ fn expected_instruction_fragment(cwd: &PathUri, contents: &str) -> String {
     format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
-fn expected_provider_only_instruction_fragment(contents: &str) -> String {
+pub(super) fn expected_provider_only_instruction_fragment(contents: &str) -> String {
     format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
 }
 
@@ -239,7 +250,10 @@ fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, exp
     assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
 }
 
-async fn submit_thread_turn(thread: &Arc<codex_core::CodexThread>, prompt: &str) -> Result<()> {
+pub(super) async fn submit_thread_turn(
+    thread: &Arc<codex_core::CodexThread>,
+    prompt: &str,
+) -> Result<()> {
     thread
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
             text: prompt.to_string(),
@@ -250,7 +264,7 @@ async fn submit_thread_turn(thread: &Arc<codex_core::CodexThread>, prompt: &str)
     Ok(())
 }
 
-async fn persisted_resume_history(
+pub(super) async fn persisted_resume_history(
     thread: &Arc<codex_core::CodexThread>,
 ) -> Result<(ThreadId, InitialHistory)> {
     thread.ensure_rollout_materialized().await;
@@ -1294,6 +1308,75 @@ async fn thread_provider_refreshes_at_the_next_step_of_an_active_turn() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn isolated_guardian_keeps_applied_thread_instructions() -> Result<()> {
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.permissions.approval_policy = codex_core::config::Constrained::allow_any(
+                codex_protocol::protocol::AskForApproval::OnRequest,
+            );
+            config.approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::AutoReview;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let provider =
+        Arc::new(RecordingThreadInstructionsProvider::with_text(TASK_USER_INSTRUCTIONS).shared());
+    let parent = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(test.codex.environment_selections().await),
+            thread_instructions_provider: Some(provider.clone()),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    // Publish an update after the parent captured its instructions, before it starts Guardian.
+    let parent_request = responses::mount_sse_once_match(
+        &server,
+        move |_: &wiremock::Request| {
+            provider.set_instructions(Some(Instructions {
+                text: UPDATED_TASK_USER_INSTRUCTIONS.to_owned(),
+                source: None,
+            }));
+            true
+        },
+        sse(vec![
+            responses::ev_exec_command_call_with_args(
+                "action",
+                &serde_json::json!({
+                    "cmd": "echo reviewed",
+                    "sandbox_permissions": "require_escalated",
+                    "justification": "Check the requested action.",
+                }),
+            ),
+            ev_completed("parent-action"),
+        ]),
+    )
+    .await;
+    let remaining = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("decision", r#"{"outcome":"deny"}"#),
+                ev_completed("guardian-review"),
+            ]),
+            responses::sse_completed("parent-done"),
+        ],
+    )
+    .await;
+    submit_thread_turn(&parent.thread, "Check the action before executing it.").await?;
+    let requests = remaining.requests();
+    let initial = expected_provider_only_instruction_fragment(TASK_USER_INSTRUCTIONS);
+    assert_single_instruction_fragment(&parent_request.single_request(), &initial);
+    assert_eq!(
+        requests[0].body_json()["client_metadata"]["x-openai-subagent"],
+        "guardian"
+    );
+    assert_single_instruction_fragment(&requests[0], &initial);
+    assert!(requests[1].body_contains_text(UPDATED_TASK_USER_INSTRUCTIONS));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_provider_enforces_its_own_limit_before_startup_and_sampling() -> Result<()> {
     let server = start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -1406,11 +1489,15 @@ enum InstructionForkSource {
     OfflinePrepared,
 }
 
-#[test_case::test_case(InstructionForkSource::LiveRollout; "live snapshot")]
-#[test_case::test_case(InstructionForkSource::OfflineHistory; "offline history provider")]
-#[test_case::test_case(InstructionForkSource::OfflinePrepared; "offline prepared provider")]
+#[test_case::test_case(InstructionForkSource::LiveRollout, false; "live snapshot")]
+#[test_case::test_case(InstructionForkSource::LiveRollout, true; "shared provider stays with source root")]
+#[test_case::test_case(InstructionForkSource::OfflineHistory, false; "offline history provider")]
+#[test_case::test_case(InstructionForkSource::OfflinePrepared, false; "offline prepared provider")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fork_preserves_thread_instructions(source: InstructionForkSource) -> Result<()> {
+async fn fork_preserves_thread_instructions(
+    source: InstructionForkSource,
+    shared: bool,
+) -> Result<()> {
     let server = start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -1434,9 +1521,12 @@ async fn fork_preserves_thread_instructions(source: InstructionForkSource) -> Re
         })
         .with_history_mode(history_mode);
     let test = builder.build_with_auto_env(&server).await?;
-    let parent_provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
-        TASK_USER_INSTRUCTIONS,
-    ));
+    let parent_provider = RecordingThreadInstructionsProvider::with_text(TASK_USER_INSTRUCTIONS);
+    let parent_provider = Arc::new(if shared {
+        parent_provider.shared()
+    } else {
+        parent_provider
+    });
     let parent = test
         .thread_manager
         .start_thread(StartThreadOptions {

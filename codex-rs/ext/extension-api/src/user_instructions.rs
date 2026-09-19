@@ -44,6 +44,18 @@ pub type LoadInstructionsFuture<'a> =
 pub trait ThreadInstructionsProvider: Send + Sync {
     /// Loads the current snapshot for the provider's root thread.
     fn load_thread_instructions(&self) -> LoadInstructionsFuture<'_>;
+
+    /// Whether descendants should retain this provider instead of only its applied text.
+    /// Defaults to snapshot inheritance. Opt in only when the same instruction scope and
+    /// credentials apply to descendants. Descendants share the installed provider; a root
+    /// resume can replace it for surviving descendants. Providers must coalesce/cache
+    /// concurrent reads and retain a usable snapshot during outages.
+    /// If a resumed root supplies a non-sharing provider, existing descendants keep their
+    /// last shared instructions without receiving any new private updates.
+    /// Updates are loaded at each descendant's next model-request boundary, not mid-request.
+    fn share_with_subagents(&self) -> bool {
+        false
+    }
 }
 
 /// Loads global user instructions shared across root threads.

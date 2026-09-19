@@ -24,7 +24,7 @@ pub(crate) struct AgentsMdManager {
     state: Mutex<AgentsMdState>,
 }
 
-/// Root runtimes retain providers; subagents inherit only their applied snapshots.
+/// Subagents inherit applied snapshots, plus thread providers that opt into sharing.
 #[derive(Clone, Default)]
 pub(crate) struct SessionInstructions {
     pub(crate) user: Option<Instructions>,
@@ -152,6 +152,11 @@ impl AgentsMdManager {
         SessionInstructions {
             user: state.instructions.user.clone(),
             thread: state.instructions.thread.clone(),
+            thread_provider: state
+                .instructions
+                .thread_provider
+                .clone()
+                .filter(|provider| provider.share_with_subagents()),
             ..Default::default()
         }
     }
