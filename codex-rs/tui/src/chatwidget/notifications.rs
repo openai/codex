@@ -30,6 +30,7 @@ pub(super) enum Notification {
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
     ElicitationRequested { server_name: String },
     PlanModePrompt { title: String },
+    AsyncQuestion { title: String },
 }
 
 impl Notification {
@@ -62,6 +63,9 @@ impl Notification {
             Notification::PlanModePrompt { title } => {
                 format!("Plan mode prompt: {title}")
             }
+            Notification::AsyncQuestion { title } => {
+                format!("Question: {title}")
+            }
         }
     }
 
@@ -72,6 +76,7 @@ impl Notification {
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
+            Notification::AsyncQuestion { .. } => "async-question",
         }
     }
 
@@ -81,7 +86,8 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
-            | Notification::PlanModePrompt { .. } => 1,
+            | Notification::PlanModePrompt { .. }
+            | Notification::AsyncQuestion { .. } => 1,
         }
     }
 
