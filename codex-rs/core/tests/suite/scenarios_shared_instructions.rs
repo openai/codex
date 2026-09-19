@@ -6,7 +6,14 @@ use super::super::agents_md::instruction_fragments;
 use super::super::agents_md::persisted_resume_history;
 use super::super::agents_md::submit_thread_turn;
 use super::*;
+use codex_core::StartThreadOptions;
+use codex_core::config::Constrained;
 use codex_extension_api::Instructions;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
+use codex_extension_api::ToolStartInput;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::responses;
@@ -152,5 +159,137 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
             )
         );
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_tracks_shared_instruction_updates_in_running_descendants() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Change the host's rules after each action is sampled, before its review.
+    // The worker must refresh on its next request; Guardian must review the
+    // applied snapshot, without independently polling the live provider.
+    struct UpdateRulesOnAction(Arc<RecordingThreadInstructionsProvider>);
+
+    impl ToolLifecycleContributor for UpdateRulesOnAction {
+        fn on_tool_start<'a>(&'a self, input: ToolStartInput<'a>) -> ToolLifecycleFuture<'a> {
+            Box::pin(async move {
+                let instructions = match input.call_id {
+                    "initial-action" => Some(Instructions {
+                        text: UPDATED.to_owned(),
+                        source: None,
+                    }),
+                    "updated-action" => None,
+                    _ => return,
+                };
+                self.0.set_instructions(instructions);
+            })
+        }
+    }
+
+    let server = start_mock_server().await;
+    let provider = Arc::new(RecordingThreadInstructionsProvider::with_text(INITIAL).shared());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(Arc::new(UpdateRulesOnAction(provider.clone())));
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let root = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            environments: Some(vec![test.executor_environment().selection().clone()]),
+            thread_instructions_provider: Some(provider),
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?;
+    let mut descendant = root;
+    for depth in 1..=2 {
+        descendant = test
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                environments: Some(vec![test.executor_environment().selection().clone()]),
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: descendant.thread_id,
+                    depth,
+                    agent_path: None,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                ..StartThreadOptions::new(test.config.clone())
+            })
+            .await?;
+    }
+
+    let mut responses = Vec::new();
+    for call_id in ["initial-action", "updated-action", "cleared-action"] {
+        responses.push(sse(vec![
+            ev_response_created(call_id),
+            responses::ev_function_call(
+                call_id,
+                "exec_command",
+                &json!({
+                    "cmd": format!("echo {call_id}"),
+                    "sandbox_permissions": "require_escalated",
+                    "justification": "Review this action against the current rules.",
+                })
+                .to_string(),
+            ),
+            ev_completed(call_id),
+        ]));
+        responses.push(sse(vec![
+            ev_assistant_message("guardian", r#"{"outcome":"deny"}"#),
+            ev_completed(&format!("review-{call_id}")),
+        ]));
+        responses.push(responses::sse_completed(&format!("finished-{call_id}")));
+    }
+    let requests = mount_sse_sequence(&server, responses).await;
+    // Neither ancestor takes another turn during the update and removal.
+    for prompt in [
+        "Check the initial rules.",
+        "Check the updated rules.",
+        "Check after removal.",
+    ] {
+        submit_thread_turn(&descendant.thread, prompt).await?;
+    }
+    let requests = requests.requests();
+    assert_eq!(requests.len(), 9);
+    let initial = format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{INITIAL}\n</INSTRUCTIONS>");
+    let updated = format!("# AGENTS.md instructions\n\n<INSTRUCTIONS>\n{UPDATED}\n</INSTRUCTIONS>");
+    let replacement = format!(
+        "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nThese AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n{UPDATED}\n</INSTRUCTIONS>"
+    );
+    let cleared = "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nThe previously provided AGENTS.md instructions no longer apply.\n</INSTRUCTIONS>".to_owned();
+    assert_eq!(
+        requests
+            .iter()
+            .map(instruction_fragments)
+            .collect::<Vec<_>>(),
+        vec![
+            vec![initial.clone()],
+            vec![initial.clone()],
+            vec![initial.clone(), replacement.clone()],
+            vec![initial.clone(), replacement.clone()],
+            vec![updated],
+            vec![initial.clone(), replacement.clone(), cleared.clone()],
+            vec![initial.clone(), replacement.clone(), cleared.clone()],
+            vec![],
+            vec![initial, replacement, cleared],
+        ],
+    );
+    let reviewers = [1, 4, 7].map(|index| {
+        let metadata = requests[index].body_json()["client_metadata"].clone();
+        assert_eq!(metadata["x-openai-subagent"], "guardian");
+        metadata["thread_id"]
+            .as_str()
+            .expect("reviewer thread id")
+            .to_owned()
+    });
+    assert_ne!(reviewers[0], reviewers[1]);
+    assert_ne!(reviewers[1], reviewers[2]);
     Ok(())
 }

@@ -105,7 +105,13 @@ impl PreparedGuardianContext {
                 auth_manager: Arc::clone(&self.parent.services.auth_manager),
                 agent_control: self.parent.services.agent_control.clone(),
                 originator: self.context.turn().originator.clone(),
-                inherited_instructions: Some(self.parent.inherited_instructions().await),
+                // Review the same applied instructions captured by the reuse key.
+                // A live provider could advance independently while reviewing this action.
+                inherited_instructions: Some(SessionInstructions {
+                    user: self.key.user_instructions.clone(),
+                    thread: self.key.thread_instructions.clone(),
+                    ..Default::default()
+                }),
             }),
             initial_history: initial_history.unwrap_or(InitialHistory::New),
             environments: Some(self.context.environments().to_selections()),
