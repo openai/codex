@@ -590,40 +590,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Result<()> {
-    let dir = tempdir()?;
-    let startup = dir.path().join("startup.sh");
-    std::fs::write(
-        &startup,
-        "unset GITHUB_ENTERPRISE_TOKEN UNSET_AUTH_HEADER\n\
-         export GH_TOKEN='ghp_shell_only_secret'\n\
-         export AUTH_HEADER=\"Bearer $GH_TOKEN\"\n\
-         declare -rx GITHUB_TOKEN='ghp_readonly_secret'\n\
-         declare -rx HOMEBREW_GITHUB_API_TOKEN=\"$GITHUB_TOKEN\"\n\
-         export GH_ENTERPRISE_TOKEN='ghp_enterprise_secret'\n\
-         export GH_HOST='attacker.example'\n\
-         export OPENAI_API_KEY='sk-proj-snapshot-secret'\n\
-         export STRIPE_API_KEY='stripe_live_abcdefghijklmnopqrstuvwx'\n\
-         export STRIPE_HOST='https://startup.stripe.example/v1'\n\
-         export STRIPE_AUTH_HEADER=\"Bearer $STRIPE_API_KEY\"\n\
-         export VENDOR_PASSWORD='pin_abcdefgh'\n\
-         export VENDOR_AUTH_HEADER=\"Bearer $VENDOR_PASSWORD\"\n\
-         export VENDOR_HOST='https://attacker.vendor.example/v2'\n\
-         export LOCAL_TOKEN='local_abcdefghijklmnopqrstuvwx'\n\
-         export LOCAL_URL='http://127.0.0.1:1234/v1'\n\
-         export LOCAL_AUTH_HEADER=\"Bearer $LOCAL_TOKEN\"\n\
-         unset LOCAL_TOKEN\n\
-         export AUTH_BUNDLE=\"GitHub $GH_TOKEN\n\
-         OpenAI $OPENAI_API_KEY\"\n\
-         export OPENAI_BASE_URL='https://api.snapshot.example/v1'\n\
-         export IDENTITY_SEEN=\"${OPENAI_IDENTITY_TOKEN_FILE-missing}\"\n\
-         export EXCLUDED_PARENT_HOME=\"${HOME-missing}\"\n\
-         export STARTUP_PATH_OVERRIDE_SEEN=\"${PATH%%:*}\"\n\
-         export STARTUP_CORP_REGION_SEEN=\"${CORP_REGION-missing}\"\n\
-         export STARTUP_NPM_TOKEN_SEEN=\"${NPM_TOKEN-missing}\"\n",
-    )?;
-
+async fn credential_snapshot_proxy() -> Result<crate::config::StartedNetworkProxy> {
     let mut network_config = NetworkProxyConfig::default();
     network_config.set_credential_broker_enabled(/*enabled*/ true);
     network_config.allow_local_binding = Some(true);
@@ -665,7 +632,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
         /*requirements*/ None,
         &permission_profile,
     )?;
-    let started_proxy = network_spec
+    Ok(network_spec
         .start_proxy(
             &permission_profile,
             codex_network_proxy::ManagedProxyRouting::SharedIngress,
@@ -675,7 +642,45 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
             /*enable_network_approval_flow*/ false,
             Default::default(),
         )
-        .await?;
+        .await?)
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Result<()> {
+    let dir = tempdir()?;
+    let startup = dir.path().join("startup.sh");
+    std::fs::write(
+        &startup,
+        "unset GITHUB_ENTERPRISE_TOKEN UNSET_AUTH_HEADER\n\
+         export GH_TOKEN='ghp_shell_only_secret'\n\
+         export AUTH_HEADER=\"Bearer $GH_TOKEN\"\n\
+         declare -rx GITHUB_TOKEN='ghp_readonly_secret'\n\
+         declare -rx HOMEBREW_GITHUB_API_TOKEN=\"$GITHUB_TOKEN\"\n\
+         export GH_ENTERPRISE_TOKEN='ghp_enterprise_secret'\n\
+         export GH_HOST='attacker.example'\n\
+         export OPENAI_API_KEY='sk-proj-snapshot-secret'\n\
+         export STRIPE_API_KEY='stripe_live_abcdefghijklmnopqrstuvwx'\n\
+         export STRIPE_HOST='https://startup.stripe.example/v1'\n\
+         export STRIPE_AUTH_HEADER=\"Bearer $STRIPE_API_KEY\"\n\
+         export VENDOR_PASSWORD='pin_abcdefgh'\n\
+         export VENDOR_AUTH_HEADER=\"Bearer $VENDOR_PASSWORD\"\n\
+         export VENDOR_HOST='https://attacker.vendor.example/v2'\n\
+         export LOCAL_TOKEN='local_abcdefghijklmnopqrstuvwx'\n\
+         export LOCAL_URL='http://127.0.0.1:1234/v1'\n\
+         export LOCAL_AUTH_HEADER=\"Bearer $LOCAL_TOKEN\"\n\
+         unset LOCAL_TOKEN\n\
+         export AUTH_BUNDLE=\"GitHub $GH_TOKEN\n\
+         OpenAI $OPENAI_API_KEY\"\n\
+         export OPENAI_BASE_URL='https://api.snapshot.example/v1'\n\
+         export IDENTITY_SEEN=\"${OPENAI_IDENTITY_TOKEN_FILE-missing}\"\n\
+         export EXCLUDED_PARENT_HOME=\"${HOME-missing}\"\n\
+         export STARTUP_PATH_OVERRIDE_SEEN=\"${PATH%%:*}\"\n\
+         export STARTUP_CORP_REGION_SEEN=\"${CORP_REGION-missing}\"\n\
+         export STARTUP_NPM_TOKEN_SEEN=\"${NPM_TOKEN-missing}\"\n",
+    )?;
+
+    let started_proxy = credential_snapshot_proxy().await?;
     let network_proxy = started_proxy.proxy();
 
     let shell = Shell {
@@ -1235,6 +1240,15 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
         assert!(!fail_open_env.contains_key("AUTH_BUNDLE"));
     }
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_protects_posix_startup_only_when_it_contains_credentials() -> Result<()> {
+    let dir = tempdir()?;
+    let started_proxy = credential_snapshot_proxy().await?;
+    let network_proxy = started_proxy.proxy();
     let posix_startup = dir.path().join("posix-startup.sh");
     std::fs::write(
         &posix_startup,
@@ -1287,6 +1301,21 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
     .expect("brokered POSIX application snapshot has credentials");
     assert!(application_credentials.protected_startup_env.is_none());
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Result<()> {
+    let dir = tempdir()?;
+    let startup = dir.path().join("startup.sh");
+    let started_proxy = credential_snapshot_proxy().await?;
+    let network_proxy = started_proxy.proxy();
+    let shell = Shell {
+        shell_type: ShellType::Bash,
+        shell_path: PathBuf::from("/bin/bash"),
+    };
+    let trusted_startup = ("BASH_ENV".to_string(), startup.display().to_string());
     std::fs::write(
         &startup,
         "export GH_TOKEN='ghp_hidden_alias_secret'\n\
