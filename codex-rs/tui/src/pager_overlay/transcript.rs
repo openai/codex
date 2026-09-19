@@ -1,6 +1,9 @@
 //! Detailed transcript overlay over committed history and the current live tail.
 
 use super::*;
+use crate::transcript_view::LayoutCache;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 pub(crate) struct TranscriptOverlay {
     /// Pager UI state and the renderables currently displayed.
@@ -8,6 +11,7 @@ pub(crate) struct TranscriptOverlay {
     /// The invariant is that `view.renderables` is `render_cells(cells)` plus an optional trailing
     /// live-tail renderable appended after the committed cells.
     view: PagerView,
+    cache: Rc<RefCell<LayoutCache>>,
     /// Committed transcript cells (does not include the live tail).
     cells: Vec<Arc<dyn HistoryCell>>,
     highlight_cell: Option<usize>,
@@ -38,9 +42,11 @@ impl TranscriptOverlay {
     /// This overlay does not own the "active cell"; callers may optionally append a live tail via
     /// `sync_live_tail` during draws to reflect in-flight activity.
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
+        let cache = Rc::new(RefCell::new(LayoutCache::default()));
         Self {
             view: PagerView::new(
                 Self::render_cells(
+                    &cache,
                     &transcript_cells,
                     /*highlight_cell*/ None,
                     TranscriptHistoryState::Idle,
@@ -49,6 +55,7 @@ impl TranscriptOverlay {
                 usize::MAX,
                 keymap,
             ),
+            cache,
             cells: transcript_cells,
             highlight_cell: None,
             live_tail_key: None,
@@ -84,6 +91,7 @@ impl TranscriptOverlay {
     }
 
     fn render_cells(
+        cache: &Rc<RefCell<LayoutCache>>,
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: Option<usize>,
         history_state: TranscriptHistoryState,
@@ -91,12 +99,13 @@ impl TranscriptOverlay {
         cells
             .iter()
             .enumerate()
-            .map(|(i, cell)| Self::render_cell(cell, i, highlight_cell, history_state))
+            .map(|(i, cell)| Self::render_cell(cache, cell, i, highlight_cell, history_state))
             .collect()
     }
 
     /// Build the renderable for a committed cell, caching its height when the cell is stable.
     fn render_cell(
+        cache: &Rc<RefCell<LayoutCache>>,
         cell: &Arc<dyn HistoryCell>,
         index: usize,
         highlight_cell: Option<usize>,
@@ -108,6 +117,7 @@ impl TranscriptOverlay {
             return Box::new(Line::from(placeholder).dim());
         }
         let cell_renderable = CellRenderable {
+            cache: Rc::clone(cache),
             cell: cell.clone(),
             highlighted: highlight_cell == Some(index),
         };
@@ -142,6 +152,7 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         let cell_renderable = Self::render_cell(
+            &self.cache,
             &cell,
             self.cells.len(),
             self.highlight_cell,
@@ -315,7 +326,7 @@ impl TranscriptOverlay {
             animation_tick: key.animation_tick,
         });
 
-        if self.live_tail_key == next_key {
+        if active_key.is_some_and(|key| key.cacheable) && self.live_tail_key == next_key {
             return;
         }
         let follow_bottom = self.view.is_scrolled_to_bottom();
@@ -347,6 +358,7 @@ impl TranscriptOverlay {
             for index in [previous, cell].into_iter().flatten() {
                 if let Some(history_cell) = self.cells.get(index) {
                     self.view.renderables[index] = Self::render_cell(
+                        &self.cache,
                         history_cell,
                         index,
                         self.highlight_cell,
@@ -370,8 +382,12 @@ impl TranscriptOverlay {
 
     // Detach the live tail before changing cells: their old count identifies the tail renderable.
     fn rebuild_renderables(&mut self, tail_renderable: Option<Box<dyn Renderable>>) {
-        self.view.renderables =
-            Self::render_cells(&self.cells, self.highlight_cell, self.history_state);
+        self.view.renderables = Self::render_cells(
+            &self.cache,
+            &self.cells,
+            self.highlight_cell,
+            self.history_state,
+        );
         if let Some(tail) = tail_renderable {
             self.view.renderables.push(tail);
         }
@@ -433,6 +449,7 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.cache.borrow_mut().begin_frame();
         // Preserve following the tail before the composer changes the available height.
         if self.view.is_scrolled_to_bottom() {
             self.view.scroll_offset = usize::MAX;

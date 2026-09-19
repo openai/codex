@@ -391,3 +391,32 @@ async fn external_writer_notice_offers_command_center_on_shared_servers() {
         }
     }
 }
+
+#[tokio::test]
+async fn externally_mutable_active_cells_refresh_the_transcript_without_a_revision_change() {
+    let (widget, _height_calls, display_calls) = widget_with_counting_cell(
+        /*desired_height*/ 2, /*line_count*/ 2, /*stable_height*/ false,
+    )
+    .await;
+    let mut overlay = crate::pager_overlay::TranscriptOverlay::new(
+        Vec::new(),
+        crate::keymap::RuntimeKeymap::defaults().pager,
+    );
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 10,
+    );
+    let key = widget.active_cell_transcript_key();
+    let mut frames = Vec::new();
+    for _ in 0..2 {
+        assert_eq!(widget.active_cell_transcript_key(), key);
+        overlay.sync_live_tail(area.width, key, |width| {
+            widget.active_cell_transcript_hyperlink_lines(width)
+        });
+        let mut buffer = Buffer::empty(area);
+        overlay.render(area, &mut buffer);
+        frames.push(buffer);
+    }
+    assert_eq!(display_calls.load(Ordering::Relaxed), 2);
+    assert!(contains_text(&frames[0], "frame 1 row 0"));
+    assert!(contains_text(&frames[1], "frame 2 row 0"));
+}

@@ -14,16 +14,12 @@ struct MeasuredCell {
 
 impl HistoryCell for MeasuredCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.measurements.fetch_add(1, Ordering::Relaxed);
         vec!["history".into()]
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec!["history".into()]
-    }
-
-    fn desired_transcript_height(&self, _width: u16) -> u16 {
-        self.measurements.fetch_add(1, Ordering::Relaxed);
-        1
     }
 }
 
@@ -60,8 +56,6 @@ fn moving_highlight_preserves_unaffected_height_caches() {
             .collect::<Vec<_>>()
     };
     let mut expected = vec![1; cells.len()];
-    expected[28] = 3;
-    expected[30] = 3;
     assert_eq!(measurements(), expected);
 
     // Width changes still invalidate every cached height.
@@ -93,6 +87,7 @@ fn moving_highlight_matches_full_rebuild_with_live_tail() {
         overlay.sync_live_tail(
             /*width*/ 40,
             Some(ActiveCellTranscriptKey {
+                cacheable: true,
                 revision: 1,
                 is_stream_continuation: false,
                 animation_tick: None,

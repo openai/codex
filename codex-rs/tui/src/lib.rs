@@ -220,6 +220,7 @@ mod token_usage;
 mod tool_output;
 mod tooltips;
 mod transcript_reflow;
+mod transcript_view;
 mod tui;
 mod ui_consts;
 mod unarchive_prompt;

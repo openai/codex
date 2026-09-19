@@ -832,6 +832,8 @@ enum CodexOpTarget {
 /// it cheaply decide when to recompute that tail as the active cell evolves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ActiveCellTranscriptKey {
+    /// External mutable sources must refresh even when the explicit revision is unchanged.
+    pub(crate) cacheable: bool,
     /// Cache-busting revision for in-place updates.
     ///
     /// Many active cells are updated incrementally while streaming (for example when exec groups
@@ -1994,11 +1996,26 @@ impl ChatWidget {
         {
             return None;
         }
+        let live_sources: [Option<&dyn HistoryCell>; 2] = [
+            cell.map(AsRef::as_ref),
+            rate_limit_reset_hint.map(|cell| cell as &dyn HistoryCell),
+        ];
         Some(ActiveCellTranscriptKey {
+            cacheable: live_sources
+                .into_iter()
+                .flatten()
+                .chain(
+                    self.realtime_conversation
+                        .pending_history_cells
+                        .iter()
+                        .chain(self.realtime_conversation.live_transcript_cells())
+                        .map(AsRef::as_ref),
+                )
+                .all(HistoryCell::has_stable_transcript_height),
             revision: self.transcript.active_cell_revision,
             is_stream_continuation: cell
                 .map(|cell| cell.is_stream_continuation())
-                .unwrap_or(false),
+                .unwrap_or(/*default*/ false),
             animation_tick: cell
                 .and_then(|cell| cell.transcript_animation_tick())
                 .or_else(|| realtime_cells.find_map(|cell| cell.transcript_animation_tick())),

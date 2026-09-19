@@ -1,5 +1,8 @@
 //! Viewport-aware transcript rendering and the fallback for generic pager content.
 
+use crate::transcript_view::LayoutCache;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::history_cell::HistoryCell;
@@ -17,6 +20,7 @@ use ratatui::widgets::Widget;
 pub(super) struct CellRenderable {
     pub(super) cell: Arc<dyn HistoryCell>,
     pub(super) highlighted: bool,
+    pub(super) cache: Rc<RefCell<LayoutCache>>,
 }
 
 impl Renderable for CellRenderable {
@@ -26,7 +30,10 @@ impl Renderable for CellRenderable {
 
     /// Scroll visible text and hyperlink metadata together without rendering hidden rows.
     fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
-        let hyperlink_lines = self.cell.transcript_hyperlink_lines(area.width);
+        let layout = self
+            .cache
+            .borrow_mut()
+            .get(&self.cell, area.width, /*separated*/ false);
         let style = if self.cell.as_any().is::<UserHistoryCell>() {
             if self.highlighted {
                 user_message_style().reversed()
@@ -36,14 +43,18 @@ impl Renderable for CellRenderable {
         } else {
             Style::default()
         };
-        HyperlinkParagraph::new(&hyperlink_lines, style)
-            .scroll(scroll_offset)
-            .render(area, buf);
+        buf.set_style(area, style);
+        layout.render(area, buf, usize::from(scroll_offset));
         true
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        self.cell.desired_transcript_height(width)
+        self.cache
+            .borrow_mut()
+            .get(&self.cell, width, /*separated*/ false)
+            .row_count()
+            .try_into()
+            .unwrap_or(u16::MAX)
     }
 }
 

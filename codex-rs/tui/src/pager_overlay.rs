@@ -18,6 +18,11 @@
 mod scrolling;
 mod transcript;
 
+pub(crate) use transcript::TranscriptOverlay;
+
+use std::io::Result;
+use std::sync::Arc;
+
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::SessionInfoCell;
@@ -48,9 +53,6 @@ use ratatui::widgets::Wrap;
 use scrolling::CellRenderable;
 use scrolling::HyperlinkLinesRenderable;
 use scrolling::render_offset_content;
-use std::io::Result;
-use std::sync::Arc;
-pub(crate) use transcript::TranscriptOverlay;
 
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),

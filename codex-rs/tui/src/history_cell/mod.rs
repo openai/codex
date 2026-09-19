@@ -321,15 +321,6 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         plain_hyperlink_lines(self.transcript_lines(width))
     }
 
-    fn desired_transcript_height(&self, width: u16) -> u16 {
-        let lines = visible_lines(self.transcript_hyperlink_lines(width));
-        Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
-    }
-
     /// Whether the cached transcript layout remains valid across later frames.
     ///
     /// Cells backed by external state should return `false` so the shared viewport refreshes

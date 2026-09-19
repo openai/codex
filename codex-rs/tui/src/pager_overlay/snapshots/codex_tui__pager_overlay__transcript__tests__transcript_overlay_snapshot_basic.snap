@@ -1,14 +1,57 @@
 ---
 source: tui/src/pager_overlay/transcript_tests.rs
-expression: term.backend()
+expression: "format!(\"{:?}\", term.backend().buffer())"
 ---
-"/ T R A N S C R I P T / / / / / / / / / "
-"alpha                                   "
-"                                        "
-"beta                                    "
-"                                        "
-"gamma                                   "
-"───────────────────────────────── 100% ─"
-" ↑/↓ to scroll   pgup/pgdn to page   hom"
-" q close   esc to edit prev             "
-"                                        "
+Buffer {
+    area: Rect { x: 0, y: 0, width: 24, height: 16 },
+    content: [
+        "/ T R A N S C R I P T / ",
+        "    indented styled 漢字", // hidden by multi-width symbols: [(21, " "), (23, " ")]
+        "ｶﾞ text                 ", // hidden by multi-width symbols: [(1, " ")]
+        "abc-def ghi             ",
+        "continuation spaces and ",
+        "a-long-hyphenated-token ",
+        "+ added text            ",
+        "                        ",
+        "• A styled ]8;;https://example.com/transcriptl]8;;]8;;https://example.com/transcripti]8;;]8;;https://example.com/transcriptn]8;;]8;;https://example.com/transcriptk]8;;         ",
+        "  (]8;;https://example.com/transcripth]8;;]8;;https://example.com/transcriptt]8;;]8;;https://example.com/transcriptt]8;;]8;;https://example.com/transcriptp]8;;]8;;https://example.com/transcripts]8;;]8;;https://example.com/transcript:]8;;]8;;https://example.com/transcript/]8;;]8;;https://example.com/transcript/]8;;]8;;https://example.com/transcripte]8;;]8;;https://example.com/transcriptx]8;;]8;;https://example.com/transcripta]8;;]8;;https://example.com/transcriptm]8;;]8;;https://example.com/transcriptp]8;;]8;;https://example.com/transcriptl]8;;]8;;https://example.com/transcripte]8;;]8;;https://example.com/transcript.]8;;]8;;https://example.com/transcriptc]8;;]8;;https://example.com/transcripto]8;;]8;;https://example.com/transcriptm]8;;]8;;https://example.com/transcript/]8;;]8;;https://example.com/transcriptt]8;;",
+        "]8;;https://example.com/transcriptr]8;;]8;;https://example.com/transcripta]8;;]8;;https://example.com/transcriptn]8;;]8;;https://example.com/transcripts]8;;]8;;https://example.com/transcriptc]8;;]8;;https://example.com/transcriptr]8;;]8;;https://example.com/transcripti]8;;]8;;https://example.com/transcriptp]8;;]8;;https://example.com/transcriptt]8;;)              ",
+        "~                       ",
+        "───────────────── 100% ─",
+        " ↑/↓ to scroll   pgup/pg",
+        " q close   esc to edit p",
+        "                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 1, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
+        x: 13, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 21, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 22, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 23, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 1, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 7, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 6, fg: Reset, bg: Green, underline: Reset, modifier: NONE,
+        x: 12, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 2, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 10, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 11, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: UNDERLINED,
+        x: 15, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 3, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: UNDERLINED,
+        x: 9, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 12, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 4, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 13, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 0, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 11, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 14, y: 14, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 15, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

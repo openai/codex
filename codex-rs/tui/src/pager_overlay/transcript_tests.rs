@@ -47,16 +47,12 @@ struct HeightCountingCell {
 
 impl crate::history_cell::HistoryCell for HeightCountingCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        self.height_calls.fetch_add(1, Ordering::Relaxed);
         vec![Line::from("counted")]
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         vec![Line::from("counted")]
-    }
-
-    fn desired_transcript_height(&self, _width: u16) -> u16 {
-        self.height_calls.fetch_add(1, Ordering::Relaxed);
-        1
     }
 }
 
@@ -130,22 +126,23 @@ fn transcript_overlay_snapshots_paginated_history_states() {
 
 #[test]
 fn transcript_overlay_snapshot_basic() {
-    // Prepare a transcript overlay with a few lines
     let mut overlay = transcript_overlay(vec![
         Arc::new(TestCell {
-            lines: vec![Line::from("alpha")],
+            lines: vec![
+                Line::from(vec!["    indented ".green(), "styled 漢字 ｶﾞ text".bold()]),
+                Line::from("abc-def ghi    continuation spaces and a-long-hyphenated-token"),
+                Line::from("+ added text").on_green(),
+            ],
         }),
-        Arc::new(TestCell {
-            lines: vec![Line::from("beta")],
-        }),
-        Arc::new(TestCell {
-            lines: vec![Line::from("gamma")],
-        }),
+        Arc::new(history_cell::AgentMarkdownCell::new(
+            "A **styled** [link](https://example.com/transcript)".to_string(),
+            std::path::Path::new("/tmp"),
+        )),
     ]);
-    let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+    let mut term = Terminal::new(TestBackend::new(24, 16)).expect("term");
     term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
         .expect("draw");
-    assert_snapshot!(term.backend());
+    assert_snapshot!(format!("{:?}", term.backend().buffer()));
 }
 
 #[test]
@@ -177,6 +174,7 @@ fn transcript_overlay_renders_live_tail() {
     overlay.sync_live_tail(
         /*width*/ 40,
         Some(ActiveCellTranscriptKey {
+            cacheable: true,
             revision: 1,
             is_stream_continuation: false,
             animation_tick: None,
@@ -198,6 +196,7 @@ fn transcript_overlay_preserves_live_tail_when_prepending_history() {
     overlay.sync_live_tail(
         /*width*/ 40,
         Some(ActiveCellTranscriptKey {
+            cacheable: true,
             revision: 1,
             is_stream_continuation: false,
             animation_tick: None,
@@ -236,6 +235,7 @@ fn transcript_overlay_live_tail_preserves_semantic_web_links() {
     overlay.sync_live_tail(
         area.width,
         Some(ActiveCellTranscriptKey {
+            cacheable: true,
             revision: 1,
             is_stream_continuation: false,
             animation_tick: None,
@@ -259,6 +259,7 @@ fn transcript_overlay_sync_live_tail_is_noop_for_identical_key() {
 
     let calls = std::cell::Cell::new(0usize);
     let key = ActiveCellTranscriptKey {
+        cacheable: true,
         revision: 1,
         is_stream_continuation: false,
         animation_tick: None,
@@ -479,6 +480,7 @@ fn transcript_overlay_history_rebuild_preserves_only_the_live_tail() {
                     .to_vec(),
             );
             let key = tail.as_ref().map(|_| ActiveCellTranscriptKey {
+                cacheable: true,
                 revision: 1,
                 is_stream_continuation: false,
                 animation_tick: None,
