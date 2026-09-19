@@ -1,9 +1,11 @@
 ---
 source: tui/src/app/tests/active_reconnect_tests.rs
-expression: "format!(\"{history}\\n{}\", render_bottom_popup(&app.chat_widget, 80))"
+expression: "format!(\"{history}\\n{}\",\nrender_bottom_popup(&app.chat_widget,\n80)).replace(&test_path_buf(\"/tmp/project\").display().to_string(),\n\"/tmp/project\")"
 ---
 • This conversation is unavailable. Its cached transcript and draft remain here; input is paused. Open the agent picker or return to the parent to continue.
 • Reconnected. No input was resent. Review uncertain submissions before retrying; recovered queues remain paused.
+⚠ A background Codex service is running v2.0.0, different from your Codex CLI
+  v0.0.0.
 › unavailable draft
 
   gpt-test default · /tmp/project

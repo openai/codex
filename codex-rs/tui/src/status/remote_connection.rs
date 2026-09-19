@@ -1,5 +1,6 @@
 use crate::AppServerTarget;
 use crate::RemoteAppServerEndpoint;
+use crate::update_versions::ServerVersionNoticeKind;
 use sha2::Digest;
 use sha2::Sha256;
 use url::Url;
@@ -44,11 +45,13 @@ pub(crate) fn remote_connection_status_value(
 
 pub(crate) fn server_version_notice(client: &str, server: Option<&str>) -> Option<String> {
     let server = server?;
-    crate::update_versions::is_official_server_older(client, server).then(|| {
-        format!(
-            "A background Codex service is running v{server}, older than your Codex CLI v{client}."
-        )
-    })
+    let comparison = match crate::update_versions::server_version_notice_kind(client, server)? {
+        ServerVersionNoticeKind::Older => "older than",
+        ServerVersionNoticeKind::Different => "different from",
+    };
+    Some(format!(
+        "A background Codex service is running v{server}, {comparison} your Codex CLI v{client}."
+    ))
 }
 
 pub(crate) fn server_version_notice_for_tui(
@@ -205,14 +208,31 @@ mod tests {
     }
 
     #[test]
-    fn server_version_notice_only_for_older_official_server() {
+    fn server_version_notice_uses_client_release_policy() {
         assert_eq!(
             server_version_notice("0.153.0", Some("0.152.1")),
             Some("A background Codex service is running v0.152.1, older than your Codex CLI v0.153.0.".to_string())
         );
         assert_eq!(server_version_notice("0.153.0", Some("0.153.0")), None);
-        assert_eq!(server_version_notice("0.0.0", Some("0.152.1")), None);
+        assert_eq!(
+            server_version_notice("0.0.0", Some("0.152.1")),
+            Some("A background Codex service is running v0.152.1, different from your Codex CLI v0.0.0.".to_string())
+        );
         assert_eq!(server_version_notice("0.153.0", /*server*/ None), None);
+        assert_eq!(
+            server_version_notice("0.153.0-alpha.10", Some("0.153.0-alpha.9")),
+            Some("A background Codex service is running v0.153.0-alpha.9, older than your Codex CLI v0.153.0-alpha.10.".to_string())
+        );
+        for server in ["0.153.0-alpha.10", "0.153.0-alpha.11", "0.153.0"] {
+            assert_eq!(
+                server_version_notice("0.153.0-alpha.10", Some(server)),
+                None
+            );
+        }
+        assert_eq!(
+            server_version_notice("0.155.0-alpha.12", Some("0.156.0")),
+            Some("A background Codex service is running v0.156.0, different from your Codex CLI v0.155.0-alpha.12.".to_string())
+        );
     }
 
     #[test]
@@ -234,13 +254,14 @@ mod tests {
                 &settings,
                 target,
                 /*server_home*/ None,
-                "0.153.0",
-                Some("0.152.1"),
+                "0.153.0-alpha.10.1",
+                Some("0.153.0-alpha.9.2"),
                 /*last_shown*/ None,
             )
             .map(|(notice, _)| notice)
         };
-        let remote_notice = server_version_notice("0.153.0", Some("0.152.1")).unwrap();
+        let remote_notice =
+            server_version_notice("0.153.0-alpha.10.1", Some("0.153.0-alpha.9.2")).unwrap();
         assert_eq!(
             notice(&remote),
             Some(ServerVersionNotice {

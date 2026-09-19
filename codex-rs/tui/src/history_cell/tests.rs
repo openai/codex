@@ -78,17 +78,26 @@ fn local_daemon_version_notice_snapshot() {
         show_server_version_notice: true,
         ..Default::default()
     };
-    let (notice, _) = crate::status::remote_connection::pending_server_version_notice(
-        &settings,
-        &target,
-        /*server_home*/ None,
-        "0.153.0",
-        Some("0.152.1"),
-        /*last_shown*/ None,
-    )
-    .expect("older local service should have a notice");
-    let cell = new_server_version_warning(notice);
-    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 100)).join("\n"));
+    for (client, server, snapshot) in [
+        ("0.153.0", "0.152.1", "local_daemon_version_notice_snapshot"),
+        ("0.155.0-alpha.12", "0.156.0", "local_daemon_alpha_mismatch"),
+        ("0.0.0", "0.156.0", "local_daemon_source_mismatch"),
+    ] {
+        let (notice, _) = crate::status::remote_connection::pending_server_version_notice(
+            &settings,
+            &target,
+            /*server_home*/ None,
+            client,
+            Some(server),
+            /*last_shown*/ None,
+        )
+        .expect("local service should have a notice");
+        let cell = new_server_version_warning(notice);
+        insta::assert_snapshot!(
+            snapshot,
+            render_lines(&cell.display_lines(/*width*/ 100)).join("\n")
+        );
+    }
 }
 
 async fn test_config() -> Config {

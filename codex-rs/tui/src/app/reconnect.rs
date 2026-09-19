@@ -189,7 +189,7 @@ impl App {
                 self.reconnect.seen_version_notice = None;
                 self.update_server_version_overview_notice(
                     CODEX_CLI_VERSION,
-                    /*older_server*/ None,
+                    /*server_version*/ None,
                 );
             }
             self.cancel_pending_key_chord();
@@ -492,7 +492,10 @@ impl App {
             || self.reconnect.seen_version_notice != connected_notice_key
         {
             self.reconnect.seen_version_notice = None;
-            self.update_server_version_overview_notice(client_version, /*older_server*/ None);
+            self.update_server_version_overview_notice(
+                client_version,
+                /*server_version*/ None,
+            );
         }
         if let Some((notice, key)) = crate::status::remote_connection::pending_server_version_notice(
             &self.local_settings.tui,

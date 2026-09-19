@@ -4855,6 +4855,7 @@ dependencies = [
  "ratatui-macros",
  "regex-lite",
  "rmcp",
+ "semver",
  "serde",
  "serde_json",
  "serial_test",

@@ -19,30 +19,28 @@ pub(crate) fn is_source_build_version(version: &str) -> bool {
     parse_version(version) == Some((0, 0, 0))
 }
 
-/// Whether an official stable TUI release is newer than the connected app server.
-pub(crate) fn is_official_server_older(client: &str, server: &str) -> bool {
-    fn stable_version(version: &str) -> Option<(u64, u64, u64)> {
-        fn component(value: Option<&str>) -> Option<u64> {
-            let value = value?;
-            if value.is_empty()
-                || !value.bytes().all(|byte| byte.is_ascii_digit())
-                || (value.len() > 1 && value.starts_with('0'))
-            {
-                return None;
-            }
-            value.parse().ok()
-        }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ServerVersionNoticeKind {
+    Older,
+    Different,
+}
 
-        let mut parts = version.split('.');
-        let version = (
-            component(parts.next())?,
-            component(parts.next())?,
-            component(parts.next())?,
-        );
-        (parts.next().is_none() && version != (0, 0, 0)).then_some(version)
+/// Stable clients compare release precedence. Prerelease clients only order versions
+/// within the same release line; local builds and other release lines compare identity.
+pub(crate) fn server_version_notice_kind(
+    client: &str,
+    server: &str,
+) -> Option<ServerVersionNoticeKind> {
+    let client = semver::Version::parse(client).ok()?;
+    let server = semver::Version::parse(server).ok()?;
+    let client_release = (client.major, client.minor, client.patch);
+    let server_release = (server.major, server.minor, server.patch);
+    let client_is_local = client_release == (0, 0, 0) || !client.build.is_empty();
+    if client_is_local || (!client.pre.is_empty() && client_release != server_release) {
+        return (client != server).then_some(ServerVersionNoticeKind::Different);
     }
-
-    matches!((stable_version(client), stable_version(server)), (Some(client), Some(server)) if client > server)
+    (server.build.is_empty() && server_release != (0, 0, 0) && client > server)
+        .then_some(ServerVersionNoticeKind::Older)
 }
 
 #[cfg(any(not(debug_assertions), test))]
@@ -99,24 +97,87 @@ mod tests {
     }
 
     #[test]
-    fn official_server_version_comparison() {
-        assert!(is_official_server_older("0.152.1", "0.152.0"));
-        assert!(is_official_server_older("0.153.0", "0.152.1"));
-        assert!(!is_official_server_older("0.152.0", "0.152.0"));
-        assert!(!is_official_server_older("0.152.0", "0.153.0"));
+    fn stable_clients_only_warn_for_older_releases() {
+        for (client, server, expected) in [
+            ("0.152.1", "0.152.0", Some(ServerVersionNoticeKind::Older)),
+            ("0.153.0", "0.152.1", Some(ServerVersionNoticeKind::Older)),
+            (
+                "0.153.0",
+                "0.153.0-alpha.10.1",
+                Some(ServerVersionNoticeKind::Older),
+            ),
+            (
+                "0.156.0",
+                "0.155.0-alpha.12",
+                Some(ServerVersionNoticeKind::Older),
+            ),
+            ("0.153.0", "0.153.0", None),
+            ("0.153.0", "0.154.0", None),
+            ("0.153.0", "0.154.0-alpha.1", None),
+            ("0.153.0", "0.0.0", None),
+            ("0.153.0", "0.0.0-alpha.1", None),
+            ("0.153.0", "0.152.0+dev", None),
+        ] {
+            assert_eq!(server_version_notice_kind(client, server), expected);
+        }
+    }
+
+    #[test]
+    fn prerelease_clients_compare_within_the_same_release_line() {
+        for (newer, older) in [
+            ("0.155.0-alpha.23", "0.155.0-alpha.22"),
+            ("0.155.0-alpha.24", "0.155.0-alpha.23"),
+            ("0.153.0-alpha.10", "0.153.0-alpha.9"),
+            ("0.153.0-alpha.10.1", "0.153.0-alpha.9.2"),
+            ("0.153.0-alpha.10.10", "0.153.0-alpha.10.9"),
+            ("0.153.0-alpha.10.1", "0.153.0-alpha.10"),
+            ("0.155.0", "0.155.0-alpha.23"),
+        ] {
+            assert_eq!(
+                server_version_notice_kind(newer, older),
+                Some(ServerVersionNoticeKind::Older)
+            );
+            assert_eq!(server_version_notice_kind(older, newer), None);
+            assert_eq!(server_version_notice_kind(newer, newer), None);
+        }
+    }
+
+    #[test]
+    fn prerelease_clients_on_other_release_lines_and_local_clients_warn_for_mismatches() {
+        for (client, server) in [
+            ("0.155.0-alpha.23", "0.156.0"),
+            ("0.155.0-alpha.12", "0.154.0"),
+            ("0.0.0", "0.153.0"),
+            ("0.0.0", "0.153.0-alpha.10"),
+            ("0.153.0+dev", "0.153.0"),
+            ("0.153.0-alpha.10", "0.0.0"),
+        ] {
+            assert_eq!(
+                server_version_notice_kind(client, server),
+                Some(ServerVersionNoticeKind::Different)
+            );
+            assert_eq!(server_version_notice_kind(client, client), None);
+        }
+    }
+
+    #[test]
+    fn unknown_or_malformed_versions_do_not_produce_notices() {
         for version in [
-            "0.0.0",
-            "0.0.0.0",
-            "0.153.0-alpha.1",
             "unknown",
+            "dev",
+            "0.0.0.0",
             "0.153",
             "0.153.0.1",
             " 0.153.0",
             "+0.153.0",
             "0.0153.0",
+            "0.153.0-alpha.01",
+            "0.153.0-alpha..1",
         ] {
-            assert!(!is_official_server_older(version, "0.152.0"));
-            assert!(!is_official_server_older("0.153.0", version));
+            for release in ["0.153.0", "0.153.0-alpha.10", "0.0.0"] {
+                assert_eq!(server_version_notice_kind(version, release), None);
+                assert_eq!(server_version_notice_kind(release, version), None);
+            }
         }
     }
 }

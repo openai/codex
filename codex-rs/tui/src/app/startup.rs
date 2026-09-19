@@ -826,7 +826,7 @@ See the Codex keymap documentation for supported actions and examples."
         if initial_server_version_notice.is_none() {
             app.update_server_version_overview_notice(
                 CODEX_CLI_VERSION,
-                /*older_server*/ None,
+                /*server_version*/ None,
             );
         }
         if start_in_agents_overview {

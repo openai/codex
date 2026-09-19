@@ -76,7 +76,7 @@ async fn server_version_overview_notice_updates_and_clears() {
     insta::assert_snapshot!(rendered.lines().take(2).collect::<Vec<_>>().join("\n"), @"  Service v0.151.0 < Codex CLI v0.153.0
   0 need input   0 working   0 ready");
 
-    app.update_server_version_overview_notice("0.153.0", /*older_server*/ None);
+    app.update_server_version_overview_notice("0.153.0", /*server_version*/ None);
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);

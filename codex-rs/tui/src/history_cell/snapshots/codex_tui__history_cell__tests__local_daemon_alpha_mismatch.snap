@@ -1,0 +1,7 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&cell.display_lines(100)).join(\"\\n\")"
+---
+⚠ A background Codex service is running v0.156.0, different from your Codex CLI v0.155.0-alpha.12.
+  Use /daemon to manage the local background server.
+  Updating may interrupt active or queued work.

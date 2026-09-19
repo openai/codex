@@ -4479,7 +4479,7 @@
         },
         "show_server_version_notice": {
           "default": true,
-          "description": "Show an informational notice when the connected app server is an older stable release. Defaults to `true`; this does not control compatibility errors or version status.",
+          "description": "Show informational notices about connected app server version differences. Defaults to `true`; this does not control compatibility errors or version status.",
           "type": "boolean"
         },
         "show_tooltips": {
