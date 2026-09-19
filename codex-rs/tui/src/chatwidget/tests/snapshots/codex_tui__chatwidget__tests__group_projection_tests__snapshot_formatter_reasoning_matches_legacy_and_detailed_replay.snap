@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests/group_projection_tests.rs
+expression: "snapshots.join(\"\\n\")"
+---
+Hidden
+legacy: []
+detailed:
+• Read src/main.rs (src/main.rs:3).
+
+Visible
+legacy: []
+detailed:
+• Read src/main.rs (src/main.rs:3).
+  
+  Raw detail.

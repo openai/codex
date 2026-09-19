@@ -349,7 +349,8 @@ impl ChatWidget {
             .or(self.reasoning_header.take());
         if !self.reasoning_summary_parts.is_empty() {
             let reasoning_parts = std::mem::take(&mut self.reasoning_summary_parts);
-            let cell = history_cell::new_reasoning_summary_block(reasoning_parts, &self.config.cwd);
+            let cell: Box<dyn HistoryCell> =
+                history_cell::new_reasoning_summary_block(reasoning_parts, &self.config.cwd);
             let result = match self.transcript.active_cell.as_mut() {
                 Some(active) => active.append_reasoning(cell),
                 None => Err(cell),

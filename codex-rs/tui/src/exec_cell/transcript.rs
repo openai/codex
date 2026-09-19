@@ -69,3 +69,7 @@ impl ExecCell {
         lines
     }
 }
+
+#[cfg(test)]
+#[path = "transcript_tests.rs"]
+mod tests;

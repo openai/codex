@@ -318,9 +318,30 @@ pub(crate) struct ReasoningSummaryCell {
     /// Session cwd used to render local file links inside the reasoning body.
     cwd: PathBuf,
     transcript_only: bool,
+    /// Persisted identity verifies page folds without comparing rendered reasoning text.
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    source_item_id: Option<String>,
 }
 
 impl ReasoningSummaryCell {
+    pub(crate) fn markdown_source(&self) -> &str {
+        &self.content
+    }
+
+    pub(crate) fn set_source_item_id(&mut self, id: String) {
+        self.source_item_id = Some(id);
+    }
+
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn source_item_id(&self) -> Option<&str> {
+        self.source_item_id.as_deref()
+    }
+
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn is_transcript_only(&self) -> bool {
+        self.transcript_only
+    }
+
     /// Create a reasoning summary cell that will render local file links relative to the session
     /// cwd active when the summary was recorded.
     pub(crate) fn new(header: String, content: String, cwd: &Path, transcript_only: bool) -> Self {
@@ -329,31 +350,34 @@ impl ReasoningSummaryCell {
             content,
             cwd: cwd.to_path_buf(),
             transcript_only,
+            source_item_id: None,
         }
     }
 
-    fn lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(
+    fn lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let lines = crate::markdown_render::render_markdown_lines_with_width_and_cwd(
             &self.content,
             crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2),
             Some(self.cwd.as_path()),
-            &mut lines,
         );
         let summary_style = Style::default().dim().italic();
         let summary_lines = lines
             .into_iter()
             .map(|mut line| {
-                line.spans = line
+                line.line.spans = line
+                    .line
                     .spans
                     .into_iter()
                     .map(|span| span.patch_style(summary_style))
                     .collect();
+                if let Some(source) = &mut line.source {
+                    source.span_style = source.span_style.patch(summary_style);
+                }
                 line
             })
             .collect::<Vec<_>>();
 
-        adaptive_wrap_lines(
+        crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
             &summary_lines,
             RtOptions::new(width as usize)
                 .initial_indent("• ".dim().into())
@@ -364,6 +388,10 @@ impl ReasoningSummaryCell {
 
 impl HistoryCell for ReasoningSummaryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         if self.transcript_only {
             Vec::new()
         } else {
@@ -372,6 +400,10 @@ impl HistoryCell for ReasoningSummaryCell {
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.transcript_hyperlink_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         self.lines(width)
     }
 
@@ -379,7 +411,7 @@ impl HistoryCell for ReasoningSummaryCell {
         if self.transcript_only {
             Vec::new()
         } else {
-            raw_lines_from_source(self.content.trim())
+            raw_lines_from_source(self.markdown_source().trim())
         }
     }
 }
@@ -686,7 +718,7 @@ pub(crate) fn new_spoken_user_prompt(message: String) -> UserHistoryCell {
 pub(crate) fn new_reasoning_summary_block(
     reasoning_parts: Vec<String>,
     cwd: &Path,
-) -> Box<dyn HistoryCell> {
+) -> Box<ReasoningSummaryCell> {
     let (header, content) = split_reasoning_summary_parts(&reasoning_parts);
     Box::new(ReasoningSummaryCell::new(
         header, content, cwd, /*transcript_only*/ true,

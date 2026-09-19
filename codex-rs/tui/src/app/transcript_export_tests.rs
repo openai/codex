@@ -202,6 +202,10 @@ fn transcript_file_resolves_relative_paths_and_refuses_to_overwrite() {
 fn persisted_web_and_image_activity_preserves_full_details() {
     let items = [
         serde_json::json!({
+            "type": "reasoning", "id": "reasoning",
+            "summary": ["Inspect **the saved result**."], "content": ["Raw details stay hidden."]
+        }),
+        serde_json::json!({
             "type": "webSearch", "id": "open", "query": "",
             "action": {"type": "openPage", "url": "https://example.com/long/path?query=full#details"}
         }),

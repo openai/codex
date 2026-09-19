@@ -1,4 +1,4 @@
-//! Group older history items at successful turn boundaries before projecting transcript cells.
+//! Separate older history at every turn boundary; only successful turns gain completion metadata.
 //! A page splitting a turn only adds completion metadata when it contains that turn's last item.
 
 use codex_app_server_protocol::ThreadItem;
@@ -10,17 +10,17 @@ pub(super) fn group_completed_turn_items(
     items: Vec<ThreadItem>,
     turns: &[Turn],
 ) -> Vec<(Vec<ThreadItem>, Option<&Turn>)> {
-    let completed_boundaries: HashMap<_, _> = turns
+    let boundaries: HashMap<_, _> = turns
         .iter()
-        .filter(|turn| turn.status == TurnStatus::Completed)
         .filter_map(|turn| turn.items.last().map(|item| (item.id(), turn)))
         .collect();
     let mut groups = Vec::new();
     let mut pending = Vec::new();
     for item in items {
-        let completed_turn = completed_boundaries.get(item.id()).copied();
+        let boundary = boundaries.get(item.id()).copied();
         pending.push(item);
-        if completed_turn.is_some() {
+        if let Some(turn) = boundary {
+            let completed_turn = (turn.status == TurnStatus::Completed).then_some(turn);
             groups.push((std::mem::take(&mut pending), completed_turn));
         }
     }

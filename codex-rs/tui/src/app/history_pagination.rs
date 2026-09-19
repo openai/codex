@@ -88,7 +88,7 @@ impl App {
                 store.turns.clone(),
             )
         };
-        let mut items = app_server
+        let items = app_server
             .apply_older_history_page(thread_id, cursor, page, &mut turns)
             .await?;
         let mut hidden_item_ids = HashSet::new();
@@ -185,9 +185,9 @@ impl App {
                 }
             }
         }
-        items.retain(|item| !hidden_item_ids.contains(item.id()));
         let mut cells = Vec::new();
-        for (items, completed_turn) in completion::group_completed_turn_items(items, &turns) {
+        for (mut items, completed_turn) in completion::group_completed_turn_items(items, &turns) {
+            items.retain(|item| !hidden_item_ids.contains(item.id()));
             cells.extend(thread_items_to_transcript_cells(
                 Some(thread_id),
                 &cwd,

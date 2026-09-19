@@ -237,6 +237,8 @@ fn render_markdown_transcript(cells: &[Arc<dyn HistoryCell>]) -> Result<String, 
             }
             lines.extend(image_labels.into_iter().map(Into::into));
             lines
+        } else if let Some(reasoning) = cell.as_any().downcast_ref::<ReasoningSummaryCell>() {
+            raw_lines_from_source(reasoning.markdown_source().trim())
         } else {
             cell.raw_lines()
         };

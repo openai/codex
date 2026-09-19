@@ -270,10 +270,10 @@ impl McpToolCallCell {
                         continue;
                     };
                     for segment in text.lines() {
-                        let line = Line::from(segment.to_owned().dim());
                         if mode == McpToolCallRenderMode::Display {
-                            preview.push_line(line);
+                            preview.push_line(Line::from(segment.dim()));
                         } else {
+                            let line = Line::from(segment.to_owned().dim());
                             lines.extend(adaptive_wrap_hyperlink_lines(
                                 &[HyperlinkLine::new(line)],
                                 options.clone(),
@@ -285,10 +285,10 @@ impl McpToolCallCell {
             Some(Err(error)) => {
                 let text = format!("Error: {error}");
                 for segment in text.lines() {
-                    let line = Line::from(segment.to_owned().dim());
                     if mode == McpToolCallRenderMode::Display {
-                        preview.push_line(line);
+                        preview.push_line(Line::from(segment.dim()));
                     } else {
+                        let line = Line::from(segment.to_owned().dim());
                         lines.extend(adaptive_wrap_hyperlink_lines(
                             &[HyperlinkLine::new(line)],
                             options.clone(),

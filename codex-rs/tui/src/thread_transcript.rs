@@ -1,4 +1,6 @@
-//! Project individual persisted items into rich history cells without changing live state.
+//! Project persisted items into the same rich cells as completed live output.
+//! Tool grouping spans hidden reasoning but stops at visible content and turn boundaries.
+//! Only one computer or exploration group can be pending at a time.
 
 use std::sync::Arc;
 
@@ -22,10 +24,60 @@ use codex_protocol::items::UserMessageItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize as _;
 
+mod activity_pages;
+mod computer_groups;
+mod exploration_groups;
 mod other_items;
 pub(crate) mod tools;
 
+#[allow(
+    unused_imports,
+    reason = "Used by later layers of the TUI refresh stack."
+)]
+pub(crate) use activity_pages::fold_trailing_activity_details;
+#[allow(
+    unused_imports,
+    reason = "Used by later layers of the TUI refresh stack."
+)]
+pub(crate) use activity_pages::is_hidden_activity_detail;
+#[allow(
+    unused_imports,
+    reason = "Used by later layers of the TUI refresh stack."
+)]
+pub(crate) use computer_groups::join_computer_groups;
+#[allow(
+    unused_imports,
+    reason = "Used by later layers of the TUI refresh stack."
+)]
+pub(crate) use computer_groups::older_computer_group;
+#[allow(
+    unused_imports,
+    reason = "Used by later layers of the TUI refresh stack."
+)]
+pub(crate) use exploration_groups::join_exploration_groups;
+#[allow(
+    unused_imports,
+    reason = "Used by later layers of the TUI refresh stack."
+)]
+pub(crate) use exploration_groups::older_exploration_group;
+
 pub(crate) type TranscriptCells = Vec<Arc<dyn HistoryCell>>;
+
+enum PendingActivity {
+    Computer(crate::history_cell::ComputerActivityCell),
+    Exploration(crate::exec_cell::ExecCell),
+}
+
+impl PendingActivity {
+    fn flush(pending: &mut Option<Self>, cells: &mut TranscriptCells) {
+        let cell: Arc<dyn HistoryCell> = match pending.take() {
+            Some(Self::Computer(group)) => Arc::new(group),
+            Some(Self::Exploration(group)) => Arc::new(group),
+            None => return,
+        };
+        cells.push(cell);
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RawReasoningVisibility {
@@ -68,13 +120,19 @@ pub(crate) fn thread_to_transcript_cells(
 ) -> TranscriptCells {
     let cwd = thread.cwd;
     let thread_id = ThreadId::from_string(&thread.id).ok();
-    let mut cells = thread_items_to_transcript_cells(
-        thread_id,
-        &cwd,
-        thread.turns.into_iter().flat_map(|turn| turn.items),
-        raw_reasoning_visibility,
-        config,
-    );
+    let mut cells = thread
+        .turns
+        .into_iter()
+        .flat_map(|turn| {
+            thread_items_to_transcript_cells(
+                thread_id,
+                &cwd,
+                turn.items,
+                raw_reasoning_visibility,
+                config,
+            )
+        })
+        .collect::<TranscriptCells>();
     if cells.is_empty() {
         cells.push(Arc::new(PlainHistoryCell::new(vec![
             "No transcript content available".italic().dim().into(),
@@ -94,18 +152,89 @@ pub(crate) fn thread_items_to_transcript_cells(
         thread_id.and_then(|thread_id| InlineVisualizationContext::from_config(config, thread_id))
     });
     let mut cells: TranscriptCells = Vec::new();
+    let mut pending = None;
     for item in items {
-        if let Some(cell) = tools::historical_tool_fallback(&item) {
-            cells.push(Arc::new(cell));
-        } else {
-            cells.extend(item_to_cells(
+        if matches!(item, ThreadItem::Reasoning { .. })
+            && let Some(group) = &mut pending
+        {
+            for cell in item_to_cells(
                 item,
                 cwd,
                 raw_reasoning_visibility,
                 inline_visualization_context.clone(),
-            ));
+            ) {
+                match group {
+                    PendingActivity::Computer(group) => group.group.push_detail(cell),
+                    PendingActivity::Exploration(group) => group.group.push_detail(cell),
+                }
+            }
+            continue;
+        }
+        if let Some(cell) = tools::historical_tool_fallback(&item) {
+            PendingActivity::flush(&mut pending, &mut cells);
+            cells.push(Arc::new(cell));
+            continue;
+        }
+        match item {
+            item @ ThreadItem::McpToolCall { .. } => {
+                let Some(call) = tools::McpHistory::from_item(item) else {
+                    PendingActivity::flush(&mut pending, &mut cells);
+                    continue;
+                };
+                if call.invocation.is_computer_activity() {
+                    match &mut pending {
+                        Some(PendingActivity::Computer(group)) => {
+                            computer_groups::append(group, call);
+                        }
+                        Some(PendingActivity::Exploration(_)) | None => {
+                            PendingActivity::flush(&mut pending, &mut cells);
+                            let mut group = crate::history_cell::ComputerActivityCell::default();
+                            computer_groups::append(&mut group, call);
+                            pending = Some(PendingActivity::Computer(group));
+                        }
+                    }
+                } else {
+                    PendingActivity::flush(&mut pending, &mut cells);
+                    let cell = call.into_cell();
+                    cells.push(Arc::new(cell));
+                }
+            }
+            item @ ThreadItem::CommandExecution { .. } => {
+                if matches!(pending, Some(PendingActivity::Computer(_))) {
+                    PendingActivity::flush(&mut pending, &mut cells);
+                }
+                if let Some(command) = tools::CommandHistory::from_item(item) {
+                    let newer = command.into_cell();
+                    if let Some(PendingActivity::Exploration(group)) = &mut pending {
+                        if let Err(newer) = group.append_completed(newer) {
+                            PendingActivity::flush(&mut pending, &mut cells);
+                            pending = Some(PendingActivity::Exploration(newer));
+                        }
+                    } else {
+                        pending = Some(PendingActivity::Exploration(newer));
+                    }
+                    if let Some(PendingActivity::Exploration(group)) = &pending
+                        && group.should_flush()
+                    {
+                        PendingActivity::flush(&mut pending, &mut cells);
+                    }
+                }
+            }
+            item => {
+                let projected = item_to_cells(
+                    item,
+                    cwd,
+                    raw_reasoning_visibility,
+                    inline_visualization_context.clone(),
+                );
+                if !projected.is_empty() {
+                    PendingActivity::flush(&mut pending, &mut cells);
+                    cells.extend(projected);
+                }
+            }
         }
     }
+    PendingActivity::flush(&mut pending, &mut cells);
     cells
 }
 
@@ -196,33 +325,33 @@ fn item_to_cells(
             }
         }
         ThreadItem::Reasoning {
-            summary, content, ..
+            id,
+            summary,
+            content,
         } => {
-            let (header, text) =
-                if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
-                    && !content.is_empty()
-                {
-                    ("Reasoning".to_string(), content.join("\n\n"))
-                } else {
-                    split_reasoning_summary_parts(&summary)
-                };
+            let (header, mut text) = split_reasoning_summary_parts(&summary);
+            if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
+                && !content.is_empty()
+            {
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str(&content.join("\n\n"));
+            }
             if !text.trim().is_empty() {
-                cells.push(Arc::new(ReasoningSummaryCell::new(
+                let mut cell = ReasoningSummaryCell::new(
                     header,
                     text,
                     cwd.as_path(),
-                    /*transcript_only*/ false,
-                )));
+                    /*transcript_only*/ true,
+                );
+                cell.set_source_item_id(id);
+                cells.push(Arc::new(cell));
             }
         }
         item @ ThreadItem::CommandExecution { .. } => {
             if let Some(command) = tools::CommandHistory::from_item(item) {
                 cells.push(Arc::new(command.into_cell()));
-            }
-        }
-        item @ ThreadItem::McpToolCall { .. } => {
-            if let Some(call) = tools::McpHistory::from_item(item) {
-                cells.push(Arc::new(call.into_cell()));
             }
         }
         other => cells.extend(other_items::cells(other, cwd)),

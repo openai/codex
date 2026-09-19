@@ -58,7 +58,7 @@ fn multiple_turns_keep_item_groups_and_completion_order() {
 }
 
 #[test]
-fn unsuccessful_and_running_turns_do_not_create_completion_boundaries() {
+fn unsuccessful_and_running_turns_separate_groups_without_completion_metadata() {
     let turns = vec![
         turn("failed", TurnStatus::Failed, &["a"]),
         turn("interrupted", TurnStatus::Interrupted, &["b"]),
@@ -69,7 +69,10 @@ fn unsuccessful_and_running_turns_do_not_create_completion_boundaries() {
         .flat_map(|turn| turn.items.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        group_completed_turn_items(items.clone(), &turns),
-        vec![(items, None)],
+        group_completed_turn_items(items, &turns),
+        turns
+            .iter()
+            .map(|turn| (turn.items.clone(), None))
+            .collect::<Vec<_>>(),
     );
 }

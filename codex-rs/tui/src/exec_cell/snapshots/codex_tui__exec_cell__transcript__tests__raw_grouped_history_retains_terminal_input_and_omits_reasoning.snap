@@ -1,0 +1,29 @@
+---
+source: tui/src/exec_cell/transcript_tests.rs
+assertion_line: 73
+expression: "format!(\"Rich\\n{rich}\\n\\nRaw\\n{}\", raw.join(\"\\n\"))"
+---
+Rich
+$ cat first.txt
+first output
+✓ • 5ms
+
+• Inspecting the next file
+
+↳ Interacted with background terminal · cat first.txt
+  └ continue
+
+$ cat second.txt
+second output
+✓ • 5ms
+
+Raw
+$ cat first.txt
+first output
+✓ • 5ms
+Interacted with background terminal: cat first.txt
+continue
+
+$ cat second.txt
+second output
+✓ • 5ms
