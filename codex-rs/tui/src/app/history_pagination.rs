@@ -232,7 +232,7 @@ impl App {
         self.scrollback_has_older_history = app_server.has_older_history(thread_id);
         let mut continue_to_start = false;
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
-            let index = overlay.prepend(cells.clone(), width);
+            let index = overlay.prepend(cells.clone());
             self.transcript_cells.splice(index..index, cells);
             let previous_state = overlay.set_history_state(if self.scrollback_has_older_history {
                 TranscriptHistoryState::Partial

@@ -31,8 +31,6 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::ShortcutHint;
 use crate::keymap::PagerKeymap;
-use crate::render::Insets;
-use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::tui;
@@ -50,19 +48,17 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
-use scrolling::CellRenderable;
-use scrolling::HyperlinkLinesRenderable;
 use scrolling::render_offset_content;
 
 pub(crate) enum Overlay {
-    Transcript(TranscriptOverlay),
-    Static(StaticOverlay),
+    Transcript(Box<TranscriptOverlay>),
+    Static(Box<StaticOverlay>),
     Analytics(Box<crate::analytics::AnalyticsView>),
 }
 
 impl Overlay {
     pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
-        Self::Transcript(TranscriptOverlay::new(cells, keymap))
+        Self::Transcript(Box::new(TranscriptOverlay::new(cells, keymap)))
     }
 
     pub(crate) fn new_static_with_lines(
@@ -70,7 +66,7 @@ impl Overlay {
         title: String,
         keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(StaticOverlay::with_title(lines, title, keymap))
+        Self::Static(Box::new(StaticOverlay::with_title(lines, title, keymap)))
     }
 
     pub(crate) fn new_static_with_renderables(
@@ -78,7 +74,11 @@ impl Overlay {
         title: String,
         keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(StaticOverlay::with_renderables(renderables, title, keymap))
+        Self::Static(Box::new(StaticOverlay::with_renderables(
+            renderables,
+            title,
+            keymap,
+        )))
     }
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
@@ -159,11 +159,6 @@ struct PagerView {
     title: String,
     keymap: PagerKeymap,
     last_content_height: Option<usize>,
-    last_rendered_height: Option<usize>,
-    /// Percentages are meaningful only when the full scrollable history is known.
-    scroll_percentage_visible: bool,
-    /// If set, on next render ensure this chunk is visible.
-    pending_scroll_chunk: Option<usize>,
 }
 
 impl PagerView {
@@ -179,9 +174,6 @@ impl PagerView {
             title,
             keymap,
             last_content_height: None,
-            last_rendered_height: None,
-            scroll_percentage_visible: true,
-            pending_scroll_chunk: None,
         }
     }
 
@@ -198,12 +190,6 @@ impl PagerView {
         let content_area = self.content_area(area);
         self.update_last_content_height(content_area.height);
         let content_height = self.content_height(content_area.width);
-        self.last_rendered_height = Some(content_height);
-        // If there is a pending request to scroll a specific chunk into view,
-        // satisfy it now that wrapping is up to date for this width.
-        if let Some(idx) = self.pending_scroll_chunk.take() {
-            self.ensure_chunk_visible(idx, content_area);
-        }
         self.scroll_offset = self
             .scroll_offset
             .min(content_height.saturating_sub(content_area.height as usize));
@@ -270,9 +256,6 @@ impl PagerView {
         Span::from("─".repeat(sep_rect.width as usize))
             .dim()
             .render(sep_rect, buf);
-        if !self.scroll_percentage_visible {
-            return;
-        }
         let percent = if total_len == 0 {
             100
         } else {
@@ -359,53 +342,6 @@ impl PagerView {
     }
 }
 
-impl PagerView {
-    fn is_scrolled_to_bottom(&self) -> bool {
-        if self.scroll_offset == usize::MAX {
-            return true;
-        }
-        let Some(height) = self.last_content_height else {
-            return false;
-        };
-        if self.renderables.is_empty() {
-            return true;
-        }
-        let Some(total_height) = self.last_rendered_height else {
-            return false;
-        };
-        if total_height <= height {
-            return true;
-        }
-        let max_scroll = total_height.saturating_sub(height);
-        self.scroll_offset >= max_scroll
-    }
-
-    /// Request that the given text chunk index be scrolled into view on next render.
-    fn scroll_chunk_into_view(&mut self, chunk_index: usize) {
-        self.pending_scroll_chunk = Some(chunk_index);
-    }
-
-    fn ensure_chunk_visible(&mut self, idx: usize, area: Rect) {
-        if area.height == 0 || idx >= self.renderables.len() {
-            return;
-        }
-        let first = self
-            .renderables
-            .iter()
-            .take(idx)
-            .map(|r| r.desired_height(area.width) as usize)
-            .sum();
-        let last = first + self.renderables[idx].desired_height(area.width) as usize;
-        let current_top = self.scroll_offset;
-        let current_bottom = current_top.saturating_add(area.height.saturating_sub(1) as usize);
-        if first < current_top {
-            self.scroll_offset = first;
-        } else if last > current_bottom {
-            self.scroll_offset = last.saturating_sub(area.height.saturating_sub(1) as usize);
-        }
-    }
-}
-
 /// A renderable that caches its desired height.
 struct CachedRenderable {
     renderable: Box<dyn Renderable>,
@@ -454,14 +390,14 @@ pub(crate) enum TranscriptHistoryState {
 }
 
 impl TranscriptHistoryState {
-    fn has_unloaded_history(self) -> bool {
+    pub(crate) fn has_unloaded_history(self) -> bool {
         matches!(
             self,
             Self::LoadingOlder | Self::LoadingBeginning | Self::Partial | Self::Failed
         )
     }
 
-    fn session_header_placeholder(self) -> Option<&'static str> {
+    pub(crate) fn session_header_placeholder(self) -> Option<&'static str> {
         match self {
             Self::LoadingOlder | Self::LoadingBeginning => Some("Loading earlier messages..."),
             Self::Partial => Some("Earlier messages are available — scroll up to load them"),
@@ -605,26 +541,6 @@ mod tests {
         );
     }
 
-    fn buffer_to_text(buf: &Buffer, area: Rect) -> String {
-        let mut out = String::new();
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                let symbol = buf[(x, y)].symbol();
-                if symbol.is_empty() {
-                    out.push(' ');
-                } else {
-                    out.push(symbol.chars().next().unwrap_or(' '));
-                }
-            }
-            // Trim trailing spaces for stability.
-            while out.ends_with(' ') {
-                out.pop();
-            }
-            out.push('\n');
-        }
-        out
-    }
-
     #[test]
     fn static_overlay_snapshot_basic() {
         // Prepare a static overlay with a few lines and a title
@@ -664,85 +580,5 @@ mod tests {
         );
 
         assert_eq!(pv.content_height(/*width*/ 80), 5);
-    }
-
-    #[test]
-    fn pager_view_ensure_chunk_visible_scrolls_down_when_needed() {
-        let mut pv = pager_view(
-            vec![
-                paragraph_block("a", /*lines*/ 1),
-                paragraph_block("b", /*lines*/ 3),
-                paragraph_block("c", /*lines*/ 3),
-            ],
-            "T",
-            /*scroll_offset*/ 0,
-        );
-        let area = Rect::new(0, 0, 20, 8);
-
-        pv.scroll_offset = 0;
-        let content_area = pv.content_area(area);
-        pv.ensure_chunk_visible(/*idx*/ 2, content_area);
-
-        let mut buf = Buffer::empty(area);
-        pv.render(area, &mut buf);
-        let rendered = buffer_to_text(&buf, area);
-
-        assert!(
-            rendered.contains("c0"),
-            "expected chunk top in view: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("c1"),
-            "expected chunk middle in view: {rendered:?}"
-        );
-        assert!(
-            rendered.contains("c2"),
-            "expected chunk bottom in view: {rendered:?}"
-        );
-    }
-
-    #[test]
-    fn pager_view_ensure_chunk_visible_scrolls_up_when_needed() {
-        let mut pv = pager_view(
-            vec![
-                paragraph_block("a", /*lines*/ 2),
-                paragraph_block("b", /*lines*/ 3),
-                paragraph_block("c", /*lines*/ 3),
-            ],
-            "T",
-            /*scroll_offset*/ 0,
-        );
-        let area = Rect::new(0, 0, 20, 3);
-
-        pv.scroll_offset = 6;
-        pv.ensure_chunk_visible(/*idx*/ 0, area);
-
-        assert_eq!(pv.scroll_offset, 0);
-    }
-
-    #[test]
-    fn pager_view_is_scrolled_to_bottom_accounts_for_wrapped_height() {
-        let mut pv = pager_view(
-            vec![paragraph_block("a", /*lines*/ 10)],
-            "T",
-            /*scroll_offset*/ 0,
-        );
-        let area = Rect::new(0, 0, 20, 8);
-        let mut buf = Buffer::empty(area);
-
-        pv.render(area, &mut buf);
-
-        assert!(
-            !pv.is_scrolled_to_bottom(),
-            "expected view to report not at bottom when offset < max"
-        );
-
-        pv.scroll_offset = usize::MAX;
-        pv.render(area, &mut buf);
-
-        assert!(
-            pv.is_scrolled_to_bottom(),
-            "expected view to report at bottom after scrolling to end"
-        );
     }
 }

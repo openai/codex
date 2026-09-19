@@ -2651,10 +2651,6 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     .await;
     assert!(app.scrollback_has_older_history);
     if let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() {
-        overlay.handle_event(
-            &mut tui,
-            TuiEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
-        )?;
         let area = Rect::new(
             /*x*/ 0, /*y*/ 0, /*width*/ 100, /*height*/ 16,
         );
@@ -2670,6 +2666,9 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        // Inspect the loaded start without Home, which now requests all older pages.
+        render_overlay(overlay);
+        overlay.scroll(isize::MIN);
         let partial = render_overlay(overlay);
         assert!(partial.contains("Earlier messages are available — scroll up to load them"));
         assert!(!partial.contains("OpenAI Codex"));

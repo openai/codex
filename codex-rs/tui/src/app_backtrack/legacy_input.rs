@@ -13,7 +13,7 @@ impl App {
         event: TuiEvent,
     ) -> Result<bool> {
         if let TuiEvent::Key(key_event) = &event
-            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_ref()
+            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
             && (overlay.should_load_older(*key_event)
                 || (self.backtrack.overlay_preview_active
                     && self.backtrack.nth_user_message == 0

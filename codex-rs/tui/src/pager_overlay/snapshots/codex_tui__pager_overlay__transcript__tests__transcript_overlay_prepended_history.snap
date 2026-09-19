@@ -1,7 +1,0 @@
----
-source: tui/src/pager_overlay/transcript_tests.rs
-expression: visible_before.trim()
----
-line2
-
-line3

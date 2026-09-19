@@ -13,7 +13,7 @@ const MAX_CACHED_ENTRIES: usize = 64;
 const MAX_CACHED_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Default)]
-pub(crate) struct LayoutCache {
+pub(super) struct LayoutCache {
     entries: Vec<CachedLayout>,
     frame: u64,
     render_state: Option<RenderState>,
@@ -37,7 +37,7 @@ struct CachedLayout {
 }
 
 impl LayoutCache {
-    pub(crate) fn begin_frame(&mut self) {
+    pub(super) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(/*rhs*/ 1);
         let state = RenderState {
             theme: crate::render::highlight::syntax_theme_revision(),
@@ -51,7 +51,7 @@ impl LayoutCache {
         }
     }
 
-    pub(crate) fn get(
+    pub(super) fn get(
         &mut self,
         cell: &Arc<dyn HistoryCell>,
         width: u16,

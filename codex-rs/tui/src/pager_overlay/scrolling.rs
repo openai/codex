@@ -1,88 +1,8 @@
-//! Viewport-aware transcript rendering and the fallback for generic pager content.
+//! Viewport fallback for generic static pager content.
 
-use crate::transcript_view::LayoutCache;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-
-use crate::history_cell::HistoryCell;
-use crate::history_cell::UserHistoryCell;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
-use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::terminal_hyperlinks::HyperlinkParagraph;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
-use ratatui::widgets::Widget;
-
-/// Renders a committed history cell directly into the visible transcript viewport.
-pub(super) struct CellRenderable {
-    pub(super) cell: Arc<dyn HistoryCell>,
-    pub(super) highlighted: bool,
-    pub(super) cache: Rc<RefCell<LayoutCache>>,
-}
-
-impl Renderable for CellRenderable {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_scrolled(area, buf, /*scroll_offset*/ 0);
-    }
-
-    /// Scroll visible text and hyperlink metadata together without rendering hidden rows.
-    fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
-        let layout = self
-            .cache
-            .borrow_mut()
-            .get(&self.cell, area.width, /*separated*/ false);
-        let style = if self.cell.as_any().is::<UserHistoryCell>() {
-            if self.highlighted {
-                user_message_style().reversed()
-            } else {
-                user_message_style()
-            }
-        } else {
-            Style::default()
-        };
-        buf.set_style(area, style);
-        layout.render(area, buf, usize::from(scroll_offset));
-        true
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.cache
-            .borrow_mut()
-            .get(&self.cell, width, /*separated*/ false)
-            .row_count()
-            .try_into()
-            .unwrap_or(u16::MAX)
-    }
-}
-
-/// Renders the optional in-flight transcript tail without allocating hidden rows.
-pub(super) struct HyperlinkLinesRenderable {
-    pub(super) lines: Vec<HyperlinkLine>,
-}
-
-impl Renderable for HyperlinkLinesRenderable {
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_scrolled(area, buf, /*scroll_offset*/ 0);
-    }
-
-    /// Keep live-tail hyperlinks aligned with the same visible rows as their text.
-    fn render_scrolled(&self, area: Rect, buf: &mut Buffer, scroll_offset: u16) -> bool {
-        HyperlinkParagraph::new(&self.lines, Style::default())
-            .scroll(scroll_offset)
-            .render(area, buf);
-        true
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        HyperlinkParagraph::new(&self.lines, Style::default())
-            .line_count(width)
-            .try_into()
-            .unwrap_or(/*default*/ 0)
-    }
-}
 
 /// Render visible rows directly when supported, preserving the legacy scratch-buffer fallback.
 pub(super) fn render_offset_content(

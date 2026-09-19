@@ -41,13 +41,13 @@ impl crate::history_cell::HistoryCell for TestCell {
 }
 
 #[derive(Debug)]
-struct HeightCountingCell {
-    height_calls: Arc<AtomicUsize>,
+struct LayoutCountingCell {
+    layout_calls: Arc<AtomicUsize>,
 }
 
-impl crate::history_cell::HistoryCell for HeightCountingCell {
+impl crate::history_cell::HistoryCell for LayoutCountingCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        self.height_calls.fetch_add(1, Ordering::Relaxed);
+        self.layout_calls.fetch_add(/*val*/ 1, Ordering::Relaxed);
         vec![Line::from("counted")]
     }
 
@@ -66,7 +66,7 @@ fn transcript_overlay(cells: Vec<Arc<dyn HistoryCell>>) -> TranscriptOverlay {
 
 #[test]
 fn jump_top_requests_older_history_from_the_bottom() {
-    let overlay = transcript_overlay(vec![Arc::new(TestCell {
+    let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
         lines: vec![Line::from("recent")],
     })]);
 
@@ -81,22 +81,149 @@ fn jump_top_requests_older_history_from_the_bottom() {
 }
 
 #[test]
-fn edit_next_hint_is_visible_when_highlighted() {
-    let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
-        lines: vec![Line::from("hello")],
-    })]);
-    overlay.set_highlight_cell(Some(0));
-
-    // Render into a wide buffer so the footer hints aren't truncated.
-    let area = Rect::new(0, 0, 120, 10);
-    let mut buf = Buffer::empty(area);
-    overlay.render(area, &mut buf);
-
-    let s = buffer_to_text(&buf, area);
-    assert!(
-        s.contains("edit next"),
-        "expected 'edit next' hint in overlay footer, got: {s:?}"
+fn first_upward_key_requests_history_when_the_loaded_start_is_visible() {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
     );
+    for committed in [false, true] {
+        for (line_count, near_start) in [(0, true), (3, true), (7, true), (30, false)] {
+            let lines = (0..line_count)
+                .map(|index| Line::from(format!("line {index}")))
+                .collect::<Vec<_>>();
+            let cells = if committed && !lines.is_empty() {
+                vec![Arc::new(TestCell {
+                    lines: lines.clone(),
+                }) as Arc<dyn HistoryCell>]
+            } else {
+                Vec::new()
+            };
+            let mut overlay = transcript_overlay(cells);
+            if !committed {
+                overlay.sync_live_tail(area.width, /*key*/ None, |_| {
+                    Some(lines.into_iter().map(HyperlinkLine::from).collect())
+                });
+            }
+            overlay.set_history_state(TranscriptHistoryState::Partial);
+            overlay.render(area, &mut Buffer::empty(area));
+            assert!(overlay.view.is_following());
+
+            // App checks pagination before forwarding the first navigation key.
+            for key in [
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+                KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            ] {
+                assert_eq!(overlay.should_load_older(key), near_start);
+            }
+            assert!(!overlay.should_load_older(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE,)));
+            if line_count == 30 {
+                let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+                overlay.scroll(/*rows*/ -1);
+                assert!(
+                    !overlay.should_load_older(up),
+                    "one row must not prefetch a distant page"
+                );
+                overlay.scroll(/*rows*/ -18);
+                assert!(
+                    !overlay.should_load_older(up),
+                    "row six is outside the five-row prefetch threshold"
+                );
+                overlay.scroll(/*rows*/ -1);
+                assert!(
+                    overlay.should_load_older(up),
+                    "prefetch at row five even before a draw"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn loading_beginning_keeps_the_entry_until_history_is_complete() -> Result<()> {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for already_rendered in [false, true] {
+        let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+            lines: vec!["committed".into()],
+        })]);
+        let live = (0..20)
+            .map(|index| Line::from(format!("live {index}")))
+            .collect::<Vec<_>>();
+        overlay.sync_live_tail(area.width, /*key*/ None, |_| {
+            Some(live.iter().cloned().map(HyperlinkLine::from).collect())
+        });
+        overlay.set_history_state(TranscriptHistoryState::Partial);
+        if already_rendered {
+            overlay.render(area, &mut Buffer::empty(area));
+        }
+
+        // App marks loading before forwarding Home to the overlay.
+        overlay.set_history_state(TranscriptHistoryState::LoadingBeginning);
+        overlay.handle_event(
+            &mut tui,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+        )?;
+        let mut before = Buffer::empty(area);
+        overlay.render(area, &mut before);
+        assert!(!overlay.view.is_following());
+        assert_eq!(
+            overlay.view.history,
+            TranscriptHistoryState::LoadingBeginning
+        );
+
+        overlay.insert_cell(Arc::new(TestCell { lines: live }));
+        overlay.sync_live_tail(area.width, /*key*/ None, |_| {
+            Some(
+                (20..40)
+                    .map(|index| HyperlinkLine::from(format!("live {index}")))
+                    .collect(),
+            )
+        });
+        overlay.prepend(vec![Arc::new(TestCell {
+            lines: vec!["oldest".into()],
+        })]);
+        let mut actual = Buffer::empty(area);
+        overlay.render(area, &mut actual);
+        assert_eq!(actual, before);
+
+        overlay.set_history_state(TranscriptHistoryState::Complete);
+        overlay.render(area, &mut actual);
+        assert!(buffer_to_text(&actual, overlay.content_area).starts_with("oldest\n"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn navigation_before_the_first_draw_preserves_the_full_latest_viewport() -> Result<()> {
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
+    );
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for key in [
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+    ] {
+        let cells = vec![Arc::new(TestCell {
+            lines: (0..30)
+                .map(|index| Line::from(format!("line {index}")))
+                .collect(),
+        }) as Arc<dyn HistoryCell>];
+        let mut expected_overlay = transcript_overlay(cells.clone());
+        let mut expected = Buffer::empty(area);
+        expected_overlay.render(area, &mut expected);
+        let mut overlay = transcript_overlay(cells);
+        overlay.handle_event(&mut tui, TuiEvent::Key(key))?;
+        let mut actual = Buffer::empty(area);
+        overlay.render(area, &mut actual);
+        assert_eq!(actual, expected);
+    }
+    Ok(())
 }
 
 #[test]
@@ -146,24 +273,35 @@ fn transcript_overlay_snapshot_basic() {
 }
 
 #[test]
-fn transcript_overlay_preserves_semantic_web_links() {
+fn transcript_overlay_preserves_complete_wrapped_links_in_history_and_live_output() {
     let destination = "https://example.com/a/very/long/path";
-    let mut overlay = transcript_overlay(vec![Arc::new(history_cell::AgentMarkdownCell::new(
+    let cell: Arc<dyn HistoryCell> = Arc::new(history_cell::AgentMarkdownCell::new(
         destination.to_string(),
         std::path::Path::new("/tmp"),
-    ))]);
+    ));
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 10,
     );
-    let mut buf = Buffer::empty(area);
-
-    overlay.render(area, &mut buf);
-
-    assert!(area.positions().any(|position| {
-        buf[position]
-            .symbol()
-            .contains(&format!("\x1b]8;;{destination}\x07"))
-    }));
+    for live in [false, true] {
+        let mut overlay = transcript_overlay(if live { Vec::new() } else { vec![cell.clone()] });
+        if live {
+            overlay.sync_live_tail(area.width, /*key*/ None, |width| {
+                Some(cell.transcript_hyperlink_lines(width))
+            });
+        }
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        let linked_text = area
+            .positions()
+            .filter_map(|position| {
+                let symbol = buf[position].symbol();
+                symbol
+                    .contains(&format!("\x1b]8;;{destination}\x07"))
+                    .then(|| crate::terminal_hyperlinks::strip_osc8(symbol))
+            })
+            .collect::<String>();
+        assert_eq!(linked_text, destination);
+    }
 }
 
 #[test]
@@ -186,69 +324,67 @@ fn transcript_overlay_renders_live_tail() {
     term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
         .expect("draw");
     assert_snapshot!(term.backend());
+    overlay.navigate(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+        .expect("draw");
+    assert!(overlay.live_tail_visible());
 }
 
 #[test]
-fn transcript_overlay_preserves_live_tail_when_prepending_history() {
-    let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
-        lines: vec![Line::from("recent")],
-    })]);
-    overlay.sync_live_tail(
-        /*width*/ 40,
-        Some(ActiveCellTranscriptKey {
-            cacheable: true,
-            revision: 1,
-            is_stream_continuation: false,
-            animation_tick: None,
-        }),
-        |_| Some(vec![HyperlinkLine::from("live tail")]),
-    );
-    overlay.prepend(
-        vec![Arc::new(TestCell {
-            lines: vec![Line::from("older")],
-        })],
-        /*width*/ 40,
-    );
-
-    let area = Rect::new(
-        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
-    );
-    let mut buffer = Buffer::empty(area);
-    overlay.render(area, &mut buffer);
-    let rendered = buffer_to_text(&buffer, area);
-    assert!(rendered.contains("older"));
-    assert!(rendered.contains("recent"));
-    assert!(rendered.contains("live tail"));
-}
-
-#[test]
-fn transcript_overlay_live_tail_preserves_semantic_web_links() {
-    let destination = "https://example.com/a/streamed/path";
-    let cell =
-        history_cell::AgentMarkdownCell::new(destination.to_string(), std::path::Path::new("/tmp"));
-    let mut overlay = transcript_overlay(Vec::new());
-    let area = Rect::new(
-        /*x*/ 0, /*y*/ 0, /*width*/ 24, /*height*/ 10,
-    );
-    let mut buf = Buffer::empty(area);
-
-    overlay.sync_live_tail(
-        area.width,
-        Some(ActiveCellTranscriptKey {
-            cacheable: true,
-            revision: 1,
-            is_stream_continuation: false,
-            animation_tick: None,
-        }),
-        |width| Some(cell.transcript_hyperlink_lines(width)),
-    );
-    overlay.render(area, &mut buf);
-
-    assert!(area.positions().any(|position| {
-        buf[position]
-            .symbol()
-            .contains(&format!("\x1b]8;;{destination}\x07"))
-    }));
+fn transcript_overlay_prepend_preserves_reading_highlight_and_live_tail() {
+    for follow in [false, true] {
+        let mut overlay = transcript_overlay(vec![
+            Arc::new(TestCell {
+                lines: vec!["newer one".into(), "newer two".into()],
+            }),
+            Arc::new(TestCell {
+                lines: (0..20)
+                    .map(|i| Line::from(format!("reading {i}")))
+                    .collect(),
+            }),
+        ]);
+        overlay.highlight_cell = Some(1);
+        overlay.sync_live_tail(
+            /*width*/ 40,
+            Some(ActiveCellTranscriptKey {
+                cacheable: true,
+                revision: 1,
+                is_stream_continuation: false,
+                animation_tick: None,
+            }),
+            |_| Some(vec![HyperlinkLine::from("live tail")]),
+        );
+        let mut term = Terminal::new(TestBackend::new(/*width*/ 40, /*height*/ 8)).expect("term");
+        term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        if !follow {
+            overlay.view.jump_to_entry(&overlay.cells, /*index*/ 1);
+        }
+        term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw");
+        let content_area = overlay.content_area;
+        let before = buffer_to_text(term.backend().buffer(), content_area);
+        overlay.reveal_highlight = true;
+        overlay.prepend(vec![Arc::new(TestCell {
+            lines: vec!["older one".into(), "older two".into(), "older three".into()],
+        })]);
+        assert_eq!(
+            (overlay.highlight_cell, overlay.reveal_highlight),
+            (Some(2), true)
+        );
+        overlay.reveal_highlight = false;
+        term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw prepended");
+        assert_eq!(
+            buffer_to_text(term.backend().buffer(), content_area),
+            before
+        );
+        assert_eq!(overlay.view.is_following(), follow);
+        overlay.view.jump_to_latest();
+        term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
+            .expect("draw tail");
+        assert!(buffer_to_text(term.backend().buffer(), content_area).contains("live tail"));
+    }
 }
 
 #[test]
@@ -351,7 +487,7 @@ fn transcript_overlay_apply_patch_scroll_vt100_clears_previous_page() {
     let mut buf = Buffer::empty(area);
 
     overlay.render(area, &mut buf);
-    overlay.view.scroll_offset = 0;
+    overlay.view.jump_to_entry(&overlay.cells, /*index*/ 0);
     overlay.render(area, &mut buf);
 
     let snapshot = buffer_to_text(&buf, area);
@@ -374,7 +510,7 @@ fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
         .expect("draw");
 
     assert!(
-        overlay.view.is_scrolled_to_bottom(),
+        overlay.view.is_following(),
         "expected initial render to leave view at bottom"
     );
 
@@ -382,318 +518,227 @@ fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
         term.backend_mut().resize(/*width*/ 40, height);
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw after composer height change");
-        assert!(overlay.is_scrolled_to_bottom());
+        assert!(overlay.view.is_following());
     }
 
     overlay.insert_cell(Arc::new(TestCell {
         lines: vec!["tail".into()],
     }));
 
-    assert_eq!(overlay.view.scroll_offset, usize::MAX);
+    assert!(overlay.view.is_following());
     term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
         .expect("draw committed tail");
     assert_snapshot!("transcript_overlay_follows_resized_tail", term.backend());
 }
 
 #[test]
-fn transcript_overlay_preserves_manual_scroll_position() {
-    let mut overlay = transcript_overlay(
-        (0..20)
-            .map(|i| {
-                Arc::new(TestCell {
-                    lines: vec![Line::from(format!("line{i}"))],
-                }) as Arc<dyn HistoryCell>
-            })
-            .collect(),
-    );
-    let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
-    term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
-        .expect("draw");
-
-    overlay.view.scroll_offset = 0;
-
-    overlay.insert_cell(Arc::new(TestCell {
-        lines: vec!["tail".into()],
-    }));
-
-    assert_eq!(overlay.view.scroll_offset, 0);
-    overlay.view.scroll_offset = 3;
-    term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
-        .expect("draw");
-    let content_area = Rect::new(
-        /*x*/ 0, /*y*/ 1, /*width*/ 40, /*height*/ 4,
-    );
-    let visible_before = buffer_to_text(term.backend().buffer(), content_area);
-    overlay.prepend(
-        vec![Arc::new(TestCell {
-            lines: (0..40).map(|i| Line::from(format!("older {i}"))).collect(),
-        })],
-        /*width*/ 40,
-    );
-    term.draw(|frame| overlay.render(frame.area(), frame.buffer_mut()))
-        .expect("draw");
-    assert_eq!(
-        buffer_to_text(term.backend().buffer(), content_area),
-        visible_before
-    );
-    assert_snapshot!(
-        "transcript_overlay_prepended_history",
-        visible_before.trim()
-    );
-}
-
-#[test]
-fn transcript_overlay_insert_preserves_cached_cell_heights() {
-    let height_calls = Arc::new(AtomicUsize::new(0));
-    let mut overlay = transcript_overlay(vec![Arc::new(HeightCountingCell {
-        height_calls: height_calls.clone(),
-    })]);
-    let area = Rect::new(0, 0, 40, 12);
-    let mut buf = Buffer::empty(area);
-
-    overlay.render(area, &mut buf);
-    assert_eq!(height_calls.load(Ordering::Relaxed), 1);
-
-    overlay.insert_cell(Arc::new(TestCell {
-        lines: vec![Line::from("inserted")],
-    }));
-    overlay.render(area, &mut buf);
-
-    assert_eq!(height_calls.load(Ordering::Relaxed), 1);
-}
-
-#[test]
-fn transcript_overlay_history_rebuild_preserves_only_the_live_tail() {
-    for replace in [false, true] {
-        for tail in [
-            None,
-            Some(Vec::new()),
-            Some(vec![HyperlinkLine::from("live")]),
-        ] {
-            let mut overlay = transcript_overlay(
-                ["first", "last"]
-                    .map(|line| {
-                        Arc::new(TestCell {
-                            lines: vec![line.into()],
-                        }) as Arc<dyn HistoryCell>
-                    })
-                    .to_vec(),
-            );
-            let key = tail.as_ref().map(|_| ActiveCellTranscriptKey {
-                cacheable: true,
-                revision: 1,
-                is_stream_continuation: false,
-                animation_tick: None,
-            });
-            overlay.sync_live_tail(/*width*/ 40, key, |_| tail.clone());
-            let consolidated = Arc::new(TestCell {
-                lines: vec!["first".into(), "last".into()],
-            });
-            if replace {
-                overlay.replace_cells(vec![consolidated]);
-            } else {
-                overlay.consolidate_cells(0..2, consolidated);
-            }
-            // A draw may arrive after the active tail has already been cleared.
-            overlay.sync_live_tail(/*width*/ 40, key, |_| tail.clone());
-            let mut reopened = transcript_overlay(overlay.cells.clone());
-            reopened.sync_live_tail(/*width*/ 40, key, |_| tail.clone());
-            let area = Rect::new(
-                /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
-            );
-            let mut actual = Buffer::empty(area);
-            let mut expected = Buffer::empty(area);
-            overlay.render(area, &mut actual);
-            reopened.render(area, &mut expected);
-            assert_eq!(actual, expected);
-            if tail.is_none() {
-                assert_snapshot!(
-                    "transcript_overlay_completed_stream",
-                    buffer_to_text(&actual, area)
-                );
-            }
-        }
+fn transcript_overlay_consolidation_remaps_highlight() {
+    for (selected, expected) in [(3, 2), (6, 4)] {
+        let mut overlay = transcript_overlay(
+            (0..7)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
+        overlay.set_highlight_cell(Some(selected));
+        overlay.consolidate_cells(
+            2..5,
+            Arc::new(TestCell {
+                lines: vec![Line::from("consolidated")],
+            }),
+        );
+        assert_eq!(overlay.highlight_cell, Some(expected));
     }
-}
-
-#[test]
-fn transcript_overlay_consolidation_remaps_highlight_inside_range() {
-    let mut overlay = transcript_overlay(
-        (0..6)
-            .map(|i| {
-                Arc::new(TestCell {
-                    lines: vec![Line::from(format!("line{i}"))],
-                }) as Arc<dyn HistoryCell>
-            })
-            .collect(),
-    );
-    overlay.set_highlight_cell(Some(3));
-
-    overlay.consolidate_cells(
-        2..5,
-        Arc::new(TestCell {
-            lines: vec![Line::from("consolidated")],
-        }),
-    );
-
-    assert_eq!(
-        overlay.highlight_cell,
-        Some(2),
-        "highlight inside consolidated range should point to replacement cell",
-    );
-}
-
-#[test]
-fn transcript_overlay_consolidation_remaps_highlight_after_range() {
-    let mut overlay = transcript_overlay(
-        (0..7)
-            .map(|i| {
-                Arc::new(TestCell {
-                    lines: vec![Line::from(format!("line{i}"))],
-                }) as Arc<dyn HistoryCell>
-            })
-            .collect(),
-    );
-    overlay.set_highlight_cell(Some(6));
-
-    overlay.consolidate_cells(
-        2..5,
-        Arc::new(TestCell {
-            lines: vec![Line::from("consolidated")],
-        }),
-    );
-
-    assert_eq!(
-        overlay.highlight_cell,
-        Some(4),
-        "highlight after consolidated range should shift left by removed cells",
-    );
-}
-
-fn transcript_line_numbers(overlay: &mut TranscriptOverlay, area: Rect) -> Vec<usize> {
-    let mut buf = Buffer::empty(area);
-    overlay.render(area, &mut buf);
-
-    let top_h = area.height.saturating_sub(3);
-    let top = Rect::new(area.x, area.y, area.width, top_h);
-    let content_area = overlay.view.content_area(top);
-
-    let mut nums = Vec::new();
-    for y in content_area.y..content_area.bottom() {
-        let mut line = String::new();
-        for x in content_area.x..content_area.right() {
-            line.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-        }
-        if let Some(n) = line
-            .split_whitespace()
-            .find_map(|w| w.strip_prefix("line-"))
-            .and_then(|s| s.parse().ok())
-        {
-            nums.push(n);
-        }
-    }
-    nums
 }
 
 #[test]
 fn transcript_overlay_paging_is_continuous_and_round_trips() {
-    let mut overlay = transcript_overlay(
-        (0..50)
-            .map(|i| {
-                Arc::new(TestCell {
-                    lines: vec![Line::from(format!("line-{i:02}"))],
-                }) as Arc<dyn HistoryCell>
-            })
+    let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+        lines: (0..50)
+            .map(|i| Line::from(format!("line-{i:02}")))
             .collect(),
+    })]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 15,
     );
-    let area = Rect::new(0, 0, 40, 15);
-
-    // Prime layout so last_content_height is populated and paging uses the real content height.
-    let mut buf = Buffer::empty(area);
-    overlay.view.scroll_offset = 0;
-    overlay.render(area, &mut buf);
-    let page_height = overlay.view.page_height(area);
-
-    // Scenario 1: starting from the top, PageDown should show the next page of content.
-    overlay.view.scroll_offset = 0;
-    let page1 = transcript_line_numbers(&mut overlay, area);
-    let page1_len = page1.len();
-    let expected_page1: Vec<usize> = (0..page1_len).collect();
-    assert_eq!(
-        page1, expected_page1,
-        "first page should start at line-00 and show a full page of content"
-    );
-
-    overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
-    let page2 = transcript_line_numbers(&mut overlay, area);
-    assert_eq!(
-        page2.len(),
-        page1_len,
-        "second page should have the same number of visible lines as the first page"
-    );
-    let expected_page2_first = *page1.last().unwrap() + 1;
-    assert_eq!(
-        page2[0], expected_page2_first,
-        "second page after PageDown should immediately follow the first page"
-    );
-
-    // Scenario 2: from an interior offset (start=3), PageDown then PageUp should round-trip.
-    let interior_offset = 3usize;
-    overlay.view.scroll_offset = interior_offset;
-    let before = transcript_line_numbers(&mut overlay, area);
-    overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
-    let _ = transcript_line_numbers(&mut overlay, area);
-    overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_height);
-    let after = transcript_line_numbers(&mut overlay, area);
-    assert_eq!(
-        before, after,
-        "PageDown+PageUp from interior offset ({interior_offset}) should round-trip"
-    );
-
-    // Scenario 3: from the top of the second page, PageUp then PageDown should round-trip.
-    overlay.view.scroll_offset = page_height;
-    let before2 = transcript_line_numbers(&mut overlay, area);
-    overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_sub(page_height);
-    let _ = transcript_line_numbers(&mut overlay, area);
-    overlay.view.scroll_offset = overlay.view.scroll_offset.saturating_add(page_height);
-    let after2 = transcript_line_numbers(&mut overlay, area);
-    assert_eq!(
-        before2, after2,
-        "PageUp+PageDown from the top of the second page should round-trip"
-    );
+    let mut buffer = Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    overlay.view.jump_to_entry(&overlay.cells, /*index*/ 0);
+    for start in [0, 10] {
+        overlay.render(area, &mut buffer);
+        assert_eq!(
+            buffer_to_text(&buffer, overlay.content_area),
+            (start..start + 10)
+                .map(|i| format!("line-{i:02}\n"))
+                .collect::<String>()
+        );
+        overlay.navigate(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    }
+    overlay.scroll(/*rows*/ -17);
+    overlay.render(area, &mut buffer);
+    let before = buffer.clone();
+    for key in [KeyCode::PageDown, KeyCode::PageUp] {
+        overlay.navigate(KeyEvent::new(key, KeyModifiers::NONE));
+        overlay.render(area, &mut buffer);
+    }
+    assert_eq!(buffer, before);
 }
 
 #[tokio::test]
 async fn half_page_uses_the_last_rendered_content_height() -> Result<()> {
-    let mut overlay = transcript_overlay(
-        (0..50)
-            .map(|i| {
-                Arc::new(TestCell {
-                    lines: vec![Line::from(format!("line-{i:02}"))],
-                }) as Arc<dyn HistoryCell>
-            })
+    let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+        lines: (0..50)
+            .map(|i| Line::from(format!("line-{i:02}")))
             .collect(),
-    );
+    })]);
     let transcript_area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
     );
     let mut buf = Buffer::empty(transcript_area);
     overlay.render(transcript_area, &mut buf);
-    let page_height = overlay.view.page_height(transcript_area);
+    let page_height = usize::from(overlay.content_area.height);
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.terminal.set_viewport_area(Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 24,
     ));
-    overlay.view.scroll_offset = 10;
+    overlay.view.jump_to_entry(&overlay.cells, /*index*/ 0);
+    overlay.scroll(/*rows*/ 10);
 
-    overlay.view.handle_key_event(
+    overlay.handle_event(
         &mut tui,
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL)),
     )?;
 
-    assert_eq!(
-        overlay.view.scroll_offset,
-        10 + page_height.saturating_add(1) / 2
-    );
+    overlay.render(transcript_area, &mut buf);
+    let first = 10 + page_height.div_ceil(/*rhs*/ 2);
+    assert!(buffer_to_text(&buf, overlay.content_area).starts_with(&format!("line-{first:02}\n")));
     Ok(())
+}
+
+#[test]
+fn transcript_highlight_scrolls_offscreen_entries_in_both_directions() {
+    let mut overlay = transcript_overlay(
+        (0..20)
+            .map(|index| {
+                Arc::new(TestCell {
+                    lines: vec![Line::from(format!("entry {index}"))],
+                }) as Arc<dyn HistoryCell>
+            })
+            .collect(),
+    );
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 12,
+    );
+    let mut buffer = Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    for index in [0, 19, 0] {
+        overlay.set_highlight_cell(Some(index));
+        overlay.render(area, &mut buffer);
+        assert!(buffer_to_text(&buffer, overlay.content_area).contains(&format!("entry {index}")));
+    }
+}
+
+#[test]
+fn transcript_footer_does_not_format_offscreen_history_for_a_percentage() {
+    let counts = (0..200)
+        .map(|_| Arc::new(AtomicUsize::new(/*v*/ 0)))
+        .collect::<Vec<_>>();
+    let mut overlay = transcript_overlay(
+        counts
+            .iter()
+            .map(|count| {
+                Arc::new(LayoutCountingCell {
+                    layout_calls: Arc::clone(count),
+                }) as Arc<dyn HistoryCell>
+            })
+            .collect(),
+    );
+    let area = Rect::new(
+        /*x*/ 2, /*y*/ 1, /*width*/ 72, /*height*/ 12,
+    );
+    let mut buffer = Buffer::empty(area);
+    overlay.set_history_state(TranscriptHistoryState::Partial);
+    overlay.render(area, &mut buffer);
+    assert_eq!(
+        overlay.content_area,
+        Rect::new(
+            /*x*/ 2, /*y*/ 2, /*width*/ 72, /*height*/ 7
+        )
+    );
+    assert!(!buffer_to_text(&buffer, area).contains('%'));
+    let before = counts
+        .iter()
+        .map(|count| count.load(Ordering::Relaxed))
+        .collect::<Vec<_>>();
+    assert!(before[..190].iter().all(|count| *count == 0));
+    assert!((1..10).contains(&before.iter().sum::<usize>()));
+    overlay.set_history_state(TranscriptHistoryState::Complete);
+    overlay.render(area, &mut buffer);
+    assert!(buffer_to_text(&buffer, area).contains("100%"));
+    assert_eq!(
+        counts
+            .iter()
+            .map(|count| count.load(Ordering::Relaxed))
+            .collect::<Vec<_>>(),
+        before
+    );
+    for selection in [Some(199), Some(198), None] {
+        overlay.set_highlight_cell(selection);
+        overlay.render(area, &mut buffer);
+        assert_eq!(
+            counts
+                .iter()
+                .map(|count| count.load(Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            before
+        );
+        if selection.is_some() {
+            assert!(buffer_to_text(&buffer, area).contains("edit next"));
+        }
+    }
+    overlay.view.jump_to_latest();
+    overlay.insert_cell(Arc::new(TestCell {
+        lines: vec!["new output".into()],
+    }));
+    overlay.render(area, &mut buffer);
+    assert_eq!(
+        counts
+            .iter()
+            .map(|count| count.load(Ordering::Relaxed))
+            .collect::<Vec<_>>(),
+        before
+    );
+    overlay.scroll(/*rows*/ -1);
+    overlay.render(area, &mut buffer);
+    assert!(!buffer_to_text(&buffer, area).contains('%'));
+}
+
+#[test]
+fn transcript_overlay_clips_zero_and_short_viewports_to_their_area() {
+    let canvas = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 16,
+    );
+    for width in [0, 1, 40] {
+        for height in 0..=6 {
+            let area = Rect::new(/*x*/ 2, /*y*/ 3, width, height);
+            let mut overlay = transcript_overlay(vec![Arc::new(TestCell {
+                lines: vec!["content".into()],
+            })]);
+            let mut buffer = Buffer::filled(canvas, Cell::from('.'));
+            overlay.render(area, &mut buffer);
+            for position in canvas
+                .positions()
+                .filter(|position| !area.contains(*position))
+            {
+                assert_eq!(
+                    buffer[position],
+                    Cell::from('.'),
+                    "area={area:?}, position={position:?}"
+                );
+            }
+        }
+    }
 }

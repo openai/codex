@@ -2,26 +2,30 @@
 
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
+use crate::width::display_width;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::CellWidth;
+use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::widgets::Widget;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(crate) struct TextLayout {
-    pub(crate) rows: Vec<TextRow>,
-    pub(crate) byte_len: usize,
+pub(super) struct TextLayout {
+    pub(super) rows: Vec<TextRow>,
+    pub(super) byte_len: usize,
 }
 
 #[derive(Clone)]
-pub(crate) struct TextRow {
-    pub(crate) line: Arc<HyperlinkLine>,
-    pub(crate) offset: u16,
+pub(super) struct TextRow {
+    pub(super) line: Arc<HyperlinkLine>,
+    pub(super) offset: u16,
 }
 
 impl TextLayout {
-    pub(crate) fn new(lines: Vec<HyperlinkLine>, width: u16) -> Self {
+    pub(super) fn new(lines: Vec<HyperlinkLine>, width: u16) -> Self {
         let byte_len = lines
             .iter()
             .flat_map(|line| &line.line.spans)
@@ -51,7 +55,7 @@ impl TextLayout {
         Self { rows, byte_len }
     }
 
-    pub(crate) fn with_leading_separator(mut self) -> Self {
+    pub(super) fn with_leading_separator(mut self) -> Self {
         if !self.rows.is_empty() {
             self.rows.insert(
                 /*index*/ 0,
@@ -64,11 +68,11 @@ impl TextLayout {
         self
     }
 
-    pub(crate) fn row_count(&self) -> usize {
+    pub(super) fn row_count(&self) -> usize {
         self.rows.len()
     }
 
-    pub(crate) fn render(&self, area: Rect, buf: &mut Buffer, row: usize) {
+    pub(super) fn render(&self, area: Rect, buf: &mut Buffer, row: usize) {
         let start = row.min(self.rows.len());
         let end = row
             .saturating_add(usize::from(area.height))
@@ -81,6 +85,49 @@ impl TextLayout {
                 .scroll(first.offset)
                 .render(Rect::new(area.x, y, area.width, height), buf);
             y += height;
+        }
+    }
+
+    /// Highlight the entry's text while leaving synthetic gutters and padding untouched.
+    pub(super) fn highlight(&self, area: Rect, buf: &mut Buffer, row: usize) {
+        let row = &self.rows[row];
+        let line = &row.line;
+        let text = line.line.to_string();
+        let prefix = if row.offset == 0 {
+            line.source.as_ref().map_or(
+                /*default*/ 0,
+                |source| display_width(&text[..source.prefix_bytes]),
+            )
+        } else {
+            0
+        };
+        let width = display_width(&text);
+        let columns = usize::from(area.width);
+        let alignment = match line.line.alignment.unwrap_or(Alignment::Left) {
+            Alignment::Left => 0,
+            Alignment::Center => (columns / 2).saturating_sub(width / 2),
+            Alignment::Right => columns.saturating_sub(width),
+        };
+        let (alignment, end) = if width > columns {
+            let end = (0..area.width)
+                .rfind(|x| !buf[(area.x + x, area.y)].symbol().trim().is_empty())
+                .map_or(/*default*/ 0, |x| {
+                    usize::from(x + buf[(area.x + x, area.y)].cell_width())
+                });
+            let start = if line.line.alignment.unwrap_or(Alignment::Left) == Alignment::Left {
+                0
+            } else {
+                (0..area.width)
+                    .find(|x| !buf[(area.x + x, area.y)].symbol().trim().is_empty())
+                    .map_or(/*default*/ 0, usize::from)
+            };
+            (start, end)
+        } else {
+            (alignment, alignment + width)
+        };
+        for column in alignment + prefix..end.min(columns) {
+            buf[(area.x + column as u16, area.y)]
+                .set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
     }
 }

@@ -1,0 +1,48 @@
+---
+source: tui/src/pager_overlay/anchor_tests.rs
+assertion_line: 187
+expression: "snapshots.join(\"\\n\\n\")"
+---
+40 columns
+Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 5 },
+    content: [
+        "prior                                   ",
+        "                                        ",
+        "                                        ",
+        "› alpha beta gamma                      ",
+        "                                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 3, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: REVERSED,
+        x: 18, y: 3, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: NONE,
+    ]
+}
+
+12 columns
+Buffer {
+    area: Rect { x: 0, y: 0, width: 12, height: 7 },
+    content: [
+        "prior       ",
+        "            ",
+        "            ",
+        "› alpha     ",
+        "  beta      ",
+        "  gamma     ",
+        "            ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 3, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: REVERSED,
+        x: 7, y: 3, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: NONE,
+        x: 2, y: 4, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: REVERSED,
+        x: 6, y: 4, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: NONE,
+        x: 2, y: 5, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: REVERSED,
+        x: 7, y: 5, fg: Reset, bg: Rgb(249, 249, 249), underline: Reset, modifier: NONE,
+    ]
+}

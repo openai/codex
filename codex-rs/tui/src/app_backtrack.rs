@@ -328,7 +328,7 @@ impl App {
             let close_overlay = t.is_done();
             if !close_overlay
                 && active_key.is_some_and(|key| key.animation_tick.is_some())
-                && t.is_scrolled_to_bottom()
+                && t.live_tail_visible()
             {
                 tui.frame_requester()
                     .schedule_frame_in(std::time::Duration::from_millis(50));
