@@ -19,10 +19,12 @@ use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::line_truncation::line_width;
+use crate::line_truncation::truncate_line_to_width;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::HyperlinkParagraph;
 use crate::terminal_hyperlinks::LineWrapPolicy;
@@ -44,6 +46,14 @@ pub(super) struct TextLayout {
     rows: Vec<TextRow>,
     width: u16,
     pub(super) separated: bool,
+    pub(super) disclosure: bool,
+    disclosure_control: Option<DisclosureControl>,
+}
+
+struct DisclosureControl {
+    label: String,
+    source_offset: usize,
+    row: usize,
 }
 
 struct TextRow {
@@ -63,13 +73,67 @@ impl TextLayout {
 
     /// Reflow the same displayed content revision, retaining styles, links and disclosure label.
     pub(super) fn rewrap(&self, width: u16) -> Self {
-        let layout = Self::from_logical(self.logical.clone(), width);
-
+        let mut layout = Self::from_logical(self.logical.clone(), width);
+        if let Some(control) = &self.disclosure_control {
+            layout =
+                layout.with_disclosure_control_at(control.label.clone(), control.source_offset);
+        }
         if self.separated {
             layout.with_leading_separator()
         } else {
             layout
         }
+    }
+
+    /// Append a clipped interaction row outside the copied and searched source text.
+    pub(super) fn with_disclosure_control(self, label: String) -> Self {
+        let source_offset = self.text.len();
+        self.with_disclosure_control_at(label, source_offset)
+    }
+
+    /// Place a control after an activity, before any following auxiliary source text.
+    pub(super) fn with_disclosure_control_at(
+        mut self,
+        label: String,
+        source_offset: usize,
+    ) -> Self {
+        if self.text.is_empty() || label.is_empty() {
+            return self;
+        }
+        if let Some(control) = self.disclosure_control.take() {
+            self.rows.remove(control.row);
+        }
+        let source_offset = self
+            .text
+            .floor_char_boundary(source_offset.min(self.text.len()));
+        let control_row = self
+            .rows
+            .iter()
+            .rposition(|row| row.source.end <= source_offset)
+            .map_or(/*default*/ 0, |row| row + 1);
+        let indent = usize::from(self.width / 4).min(/*other*/ 4);
+        let line = truncate_line_to_width(
+            Line::from(format!("{}{label}", " ".repeat(indent))).dim(),
+            usize::from(self.width),
+        );
+        self.rows.insert(
+            control_row,
+            TextRow {
+                line: HyperlinkLine::from(line),
+                source: source_offset..source_offset,
+                content_width: self.width,
+                first_column: indent,
+                prefix_columns: indent,
+                tabs: tabs::TabStops::default(),
+            },
+        );
+        self.disclosure = true;
+        self.disclosure_control = Some(DisclosureControl {
+            label,
+            source_offset,
+            row: control_row,
+        });
+        self
     }
 
     /// Add visual spacing between entries without changing any source position.
@@ -86,7 +150,9 @@ impl TextLayout {
                     tabs: tabs::TabStops::default(),
                 },
             );
-
+            if let Some(control) = &mut self.disclosure_control {
+                control.row += 1;
+            }
             self.separated = true;
         }
         self
@@ -114,6 +180,17 @@ impl TextLayout {
 
     pub(super) fn row_count(&self) -> usize {
         self.rows.len()
+    }
+
+    pub(super) fn disclosure_row(&self) -> Option<usize> {
+        self.disclosure_control.as_ref().map(|control| control.row)
+    }
+
+    pub(super) fn disclosure_columns(&self) -> Range<u16> {
+        let Some(row) = self.disclosure_row().and_then(|row| self.rows.get(row)) else {
+            return 0..0;
+        };
+        row.first_column as u16..line_width(&row.line.line).min(usize::from(self.width)) as u16
     }
 
     /// Paint visible rows, including inherited styles on empty rows and trailing columns.
@@ -147,7 +224,17 @@ impl TextLayout {
 
     /// Find the display row containing a source position, including omitted wrapping whitespace.
     pub(super) fn row_for_offset(&self, offset: usize) -> usize {
-        self.rows
+        let before_control = if let Some(control_row) = self.disclosure_row() {
+            let after_control = &self.rows[control_row + 1..];
+            let matching_rows = after_control.partition_point(|row| row.source.start <= offset);
+            if matching_rows > 0 {
+                return control_row + matching_rows;
+            }
+            control_row
+        } else {
+            self.rows.len()
+        };
+        self.rows[..before_control]
             .partition_point(|row| row.source.start <= offset)
             .saturating_sub(/*rhs*/ 1)
     }
@@ -261,6 +348,8 @@ impl TextLayout {
             rows,
             width,
             separated: false,
+            disclosure: false,
+            disclosure_control: None,
         }
     }
 }

@@ -83,7 +83,7 @@ impl TranscriptView {
         }
     }
 
-    /// Rejoin current history, retaining a replaced group until navigation leaves its revision.
+    /// Rejoin current history, retaining Find offsets or a replaced group until navigation.
     /// Real selections keep their reading position, including a retired live revision.
     pub(crate) fn end_selection(&mut self, cells: &[Arc<dyn HistoryCell>]) {
         let Some(selection) = self.selection.take() else {
@@ -100,7 +100,9 @@ impl TranscriptView {
             self.hold_position();
         }
         if let Position::Reading(anchor) = self.position {
-            if !cells.iter().any(|cell| EntryKey::cell(cell) == anchor.key) {
+            if self.search.has_active_query()
+                || !cells.iter().any(|cell| EntryKey::cell(cell) == anchor.key)
+            {
                 self.held_reading = Some(selection.snapshot);
                 return;
             }

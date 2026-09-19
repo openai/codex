@@ -19,6 +19,83 @@ use pretty_assertions::assert_eq;
 use std::time::Instant;
 
 #[test]
+fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
+    use crate::clipboard_copy::CopyStatus;
+
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
+        "selected\tca\rfé\x1b\u{85}".into(),
+    ]))];
+    for key in [
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
+        KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ),
+        KeyEvent::new(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ),
+        KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL),
+    ] {
+        for status in [CopyStatus::Confirmed, CopyStatus::Unconfirmed] {
+            for searching in [false, true] {
+                let mut view = TranscriptView::default();
+                render(&mut view, &cells, /*width*/ 32, /*height*/ 3);
+                if searching {
+                    view.begin_search();
+                }
+                view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
+                let action = view.handle_key(key, &cells);
+                assert_eq!(
+                    matches!(&action, Some(ViewAction::CopyAndFollow(_))),
+                    key.code == KeyCode::Enter
+                );
+                let Some(ViewAction::Copy(text) | ViewAction::CopyAndFollow(text)) = action else {
+                    panic!("selection key must request a copy");
+                };
+                assert_eq!(text, "selected\tcafé");
+                let failed = view.copy_selected_text_with(&cells, &text, |text| {
+                    assert_eq!(text, "selected\tcafé");
+                    Err("clipboard unavailable".to_string())
+                });
+                assert_eq!(failed, Err("clipboard unavailable".to_string()));
+                assert_eq!(
+                    view.selected_text(&cells).as_deref(),
+                    Some("selected\tcafé")
+                );
+
+                let Some(ViewAction::Copy(text) | ViewAction::CopyAndFollow(text)) =
+                    view.handle_key(key, &cells)
+                else {
+                    panic!("failed copy must remain retryable");
+                };
+                let copied = view.copy_selected_text_with(&cells, &text, |text| {
+                    assert_eq!(text, "selected\tcafé");
+                    Ok(status)
+                });
+                assert_eq!(copied, Ok(status));
+                assert_eq!(
+                    (view.selected_text(&cells), view.is_search_active()),
+                    (
+                        (status == CopyStatus::Unconfirmed).then(|| text.clone()),
+                        searching
+                    )
+                );
+                assert_eq!(view.selection.is_none(), status == CopyStatus::Confirmed);
+                if !searching && status == CopyStatus::Confirmed {
+                    assert!(
+                        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells)
+                            .is_none()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn command_c_ignores_release_and_copies_only_an_active_selection() {
     let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
         "selected café".into(),
@@ -499,75 +576,4 @@ fn loading_older_history_extends_the_snapshot_without_adopting_new_commits() {
     );
     render(&mut view, &cells, /*width*/ 32, /*height*/ 6);
     assert_eq!(view.selected_text(&cells).as_deref(), Some("selected"));
-}
-
-#[test]
-fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
-    use crate::clipboard_copy::CopyStatus;
-
-    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
-        "selected\tca\rfé\x1b\u{85}".into(),
-    ]))];
-    for key in [
-        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
-        KeyEvent::new(
-            KeyCode::Char('c'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ),
-        KeyEvent::new(
-            KeyCode::Char('C'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ),
-        KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL),
-    ] {
-        for status in [CopyStatus::Confirmed, CopyStatus::Unconfirmed] {
-            {
-                let mut view = TranscriptView::default();
-                render(&mut view, &cells, /*width*/ 32, /*height*/ 3);
-                view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
-                let action = view.handle_key(key, &cells);
-                assert_eq!(
-                    matches!(&action, Some(ViewAction::CopyAndFollow(_))),
-                    key.code == KeyCode::Enter
-                );
-                let Some(ViewAction::Copy(text) | ViewAction::CopyAndFollow(text)) = action else {
-                    panic!("selection key must request a copy");
-                };
-                assert_eq!(text, "selected\tcafé");
-                let failed = view.copy_selected_text_with(&cells, &text, |text| {
-                    assert_eq!(text, "selected\tcafé");
-                    Err("clipboard unavailable".to_string())
-                });
-                assert_eq!(failed, Err("clipboard unavailable".to_string()));
-                assert_eq!(
-                    view.selected_text(&cells).as_deref(),
-                    Some("selected\tcafé")
-                );
-
-                let Some(ViewAction::Copy(text) | ViewAction::CopyAndFollow(text)) =
-                    view.handle_key(key, &cells)
-                else {
-                    panic!("failed copy must remain retryable");
-                };
-                let copied = view.copy_selected_text_with(&cells, &text, |text| {
-                    assert_eq!(text, "selected\tcafé");
-                    Ok(status)
-                });
-                assert_eq!(copied, Ok(status));
-                assert_eq!(
-                    view.selected_text(&cells),
-                    (status == CopyStatus::Unconfirmed).then(|| text.clone())
-                );
-                assert_eq!(view.selection.is_none(), status == CopyStatus::Confirmed);
-                if status == CopyStatus::Confirmed {
-                    assert!(
-                        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells)
-                            .is_none()
-                    );
-                }
-            }
-        }
-    }
 }

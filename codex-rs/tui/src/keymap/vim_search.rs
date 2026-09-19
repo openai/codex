@@ -1,5 +1,5 @@
-//! Search bindings shared by normal and operator-pending input. Existing explicit Vim
-//! bindings win over new defaults; explicit search conflicts remain configuration errors.
+//! Transcript and Vim search defaults yield to explicit bindings; explicit search conflicts
+//! remain configuration errors.
 
 use super::bindings::configured_binding_for_action;
 use super::*;
@@ -26,7 +26,51 @@ impl Default for VimSearchKeymap {
 }
 
 impl RuntimeKeymap {
-    pub(super) fn configure_vim_search(&mut self, config: &TuiKeymap) -> Result<(), String> {
+    pub(super) fn configure_search(&mut self, config: &TuiKeymap) -> Result<(), String> {
+        for context in [KeymapContext::Global, KeymapContext::Pager] {
+            let setting = match context {
+                KeymapContext::Global => &config.global.find_transcript,
+                _ => &config.pager.find,
+            };
+            if setting.is_some() {
+                continue;
+            }
+            let find_action = bindings::KeymapActionId {
+                context,
+                action: if context == KeymapContext::Global {
+                    "find_transcript"
+                } else {
+                    "find"
+                },
+            };
+            let conflicts = |action: bindings::KeymapActionId| {
+                action.overlaps(find_action)
+                    || context == KeymapContext::Global && action.context == KeymapContext::Approval
+            };
+            let configured: Vec<_> = runtime_action_bindings(self)
+                .filter(|action| {
+                    conflicts(action.id)
+                        && bindings::configured_binding_for_action(config, action.id)
+                            .is_some_and(Option::is_some)
+                })
+                .flat_map(|action| action.bindings.iter().copied())
+                .chain(
+                    self.chords
+                        .bindings
+                        .iter()
+                        .filter(|chord| conflicts(chord.action))
+                        .map(|chord| chord.chord.prefix),
+                )
+                .collect();
+            let bindings = match context {
+                KeymapContext::Global => &mut self.app.find_transcript,
+                _ => &mut self.pager.find,
+            };
+            bindings.retain(|binding| {
+                let (code, modifiers) = binding.parts();
+                !configured.is_pressed(KeyEvent::new(code, modifiers))
+            });
+        }
         let others: Vec<_> = runtime_action_bindings(self)
             .filter(|binding| {
                 matches!(

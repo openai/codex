@@ -3,6 +3,9 @@
 use super::*;
 use crate::history_cell::PlainHistoryCell;
 use crate::motion::MotionMode;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 fn cell(text: &str) -> Arc<dyn HistoryCell> {
@@ -62,4 +65,30 @@ fn unchanged_live_revisions_do_not_report_activity_but_hidden_text_does() {
         assert_eq!(view.unseen_activity, unseen);
         view.scroll(&cells, /*rows*/ -3);
     }
+}
+
+#[test]
+fn escape_closes_selection_and_search_before_returning_to_latest() {
+    let mut cells = vec![cell("one\ntwo\nthree\nfour")];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells, /*height*/ 3);
+    view.scroll(&cells, /*rows*/ -1);
+    cells.push(cell("new output"));
+    render(&mut view, &cells, /*height*/ 3);
+    view.begin_search();
+    view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
+    let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    view.handle_key(escape, &cells);
+    assert!(view.selection.is_none());
+    assert!(view.is_search_active());
+    view.handle_key(escape, &cells);
+    assert!(!view.is_search_active());
+    assert!(!view.is_following());
+    assert!(matches!(
+        view.handle_key(escape, &cells),
+        Some(ViewAction::Changed)
+    ));
+    assert!(view.is_following());
+    assert!(view.footer(/*width*/ 80, MotionMode::Reduced).is_none());
+    assert!(view.handle_key(escape, &cells).is_none());
 }

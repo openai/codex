@@ -7,7 +7,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
-use tokio::time::Instant;
 
 fn vim_textarea(text: &str, cursor: usize) -> TextArea {
     let mut textarea = TextArea::new();
@@ -28,12 +27,7 @@ fn keys(textarea: &mut TextArea, keys: &str) {
             ch => KeyCode::Char(ch),
         };
         let event = KeyEvent::new(code, KeyModifiers::NONE);
-        match matcher.advance(
-            event,
-            &keymap.chords,
-            textarea.keymap_contexts(),
-            Instant::now(),
-        ) {
+        match matcher.advance(event, &keymap.chords, textarea.keymap_contexts()) {
             KeyChordMatch::PassThrough => textarea.input(event),
             KeyChordMatch::Completed(event) => textarea.input(event),
             KeyChordMatch::Pending(_) | KeyChordMatch::Cancelled | KeyChordMatch::Ignored => {}

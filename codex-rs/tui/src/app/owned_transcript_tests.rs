@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::chatwidget::tests::helpers::normalize_snapshot_paths;
+use crate::history_cell::HistoryCell;
+use crate::history_cell::UserHistoryCell;
 use crate::session_state::ThreadSessionState;
 use crate::test_support::test_path_buf;
 use codex_app_server_protocol::AskForApproval;
@@ -9,6 +11,16 @@ use codex_config::types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
+
+fn user_cell(message: &str) -> Arc<dyn HistoryCell> {
+    Arc::new(UserHistoryCell {
+        spoken: false,
+        message: message.to_string(),
+        text_elements: Vec::new(),
+        local_image_paths: Vec::new(),
+        remote_image_urls: Vec::new(),
+    })
+}
 
 fn attach_thread(app: &mut App, thread_id: ThreadId) {
     app.chat_widget.handle_thread_session(ThreadSessionState {
@@ -305,5 +317,243 @@ async fn owned_transcript_keeps_text_out_of_the_pet_columns() -> Result<()> {
         }
     }
     tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_owns_editor_chords_without_changing_the_composer_draft() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    app.transcript_cells = vec![user_cell("alpha beta")];
+    app.chat_widget
+        .apply_external_edit("draft remains intact".to_string());
+    app.keymap = RuntimeKeymap::from_config(&serde_json::from_value(serde_json::json!({
+        "global": {"find_transcript": "f4", "open_external_editor": "ctrl-g e"},
+        "editor": {"move_line_start": "ctrl-x h"},
+        "pager": {"find": "f4"}
+    }))?)
+    .expect("independent query bindings");
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for owned in [true, false] {
+        tui.set_owned_screen(owned)?;
+        if !owned {
+            app.open_transcript_overlay(&mut tui);
+        }
+        for event in [
+            TuiEvent::Key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE)),
+            TuiEvent::Draw,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            TuiEvent::Paste("alpha beta".to_string()),
+            // A global chord cannot own the next query character.
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            // Configured editor chords use the same query TextArea.
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+        ] {
+            let pasted = matches!(event, TuiEvent::Paste(_));
+            app.handle_tui_event(&mut tui, &mut app_server, event)
+                .await?;
+            if pasted {
+                app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+                    .await?;
+                let rendered = buffer_text(
+                    crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+                );
+                assert!(
+                    rendered.contains("enter next"),
+                    "Find must resume after pasting over selection"
+                );
+            }
+            if app.key_chord_matcher.is_pending() {
+                app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+                    .await?;
+                let rendered = buffer_text(
+                    crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+                );
+                let cursor = tui.terminal.last_known_cursor_pos;
+                let query_row = rendered
+                    .lines()
+                    .nth(usize::from(cursor.y))
+                    .expect("visible query caret");
+                assert_eq!(query_row.trim(), "Find: alpha betax");
+                assert!(rendered.contains("h move line start"));
+                insta::assert_snapshot!(
+                    "owned_find_pending_chord_footer",
+                    rendered
+                        .lines()
+                        .skip(usize::from(cursor.y))
+                        .take(/*n*/ 2)
+                        .map(str::trim)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+            }
+        }
+        app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+            .await?;
+        let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+            &tui.terminal,
+        ));
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim() == "Find: apha betax")
+        );
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "draft remains intact"
+        );
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        )
+        .await?;
+        assert!(!match &app.overlay {
+            Some(Overlay::Transcript(overlay)) => overlay.is_search_active(),
+            _ => app.transcript_view.is_search_active(),
+        });
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "draft remains intact"
+        );
+        app.close_transcript_overlay(&mut tui);
+    }
+    tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn offline_find_closes_before_the_next_ctrl_c_quits() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    app.chat_widget
+        .apply_external_edit("offline draft".to_string());
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.open_transcript_overlay(&mut tui);
+    app.transcript_view.begin_search();
+    app.transcript_view.paste_search("needle");
+    app.reconnect.offline = true;
+    app.chat_widget.pause_for_disconnect();
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
+    let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+        &tui.terminal,
+    ));
+    let cursor = tui.terminal.last_known_cursor_pos;
+    assert_eq!(
+        rendered.lines().nth(usize::from(cursor.y)).map(str::trim),
+        Some("Find: needle")
+    );
+    assert!(!rendered.contains("ctrl+c quit"));
+    let close = TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(matches!(
+        app.handle_tui_event(&mut tui, &mut app_server, close)
+            .await?,
+        AppRunControl::Continue
+    ));
+    assert!(!app.transcript_view.is_search_active());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "offline draft"
+    );
+    assert!(app.transcript_view.is_detailed());
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL)),
+    )
+    .await?;
+    assert!(!app.transcript_view.is_detailed());
+    let quit = TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(matches!(
+        app.handle_tui_event(&mut tui, &mut app_server, quit)
+            .await?,
+        AppRunControl::Exit(ExitReason::UserRequested)
+    ));
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn inline_transcript_search_draws_and_escape_closes_find() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.transcript_cells = vec![user_cell("needle in history")];
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.open_transcript_overlay(&mut tui);
+    for event in [
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        TuiEvent::Paste("needle".to_string()),
+        TuiEvent::Draw,
+    ] {
+        app.handle_backtrack_overlay_event(&mut tui, &mut app_server, event)
+            .await?;
+    }
+    let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+        &tui.terminal,
+    ));
+    assert!(
+        rendered.contains("enter next"),
+        "search advances on the inline overlay draw path"
+    );
+    app.handle_backtrack_overlay_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )
+    .await?;
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if !overlay.has_active_interaction())
+    );
+    app.close_transcript_overlay(&mut tui);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn find_refreshes_live_details_before_searching_the_first_query() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    crate::chatwidget::tests::helpers::set_active_cell(
+        &mut app.chat_widget,
+        Box::new(crate::exec_cell::new_active_exec_command(
+            "live".into(),
+            vec!["printf visible\nprintf needle".into()],
+            Vec::new(),
+            codex_app_server_protocol::CommandExecutionSource::Agent,
+            /*interaction_input*/ None,
+            /*animations_enabled*/ false,
+        )),
+    );
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
+    assert!(
+        !buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+            &tui.terminal
+        ))
+        .contains("needle")
+    );
+    for event in [
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+        TuiEvent::Paste("needle".into()),
+        TuiEvent::Draw,
+    ] {
+        app.handle_tui_event(&mut tui, &mut app_server, event)
+            .await?;
+    }
+    let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+        &tui.terminal,
+    ));
+    assert!(rendered.contains("enter next"), "{rendered}");
+    tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
     Ok(())
 }

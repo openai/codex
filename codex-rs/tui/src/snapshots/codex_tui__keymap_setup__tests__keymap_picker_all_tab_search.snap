@@ -4,6 +4,8 @@ expression: snapshot
 ---
 Open Agents | unbound | Global open_agents Open Agents Open the shared agent-session overview. unbound Default
 Open Transcript | ctrl-t | Global open_transcript Open Transcript Open the transcript overlay. ctrl-t Default
+Find Transcript | f3 | Global find_transcript Find Transcript Find text in the full transcript. f3 Default
+Focus Activity | f4 | Global focus_activity Focus Activity Focus transcript activity groups to expand or collapse their details. f4 Default
 Open External Editor | ctrl-g | Global open_external_editor Open External Editor Open the current draft in an external editor. ctrl-g Default
 Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. ctrl-o Default
 Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
@@ -12,5 +14,3 @@ Toggle Raw Output | alt-r | Global toggle_raw_output Toggle Raw Output Toggle ra
 Toggle Side Conversation | ctrl-/ | Global toggle_side_conversation Toggle Side Conversation Switch between a side conversation and its parent. ctrl-/ Default
 Interrupt Turn | esc | Chat interrupt_turn Interrupt Turn Interrupt the active turn. esc Default
 Decrease Reasoning Effort | alt-,, shift-down | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-,, shift-down Default
-Increase Reasoning Effort | alt-., shift-up | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-., shift-up Default
-Previous Permission Mode | unbound | Chat previous_permission_mode Previous Permission Mode Switch to the previous available permission mode. unbound Default

@@ -5,10 +5,6 @@ use crate::bottom_pane::BottomPaneView;
 use crate::clipboard_copy::CopyFormat;
 
 impl ChatWidget {
-    pub(crate) fn shortcut_overlay_visible(&self) -> bool {
-        self.bottom_pane.shortcut_overlay_visible()
-    }
-
     pub(crate) fn set_agents_navigation_enabled(&mut self, enabled: bool) {
         self.bottom_pane.set_agents_navigation_enabled(enabled);
     }
@@ -307,6 +303,11 @@ impl ChatWidget {
             .replace_selection_view_if_present(view_id, params)
     }
 
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn shortcut_overlay_visible(&self) -> bool {
+        self.bottom_pane.shortcut_overlay_visible()
+    }
+
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.bottom_pane.no_modal_or_popup_active()
     }
@@ -358,6 +359,34 @@ impl ChatWidget {
             )),
         }
         self.request_redraw();
+    }
+
+    /// Report a transcript copy without adding history and return its outcome to the viewport.
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn copy_transcript_selection(
+        &mut self,
+        text: &str,
+    ) -> Result<crate::clipboard_copy::CopyStatus, String> {
+        self.copy_transcript_selection_with(text, |text| {
+            crate::clipboard_copy::copy_to_clipboard(text, CopyFormat::PlainText)
+        })
+    }
+
+    /// The owned viewport renders its own copy feedback above the composer.
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(super) fn copy_transcript_selection_with(
+        &mut self,
+        text: &str,
+        copy_fn: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyOutcome, String>,
+    ) -> Result<crate::clipboard_copy::CopyStatus, String> {
+        let result = self.write_clipboard(text, copy_fn);
+        let line = match &result {
+            Ok(status) => Line::from(status.message("selection").dim()),
+            Err(error) => Line::from(format!("Copy failed: {error}").red()),
+        };
+        self.bottom_pane
+            .show_footer_flash(line, Duration::from_secs(/*secs*/ 3));
+        result
     }
 
     pub(crate) fn copy_selection(&mut self, text: Arc<str>, label: String, format: CopyFormat) {

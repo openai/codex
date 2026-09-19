@@ -1,0 +1,6 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+expression: "rendered.lines().skip(usize::from(cursor.y)).take(2).map(str::trim).collect::<Vec<_>>().join(\"\\n\")"
+---
+Find: alpha betax
+ctrl+x then · h move line start · esc cancel

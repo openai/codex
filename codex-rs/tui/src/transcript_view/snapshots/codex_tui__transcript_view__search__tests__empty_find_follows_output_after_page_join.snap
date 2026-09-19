@@ -1,0 +1,21 @@
+---
+source: tui/src/transcript_view/search_tests.rs
+assertion_line: 203
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 8 },
+    content: [
+        "joined computer actions                 ",
+        "                                        ",
+        "latest answer                           ",
+        "                                        ",
+        "new committed answer                    ",
+        "                                        ",
+        "stream after page                       ",
+        "                                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

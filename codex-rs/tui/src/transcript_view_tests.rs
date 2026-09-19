@@ -149,6 +149,52 @@ fn beginning_wait_keeps_live_content_through_new_output_prepend_and_resize() {
 }
 
 #[test]
+fn transcript_interaction_cancels_pending_beginning_without_losing_received_history() {
+    for key in [
+        None,
+        Some(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+        Some(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+        Some(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+    ] {
+        let mut cells = (0..20)
+            .map(|index| cell(format!("line {index}")))
+            .collect::<Vec<_>>();
+        let mut view = TranscriptView {
+            history: TranscriptHistoryState::Partial,
+            ..TranscriptView::default()
+        };
+        render(&mut view, &cells, /*width*/ 24, /*height*/ 3);
+        view.jump_to_beginning(&cells);
+        match key {
+            Some(key) if key.code == KeyCode::F(3) => view.begin_search(),
+            Some(key) => {
+                view.handle_key(key, &cells);
+            }
+            None => {
+                view.handle_mouse(
+                    MouseEvent {
+                        kind: MouseEventKind::ScrollUp,
+                        column: 0,
+                        row: 0,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    &cells,
+                );
+            }
+        }
+        assert_eq!(view.history, TranscriptHistoryState::LoadingOlder);
+        let before = render(&mut view, &cells, /*width*/ 24, /*height*/ 3);
+        cells.insert(/*index*/ 0, cell("received older history"));
+        view.history_loaded(&cells, 0..1);
+        view.history = TranscriptHistoryState::Complete;
+        assert_eq!(
+            render(&mut view, &cells, /*width*/ 24, /*height*/ 3),
+            before
+        );
+    }
+}
+
+#[test]
 fn returning_to_latest_cancels_beginning_intent_while_retaining_the_loaded_page() {
     for (beginning, latest) in [
         (
@@ -518,6 +564,29 @@ fn mutable_history_formats_once_per_frame_and_refreshes_the_next_frame() {
     version 2 row 6
     version 2 row 7
     ");
+    view.begin_search();
+    view.paste_search("version 2");
+    assert!(!view.advance_search(&cells));
+    let matched = text(&render(
+        &mut view, &cells, /*width*/ 24, /*height*/ 5,
+    ));
+    view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
+    version.store(/*val*/ 3, Ordering::Relaxed);
+    view.end_selection(&cells);
+    assert_eq!(
+        text(&render(
+            &mut view, &cells, /*width*/ 24, /*height*/ 5
+        )),
+        matched
+    );
+    view.handle_key(KeyCode::Enter.into(), &cells);
+    assert!(!view.advance_search(&cells));
+    assert!(
+        text(&render(
+            &mut view, &cells, /*width*/ 24, /*height*/ 5
+        ))
+        .contains("version 3")
+    );
 }
 
 #[test]
@@ -575,6 +644,15 @@ fn live_reader_survives_commit_new_tail_resize_and_selection_then_rejoins_latest
     );
     view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
     assert_eq!(view.selected_text(&cells), Some("live two\n".to_string()));
+    view.begin_search();
+    assert!(!view.advance_search(&cells));
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    assert_eq!(
+        text(&render(
+            &mut view, &cells, /*width*/ 20, /*height*/ 2
+        )),
+        before
+    );
     view.jump_to_latest();
     assert!(view.snapshot().is_none());
     insta::assert_snapshot!(text(&render(&mut view, &cells, /*width*/ 20, /*height*/ 2)), @"

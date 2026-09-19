@@ -7,6 +7,7 @@ use super::*;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::SessionHeaderHistoryCell;
 use crate::history_cell::SessionInfoCell;
+use crate::keymap::RuntimeKeymap;
 use crate::motion::MotionMode;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
@@ -23,6 +24,7 @@ pub(crate) struct TranscriptOverlay {
     content_area: Rect,
     cursor: Option<(u16, u16)>,
     notice: Option<String>,
+    pub(crate) key_chord_hint: Option<Vec<(String, String)>>,
     is_done: bool,
 }
 
@@ -40,6 +42,7 @@ impl TranscriptOverlay {
             content_area: Rect::default(),
             cursor: None,
             notice: None,
+            key_chord_hint: None,
             is_done: false,
         }
     }
@@ -89,7 +92,12 @@ impl TranscriptOverlay {
                 .map(|column| (status.x + column, status.y));
             if let Some(notice) = &self.notice {
                 let notice = Line::from(notice.clone()).dim();
-                footer.text = notice.into();
+                if self.view.is_search_active() {
+                    footer.text.lines.truncate(/*len*/ 1);
+                    footer.text.lines.push(notice);
+                } else {
+                    footer.text = notice.into();
+                }
             }
             Paragraph::new(footer.text).render(
                 Rect::new(status.x, status.y, status.width, /*height*/ 3).intersection(area),
@@ -105,17 +113,25 @@ impl TranscriptOverlay {
             }
             self.render_hints(hints, buf);
         }
+        if let Some(items) = &self.key_chord_hint {
+            let row = Rect::new(hints.x, hints.y, hints.width, 1).intersection(area);
+            Clear.render(row, buf);
+            crate::bottom_pane::footer_hint_items_line(items).render(row, buf);
+        }
     }
 
     pub(crate) fn draw(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let mut scanning = false;
         tui.draw(u16::MAX, |frame| {
+            self.view.prepare_width(frame.area().width);
+            scanning = self.view.advance_search(&self.cells);
             self.render(frame.area(), frame.buffer);
             if let Some(cursor) = self.cursor {
                 frame.set_cursor_position(cursor);
             }
         })?;
         let loading = self.view.is_loading_history() && self.motion == MotionMode::Animated;
-        if loading {
+        if scanning || loading {
             tui.frame_requester()
                 .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         }
@@ -145,11 +161,14 @@ impl TranscriptOverlay {
                 }
                 self.view.handle_mouse(mouse, &self.cells)
             }
-            TuiEvent::Paste(_) => None,
+            TuiEvent::Paste(text) => {
+                if self.view.is_search_active() {
+                    self.view.end_selection(&self.cells);
+                }
+                self.view.paste_search(&text).then_some(ViewAction::Changed)
+            }
             TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::FocusGained | TuiEvent::Resume => {
-                let dragging =
-                    matches!(event, TuiEvent::Draw) && self.view.tick_selection(&self.cells);
-                if dragging {
+                if matches!(event, TuiEvent::Draw) && self.view.tick_selection(&self.cells) {
                     tui.frame_requester()
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
                 }
@@ -174,6 +193,18 @@ impl TranscriptOverlay {
 
     pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
         self.view.is_following()
+    }
+
+    pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
+        self.view.set_keymap_bindings(keymap);
+    }
+
+    pub(crate) fn begin_search(&mut self) {
+        self.view.begin_search();
+    }
+
+    pub(crate) fn is_search_active(&self) -> bool {
+        self.view.is_search_active()
     }
 
     pub(crate) fn owns_interaction_key(&self, key: KeyEvent) -> bool {
@@ -252,6 +283,7 @@ impl TranscriptOverlay {
 
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         self.cells = cells;
+        self.view.restart_search();
         self.view.history_loaded(&self.cells, 0..0);
         self.highlight_cell = self
             .highlight_cell
@@ -326,6 +358,13 @@ impl TranscriptOverlay {
         if key.kind == KeyEventKind::Release {
             return None;
         }
+        if !self.view.is_search_active()
+            && (!self.view.has_active_interaction() || !self.view.owns_interaction_key(key))
+            && self.keymap.find.is_pressed(key)
+        {
+            self.view.begin_search();
+            return Some(ViewAction::Changed);
+        }
         if self.view.has_active_interaction()
             && let Some(action) = self.view.handle_key(key, &self.cells)
         {
@@ -338,7 +377,6 @@ impl TranscriptOverlay {
         if self.navigate(key) {
             return Some(ViewAction::Changed);
         }
-
         self.view.handle_key(key, &self.cells)
     }
 
@@ -411,6 +449,12 @@ impl TranscriptOverlay {
             first_or_empty(&self.keymap, "close", &self.keymap.close),
             "close",
         )];
+        if !self.keymap.find.is_empty() {
+            pairs.push((
+                first_or_empty(&self.keymap, "find", &self.keymap.find),
+                "find",
+            ));
+        }
         pairs.push((vec![key_hint::plain(KeyCode::Esc).into()], "edit previous"));
         if self.highlight_cell.is_some() {
             pairs.push((vec![key_hint::plain(KeyCode::Right).into()], "to edit next"));

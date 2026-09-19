@@ -23,6 +23,7 @@ impl TranscriptView {
                 && self.can_return_to_latest()
                 && self.highlight.is_none()
                 && self.selection.is_none()
+                && !self.is_search_active()
         });
         let Some(area) = area else {
             self.follow_control = FollowControl::default();

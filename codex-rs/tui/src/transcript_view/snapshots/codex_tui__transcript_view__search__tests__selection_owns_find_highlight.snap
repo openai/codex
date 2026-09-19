@@ -1,0 +1,18 @@
+---
+source: tui/src/transcript_view/search_tests.rs
+assertion_line: 63
+expression: "format!(\"{selected_frame:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 4 },
+    content: [
+        "newer needle                    ",
+        "                                ",
+        "                                ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 12, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

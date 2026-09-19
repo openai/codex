@@ -6,9 +6,9 @@ Keypress Inspector
 Press any key to see what Codex receives. Esc is inspected; Ctrl+C closes.
 Tip: Codex can only inspect keys your terminal sends.
 
-Detected: ctrl+o
-Config key: ctrl-o
-Raw event: code=Char('o'), modifiers=ctrl, kind=Press
+Detected: f8
+Config key: f8
+Raw event: code=F(8), modifiers=none, kind=Press
 
 Assigned actions:
-  - global.copy (Copy) - Copy the last agent response to the clipboard. [Default]
+  - chat.toggle_voice (Toggle Voice) - Start or stop a voice conversation. [Default]

@@ -26,7 +26,21 @@ impl TranscriptView {
             (selection.start.key, selection.start.offset)
                 != (selection.end.key, selection.end.offset)
         });
-
+        if let Some((query, cursor)) = self.search_footer(width) {
+            return Some(TranscriptFooter {
+                text: vec![
+                    query,
+                    if has_selected_text {
+                        selection_hint(width)
+                    } else {
+                        self.search.status_line(width, self.history)
+                    },
+                ]
+                .into(),
+                cursor_column: self.selection.is_none().then_some(cursor),
+                is_interactive: true,
+            });
+        }
         if has_selected_text {
             return Some(TranscriptFooter {
                 text: first_fitting_line(
@@ -44,68 +58,72 @@ impl TranscriptView {
                 is_interactive: true,
             });
         }
-
+        if self.is_activity_focused() {
+            return self.disclosure_footer(width);
+        }
         let pending = self.is_loading_history() || self.history == TranscriptHistoryState::Failed;
         let can_return = self.selection.is_none() && self.can_return_to_latest();
-        (pending || self.unseen_activity || can_return).then(|| {
-            let navigation = if self.can_return_to_latest() {
-                latest_navigation
-            } else {
-                ""
-            };
-            let mut status = self.status_line_with_navigation(navigation, motion);
-            // Loading must not resize the composer or move its caret. Shorten secondary text
-            // before clipping either shortcut; failed loads prioritize their retry action.
-            if status.width() > usize::from(width) {
-                status = if self.is_loading_history() {
-                    let loading = if navigation.is_empty() {
-                        if "↑ Loading…".width() <= usize::from(width) {
-                            "Loading…"
-                        } else {
-                            "…"
-                        }
-                    } else if "↑ Loading… · ".width() + navigation.width() <= usize::from(width)
-                    {
-                        "Loading… · "
-                    } else {
-                        "… "
-                    };
-                    let mut spans = vec!["↑ ".fg(accent_color())];
-                    spans.extend(shimmer_text(loading, motion));
-                    spans.extend(navigation_line(navigation).spans);
-                    Line::from(spans)
-                } else if self.history == TranscriptHistoryState::Failed {
-                    let mut spans = vec!["Retry: ".dim()];
-                    spans.extend(key_label_spans(&JumpTarget::Beginning.hint_label()));
-                    Line::from(spans)
-                } else if navigation.is_empty() {
-                    Line::from("New activity").dim()
-                } else if self.unseen_activity {
-                    let mut spans = vec!["New · ".dim()];
-                    spans.extend(navigation_line(navigation).spans);
-                    Line::from(spans)
+        (pending || self.unseen_activity || can_return)
+            .then(|| {
+                let navigation = if self.can_return_to_latest() {
+                    latest_navigation
                 } else {
-                    navigation_line(navigation)
+                    ""
                 };
-            }
-            let retry = if self.history == TranscriptHistoryState::Failed {
-                format!(
-                    "{} retry",
-                    crate::key_hint::ctrl(KeyCode::Home).display_label()
-                )
-            } else {
-                navigation.to_owned()
-            };
-            TranscriptFooter {
-                text: first_fitting_line(
-                    [status, navigation_line(&retry), navigation_line(navigation)],
-                    width,
-                )
-                .into(),
-                cursor_column: None,
-                is_interactive: false,
-            }
-        })
+                let mut status = self.status_line_with_navigation(navigation, motion);
+                // Loading must not resize the composer or move its caret. Shorten secondary text
+                // before clipping either shortcut; failed loads prioritize their retry action.
+                if status.width() > usize::from(width) {
+                    status = if self.is_loading_history() {
+                        let loading = if navigation.is_empty() {
+                            if "↑ Loading…".width() <= usize::from(width) {
+                                "Loading…"
+                            } else {
+                                "…"
+                            }
+                        } else if "↑ Loading… · ".width() + navigation.width() <= usize::from(width)
+                        {
+                            "Loading… · "
+                        } else {
+                            "… "
+                        };
+                        let mut spans = vec!["↑ ".fg(accent_color())];
+                        spans.extend(shimmer_text(loading, motion));
+                        spans.extend(navigation_line(navigation).spans);
+                        Line::from(spans)
+                    } else if self.history == TranscriptHistoryState::Failed {
+                        let mut spans = vec!["Retry: ".dim()];
+                        spans.extend(key_label_spans(&JumpTarget::Beginning.hint_label()));
+                        Line::from(spans)
+                    } else if navigation.is_empty() {
+                        Line::from("New activity").dim()
+                    } else if self.unseen_activity {
+                        let mut spans = vec!["New · ".dim()];
+                        spans.extend(navigation_line(navigation).spans);
+                        Line::from(spans)
+                    } else {
+                        navigation_line(navigation)
+                    };
+                }
+                let retry = if self.history == TranscriptHistoryState::Failed {
+                    format!(
+                        "{} retry",
+                        crate::key_hint::ctrl(KeyCode::Home).display_label()
+                    )
+                } else {
+                    navigation.to_owned()
+                };
+                TranscriptFooter {
+                    text: first_fitting_line(
+                        [status, navigation_line(&retry), navigation_line(navigation)],
+                        width,
+                    )
+                    .into(),
+                    cursor_column: None,
+                    is_interactive: false,
+                }
+            })
+            .or_else(|| self.disclosure_footer(width))
     }
 
     pub(crate) fn status_line_with_navigation(

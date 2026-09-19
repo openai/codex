@@ -10,6 +10,8 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::keymap::KeymapContext;
+#[cfg(unix)]
+use crate::pager_overlay::TranscriptHistoryState;
 use crate::test_support::test_path_display;
 use crate::tui::Tui;
 use codex_app_server_protocol::ToolRequestUserInputOption;
@@ -94,20 +96,25 @@ async fn vim_buffer_jumps_route_default_chords_in_normal_and_operator_contexts()
 }
 
 #[tokio::test]
-async fn completed_global_chord_reuses_the_existing_action_handler() -> Result<()> {
+async fn global_chord_keeps_hints_and_completes_before_deadline() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
 
     press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
     assert!(app.key_chord_matcher.is_pending());
     assert!(app.overlay.is_none());
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_millis(/*millis*/ 500)).await;
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
+        .await?;
+    assert!(app.key_chord_matcher.is_pending());
     insta::assert_snapshot!(
         render_bottom_popup(&app.chat_widget, /*width*/ 80)
             .replace(&test_path_display("/tmp/project"), "/tmp/project"),
-        @"
-    › Ask Codex to do anything
+        @r"
+        › Ask Codex to do anything
 
-      ctrl+x … waiting for next key · esc cancel
-    "
+          ctrl+x then · ctrl+t open transcript · ctrl+u interrupt turn · esc cancel
+        "
     );
 
     press(&mut app, &mut tui, &mut app_server, ctrl('t')).await?;
@@ -285,6 +292,65 @@ async fn legacy_terminal_preserves_active_global_alt_shortcuts() -> Result<()> {
         app.chat_widget
             .should_handle_vim_insert_escape(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn owned_transcript_alt_jumps_preserve_legacy_vim_insert_and_draft() -> Result<()> {
+    let (mut app, mut tui, mut app_server) = chord_app().await?;
+    app.enhanced_keys_supported = false;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.transcript_cells = vec![std::sync::Arc::new(
+        crate::history_cell::PlainHistoryCell::new(vec!["Earlier transcript".into()]),
+    )];
+    app.chat_widget.toggle_vim_mode_and_notify();
+    app.chat_widget.insert_str("draft");
+    press(
+        &mut app,
+        &mut tui,
+        &mut app_server,
+        KeyCode::Char('i').into(),
+    )
+    .await?;
+
+    let area = ratatui::layout::Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 4,
+    );
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    app.transcript_view
+        .render(area, &mut buffer, &app.transcript_cells);
+
+    for modifiers in [KeyModifiers::ALT, KeyModifiers::ALT | KeyModifiers::SHIFT] {
+        app.transcript_view.history = TranscriptHistoryState::Partial;
+        for (character, following, history) in [
+            ('<', false, TranscriptHistoryState::LoadingBeginning),
+            ('>', true, TranscriptHistoryState::LoadingOlder),
+        ] {
+            press(
+                &mut app,
+                &mut tui,
+                &mut app_server,
+                KeyEvent::new(KeyCode::Char(character), modifiers),
+            )
+            .await?;
+            assert_eq!(
+                (
+                    app.transcript_view.is_following(),
+                    app.transcript_view.history,
+                    app.chat_widget.composer_text_with_pending(),
+                    app.chat_widget
+                        .should_handle_vim_insert_escape(KeyEvent::new(
+                            KeyCode::Esc,
+                            KeyModifiers::NONE,
+                        )),
+                ),
+                (following, history, "draft".to_string(), true)
+            );
+        }
+    }
+    tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -622,7 +688,7 @@ async fn dashboard_chord_hint_survives_refresh_and_clears_on_cancel() -> Result<
     let _ = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     insta::assert_snapshot!(
         render_bottom_popup(&app.chat_widget, /*width*/ 80).lines().last().unwrap(),
-        @"  ctrl+x … waiting for next key  esc cancel"
+        @"  ctrl+x then  n new task  esc cancel"
     );
     assert_eq!(
         app.route_key_chord_event(&mut tui, KeyCode::Esc.into()),

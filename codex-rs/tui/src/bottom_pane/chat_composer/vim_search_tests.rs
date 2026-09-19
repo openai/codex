@@ -10,7 +10,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
-use tokio::time::Instant;
 
 #[test]
 fn fresh_vim_draft_records_typing_after_submission() {
@@ -88,12 +87,8 @@ fn vim_search_query_edits_and_paste_preserve_the_draft() {
                     KeyCode::Char(ch)
                 };
                 let event = KeyEvent::new(code, KeyModifiers::NONE);
-                let event = match matcher.advance(
-                    event,
-                    &keymap.chords,
-                    composer.keymap_contexts(),
-                    Instant::now(),
-                ) {
+                let event = match matcher.advance(event, &keymap.chords, composer.keymap_contexts())
+                {
                     KeyChordMatch::PassThrough => event,
                     KeyChordMatch::Completed(event) => event,
                     KeyChordMatch::Pending(_) => continue,

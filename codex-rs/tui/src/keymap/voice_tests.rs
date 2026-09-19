@@ -59,7 +59,6 @@ fn voice_mute_chord_dispatches_only_in_its_active_context() {
     let runtime = RuntimeKeymap::from_config(&config).unwrap();
     let action = keymap_action_id("chat", "toggle_voice_mute").unwrap();
     let mut matcher = KeyChordMatcher::default();
-    let now = tokio::time::Instant::now();
     let prefix = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
     let completion = KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE);
     assert_eq!(
@@ -67,17 +66,15 @@ fn voice_mute_chord_dispatches_only_in_its_active_context() {
             prefix,
             &runtime.chords,
             KeymapContextSet::new(KeymapContext::Pager),
-            now
         ),
         KeyChordMatch::PassThrough
     );
     let contexts = KeymapContextSet::new(action.context);
     assert!(matches!(
-        matcher.advance(prefix, &runtime.chords, contexts, now),
+        matcher.advance(prefix, &runtime.chords, contexts),
         KeyChordMatch::Pending(_)
     ));
-    let KeyChordMatch::Completed(dispatch) =
-        matcher.advance(completion, &runtime.chords, contexts, now)
+    let KeyChordMatch::Completed(dispatch) = matcher.advance(completion, &runtime.chords, contexts)
     else {
         panic!("mute chord completes")
     };
@@ -140,27 +137,24 @@ fn voice_toggle_chord_dispatches_in_chat_without_an_active_voice_session() {
     let config = toml::from_str::<TuiKeymap>("[chat]\ntoggle_voice = 'f8 v'").unwrap();
     let runtime = RuntimeKeymap::from_config(&config).unwrap();
     let mut matcher = KeyChordMatcher::default();
-    let now = tokio::time::Instant::now();
     let prefix = KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
     assert_eq!(
         matcher.advance(
             prefix,
             &runtime.chords,
             KeymapContextSet::new(KeymapContext::Pager),
-            now
         ),
         KeyChordMatch::PassThrough
     );
     let contexts = KeymapContextSet::new(KeymapContext::Chat);
     assert!(matches!(
-        matcher.advance(prefix, &runtime.chords, contexts, now),
+        matcher.advance(prefix, &runtime.chords, contexts),
         KeyChordMatch::Pending(_)
     ));
     let KeyChordMatch::Completed(dispatch) = matcher.advance(
         KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
         &runtime.chords,
         contexts,
-        now,
     ) else {
         panic!("voice toggle chord completes")
     };

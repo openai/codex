@@ -1,0 +1,12 @@
+---
+source: tui/src/transcript_view/footer_tests.rs
+expression: "snapshots.join(\"\\n\")"
+---
+search=false, 12 columns: esc clear
+search=false, 20 columns: enter copy+↓ · esc
+search=false, 32 columns: enter copy & follow · esc clear
+search=false, 80 columns: ctrl+c copy · enter copy & follow · esc clear
+search=true, 12 columns: esc close
+search=true, 20 columns: enter next · esc
+search=true, 32 columns: enter next · esc close
+search=true, 80 columns: enter next · ctrl+p previous · full transcript · esc close

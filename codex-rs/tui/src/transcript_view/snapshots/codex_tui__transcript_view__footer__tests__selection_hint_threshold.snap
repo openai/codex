@@ -1,0 +1,31 @@
+---
+source: tui/src/transcript_view/footer_tests.rs
+expression: snapshot
+---
+searching=false · mouse down
+<composer hints>
+
+searching=false · one character
+ctrl+c copy · enter copy & follow · esc clear
+
+searching=false · back to anchor
+<composer hints>
+
+searching=false · released empty
+<composer hints>
+
+searching=true · mouse down
+Find:
+Searching… · full transcript · esc close
+
+searching=true · one character
+Find:
+ctrl+c copy · enter copy & follow · esc clear
+
+searching=true · back to anchor
+Find:
+Searching… · full transcript · esc close
+
+searching=true · released empty
+Find:
+Searching… · full transcript · esc close

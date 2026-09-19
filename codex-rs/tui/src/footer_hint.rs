@@ -12,7 +12,6 @@ pub(crate) fn shortcut(keys: &str, label: &str) -> Line<'static> {
 }
 
 /// Choose a complete hint variant so narrow surfaces never display half a shortcut.
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn first_fitting_line(
     candidates: impl IntoIterator<Item = Line<'static>>,
     width: u16,

@@ -6,11 +6,13 @@
 
 mod activity;
 mod composer_gap;
+mod disclosure;
 mod follow_control;
 mod footer;
 mod input;
 mod layout;
 mod mutations;
+mod search;
 mod selection;
 mod snapshot;
 mod text;
@@ -30,12 +32,14 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
 
 use layout::LayoutCache;
+use search::Search;
 use selection::Selection;
 use snapshot::ViewSnapshot;
 use text::TextLayout;
 
 pub(crate) use input::JumpTarget;
 pub(crate) use input::ViewAction;
+pub(crate) use layout::ActivityTranscriptLines;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum EntryKey {
@@ -71,13 +75,14 @@ struct VisibleRow {
     row: usize,
     layout: Arc<TextLayout>,
     key: EntryKey,
+    activity_ids: Arc<[String]>,
 }
 
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
+    position: Position,
     follow_control: follow_control::FollowControl,
     copy_feedback: Option<composer_gap::CopyFeedback>,
-    position: Position,
     cache: LayoutCache,
     live: Option<Arc<TextLayout>>,
     live_separated: Option<Arc<TextLayout>>,
@@ -87,6 +92,7 @@ pub(crate) struct TranscriptView {
     visible: Vec<VisibleRow>,
     selection: Option<Selection>,
     held_reading: Option<ViewSnapshot>,
+    search: Search,
     detailed: bool,
     mode: HistoryRenderMode,
     pub(crate) history: TranscriptHistoryState,
@@ -96,6 +102,7 @@ pub(crate) struct TranscriptView {
     tail_visible: bool,
     last_tail: Option<EntryKey>,
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
+    disclosure: disclosure::Disclosure,
 }
 
 impl Default for TranscriptView {
@@ -113,6 +120,7 @@ impl Default for TranscriptView {
             visible: Vec::new(),
             selection: None,
             held_reading: None,
+            search: Search::default(),
             detailed: false,
             mode: HistoryRenderMode::Rich,
             history: TranscriptHistoryState::Idle,
@@ -122,15 +130,12 @@ impl Default for TranscriptView {
             tail_visible: true,
             last_tail: None,
             last_click: None,
+            disclosure: disclosure::Disclosure::default(),
         }
     }
 }
 
 impl TranscriptView {
-    pub(crate) fn is_detailed(&self) -> bool {
-        self.detailed
-    }
-
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
         self.cache.begin_frame();
         self.sync_history_tail(cells);
@@ -138,9 +143,7 @@ impl TranscriptView {
         let snapshot = self.snapshot_cells();
         let cells = snapshot.as_deref().unwrap_or(cells);
         Clear.render(area, buf);
-        if area.width != self.area.width {
-            self.rewrap_snapshot(area.width);
-        }
+        self.prepare_width(area.width);
         self.area = area;
         self.normalize_selection(cells);
         self.visible.clear();
@@ -150,6 +153,7 @@ impl TranscriptView {
         }
         let start = self.start(cells);
         let (mut index, mut row) = start;
+        let mut entry_activity_ids: Option<(usize, Arc<[String]>)> = None;
         for y in area.top()..area.bottom() {
             let Some(layout) = self.layout(cells, index) else {
                 break;
@@ -167,9 +171,19 @@ impl TranscriptView {
                 break;
             };
             let key = self.entry_key(cells, index);
+            let activity_ids = match &entry_activity_ids {
+                Some((previous, ids)) if *previous == index => Arc::clone(ids),
+                _ => {
+                    let ids = self.displayed_activity_ids(cells, index);
+                    entry_activity_ids = Some((index, Arc::clone(&ids)));
+                    ids
+                }
+            };
             let row_area = Rect::new(area.x, y, area.width, /*height*/ 1);
             layout.render(row_area, buf, row);
-            if self.highlight == Some(index) && self.selection.is_none() {
+            self.render_disclosure(&activity_ids, &layout, row, row_area, buf);
+            if self.highlight == Some(index) && self.selection.is_none() && !self.search.is_active()
+            {
                 layout.highlight(0..layout.text().len(), row_area, buf, row);
             }
             self.visible.push(VisibleRow {
@@ -177,6 +191,7 @@ impl TranscriptView {
                 row,
                 layout,
                 key,
+                activity_ids,
             });
             row += 1;
         }
@@ -196,6 +211,7 @@ impl TranscriptView {
         if self.history == TranscriptHistoryState::LoadingBeginning && self.is_following() {
             self.scroll(current_cells, /*rows*/ 0);
         }
+        self.render_search(buf);
     }
 
     pub(crate) fn sync_live_tail(
@@ -206,6 +222,18 @@ impl TranscriptView {
     ) -> bool {
         self.sync_live_layout(width, key, |width| {
             lines(width).map(|lines| TextLayout::new(lines, width))
+        })
+    }
+
+    pub(crate) fn sync_live_activity_tail(
+        &mut self,
+        width: u16,
+        key: Option<ActiveCellTranscriptKey>,
+        expanded: bool,
+        lines: impl FnOnce(u16) -> Option<ActivityTranscriptLines>,
+    ) -> bool {
+        self.sync_live_layout(width, key, |width| {
+            lines(width).map(|lines| layout::activity_layout(lines, width, expanded))
         })
     }
 
@@ -227,11 +255,11 @@ impl TranscriptView {
         let live = layout(width).map(Arc::new);
         if self.live.as_ref().map(|layout| layout.text())
             != live.as_ref().map(|layout| layout.text())
-            && !self.is_following()
-            && revision_changed
-            && live.is_some()
         {
-            self.unseen_activity = true;
+            if !self.is_following() && revision_changed && live.is_some() {
+                self.unseen_activity = true;
+            }
+            self.invalidate_live_search();
         }
         let changed = self.live.is_some() || live.is_some();
         self.live = live;
@@ -247,17 +275,22 @@ impl TranscriptView {
         self.cache.clear();
         self.live_key = None;
         // Search temporarily expands content without changing either presentation's position.
-        if self.detailed != detailed {
+        if self.detailed != detailed && !self.search.is_active() {
             let previous = self.position;
             self.position = self.saved_position.take().unwrap_or(previous);
             self.saved_position = Some(previous);
         }
+        self.restart_search();
         self.detailed = detailed;
         self.mode = mode;
     }
 
     pub(crate) fn has_active_interaction(&self) -> bool {
-        self.selection.is_some()
+        self.selection.is_some() || self.search.is_active() || self.is_activity_focused()
+    }
+
+    pub(crate) fn is_detailed(&self) -> bool {
+        self.detailed
     }
 
     pub(crate) fn is_following(&self) -> bool {
@@ -278,11 +311,13 @@ impl TranscriptView {
     }
 
     pub(crate) fn jump_to_latest(&mut self) {
+        self.cancel_search();
         self.cancel_beginning();
         self.position = Position::Latest;
         self.selection = None;
         self.release_live_reading();
         self.unseen_activity = false;
+        self.disclosure.focused = None;
     }
 
     pub(crate) fn scroll(&mut self, cells: &[Arc<dyn HistoryCell>], rows: isize) {
@@ -373,7 +408,8 @@ impl TranscriptView {
     }
 
     pub(crate) fn needs_history(&mut self, cells: &[Arc<dyn HistoryCell>]) -> bool {
-        self.near_start(cells)
+        self.search.needs_history(self.history)
+            || (!self.search.is_active() && self.near_start(cells))
     }
 
     pub(crate) fn near_start(&mut self, cells: &[Arc<dyn HistoryCell>]) -> bool {

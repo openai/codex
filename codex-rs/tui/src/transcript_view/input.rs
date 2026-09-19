@@ -102,7 +102,10 @@ impl TranscriptView {
                 || (modifiers == KeyModifiers::NONE
                     && matches!(code, KeyCode::PageUp | KeyCode::PageDown));
         }
-        false
+        self.is_search_active()
+            && (matches!(code, KeyCode::Esc | KeyCode::Enter)
+                || (modifiers == KeyModifiers::CONTROL
+                    && matches!(code, KeyCode::Char('c' | 'n' | 'p'))))
     }
 
     pub(crate) fn handle_key(
@@ -113,7 +116,9 @@ impl TranscriptView {
         if key.kind == KeyEventKind::Release {
             return None;
         }
-
+        if let Some(action) = self.handle_disclosure_key(key, cells) {
+            return Some(action);
+        }
         if self.selection.is_some() {
             if let Some(action) = self.handle_selection_key(key, cells) {
                 return Some(action);
@@ -129,7 +134,9 @@ impl TranscriptView {
             }
             return Some(ViewAction::Changed);
         }
-
+        if self.handle_search_key(key, cells) {
+            return Some(ViewAction::Changed);
+        }
         self.handle_scroll_key(key, cells)
     }
 
@@ -259,6 +266,10 @@ impl TranscriptView {
         event: MouseEvent,
         cells: &[Arc<dyn HistoryCell>],
     ) -> Option<ViewAction> {
+        if event.modifiers.is_empty() && self.toggle_disclosure_at(cells, event.column, event.row) {
+            return Some(ViewAction::Changed);
+        }
+        self.disclosure.focused = None;
         let visible = self
             .visible
             .get(usize::from(event.row.checked_sub(self.area.y)?))?;

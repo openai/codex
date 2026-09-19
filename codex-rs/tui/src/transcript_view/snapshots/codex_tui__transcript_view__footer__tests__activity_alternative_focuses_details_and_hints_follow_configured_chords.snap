@@ -1,0 +1,56 @@
+---
+source: tui/src/transcript_view/footer_tests.rs
+expression: "hints.join(\"\\n\")"
+---
+collapsed
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 3 },
+    content: [
+        "Activity summary                ",
+        "    + Show details              ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+20 columns: f4 inspect activity
+32 columns: f4 inspect activity
+80 columns: f4 inspect activity
+focused
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 3 },
+    content: [
+        "Activity summary                ",
+        "    + Show details              ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: UNDERLINED,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 18, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+expanded
+Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 3 },
+    content: [
+        "Activity summary                ",
+        "Hidden details                  ",
+        "    − Show less                 ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: UNDERLINED,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 15, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}
+"ctrl-x t": ctrl+x t inspect activity
+["ctrl-x t","f4"]: ctrl+x t/f4 inspect activity
+[]: unbound

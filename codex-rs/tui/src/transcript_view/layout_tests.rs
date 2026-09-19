@@ -45,7 +45,11 @@ fn layouts_refresh_for_width_animation_and_mutable_frames() {
             cache.get(
                 &history,
                 width,
-                CellPresentation { separated: false },
+                CellPresentation {
+                    separated: false,
+                    expanded: false,
+                    disclosure: false,
+                },
                 || TextLayout::new(history.transcript_hyperlink_lines(width), width),
             )
         };
@@ -95,7 +99,11 @@ fn recent_entries_are_reused_and_old_entries_are_evicted() {
         cache.get(
             &history,
             /*width*/ 20,
-            CellPresentation { separated: false },
+            CellPresentation {
+                separated: false,
+                expanded: false,
+                disclosure: false,
+            },
             || {
                 TextLayout::new(
                     history.transcript_hyperlink_lines(/*width*/ 20),
@@ -109,7 +117,11 @@ fn recent_entries_are_reused_and_old_entries_are_evicted() {
         cache.get(
             &history,
             /*width*/ 20,
-            CellPresentation { separated: false },
+            CellPresentation {
+                separated: false,
+                expanded: false,
+                disclosure: false,
+            },
             || {
                 TextLayout::new(
                     history.transcript_hyperlink_lines(/*width*/ 20),

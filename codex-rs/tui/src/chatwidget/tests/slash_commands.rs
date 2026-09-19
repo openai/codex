@@ -2280,9 +2280,9 @@ async fn slash_keymap_debug_opens_keypress_inspector() {
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(popup.contains("Keypress Inspector"));
     assert!(popup.contains("Waiting for a keypress"));
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+    chat.handle_key_event(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
     let popup = render_bottom_popup(&chat, /*width*/ 100);
-    assert!(popup.contains("global.copy (Copy)"));
+    assert!(popup.contains("global.focus_activity"));
     assert!(
         drain_insert_history(&mut rx).is_empty(),
         "debug inspector should open without transcript messages"

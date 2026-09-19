@@ -103,6 +103,17 @@ pub(crate) struct KeymapActionId {
 }
 
 impl KeymapActionId {
+    /// Activity focus and Find remain active while transcript groups use list navigation.
+    pub(super) fn overlaps(self, other: Self) -> bool {
+        self.context.overlaps(other.context)
+            || (self.context == KeymapContext::Global
+                && matches!(self.action, "focus_activity" | "find_transcript")
+                && other.context == KeymapContext::List)
+            || (other.context == KeymapContext::Global
+                && matches!(other.action, "focus_activity" | "find_transcript")
+                && self.context == KeymapContext::List)
+    }
+
     pub(crate) fn config_path(self) -> String {
         format!("tui.keymap.{}.{}", self.context.config_name(), self.action)
     }
@@ -251,6 +262,8 @@ define_runtime_action_bindings! {
     "global" => Global, app, global [
         open_agents,
         open_transcript,
+        find_transcript,
+        focus_activity,
         open_external_editor,
         copy,
         clear_terminal,
@@ -380,6 +393,7 @@ define_runtime_action_bindings! {
         jump_bottom,
         close,
         close_transcript,
+        find,
     ],
     "list" => List, list, list [
         move_up,

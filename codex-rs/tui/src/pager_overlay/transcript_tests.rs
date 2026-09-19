@@ -246,6 +246,54 @@ async fn focus_loss_stops_edge_drag_and_preserves_selection_after_focus_returns(
     Ok(())
 }
 
+#[tokio::test]
+async fn opening_find_retains_the_selected_mutable_revision() -> Result<()> {
+    let cell = history_cell::DynamicToolCallCell::from_item(
+        codex_app_server_protocol::ThreadItem::DynamicToolCall {
+            id: "tool".into(),
+            namespace: None,
+            tool: "inspect".into(),
+            arguments: serde_json::json!({}),
+            status: codex_app_server_protocol::DynamicToolCallStatus::InProgress,
+            content_items: None,
+            success: None,
+            duration_ms: None,
+        },
+    )
+    .unwrap();
+    let mut overlay = transcript_overlay(vec![Arc::new(cell.clone())]);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 12,
+    );
+    let mut before = Buffer::empty(area);
+    overlay.render(area, &mut before);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    overlay.handle_event(
+        &mut tui,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+    )?;
+    cell.mark_interrupted();
+    overlay.handle_event(
+        &mut tui,
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+    )?;
+    assert!(overlay.view.is_search_active());
+    overlay.handle_event(
+        &mut tui,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )?;
+    let mut after = Buffer::empty(area);
+    overlay.render(area, &mut after);
+    let content = Rect::new(
+        /*x*/ 0, /*y*/ 1, /*width*/ 60, /*height*/ 7,
+    );
+    assert_eq!(
+        buffer_to_text(&after, content),
+        buffer_to_text(&before, content)
+    );
+    Ok(())
+}
+
 fn buffer_to_text(buf: &Buffer, area: Rect) -> String {
     let mut out = String::new();
     for y in area.y..area.bottom() {

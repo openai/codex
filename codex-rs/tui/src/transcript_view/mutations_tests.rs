@@ -354,3 +354,98 @@ fn absorbing_older_history_excludes_only_the_hydration_revision_from_new_activit
         );
     }
 }
+
+#[test]
+fn folding_a_reasoning_only_page_retains_its_find_and_copy_revision() {
+    use crate::thread_transcript::RawReasoningVisibility;
+    use crate::thread_transcript::fold_trailing_activity_details;
+    use crate::thread_transcript::thread_items_to_transcript_cells;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnItemsView;
+    use codex_app_server_protocol::TurnStatus;
+
+    let call = serde_json::from_value(serde_json::json!({
+        "type": "mcpToolCall", "id": "call", "server": "cua_repl", "tool": "js",
+        "status": "completed", "arguments": {"title": "Inspect"},
+        "result": {"content": [{"type": "text", "text": "retained call output"}]}, "durationMs": 1
+    }))
+    .expect("computer call");
+    let reasoning = ThreadItem::Reasoning {
+        id: "reasoning".to_owned(),
+        summary: vec!["retained needle  text with exact spacing".to_owned()],
+        content: Vec::new(),
+    };
+    let current = Turn {
+        id: "turn".to_owned(),
+        items: vec![call, reasoning],
+        items_view: TurnItemsView::Full,
+        status: TurnStatus::Completed,
+        error: None,
+        started_at: None,
+        completed_at: None,
+        duration_ms: None,
+    };
+    let project = |items: &[ThreadItem]| {
+        thread_items_to_transcript_cells(
+            /*thread_id*/ None,
+            &codex_utils_absolute_path::AbsolutePathBuf::current_dir().unwrap(),
+            items.iter().cloned(),
+            RawReasoningVisibility::Hidden,
+            /*config*/ None,
+        )
+    };
+    for selecting in [false, true] {
+        let mut cells = project(&current.items[1..]);
+        let mut view = TranscriptView::default();
+        view.set_presentation(/*detailed*/ true, HistoryRenderMode::Rich);
+        view.jump_to_entry(&cells, /*index*/ 0);
+        render(&mut view, &cells, /*width*/ 30);
+        if selecting {
+            view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 1);
+            for _ in 0..8 {
+                view.selection_key(&cells, crossterm::event::KeyCode::Right);
+            }
+        } else {
+            view.begin_search();
+            view.paste_search("needle");
+            for _ in 0..8 {
+                if !view.advance_search(&cells) {
+                    break;
+                }
+            }
+            assert!(
+                view.search
+                    .status_line(/*width*/ 80, view.history)
+                    .to_string()
+                    .starts_with("enter next")
+            );
+        }
+        let before = render(&mut view, &cells, /*width*/ 30);
+        let copied = view.selected_text(&cells);
+        if selecting {
+            assert!(copied.as_ref().is_some_and(|text| !text.is_empty()));
+        }
+        cells.insert(
+            /*index*/ 0,
+            project(&current.items[..1]).remove(/*index*/ 0),
+        );
+        view.history_loaded(&cells, 0..1);
+        let joined =
+            fold_trailing_activity_details(&cells[0], &cells[1..], std::slice::from_ref(&current))
+                .unwrap();
+        view.replace_group(&cells, 0..2, &joined);
+        cells.splice(0..2, [joined]);
+        assert_eq!(render(&mut view, &cells, /*width*/ 30), before);
+        render(&mut view, &cells, /*width*/ 16);
+        assert_eq!(view.selected_text(&cells), copied);
+        if !selecting {
+            assert!(
+                view.search
+                    .status_line(/*width*/ 80, view.history)
+                    .to_string()
+                    .starts_with("enter next")
+            );
+        }
+    }
+}

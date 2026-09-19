@@ -23,7 +23,7 @@ recent transcript
 
 Earlier messages available.  Ctrl+Space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
- q close · esc edit previous
+ q close · f3 find · esc edit previous
 
 --- failed ---
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / /
@@ -45,4 +45,4 @@ recent transcript
 
 Ctrl+Space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
- q close · esc edit previous
+ q close · f3 find · esc edit previous

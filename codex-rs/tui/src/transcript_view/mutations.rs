@@ -5,29 +5,6 @@ use std::ops::Range;
 use super::*;
 
 impl TranscriptView {
-    pub(crate) fn history_loaded(
-        &mut self,
-        cells: &[Arc<dyn HistoryCell>],
-        inserted: Range<usize>,
-    ) {
-        // With only a header and live output, the first older page extends the canonical tail.
-        if !inserted.is_empty()
-            && inserted.end == cells.len()
-            && self.last_tail == cells[..inserted.start].last().map(EntryKey::cell)
-        {
-            self.last_tail = cells.last().map(EntryKey::cell);
-        }
-        self.prepend_snapshot_history(cells, inserted);
-        if let Position::Reading(anchor) = self.position {
-            let index = self.resolve(cells, anchor);
-            self.position = Position::Reading(Anchor {
-                key: self.entry_key(cells, index),
-                index,
-                ..anchor
-            });
-        }
-    }
-
     /// Refresh unseen activity before either footer measurement or transcript painting.
     pub(crate) fn sync_history_tail(&mut self, cells: &[Arc<dyn HistoryCell>]) {
         let tail = cells.last().map(EntryKey::cell);
@@ -58,12 +35,14 @@ impl TranscriptView {
         if range.is_empty() {
             return;
         }
+        self.retain_search_origin(cells, range.clone());
         if range.end == cells.len() && self.last_tail == cells.last().map(EntryKey::cell) {
             self.last_tail = Some(EntryKey::cell(replacement));
         }
         if self.snapshot().is_some() {
             return;
         }
+        self.restart_search();
         let reading = match self.position {
             Position::Reading(anchor) if range.contains(&self.resolve(cells, anchor)) => {
                 Some(anchor)
@@ -103,10 +82,12 @@ impl TranscriptView {
         if range.is_empty() {
             return;
         }
+        self.retain_search_origin(cells, range.clone());
         // Older history may extend the final group without introducing new activity.
         if range.end == cells.len() && self.last_tail == cells.last().map(EntryKey::cell) {
             self.last_tail = Some(EntryKey::cell(replacement));
         }
+        let searching = self.search.has_active_query();
         let reading = match self.position {
             Position::Reading(anchor) => Some(anchor.key),
             Position::Latest => None,
@@ -119,7 +100,8 @@ impl TranscriptView {
         if let Some(snapshot) = self.snapshot_mut() {
             let replaced = &cells[range];
             // Pins retain the initial viewport and selected text; later scrolling adds no pins.
-            if visible
+            if searching
+                || visible
                 || replaced.iter().any(|cell| {
                     let key = EntryKey::cell(cell);
                     snapshot.pinned.contains_key(&key) || reading == Some(key)
@@ -140,7 +122,8 @@ impl TranscriptView {
             snapshot.cells = joined.into();
             return;
         }
-        if matches!(self.position, Position::Reading(anchor)
+        if searching
+            || matches!(self.position, Position::Reading(anchor)
                 if cells[range].iter().any(|cell| EntryKey::cell(cell) == anchor.key))
         {
             self.held_reading = Some(self.capture_snapshot(cells));
@@ -160,6 +143,7 @@ impl TranscriptView {
         let Some((tail, preceding)) = cells.split_last() else {
             return;
         };
+        self.retain_search_origin(cells, preceding.len()..cells.len());
         let tail_key = EntryKey::cell(tail);
         if self.last_tail == Some(tail_key) {
             self.last_tail = preceding.last().map(EntryKey::cell);
@@ -176,6 +160,7 @@ impl TranscriptView {
         if self.snapshot().is_some() {
             return;
         }
+        self.restart_search();
         if let Position::Reading(anchor) = self.position
             && (anchor.key == tail_key || anchor.key == EntryKey::Live)
         {

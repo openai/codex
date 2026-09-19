@@ -36,8 +36,8 @@ impl PickerState {
         }
 
         let archive_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
-        self.list_keymap.action_for(archive_key).is_none()
-            && !self.chord_keymap.bindings.iter().any(|binding| {
+        self.keymap.list.action_for(archive_key).is_none()
+            && !self.keymap.chords.bindings.iter().any(|binding| {
                 binding.action.context == KeymapContext::List
                     && binding.chord.prefix.is_press(archive_key)
             })

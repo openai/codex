@@ -198,6 +198,7 @@ impl App {
             self.transcript_cells.remove(index);
         }
         self.native_history.retain(&self.transcript_cells);
+        self.transcript_view.restart_search();
         self.transcript_view
             .history_loaded(&self.transcript_cells, 0..0);
         if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {

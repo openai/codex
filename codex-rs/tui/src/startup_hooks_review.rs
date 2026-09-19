@@ -119,7 +119,6 @@ async fn run_startup_hooks_review_app(
                     key_event,
                     &keymap.chords,
                     crate::keymap::KeymapContextSet::new(crate::keymap::KeymapContext::List),
-                    tokio::time::Instant::now(),
                 ) {
                     crate::keymap::KeyChordMatch::PassThrough => key_event,
                     crate::keymap::KeyChordMatch::Completed(dispatch_event) => dispatch_event,

@@ -1,0 +1,11 @@
+---
+source: tui/src/transcript_view/footer_tests.rs
+assertion_line: 166
+expression: "hints.join(\"\\n\")"
+---
+32 columns, LoadingOlder: Loading… · esc close
+32 columns, LoadingBeginning: Loading… · esc close
+32 columns, Failed: ctrl+p retry · esc close
+12 columns, LoadingOlder: esc close
+12 columns, LoadingBeginning: esc close
+12 columns, Failed: esc close

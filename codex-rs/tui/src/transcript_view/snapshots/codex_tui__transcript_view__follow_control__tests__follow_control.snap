@@ -1,6 +1,6 @@
 ---
 source: tui/src/transcript_view/follow_control_tests.rs
-assertion_line: 173
+assertion_line: 212
 expression: "snapshots.join(\"\\n\\n\")"
 ---
 paused

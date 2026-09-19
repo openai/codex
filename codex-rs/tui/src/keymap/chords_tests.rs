@@ -1,4 +1,3 @@
-use super::KEY_CHORD_TIMEOUT;
 use super::KeyChordMatch;
 use super::KeyChordMatcher;
 use super::KeymapContextSet;
@@ -15,9 +14,9 @@ use codex_config::types::KeybindingsSpec;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
-use tokio::time::Instant;
 
 fn binding(spec: &str) -> KeybindingsSpec {
     KeybindingsSpec::One(KeybindingSpec(spec.to_string()))
@@ -122,12 +121,10 @@ fn default_vim_jump_top_uses_contextual_gg_chords() {
         let mut matcher = KeyChordMatcher::default();
         let contexts = KeymapContextSet::new(context);
         assert!(matches!(
-            matcher.advance(g, &runtime.chords, contexts, Instant::now()),
+            matcher.advance(g, &runtime.chords, contexts),
             KeyChordMatch::Pending(_)
         ));
-        let KeyChordMatch::Completed(event) =
-            matcher.advance(g, &runtime.chords, contexts, Instant::now())
-        else {
+        let KeyChordMatch::Completed(event) = matcher.advance(g, &runtime.chords, contexts) else {
             panic!("gg must dispatch the active Vim jump action");
         };
         assert!(target.is_pressed(event));
@@ -353,15 +350,13 @@ fn physical_dispatch_tokens_do_not_clear_pending_chords() {
     config.global.open_transcript = Some(binding("ctrl-x ctrl-t"));
     let keymap = RuntimeKeymap::from_config(&config).expect("valid chord keymap");
     let contexts = KeymapContextSet::new(KeymapContext::Global);
-    let now = Instant::now();
     let mut matcher = KeyChordMatcher::default();
 
     assert!(matches!(
         matcher.advance(
             key_event(key_hint::ctrl(KeyCode::Char('x'))),
             &keymap.chords,
-            contexts,
-            now,
+            contexts
         ),
         KeyChordMatch::Pending(_)
     ));
@@ -369,7 +364,7 @@ fn physical_dispatch_tokens_do_not_clear_pending_chords() {
     let action = keymap_action_id("global", "open_transcript").expect("known keymap action");
     let token = dispatch_binding(action).expect("internal dispatch token");
     assert_eq!(
-        matcher.advance(key_event(token), &keymap.chords, contexts, now),
+        matcher.advance(key_event(token), &keymap.chords, contexts),
         KeyChordMatch::Ignored
     );
     assert!(matcher.is_pending());
@@ -377,8 +372,7 @@ fn physical_dispatch_tokens_do_not_clear_pending_chords() {
         matcher.advance(
             key_event(key_hint::ctrl(KeyCode::Char('t'))),
             &keymap.chords,
-            contexts,
-            now,
+            contexts
         ),
         KeyChordMatch::Completed(_)
     ));
@@ -391,7 +385,6 @@ fn matching_chords_dispatches_the_active_context_action() {
     config.editor.move_line_start = Some(binding("ctrl-x home"));
     config.list.jump_top = Some(binding("ctrl-x home"));
     let runtime = RuntimeKeymap::from_config(&config).expect("non-overlapping chord contexts");
-    let now = Instant::now();
 
     for (context, prefix, completion, target, other) in [
         (
@@ -418,15 +411,12 @@ fn matching_chords_dispatches_the_active_context_action() {
     ] {
         let mut matcher = KeyChordMatcher::default();
         assert!(matches!(
-            matcher.advance(prefix, &runtime.chords, KeymapContextSet::new(context), now,),
+            matcher.advance(prefix, &runtime.chords, KeymapContextSet::new(context)),
             KeyChordMatch::Pending(_)
         ));
-        let KeyChordMatch::Completed(dispatch_event) = matcher.advance(
-            completion,
-            &runtime.chords,
-            KeymapContextSet::new(context),
-            now,
-        ) else {
+        let KeyChordMatch::Completed(dispatch_event) =
+            matcher.advance(completion, &runtime.chords, KeymapContextSet::new(context))
+        else {
             panic!("second stroke must complete the active context chord");
         };
         assert!(target.is_pressed(dispatch_event));
@@ -434,45 +424,174 @@ fn matching_chords_dispatches_the_active_context_action() {
     }
 }
 
-#[test]
-fn matcher_cancels_on_escape_context_change_and_timeout() {
+#[tokio::test(start_paused = true)]
+async fn matcher_cancels_on_escape_context_change_and_timeout() {
     let mut config = TuiKeymap::default();
     config.list.jump_top = Some(binding("ctrl-x ctrl-t"));
     let runtime = RuntimeKeymap::from_config(&config).expect("valid list chord");
     let list = KeymapContextSet::new(KeymapContext::List);
     let pager = KeymapContextSet::new(KeymapContext::Pager);
     let prefix = key_event(key_hint::ctrl(KeyCode::Char('x')));
-    let now = Instant::now();
 
     let mut matcher = KeyChordMatcher::default();
     assert!(matches!(
-        matcher.advance(prefix, &runtime.chords, list, now),
+        matcher.advance(prefix, &runtime.chords, list),
         KeyChordMatch::Pending(_)
     ));
     assert_eq!(
         matcher.advance(
             KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
             &runtime.chords,
-            list,
-            now,
+            list
         ),
         KeyChordMatch::Cancelled
     );
 
     assert!(matches!(
-        matcher.advance(prefix, &runtime.chords, list, now),
+        matcher.advance(prefix, &runtime.chords, list),
         KeyChordMatch::Pending(_)
     ));
-    assert!(matcher.expire(pager, now));
+    assert!(matcher.expire(pager));
+    matcher.advance(prefix, &runtime.chords, list);
+    tokio::time::advance(super::KEY_CHORD_TIMEOUT).await;
+    assert_eq!(
+        matcher.advance(
+            key_event(key_hint::ctrl(KeyCode::Char('t'))),
+            &runtime.chords,
+            list
+        ),
+        KeyChordMatch::PassThrough,
+    );
+}
 
+#[test]
+fn context_transition_discards_prefix_before_routing_the_next_stroke() {
+    let mut config = TuiKeymap::default();
+    config.list.jump_top = Some(binding("ctrl-x home"));
+    config.pager.jump_top = Some(binding("ctrl-x home"));
+    let runtime =
+        RuntimeKeymap::from_config(&config).expect("non-overlapping list and pager chords");
+    let mut matcher = KeyChordMatcher::default();
     assert!(matches!(
-        matcher.advance(prefix, &runtime.chords, list, now),
+        matcher.advance(
+            key_event(key_hint::ctrl(KeyCode::Char('x'))),
+            &runtime.chords,
+            KeymapContextSet::new(KeymapContext::List),
+        ),
         KeyChordMatch::Pending(_)
     ));
-    assert!(matcher.expire(list, now + KEY_CHORD_TIMEOUT));
+    assert_eq!(
+        matcher.advance(
+            KeyCode::Home.into(),
+            &runtime.chords,
+            KeymapContextSet::new(KeymapContext::Pager),
+        ),
+        KeyChordMatch::PassThrough
+    );
+    assert!(!matcher.is_pending());
 }
 
 fn key_event(binding: crate::key_hint::KeyBinding) -> KeyEvent {
     let (code, modifiers) = binding.parts();
     KeyEvent::new(code, modifiers)
+}
+
+#[test]
+fn activity_context_preserves_list_chords_and_its_remapped_focus_toggle() {
+    let config = serde_json::from_value(serde_json::json!({
+        "global": {"copy": "ctrl-x c", "focus_activity": "f12 t"},
+        "list": {"jump_top": "ctrl-x c"},
+    }))
+    .unwrap();
+    let runtime =
+        RuntimeKeymap::from_config(&config).expect("existing disjoint contexts remain valid");
+    for (contexts, prefix, completion, target, other) in [
+        (
+            KeymapContextSet::new(KeymapContext::Global),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            KeyCode::Char('c'),
+            &runtime.app.copy,
+            &runtime.list.jump_top,
+        ),
+        (
+            KeymapContextSet::activity(),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            KeyCode::Char('c'),
+            &runtime.list.jump_top,
+            &runtime.app.copy,
+        ),
+        (
+            KeymapContextSet::activity(),
+            KeyCode::F(12).into(),
+            KeyCode::Char('t'),
+            &runtime.app.focus_activity,
+            &runtime.list.jump_top,
+        ),
+    ] {
+        let mut matcher = KeyChordMatcher::default();
+        assert!(matches!(
+            matcher.advance(prefix, &runtime.chords, contexts),
+            KeyChordMatch::Pending(_)
+        ));
+        let KeyChordMatch::Completed(event) =
+            matcher.advance(completion.into(), &runtime.chords, contexts)
+        else {
+            panic!("active action chord must complete");
+        };
+        assert!(target.is_pressed(event));
+        assert!(!other.is_pressed(event));
+    }
+
+    let mut matcher = KeyChordMatcher::default();
+    matcher.advance(
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        &runtime.chords,
+        KeymapContextSet::activity(),
+    );
+    assert_eq!(
+        matcher.pending_hint_items(&runtime.chords, /*width*/ 80),
+        Some(vec![
+            ("ctrl+x".to_string(), "then".to_string()),
+            ("c".to_string(), "jump top".to_string()),
+            ("esc".to_string(), "cancel".to_string()),
+        ]),
+    );
+    matcher.cancel();
+    let combined = KeymapContextSet::new(KeymapContext::List).with(KeymapContext::Global);
+    assert!(matches!(
+        matcher.advance(KeyCode::F(12).into(), &runtime.chords, combined),
+        KeyChordMatch::Pending(_)
+    ));
+    assert!(matcher.expire(KeymapContextSet::activity()));
+    assert!(!matcher.is_pending());
+}
+
+#[test]
+fn pending_hint_skips_whole_oversized_configured_completions() {
+    let config = serde_json::from_value(serde_json::json!({"global": {
+        "copy": "ctrl-x ctrl-alt-shift-f12", "focus_activity": "ctrl-x alt-shift-f11"
+    }}))
+    .unwrap();
+    let runtime = RuntimeKeymap::from_config(&config).unwrap();
+    let mut matcher = KeyChordMatcher::default();
+    matcher.advance(
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        &runtime.chords,
+        KeymapContextSet::new(KeymapContext::Global),
+    );
+    let mut scenes = Vec::new();
+    for width in [80, 32, 12] {
+        let hints = matcher.pending_hint_items(&runtime.chords, width).unwrap();
+        let line = crate::bottom_pane::footer_hint_items_line(&hints);
+        assert!(line.width() <= usize::from(width));
+        scenes.push(format!("{width}: {line}"));
+    }
+    assert_eq!(
+        scenes,
+        [
+            "80: ctrl+x then · shift+⌥+f11 activity · ctrl+shift+⌥+f12 copy · esc cancel",
+            "32: shift+⌥+f11 inspect · esc cancel",
+            "12: esc cancel",
+        ]
+    );
 }

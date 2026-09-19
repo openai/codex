@@ -8,6 +8,7 @@ use super::*;
 pub(super) struct ViewSnapshot {
     pub(super) cells: Arc<[Arc<dyn HistoryCell>]>,
     pub(super) pinned: HashMap<EntryKey, Arc<TextLayout>>,
+    pub(super) activities: HashMap<EntryKey, Arc<[String]>>,
 }
 
 impl TranscriptView {
@@ -36,18 +37,35 @@ impl TranscriptView {
             .snapshot()
             .map(|snapshot| snapshot.pinned.clone())
             .unwrap_or_default();
+        let mut activities = self
+            .snapshot()
+            .map(|snapshot| snapshot.activities.clone())
+            .unwrap_or_default();
         pinned.extend(
             self.visible
                 .iter()
                 .map(|visible| (visible.key, Arc::clone(&visible.layout))),
         );
+        activities.extend(
+            self.visible
+                .iter()
+                .map(|visible| (visible.key, Arc::clone(&visible.activity_ids))),
+        );
         if let Some(live) = self.layout(&cells, cells.len()) {
             pinned.insert(EntryKey::Live, live);
+            activities.insert(
+                EntryKey::Live,
+                self.displayed_activity_ids(&cells, cells.len()),
+            );
         }
-        ViewSnapshot { cells, pinned }
+        ViewSnapshot {
+            cells,
+            pinned,
+            activities,
+        }
     }
 
-    /// Keep a live or replaced group's revision while reading inside it. Ordinary navigation
+    /// Keep a live, mutable, or replaced cell revision while reading inside it. Navigation
     /// rejoins current history when it reaches a surviving cell.
     pub(super) fn hold_live_reading(
         &mut self,
@@ -61,10 +79,20 @@ impl TranscriptView {
             self.release_live_reading();
             return;
         };
-        if anchor.key == EntryKey::Live {
-            if self.held_reading.is_none() {
+        let mutable_cell = cells.get(anchor.index).is_some_and(|cell| {
+            EntryKey::cell(cell) == anchor.key
+                && (!cell.has_stable_transcript_height()
+                    || cell.transcript_animation_tick().is_some())
+        });
+        if anchor.key == EntryKey::Live || mutable_cell {
+            if self
+                .held_reading
+                .as_ref()
+                .is_none_or(|snapshot| !snapshot.pinned.contains_key(&anchor.key))
+            {
+                self.held_reading = None;
                 let mut snapshot = self.capture_snapshot(cells);
-                snapshot.pinned.insert(EntryKey::Live, layout);
+                snapshot.pinned.insert(anchor.key, layout);
                 self.held_reading = Some(snapshot);
             }
         } else if self.held_reading.is_some()
@@ -79,7 +107,9 @@ impl TranscriptView {
 
     /// Search offsets belong to the held revision and must be refreshed when it is released.
     pub(super) fn release_live_reading(&mut self) {
-        self.held_reading = None;
+        if self.held_reading.take().is_some() {
+            self.invalidate_held_search();
+        }
     }
 
     pub(super) fn rewrap_snapshot(&mut self, width: u16) {

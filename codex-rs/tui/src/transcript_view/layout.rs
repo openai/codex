@@ -10,6 +10,39 @@ use super::*;
 const MAX_CACHED_ENTRIES: usize = 64;
 const MAX_CACHED_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
+/// The selected activity presentation and any live content that follows it.
+pub(crate) struct ActivityTranscriptLines {
+    pub(crate) activity: Vec<HyperlinkLine>,
+    pub(crate) auxiliary: Vec<HyperlinkLine>,
+    pub(crate) has_hidden_details: bool,
+}
+
+/// Keep disclosure controls outside selectable source without rendering hidden details.
+pub(super) fn activity_layout(
+    mut lines: ActivityTranscriptLines,
+    width: u16,
+    expanded: bool,
+) -> TextLayout {
+    let has_details = !lines.activity.is_empty() && (expanded || lines.has_hidden_details);
+    let source_offset = (!lines.auxiliary.is_empty())
+        .then(|| TextLayout::new(lines.activity.clone(), width).text().len());
+    lines.activity.extend(lines.auxiliary);
+    let layout = TextLayout::new(lines.activity, width);
+    if !has_details {
+        return layout;
+    }
+    let label = if expanded {
+        "− Show less"
+    } else {
+        "+ Show details"
+    }
+    .to_owned();
+    match source_offset {
+        Some(offset) => layout.with_disclosure_control_at(label, offset),
+        None => layout.with_disclosure_control(label),
+    }
+}
+
 #[derive(Default)]
 pub(super) struct LayoutCache {
     entries: Vec<CachedLayout>,
@@ -37,6 +70,8 @@ struct CachedLayout {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct CellPresentation {
     separated: bool,
+    expanded: bool,
+    disclosure: bool,
 }
 
 impl TranscriptView {
@@ -92,10 +127,34 @@ impl TranscriptView {
         }
         let detailed = self.detailed;
         let mode = self.mode;
+        let ids = cell.activity_ids();
+        let disclosure = !detailed && mode == HistoryRenderMode::Rich && !ids.is_empty();
+        let expanded = disclosure && self.disclosure.is_expanded(&ids);
+        if expanded {
+            self.disclosure.expanded.extend(ids);
+        }
         let separated = index > 0 && !cell.is_stream_continuation();
-        let presentation = CellPresentation { separated };
+        let presentation = CellPresentation {
+            separated,
+            expanded,
+            disclosure,
+        };
         Some(self.cache.get(cell, width, presentation, || {
-            if detailed {
+            if disclosure {
+                activity_layout(
+                    ActivityTranscriptLines {
+                        activity: if expanded {
+                            cell.expanded_hyperlink_lines(width)
+                        } else {
+                            cell.compact_hyperlink_lines(width)
+                        },
+                        auxiliary: Vec::new(),
+                        has_hidden_details: cell.has_hidden_activity_details(width),
+                    },
+                    width,
+                    expanded,
+                )
+            } else if detailed {
                 TextLayout::new(cell.transcript_hyperlink_lines(width), width)
             } else if mode == HistoryRenderMode::Rich {
                 TextLayout::new(cell.compact_hyperlink_lines(width), width)

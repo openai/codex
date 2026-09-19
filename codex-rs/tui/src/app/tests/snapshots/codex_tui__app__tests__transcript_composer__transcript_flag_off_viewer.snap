@@ -13,4 +13,4 @@ expression: buffer_text(&buffer)
 
 Ctrl+Space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
- q close · esc edit previous
+ q close · f3 find · esc edit previous

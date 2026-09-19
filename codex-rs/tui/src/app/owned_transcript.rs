@@ -19,20 +19,22 @@ impl App {
         let chat_widget = &self.chat_widget;
         let transcript_width = chat_widget.history_wrap_width(width);
         let view = &mut self.transcript_view;
+        view.set_keymap_bindings(&self.keymap);
         view.set_presentation(view.is_detailed(), chat_widget.history_render_mode());
         let active_key = chat_widget.active_cell_transcript_key();
         let detailed = view.is_detailed();
-        view.sync_live_tail(transcript_width, active_key, |width| {
-            chat_widget.active_cell_hyperlink_lines_with(width, |cell, width| {
-                if detailed {
-                    cell.transcript_hyperlink_lines(width)
-                } else if chat_widget.history_render_mode() == HistoryRenderMode::Raw {
-                    cell.display_hyperlink_lines_for_mode(width, HistoryRenderMode::Raw)
-                } else {
-                    cell.compact_hyperlink_lines(width)
-                }
+        let active_ids = chat_widget.active_activity_ids();
+        let expanded = view.sync_live_activity(&self.transcript_cells, active_ids)
+            && chat_widget.history_render_mode() == HistoryRenderMode::Rich;
+        if detailed {
+            view.sync_live_tail(transcript_width, active_key, |width| {
+                chat_widget.active_cell_transcript_hyperlink_lines(width)
             })
-        })
+        } else {
+            view.sync_live_activity_tail(transcript_width, active_key, expanded, |width| {
+                chat_widget.active_cell_owned_transcript_lines(width, expanded)
+            })
+        }
     }
 
     pub(super) fn render_owned_transcript(
@@ -52,6 +54,10 @@ impl App {
         let view = &mut self.transcript_view;
         let active_key = chat_widget.active_cell_transcript_key();
         view.sync_history_tail(&self.transcript_cells);
+        view.prepare_width(transcript_width);
+        if view.advance_search(&self.transcript_cells) {
+            tui.frame_requester().schedule_frame();
+        }
         let footer_area = crate::bottom_pane::inset_footer_hint_area(Rect::new(
             /*x*/ 0,
             /*y*/ 0,
@@ -107,8 +113,16 @@ impl App {
             feedback_tick = view.render_composer_gap(follow_area, /*hint*/ None, frame.buffer);
             // Rendering resolves whether new activity is still hidden. Paint that result in
             // this frame so a revision change cannot flash a stale activity hint.
-            let footer = view.footer_with_navigation(footer_area.width, motion, latest_navigation);
-
+            let mut footer =
+                view.footer_with_navigation(footer_area.width, motion, latest_navigation);
+            if let Some(footer) = footer.as_mut().filter(|footer| footer.is_interactive)
+                && let Some(items) = self
+                    .key_chord_matcher
+                    .pending_hint_items(&self.keymap.chords, footer_area.width)
+                && let Some(progress) = footer.text.lines.last_mut()
+            {
+                *progress = crate::bottom_pane::footer_hint_items_line(&items);
+            }
             let bottom = chat_widget.bottom_pane_renderable(footer.as_ref());
             footer_height_changed = !dashboard_visible
                 && bottom
@@ -212,6 +226,7 @@ impl App {
             && !self.transcript_view.has_active_interaction()
             && keymap_action_ids().any(|action| {
                 action.context != KeymapContext::Pager
+                    && !matches!(action.action, "find_transcript" | "focus_activity")
                     && self.active_keymap_contexts().contains_action(action)
                     && bindings_for_action(
                         &self.keymap,
@@ -224,15 +239,27 @@ impl App {
             return Ok(false);
         }
         let action = match event {
+            TuiEvent::Key(key)
+                if !self.transcript_view.is_search_active()
+                    && self.keymap.app.find_transcript.is_pressed(*key) =>
+            {
+                self.transcript_view.begin_search();
+                Some(ViewAction::Changed)
+            }
             TuiEvent::Key(key) => self
                 .transcript_view
                 .handle_key(*key, &self.transcript_cells),
             TuiEvent::Mouse(mouse) => self
                 .transcript_view
                 .handle_mouse(*mouse, &self.transcript_cells),
-            TuiEvent::Paste(_) => {
+            TuiEvent::Paste(text) => {
                 self.transcript_view.end_selection(&self.transcript_cells);
-                None
+                if self.transcript_view.paste_search(text) {
+                    Some(ViewAction::Changed)
+                } else {
+                    self.transcript_view.clear_activity_focus();
+                    None
+                }
             }
             TuiEvent::Draw
             | TuiEvent::Resume
@@ -324,9 +351,9 @@ impl App {
 mod tests;
 
 #[cfg(test)]
-#[path = "owned_transcript_follow_tests.rs"]
-mod follow_tests;
-
-#[cfg(test)]
 #[path = "owned_transcript_input_tests.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "owned_transcript_follow_tests.rs"]
+mod follow_tests;
