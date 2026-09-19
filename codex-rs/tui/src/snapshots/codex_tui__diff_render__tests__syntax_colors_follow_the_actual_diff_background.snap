@@ -1,0 +1,23 @@
+---
+source: tui/src/diff_render.rs
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 2 },
+    content: [
+        "1 +let value = 1; plain reset           ",
+        "1 -let value = 1; plain reset           ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(31, 35, 40), bg: Rgb(172, 238, 187), underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Green, bg: Rgb(220, 250, 230), underline: Reset, modifier: NONE,
+        x: 3, y: 0, fg: Rgb(122, 109, 88), bg: Rgb(220, 250, 230), underline: Reset, modifier: NONE,
+        x: 17, y: 0, fg: Rgb(30, 30, 30), bg: Rgb(220, 250, 230), underline: Reset, modifier: NONE,
+        x: 29, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Rgb(31, 35, 40), bg: Rgb(255, 206, 203), underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Red, bg: Rgb(55, 25, 35), underline: Reset, modifier: NONE,
+        x: 3, y: 1, fg: Rgb(235, 210, 170), bg: Rgb(55, 25, 35), underline: Reset, modifier: NONE,
+        x: 17, y: 1, fg: Rgb(137, 137, 137), bg: Rgb(55, 25, 35), underline: Reset, modifier: NONE,
+        x: 29, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

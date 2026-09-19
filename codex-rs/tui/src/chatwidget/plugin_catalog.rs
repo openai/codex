@@ -406,7 +406,8 @@ impl ChatWidget {
                 Span::from(key_hint::plain(KeyCode::Enter)),
                 " select".dim(),
                 " · ".into(),
-                "esc close".dim(),
+                Span::from(key_hint::plain(KeyCode::Esc)),
+                " close".dim(),
             ])),
             items: vec![
                 SelectionItem {

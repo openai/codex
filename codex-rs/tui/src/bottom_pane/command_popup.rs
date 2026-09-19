@@ -209,6 +209,7 @@ impl CommandPopup {
                 let name = format!("/{}", item.command());
                 let description = item.description().to_string();
                 GenericDisplayRow {
+                    selection_style: None,
                     name,
                     name_prefix_spans: Vec::new(),
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),

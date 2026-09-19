@@ -1,4 +1,5 @@
 //! Shortcut picker construction for `/keymap`.
+//! Reserve the opt-in panel viewport so tab and search changes keep controls anchored.
 
 use codex_config::types::TuiKeymap;
 use ratatui::style::Styled;
@@ -9,6 +10,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::bottom_pane::ColumnWidthMode;
+use crate::bottom_pane::PickerSurface;
+use crate::bottom_pane::SelectionAppearance;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionRowDisplay;
 use crate::bottom_pane::SelectionTab;
@@ -294,6 +297,10 @@ fn build_keymap_picker_params_for_action(
 
     SelectionViewParams {
         view_id: Some(KEYMAP_PICKER_VIEW_ID),
+        appearance: SelectionAppearance::Picker,
+        picker_surface: PickerSurface::Panel,
+        max_visible_rows: 24,
+        reserve_result_rows: true,
         header: Box::new(()),
         footer_hint: Some(keymap_picker_hint_line()),
         tab_footer_hints: vec![(KEYMAP_DEBUG_TAB_ID.to_string(), keymap_debug_hint_line())],
@@ -462,27 +469,30 @@ fn action_count_line(count: usize) -> String {
 }
 
 fn keymap_picker_hint_line() -> Line<'static> {
-    let style = accent_style();
-    Line::from(vec![
-        "left/right".set_style(style),
-        " group · ".dim(),
-        "enter".set_style(style),
-        " edit shortcut · ".dim(),
-        "*".set_style(style),
-        " custom · ".dim(),
-        "-".set_style(style),
-        " unbound · ".dim(),
-        "esc".set_style(style),
-        " close".dim(),
-    ])
+    [
+        ("left/right", " group · "),
+        ("enter", " edit shortcut · "),
+        ("*", " custom · "),
+        ("-", " unbound · "),
+        ("esc", " close"),
+    ]
+    .into_iter()
+    .flat_map(|(key, label)| {
+        crate::key_hint::key_label_spans(key)
+            .into_iter()
+            .chain([label.set_style(crate::style::footer_hint_label_style())])
+    })
+    .collect::<Line>()
 }
 
 fn keymap_debug_hint_line() -> Line<'static> {
-    let style = accent_style();
-    Line::from(vec![
-        "enter".set_style(style),
-        " start inspector · ".dim(),
-        "esc".set_style(style),
-        " close".dim(),
-    ])
+    let mut spans = crate::key_hint::key_label_spans("enter");
+    spans.push(" start inspector · ".set_style(crate::style::footer_hint_label_style()));
+    spans.extend(crate::key_hint::key_label_spans("esc"));
+    spans.push(" close".set_style(crate::style::footer_hint_label_style()));
+    spans.into()
 }
+
+#[cfg(test)]
+#[path = "picker_tests.rs"]
+mod tests;

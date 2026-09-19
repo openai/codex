@@ -46,10 +46,12 @@ use crate::key_hint::KeyBinding;
 use crate::key_hint::ShortcutHint;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
+use crate::style::secondary_text_style;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -149,11 +151,14 @@ impl CollaborationModeIndicator {
         }
     }
 
-    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
-        let label = self.label(show_cycle_hint);
-        match self {
-            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+    fn styled_line(self, show_cycle_hint: bool) -> Line<'static> {
+        let mut line = Line::from(self.label(/*show_cycle_hint*/ false).magenta());
+        if show_cycle_hint {
+            line.push_span(" (".set_style(secondary_text_style()));
+            line.extend(key_hint::shift(KeyCode::Tab).spans());
+            line.push_span(" to cycle)".set_style(secondary_text_style()));
         }
+        line
     }
 }
 
@@ -316,36 +321,40 @@ fn left_side_line(
         SummaryHintKind::None => {}
         SummaryHintKind::Shortcuts => {
             if let Some(key) = key_hints.agents {
-                line.push_span(key);
-                line.push_span(" for agents".dim());
+                line.extend(key.spans());
+                line.push_span(" for agents".set_style(secondary_text_style()));
                 if key_hints.toggle_shortcuts.is_some() {
-                    line.push_span(" · ".dim());
+                    line.push_span(" · ".set_style(secondary_text_style()));
                 }
             }
             if let Some(key) = key_hints.toggle_shortcuts {
-                line.push_span(key);
-                line.push_span(" for shortcuts".dim());
+                line.extend(key.spans());
+                line.push_span(" for shortcuts".set_style(secondary_text_style()));
             }
         }
         SummaryHintKind::QueueMessage => {
             if let Some(key) = key_hints.queue {
-                line.push_span(key);
-                line.push_span(" to queue message".dim());
+                line.extend(key.spans());
+                line.push_span(" to queue message".set_style(secondary_text_style()));
             }
         }
         SummaryHintKind::QueueShort => {
             if let Some(key) = key_hints.queue {
-                line.push_span(key);
-                line.push_span(" to queue".dim());
+                line.extend(key.spans());
+                line.push_span(" to queue".set_style(secondary_text_style()));
             }
         }
     };
 
     if let Some(collaboration_mode_indicator) = collaboration_mode_indicator {
         if !matches!(state.hint, SummaryHintKind::None) {
-            line.push_span(" · ".dim());
+            line.push_span(" · ".set_style(secondary_text_style()));
         }
-        line.push_span(collaboration_mode_indicator.styled_span(state.show_cycle_hint));
+        line.extend(
+            collaboration_mode_indicator
+                .styled_line(state.show_cycle_hint)
+                .spans,
+        );
     }
 
     line
@@ -547,7 +556,7 @@ pub(crate) fn mode_indicator_line(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
-    indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
+    indicator.map(|indicator| indicator.styled_line(show_cycle_hint))
 }
 
 pub(crate) fn goal_status_indicator_line(
@@ -600,7 +609,7 @@ pub(crate) fn status_line_right_indicator_line(
         .flatten()
     {
         if let Some(line) = line.as_mut() {
-            line.push_span(" · ".dim());
+            line.push_span(" · ".set_style(secondary_text_style()));
             for span in indicator.spans {
                 line.push_span(span);
             }
@@ -613,11 +622,28 @@ pub(crate) fn status_line_right_indicator_line(
 }
 
 pub(crate) fn side_conversation_context_line(label: &str) -> Line<'static> {
-    if let Some(rest) = label.strip_prefix("Side ") {
-        Line::from(vec!["Side".magenta().bold(), format!(" {rest}").magenta()])
+    let mut line = Line::default();
+    let rest = if let Some(rest) = label.strip_prefix("Side ") {
+        line.extend(["Side".magenta().bold(), " ".into()]);
+        rest
     } else {
-        Line::from(vec![Span::from(label.to_string()).magenta()])
+        label
+    };
+    for (index, part) in rest.split(" · ").enumerate() {
+        if index > 0 {
+            line.push_span(" · ".set_style(secondary_text_style()));
+        }
+        if let Some((keys, action)) = [" to switch", " to close", " for side"]
+            .into_iter()
+            .find_map(|action| part.strip_suffix(action).map(|keys| (keys, action)))
+        {
+            line.extend(key_hint::key_label_spans(keys));
+            line.push_span(action.set_style(secondary_text_style()));
+        } else {
+            line.push_span(part.to_owned().magenta());
+        }
     }
+    line
 }
 
 fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
@@ -736,7 +762,9 @@ fn footer_from_props_lines(
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
-        FooterMode::HistorySearch => vec![Line::from("reverse-i-search: ").dim()],
+        FooterMode::HistorySearch => {
+            vec![Line::from("reverse-i-search: ").set_style(secondary_text_style())]
+        }
         FooterMode::ComposerEmpty => {
             let state = LeftSideState {
                 hint: if show_shortcuts_hint {
@@ -803,10 +831,12 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
 
     if let Some(active_agent_label) = props.active_agent_label.as_ref() {
         if let Some(existing) = line.as_mut() {
-            existing.spans.push(" · ".dim());
-            existing.spans.push(active_agent_label.clone().dim());
+            existing.spans.push(" · ".set_style(secondary_text_style()));
+            existing
+                .spans
+                .push(active_agent_label.clone().set_style(secondary_text_style()));
         } else {
-            line = Some(Line::from(active_agent_label.clone()).dim());
+            line = Some(Line::from(active_agent_label.clone()).set_style(secondary_text_style()));
         }
     }
 
@@ -814,7 +844,9 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
         && let Some(key) = props.key_hints.agents
         && let Some(line) = line.as_mut()
     {
-        line.extend(vec![" · ".dim(), key.into(), " for agents".dim()]);
+        line.push_span(" · ".set_style(secondary_text_style()));
+        line.extend(key.spans());
+        line.push_span(" for agents".set_style(secondary_text_style()));
     }
 
     line
@@ -873,19 +905,18 @@ pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
 pub(crate) fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
     let mut spans = Vec::with_capacity(items.len() * 4);
     for (idx, (key, label)) in items.iter().enumerate() {
-        spans.push(" ".into());
-        spans.push(key.clone().bold());
+        if idx > 0 {
+            spans.push(" · ".set_style(secondary_text_style()));
+        }
+        spans.extend(key_hint::key_label_spans(key));
         if idx == 0
             && key == "voice"
             && let Some(label) = label.strip_prefix("● ")
         {
             spans.push(" ●".red());
-            spans.push(format!(" {label}").into());
+            spans.push(format!(" {label}").set_style(secondary_text_style()));
         } else {
-            spans.push(format!(" {label}").into());
-        }
-        if idx + 1 != items.len() {
-            spans.push((if items[0].0 == "voice" { "  " } else { "   " }).into());
+            spans.push(format!(" {label}").set_style(secondary_text_style()));
         }
     }
     Line::from(spans)
@@ -903,21 +934,23 @@ struct ShortcutsState {
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
-    Line::from(vec![key.into(), " again to quit".into()]).dim()
+    let mut line = Line::from(key.spans());
+    line.push_span(" again to quit".set_style(secondary_text_style()));
+    line
 }
 
 fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
     let esc = key_hint::plain(KeyCode::Esc);
     if esc_backtrack_hint {
-        Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
+        let mut line = Line::from(esc.spans());
+        line.push_span(" again to edit previous message".set_style(secondary_text_style()));
+        line
     } else {
-        Line::from(vec![
-            esc.into(),
-            " ".into(),
-            esc.into(),
-            " to edit previous message".into(),
-        ])
-        .dim()
+        let mut line = Line::from(esc.spans());
+        line.push_span(" ".set_style(secondary_text_style()));
+        line.extend(esc.spans());
+        line.push_span(" to edit previous message".set_style(secondary_text_style()));
+        line
     }
 }
 
@@ -979,14 +1012,20 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut lines = build_columns(ordered);
     if let Some(key) = state.key_hints.agents {
         lines.push(Line::from(vec![
-            key.into(),
-            " for agents (empty prompt)".into(),
+            key.display_label()
+                .fg(crate::style::accent_color_on(/*background*/ None))
+                .not_bold()
+                .not_dim(),
+            " for agents (empty prompt)".set_style(secondary_text_style()),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        "customize shortcuts with ".into(),
-        "/keymap".cyan(),
+        "customize shortcuts with ".set_style(secondary_text_style()),
+        "/keymap"
+            .fg(crate::style::accent_color_on(/*background*/ None))
+            .not_bold()
+            .not_dim(),
     ]));
     lines
 }
@@ -1033,7 +1072,7 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
                     line.push_span(Span::from(" ".repeat(padding)));
                 }
             }
-            line.dim()
+            line.set_style(secondary_text_style())
         })
         .collect()
 }
@@ -1041,15 +1080,21 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
 pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
-        return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
+        return Line::from(vec![
+            Span::from(format!("{percent}% context left")).set_style(secondary_text_style()),
+        ]);
     }
 
     if let Some(tokens) = used_tokens {
         let used_fmt = format_tokens_compact(tokens);
-        return Line::from(vec![Span::from(format!("{used_fmt} used")).dim()]);
+        return Line::from(vec![
+            Span::from(format!("{used_fmt} used")).set_style(secondary_text_style()),
+        ]);
     }
 
-    Line::from(vec![Span::from("100% context left").dim()])
+    Line::from(vec![
+        Span::from("100% context left").set_style(secondary_text_style()),
+    ])
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1134,7 +1179,12 @@ impl ShortcutDescriptor {
                 .binding_for(state)
                 .map(|binding| ShortcutHint::Single(binding.key)),
         }?;
-        let mut line = Line::from(vec![self.prefix.into(), key.into()]);
+        let reference_key = key
+            .display_label()
+            .fg(crate::style::accent_color_on(/*background*/ None))
+            .not_bold()
+            .not_dim();
+        let mut line = Line::from(vec![self.prefix.into(), reference_key.clone()]);
         match self.id {
             ShortcutId::QueueMessageTab => {
                 if state.is_task_running || state.queue_submissions {
@@ -1149,7 +1199,7 @@ impl ShortcutDescriptor {
                 } else {
                     line.extend(vec![
                         " ".into(),
-                        key.into(),
+                        reference_key,
                         " to edit previous message".into(),
                     ]);
                 }
@@ -1311,6 +1361,10 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
 ];
 
 #[cfg(test)]
+#[path = "footer_typography_tests.rs"]
+mod typography_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
@@ -1324,7 +1378,7 @@ mod tests {
     #[test]
     fn voice_live_microphone_indicator_is_red() {
         let line = footer_hint_items_line(&[("voice".into(), "● listen".into())]);
-        assert_eq!(line.spans[2].style.fg, Some(ratatui::style::Color::Red));
+        assert_eq!(line.spans[1].style.fg, Some(ratatui::style::Color::Red));
     }
 
     #[test]

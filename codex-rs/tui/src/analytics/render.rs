@@ -9,14 +9,12 @@ use crate::analytics::models::AccountAnalyticsValue;
 use crate::analytics::sections::Section;
 use crate::keymap::ListAction;
 use crate::style::accent_style;
-use crate::style::footer_hint_key_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -171,11 +169,7 @@ impl AnalyticsView {
                     spans.push(" · ".into());
                 }
                 let (keys, description) = control.rsplit_once(' ').unwrap_or((control, ""));
-                spans.push(
-                    keys.to_owned()
-                        .fg(Color::Reset)
-                        .patch_style(footer_hint_key_style().bold().not_dim()),
-                );
+                spans.extend(crate::key_hint::key_label_spans(keys));
                 if !description.is_empty() {
                     spans.push(format!(" {description}").into());
                 }

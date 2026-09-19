@@ -12,5 +12,5 @@ expression: buffer_text(&buffer)
        wraps across several option
        rows
 
-  enter submit   ctrl + ] skip
-  ⌥ + ↓ main prompt
+  enter submit   ctrl+] skip
+  ⌥+↓ main prompt

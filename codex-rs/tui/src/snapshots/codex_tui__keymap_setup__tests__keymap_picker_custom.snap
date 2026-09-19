@@ -7,9 +7,10 @@ expression: "render_picker(params, 120)"
   All configurable shortcuts.
   147 actions, 1 customized, 5 unbound.
 
-  [All]  Common  Customized (1)  Unbound (5)  App  Composer  Editor  Vim  Navigation  Agents  Approval  Debug
+   All   Common   Customized (1)   Unbound (5)   App   Composer   Editor   Vim   Navigation   Agents   Approval      ›
 
   Type to search shortcuts
+
 › Global       - Open Agents                unbound
   Global         Open Transcript            ctrl-t
   Global         Open External Editor       ctrl-g
@@ -18,5 +19,21 @@ expression: "render_picker(params, 120)"
   Global       - Toggle Vim Mode            unbound
   Global         Toggle Raw Output          alt-r
   Global         Toggle Side Conversation   ctrl-/
-
+  Chat           Interrupt Turn             esc
+  Chat           Decrease Reasoning Effort  alt-,, shift-down
+  Chat           Increase Reasoning Effort  alt-., shift-up
+  Chat         - Previous Permission Mode   unbound
+  Chat         - Next Permission Mode       unbound
+  Chat           Edit Queued Message        alt-up, shift-left
+  Chat           Prompt Stack Back          alt-down, shift-right
+  Chat           Skip Question              ctrl-]
+  Chat           Toggle Voice               f8
+  Chat           Toggle Voice Mute          ctrl-x
+  Composer     * Submit                     ctrl-enter
+  Composer       Queue                      tab
+  Composer       Toggle Shortcuts           ?, shift-?
+  Composer       History Search Previous    ctrl-r
+  Composer       History Search Next        ctrl-s
+  Editor         Insert Newline             ctrl-j, ctrl-m, enter, shift-enter, alt-enter
+↓
   left/right group · enter edit shortcut · * custom · - unbound · esc close

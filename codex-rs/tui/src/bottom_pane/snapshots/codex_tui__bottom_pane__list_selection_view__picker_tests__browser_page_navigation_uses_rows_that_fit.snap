@@ -1,0 +1,23 @@
+---
+source: tui/src/bottom_pane/selection_picker_tests.rs
+assertion_line: 79
+expression: text
+---
+
+  Keymap
+  All configurable shortcuts.
+
+   All   Common   Customized (3)   Unbound (4)   App
+
+  Type to search shortcuts
+↑
+  Action 01  Ctrl+1
+  Action 02  Ctrl+2
+  Action 03  Ctrl+3
+  Action 04  Ctrl+4
+  Action 05  Ctrl+5
+  Action 06  Ctrl+6
+  Action 07  Ctrl+7
+› Action 08  Ctrl+8
+↓
+  left/right group · enter edit · esc close

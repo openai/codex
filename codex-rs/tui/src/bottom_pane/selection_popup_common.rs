@@ -2,6 +2,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -31,6 +33,8 @@ use super::selection_row_layout::wrap_stacked_row;
 #[derive(Default)]
 pub(crate) struct GenericDisplayRow {
     pub name: String,
+    /// Optional full-width selection treatment; other rows use the shared text accent.
+    pub selection_style: Option<Style>,
     pub name_prefix_spans: Vec<Span<'static>>,
     pub display_shortcut: Option<ShortcutHint>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
@@ -326,11 +330,36 @@ fn wrap_row_lines(
     wrap_standard_row(row, desc_col, width, description_layout)
 }
 
-fn apply_row_state_style(lines: &mut [Line<'static>], selected: bool, is_disabled: bool) {
+fn apply_row_state_style(
+    lines: &mut [Line<'static>],
+    selected: bool,
+    is_disabled: bool,
+    selection_style: Option<Style>,
+) {
     if selected {
         for line in lines.iter_mut() {
+            if let Some(style) = selection_style {
+                line.style = style;
+            }
             line.spans.iter_mut().for_each(|span| {
-                span.style = accent_style();
+                let Some(selected) = selection_style else {
+                    span.style = accent_style();
+                    return;
+                };
+                let secondary = span.style.add_modifier.contains(Modifier::DIM);
+                let foreground = span.style.fg.or(selected.fg).unwrap_or_default();
+                span.style = selected.patch(span.style).not_dim();
+                span.style.bg = selected.bg;
+                if selected.add_modifier.contains(Modifier::REVERSED) {
+                    span.style.fg = selected.fg;
+                    span.style = span.style.reversed();
+                } else {
+                    span.style.fg = Some(crate::style::readable_color_on(foreground, selected.bg));
+                    span.style = span.style.not_reversed();
+                }
+                if secondary {
+                    span.style = span.style.not_bold();
+                }
             });
         }
     }
@@ -448,14 +477,15 @@ fn adjust_start_for_wrapped_selection_visibility(
     start_idx
 }
 
-/// Render a list of rows using the provided ScrollState, with shared styling
-/// and behavior for selection popups.
-/// Returns the number of terminal lines actually rendered (including the
-/// single-line empty placeholder when shown).
+/// Counts painted rows and items and reports content hidden outside the viewport.
+/// The line count includes the single-line empty placeholder when shown.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct RenderedRows {
     pub(crate) lines: u16,
     pub(crate) items: usize,
+    pub(crate) has_above: bool,
+    /// Includes a description whose final wrapped lines were clipped.
+    pub(crate) has_below: bool,
 }
 
 fn render_rows_inner(
@@ -475,6 +505,7 @@ fn render_rows_inner(
         return RenderedRows {
             lines: u16::from(area.height > 0),
             items: 0,
+            ..Default::default()
         };
     }
 
@@ -509,6 +540,7 @@ fn render_rows_inner(
     let mut cur_y = area.y;
     let mut rendered_lines: u16 = 0;
     let mut rendered_items = 0;
+    let mut clipped = false;
     for (i, row) in rows_all.iter().enumerate().skip(start_idx).take(max_items) {
         if cur_y >= area.y + area.height {
             break;
@@ -516,10 +548,12 @@ fn render_rows_inner(
 
         let mut wrapped =
             wrap_row_lines(row, desc_col, area.width, column_width.description_layout);
+        clipped |= wrapped.len() > usize::from(area.bottom().saturating_sub(cur_y));
         apply_row_state_style(
             &mut wrapped,
             Some(i) == state.selected_idx && !row.is_disabled,
             row.is_disabled,
+            row.selection_style,
         );
 
         // Render the wrapped lines.
@@ -549,6 +583,8 @@ fn render_rows_inner(
     RenderedRows {
         lines: rendered_lines,
         items: rendered_items,
+        has_above: start_idx > 0,
+        has_below: clipped || start_idx + rendered_items < rows_all.len(),
     }
 }
 
@@ -651,6 +687,7 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
         return RenderedRows {
             lines: u16::from(area.height > 0),
             items: 0,
+            ..Default::default()
         };
     }
 
@@ -685,16 +722,12 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
         }
 
         let mut full_line = build_full_line(row, desc_col, column_width.description_layout);
-        if Some(i) == state.selected_idx && !row.is_disabled {
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = accent_style();
-            });
-        }
-        if row.is_disabled {
-            full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
-            });
-        }
+        apply_row_state_style(
+            std::slice::from_mut(&mut full_line),
+            Some(i) == state.selected_idx && !row.is_disabled,
+            row.is_disabled,
+            row.selection_style,
+        );
 
         let full_line = truncate_line_with_ellipsis_if_overflow(full_line, area.width as usize);
         full_line.render(
@@ -713,6 +746,8 @@ pub(crate) fn render_rows_single_line_with_col_width_mode(
     RenderedRows {
         lines: rendered_lines,
         items: rendered_lines as usize,
+        has_above: start_idx > 0,
+        has_below: start_idx + usize::from(rendered_lines) < rows_all.len(),
     }
 }
 
@@ -812,6 +847,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use ratatui::style::Color;
     use ratatui::style::Modifier;
 
     #[test]
@@ -942,6 +978,109 @@ mod tests {
         first   alpha
         second  beta
         ");
+    }
+
+    #[test]
+    fn selection_preserves_semantic_spans_and_secondary_hierarchy() {
+        for (fg, bg) in [
+            ((32, 32, 32), (255, 255, 255)),
+            ((230, 230, 230), (18, 20, 30)),
+        ] {
+            crate::terminal_palette::with_test_default_colors(
+                crate::terminal_probe::DefaultColors { fg, bg },
+                || {
+                    for selected in [
+                        crate::style::selection_style(),
+                        Style::default()
+                            .fg(Color::Reset)
+                            .bg(Color::Reset)
+                            .bold()
+                            .reversed(),
+                    ] {
+                        for single_line in [true, false] {
+                            let rows = [GenericDisplayRow {
+                                name_prefix_spans: vec![
+                                    "L".underlined(),
+                                    "M ".into(),
+                                    "Ready ".green().italic(),
+                                ],
+                                name: "provider".into(),
+                                description: Some("secondary details".into()),
+                                selection_style: Some(selected),
+                                ..Default::default()
+                            }];
+                            let state = ScrollState {
+                                selected_idx: Some(0),
+                                scroll_top: 0,
+                            };
+                            let area = Rect::new(
+                                /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 1,
+                            );
+                            let mut buffer = Buffer::empty(area);
+                            if single_line {
+                                render_rows_single_line_with_col_width_mode(
+                                    area,
+                                    &mut buffer,
+                                    &rows,
+                                    &state,
+                                    /*max_results*/ 1,
+                                    "",
+                                    ColumnWidthConfig::default(),
+                                );
+                            } else {
+                                render_rows(
+                                    area,
+                                    &mut buffer,
+                                    &rows,
+                                    &state,
+                                    /*max_results*/ 1,
+                                    "",
+                                );
+                            }
+                            let line = buffer
+                                .content
+                                .iter()
+                                .map(ratatui::buffer::Cell::symbol)
+                                .collect::<String>();
+                            let status = &buffer[(3, 0)];
+                            let description_x =
+                                line.find("secondary").expect("visible secondary text") as u16;
+                            assert_eq!(
+                                (
+                                    buffer[(0, 0)].modifier,
+                                    status.modifier,
+                                    buffer[(description_x, 0)].modifier
+                                ),
+                                (
+                                    Modifier::BOLD
+                                        | Modifier::UNDERLINED
+                                        | (selected.add_modifier & Modifier::REVERSED),
+                                    Modifier::BOLD
+                                        | Modifier::ITALIC
+                                        | (selected.add_modifier & Modifier::REVERSED),
+                                    selected.add_modifier & Modifier::REVERSED,
+                                )
+                            );
+                            assert_eq!(
+                                status.fg,
+                                if selected.add_modifier.contains(Modifier::REVERSED) {
+                                    Color::Reset
+                                } else {
+                                    Color::Green
+                                }
+                            );
+                            assert_eq!(buffer[(0, 0)].fg, selected.fg.unwrap());
+                            assert!(
+                                buffer
+                                    .content
+                                    .iter()
+                                    .all(|cell| cell.bg == selected.bg.unwrap())
+                            );
+                        }
+                    }
+                },
+            );
+        }
     }
 
     #[test]

@@ -34,6 +34,14 @@ Buffer {
         x: 4, y: 6, fg: Red, bg: Reset, underline: Reset, modifier: NONE,
         x: 12, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 4, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 26, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 37, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 45, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 8, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

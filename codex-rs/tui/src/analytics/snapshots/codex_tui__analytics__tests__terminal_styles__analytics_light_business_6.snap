@@ -1,6 +1,5 @@
 ---
 source: tui/src/analytics/styles_tests.rs
-assertion_line: 145
 expression: snapshot
 ---
 120x42
@@ -51,13 +50,13 @@ Palette (foreground|background|underline|modifiers):
 0: Reset|Reset|Reset|NONE
 1: Reset|Reset|Reset|BOLD
 2: Rgb(76, 76, 76)|Reset|Reset|NONE
-3: Rgb(0, 95, 135)|Reset|Reset|BOLD
+3: Rgb(28, 100, 200)|Reset|Reset|BOLD
 4: Reset|Reset|Reset|DIM
 5: Green|Reset|Reset|NONE
 6: Magenta|Reset|Reset|NONE
 7: Cyan|Reset|Reset|NONE
-8: Rgb(0, 95, 135)|Reset|Reset|BOLD | UNDERLINED
-9: Black|Reset|Reset|BOLD
+8: Rgb(28, 100, 200)|Reset|Reset|BOLD | UNDERLINED
+9: Rgb(38, 38, 38)|Reset|Reset|BOLD
 Rows (column:palette):
 0: 0:0 2:1 11:2 28:0
 1: 0:0 2:3 6:0 11:2 34:0

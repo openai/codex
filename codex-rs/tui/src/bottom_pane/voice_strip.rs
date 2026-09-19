@@ -105,7 +105,7 @@ impl Renderable for VoiceStrip {
             |hint| {
                 format!(
                     "{} {}",
-                    hint.display_label().replace(" + ", "+"),
+                    hint.display_label(),
                     if self.state.microphone_muted {
                         "unmute"
                     } else {
@@ -123,7 +123,8 @@ impl Renderable for VoiceStrip {
         {
             status.spans.pop();
         }
-        let controls = if can_mute && available > status.width() + full_controls.width() {
+        let show_full_controls = can_mute && available > status.width() + full_controls.width();
+        let controls = if show_full_controls {
             full_controls.as_str()
         } else {
             "/voice stop"
@@ -135,7 +136,16 @@ impl Renderable for VoiceStrip {
             " ".repeat(available.saturating_sub(status.width() + controls.width()))
                 .into(),
         );
-        status.spans.push(controls.dim());
+        if show_full_controls && let Some(hint) = self.state.mute_hint {
+            status.spans.extend(hint.spans());
+            status.spans.push(if self.state.microphone_muted {
+                " unmute   /voice stop".dim()
+            } else {
+                " mute     /voice stop".dim()
+            });
+        } else {
+            status.spans.push(controls.dim());
+        }
         Paragraph::new(status).render(Rect::new(area.x, area.y, area.width, /*height*/ 1), buf);
         if area.height < 2 {
             return;

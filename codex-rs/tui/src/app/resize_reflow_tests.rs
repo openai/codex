@@ -164,8 +164,8 @@ async fn capped_resize_reflow_prepends_transcript_notice_without_changing_transc
             .map(rendered_line_text)
             .collect::<Vec<_>>()
             .join("\n"),
-        @r"
-    Earlier messages are available — press ctrl + t to view the full transcript
+        @"
+    Earlier messages are available — press ctrl+t to view the full transcript
     cell 8
 
     cell 9
@@ -193,10 +193,10 @@ async fn capped_resize_reflow_counts_wrapped_notice_rows() {
             .map(rendered_line_text)
             .collect::<Vec<_>>()
             .join("\n"),
-        @r"
+        @"
     Earlier messages are
-    available — press ctrl + t
-    to view the full transcript
+    available — press ctrl+t to
+    view the full transcript
     cell 9
 
     cell 10
@@ -243,8 +243,8 @@ async fn paginated_resize_reflow_prepends_transcript_notice_for_unloaded_history
             .map(rendered_line_text)
             .collect::<Vec<_>>()
             .join("\n"),
-        @r"
-    Earlier messages are available — press ctrl + t to view the full transcript
+        @"
+    Earlier messages are available — press ctrl+t to view the full transcript
     cell 0
 
     cell 1

@@ -389,7 +389,7 @@ async fn side_context_label_preserves_status_line_snapshot() {
     chat.refresh_status_line();
     chat.set_side_conversation_active(/*active*/ true);
     chat.set_side_conversation_context_label(Some(
-        "Side from main thread · ctrl + / to switch · ctrl + c to close".to_string(),
+        "Side from main thread · ctrl+/ to switch · ctrl+c to close".to_string(),
     ));
 
     let width = 80;
@@ -410,8 +410,7 @@ async fn side_context_label_shows_parent_status_snapshot() {
     chat.show_welcome_banner = false;
     chat.set_side_conversation_active(/*active*/ true);
     chat.set_side_conversation_context_label(Some(
-        "Side from main thread · main needs input · ctrl + / to switch · ctrl + c to close"
-            .to_string(),
+        "Side from main thread · main needs input · ctrl+/ to switch · ctrl+c to close".to_string(),
     ));
 
     let width = 80;
@@ -429,7 +428,7 @@ async fn side_context_label_shows_hidden_side_snapshot() {
     chat.show_welcome_banner = false;
     chat.local_settings.tui.status_line = Some(vec!["model-name".to_string()]);
     chat.refresh_status_line();
-    chat.set_side_conversation_context_label(Some("ctrl + / for side".to_string()));
+    chat.set_side_conversation_context_label(Some("ctrl+/ for side".to_string()));
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -437,12 +436,19 @@ async fn side_context_label_shows_hidden_side_snapshot() {
     terminal
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw hidden side conversation footer");
-    let hint_start = width - "ctrl + / for side".len() as u16 - 2;
+    let hint_start = width - "ctrl+/ for side".len() as u16 - 2;
+    let key_style = crate::key_hint::ctrl(KeyCode::Char('/')).spans()[0].style;
+    let secondary_style = crate::style::secondary_text_style();
+    let styles = [hint_start, hint_start + 4, hint_start + 5, hint_start + 7].map(|x| {
+        let cell = &terminal.backend().buffer()[(x, height - 1)];
+        (cell.fg, cell.modifier)
+    });
     assert_eq!(
-        terminal.backend().buffer()[(hint_start, height - 1)]
-            .style()
-            .fg,
-        Some(ratatui::style::Color::Magenta)
+        styles,
+        [key_style, key_style, key_style, secondary_style].map(|style| (
+            style.fg.unwrap_or(ratatui::style::Color::Reset),
+            style.add_modifier,
+        )),
     );
     assert_chatwidget_snapshot!("side_context_label_shows_hidden_side", terminal.backend());
 }

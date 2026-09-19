@@ -407,7 +407,7 @@ impl ChatComposer {
     }
 
     fn history_search_action_key_span(key: KeyCode) -> Span<'static> {
-        Span::from(key_hint::plain(key)).cyan().bold().not_dim()
+        Span::from(key_hint::plain(key))
     }
 
     /// Returns byte ranges that should be highlighted in the current composer preview.
@@ -900,63 +900,79 @@ mod tests {
 
     #[test]
     fn history_search_footer_action_hints_are_emphasized() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(
-            /*has_input_focus*/ true,
-            sender,
-            /*enhanced_keys_supported*/ true,
-            "Ask Codex to do anything".to_string(),
-            /*disable_paste_burst*/ false,
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (240, 240, 240),
+                bg: (24, 24, 24),
+            },
+            || {
+                let (tx, _rx) = unbounded_channel::<AppEvent>();
+                let sender = AppEventSender::new(tx);
+                let mut composer = ChatComposer::new(
+                    /*has_input_focus*/ true,
+                    sender,
+                    /*enhanced_keys_supported*/ true,
+                    "Ask Codex to do anything".to_string(),
+                    /*disable_paste_burst*/ false,
+                );
+                composer
+                    .history
+                    .record_local_submission(HistoryEntry::new("cargo test".to_string()));
+
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
+
+                let line = composer
+                    .history_search_footer_line()
+                    .expect("expected history search footer line");
+                assert_eq!(
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<Vec<_>>(),
+                    vec![
+                        "reverse-i-search: ",
+                        "c",
+                        "  ",
+                        "enter",
+                        " accept",
+                        " · ",
+                        "esc",
+                        " cancel"
+                    ]
+                );
+
+                let query_style = line.spans[1].style;
+                assert_eq!(query_style.fg, Some(ratatui::style::Color::Cyan));
+
+                let enter_style = line.spans[3].style;
+                assert_eq!(
+                    enter_style.fg,
+                    Some(crate::terminal_palette::rgb_color((240, 240, 240)))
+                );
+                assert!(enter_style.add_modifier.contains(Modifier::BOLD));
+                assert!(enter_style.sub_modifier.contains(Modifier::DIM));
+
+                let accept_style = line.spans[4].style;
+                assert!(accept_style.add_modifier.contains(Modifier::DIM));
+
+                let separator_style = line.spans[5].style;
+                assert!(separator_style.add_modifier.contains(Modifier::DIM));
+
+                let esc_style = line.spans[6].style;
+                assert_eq!(
+                    esc_style.fg,
+                    Some(crate::terminal_palette::rgb_color((240, 240, 240)))
+                );
+                assert!(esc_style.add_modifier.contains(Modifier::BOLD));
+                assert!(esc_style.sub_modifier.contains(Modifier::DIM));
+
+                let cancel_style = line.spans[7].style;
+                assert!(cancel_style.add_modifier.contains(Modifier::DIM));
+            },
         );
-        composer
-            .history
-            .record_local_submission(HistoryEntry::new("cargo test".to_string()));
-
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-
-        let line = composer
-            .history_search_footer_line()
-            .expect("expected history search footer line");
-        assert_eq!(
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<Vec<_>>(),
-            vec![
-                "reverse-i-search: ",
-                "c",
-                "  ",
-                "enter",
-                " accept",
-                " · ",
-                "esc",
-                " cancel"
-            ]
-        );
-
-        let query_style = line.spans[1].style;
-        assert_eq!(query_style.fg, Some(ratatui::style::Color::Cyan));
-
-        let enter_style = line.spans[3].style;
-        assert_eq!(enter_style.fg, Some(ratatui::style::Color::Cyan));
-        assert!(enter_style.add_modifier.contains(Modifier::BOLD));
-        assert!(enter_style.sub_modifier.contains(Modifier::DIM));
-
-        let accept_style = line.spans[4].style;
-        assert!(accept_style.add_modifier.contains(Modifier::DIM));
-
-        let separator_style = line.spans[5].style;
-        assert!(separator_style.add_modifier.contains(Modifier::DIM));
-
-        let esc_style = line.spans[6].style;
-        assert_eq!(esc_style.fg, Some(ratatui::style::Color::Cyan));
-        assert!(esc_style.add_modifier.contains(Modifier::BOLD));
-        assert!(esc_style.sub_modifier.contains(Modifier::DIM));
-
-        let cancel_style = line.spans[7].style;
-        assert!(cancel_style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

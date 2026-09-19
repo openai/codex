@@ -6,11 +6,11 @@ expression: presentations
     Text::from_iter([
         Line::from_iter([
             Span::from("plain "),
-            Span::from("plain").cyan().underlined(),
+            Span::from("plain").fg(Color::Reset).underlined(),
             Span::from(" "),
             Span::from("code").fg(Color::Rgb(166, 227, 161)),
             Span::from(" "),
-            Span::from("code").cyan().underlined(),
+            Span::from("code").fg(Color::Reset).underlined(),
         ]),
         Line::default(),
         Line::from_iter([
@@ -20,23 +20,23 @@ expression: presentations
         Line::from(Span::from("━━━━━━━━━━").dim()),
         Line::from_iter([
             Span::from(" "),
-            Span::from("docs").cyan().underlined(),
+            Span::from("docs").fg(Color::Reset).underlined(),
         ]),
     ]),
     Text::from_iter([
         Line::from_iter([
             Span::from("plain "),
-            Span::from("plain").cyan().underlined(),
+            Span::from("plain").fg(Color::Reset).underlined(),
             Span::from(" ("),
-            Span::from("https://example.com").cyan().underlined(),
+            Span::from("https://example.com").fg(Color::Reset).underlined(),
             Span::from(")"),
             Span::from(" "),
             Span::from("code").fg(Color::Rgb(166, 227, 161)),
         ]),
         Line::from_iter([
-            Span::from("code").cyan().underlined(),
+            Span::from("code").fg(Color::Reset).underlined(),
             Span::from(" ("),
-            Span::from("https://example.com").cyan().underlined(),
+            Span::from("https://example.com").fg(Color::Reset).underlined(),
             Span::from(")"),
         ]),
         Line::default(),
@@ -47,9 +47,9 @@ expression: presentations
         Line::from(Span::from("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━").dim()),
         Line::from_iter([
             Span::from(" "),
-            Span::from("docs").cyan().underlined(),
+            Span::from("docs").fg(Color::Reset).underlined(),
             Span::from(" ("),
-            Span::from("https://example.com/docs").cyan().underlined(),
+            Span::from("https://example.com/docs").fg(Color::Reset).underlined(),
             Span::from(")"),
         ]),
     ]),

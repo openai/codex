@@ -4331,15 +4331,15 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     render_bottom_popup(&app.chat_widget, /*width*/ 80)
                         .replace(&root_thread_id.to_string(), "[root]")
                         .replace(&child_thread_id.to_string(), "[child]"),
-                    @r###"
-                      Subagents
-                      Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
+                    @"
+                  Subagents
+                  Select an agent to watch. ⌥+← previous, ⌥+→ next.
 
-                    › 1. • Main [default] (current)  [root]
-                      2. • /root/worker              [child]
+                › 1. • Main [default] (current)  [root]
+                  2. • /root/worker              [child]
 
-                      Press enter to confirm or esc to go back
-                    "###
+                  Press enter to confirm or esc to go back
+                "
                 );
                 assert_eq!(take_backfill_counts(&requests), (0, 0));
                 tokio::time::timeout(Duration::from_secs(5), started_rx).await??;

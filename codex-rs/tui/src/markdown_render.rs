@@ -44,6 +44,7 @@ use crate::render::highlight::foreground_style_for_scopes;
 use crate::render::highlight::foreground_style_for_scopes_with_theme;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
+use crate::style::accent_color;
 use crate::style::table_separator_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::annotate_web_urls_in_line;
@@ -53,7 +54,6 @@ use crate::terminal_hyperlinks::web_destination;
 use crate::width::char_width;
 use crate::width::display_width;
 use crate::wrapping::RtOptions;
-use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::word_wrap_line;
 use pulldown_cmark::Alignment;
 use pulldown_cmark::CodeBlockKind;
@@ -132,13 +132,13 @@ impl MarkdownStyles {
                     "markup.raw.inline.markdown",
                 ],
             )
-            .unwrap_or_else(|| Style::new().cyan()),
+            .unwrap_or_else(|| Style::new().fg(accent_color())),
             emphasis: Style::new().italic(),
             strong: Style::new().bold(),
             strikethrough: Style::new().crossed_out(),
-            ordered_list_marker: Style::new().light_blue(),
+            ordered_list_marker: Style::new().fg(accent_color()),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
+            link: Style::new().fg(accent_color()).underlined(),
             blockquote: Style::new().green(),
         }
     }
@@ -1993,11 +1993,10 @@ where
                 let opts = RtOptions::new(width)
                     .initial_indent(self.current_initial_indent.clone().into())
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
-                let wrapped = adaptive_wrap_line(&line.line, opts)
-                    .into_iter()
-                    .map(|wrapped| line_to_static(&wrapped))
-                    .collect();
-                for wrapped in remap_wrapped_line(&line, wrapped) {
+                for wrapped in crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
+                    std::slice::from_ref(&line),
+                    opts,
+                ) {
                     self.push_output_line(wrapped.style(style));
                 }
             } else {
@@ -2333,7 +2332,13 @@ mod tests {
         // extracted (first word / comma-separated token) so highlighting works.
         for info in &["rust,no_run", "rust no_run", "rust title=\"demo\""] {
             let markdown = format!("```{info}\nfn main() {{}}\n```\n");
-            let rendered = render_markdown_text(&markdown);
+            let rendered = crate::terminal_palette::with_test_default_colors(
+                crate::terminal_probe::DefaultColors {
+                    fg: (220, 220, 220),
+                    bg: (20, 20, 20),
+                },
+                || render_markdown_text(&markdown),
+            );
             let has_rgb = rendered.lines.iter().any(|line| {
                 line.spans
                     .iter()

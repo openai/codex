@@ -12,4 +12,4 @@ expression: "render_bottom_popup(&chat, 80)"
   › 1. Next
     2. Other
 
-  enter submit   ctrl + ] skip   ⌥ + ↓ prev question   ⌥ + ↑ queued messages
+  enter submit   ctrl+] skip   ⌥+↓ prev question   ⌥+↑ queued messages

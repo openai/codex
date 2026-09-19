@@ -62,7 +62,10 @@ impl BottomPane {
             countdown.dim(),
         ])];
         if let Some(binding) = self.pending_input_preview.edit_binding {
-            lines.push(Line::from(vec!["    ".into(), binding.into(), " to answer".into()]).dim());
+            let mut hint = Line::from("    ");
+            hint.spans.extend(binding.spans());
+            hint.spans.push(" to answer".dim());
+            lines.push(hint);
         }
         Some(lines)
     }

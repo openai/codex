@@ -4,7 +4,7 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
 ---
 • Queued follow-up inputs
   ↳ old queued input
-    ⌥ + ↑ edit last queued message
+    ⌥+↑ edit last queued message
 
 › kept draft
 

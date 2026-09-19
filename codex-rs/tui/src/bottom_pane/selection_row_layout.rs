@@ -120,7 +120,7 @@ fn build_name_spans(row: &GenericDisplayRow, name_limit: usize) -> Vec<Span<'sta
 fn append_shortcut(row: &GenericDisplayRow, spans: &mut Vec<Span<'static>>) {
     if let Some(display_shortcut) = row.display_shortcut {
         spans.push(" (".into());
-        spans.push(display_shortcut.into());
+        spans.extend(display_shortcut.spans());
         spans.push(")".into());
     }
 }

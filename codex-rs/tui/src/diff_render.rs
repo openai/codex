@@ -29,8 +29,10 @@
 //!
 //! **Wrapping:** long lines are hard-wrapped at the available column width.
 //! Syntax-highlighted spans are split at character boundaries with styles
-//! preserved across the split so that no color information is lost.
+//! preserved across the split so that no color information is lost. Theme foregrounds
+//! are resolved against the painted diff fill, without dimming corrected syntax colors.
 
+use crate::style::readable_color_on;
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -827,8 +829,8 @@ pub(crate) fn push_wrapped_diff_line_with_style_context(
 ///
 /// Like [`push_wrapped_diff_line_with_style_context`] but overlays
 /// `syntax_spans` (from [`highlight_code_to_styled_spans`]) onto the diff
-/// coloring.  Delete lines receive a `DIM` modifier so syntax colors do not
-/// overpower the removal cue.
+/// coloring. Syntax foregrounds retain their hue while meeting contrast against the
+/// painted diff background; dimming is removed so it cannot undo that correction.
 pub(crate) fn push_wrapped_diff_line_with_syntax_and_style_context(
     line_number: usize,
     kind: DiffLineType,
@@ -891,19 +893,21 @@ fn push_wrapped_diff_line_inner_with_theme_and_color_level(
     }
 
     // When we have syntax spans, compose them with the diff style for a richer
-    // view. The sign character keeps the diff color; content gets syntax colors
-    // with an overlay modifier for delete lines (dim).
+    // view. The sign keeps the diff color while syntax foregrounds are resolved
+    // against the actual fill. Dimming must not undo their measured contrast.
     if let Some(syn_spans) = syntax_spans {
         let gutter = format!("{ln_str:>gutter_width$} ");
         let sign = format!("{sign_char}");
         let styled: Vec<RtSpan<'static>> = syn_spans
             .iter()
             .map(|sp| {
-                let style = if matches!(kind, DiffLineType::Delete) {
-                    sp.style.add_modifier(Modifier::DIM)
-                } else {
-                    sp.style
-                };
+                let style = sp
+                    .style
+                    .fg(readable_color_on(
+                        sp.style.fg.unwrap_or(Color::Reset),
+                        line_bg.bg,
+                    ))
+                    .remove_modifier(Modifier::DIM);
                 RtSpan::styled(sp.content.clone().into_owned(), style)
             })
             .collect();
@@ -935,6 +939,10 @@ fn push_wrapped_diff_line_inner_with_theme_and_color_level(
     }
 
     let available_content_cols = width.saturating_sub(prefix_cols + 1).max(1);
+    let content_style = content_style.fg(readable_color_on(
+        content_style.fg.unwrap_or(Color::Reset),
+        line_bg.bg,
+    ));
     let styled = vec![RtSpan::styled(text.to_string(), content_style)];
     let wrapped_chunks = wrap_styled_spans(&styled, available_content_cols);
 
@@ -1337,6 +1345,61 @@ mod tests {
     use ratatui::text::Text;
     use ratatui::widgets::Paragraph;
     use ratatui::widgets::Wrap;
+
+    #[test]
+    fn syntax_colors_follow_the_actual_diff_background() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget;
+
+        let colors = crate::terminal_probe::DefaultColors {
+            fg: (30, 30, 30),
+            bg: (255, 255, 255),
+        };
+        crate::terminal_palette::with_test_default_colors(colors, || {
+            let spans = [
+                RtSpan::from("let value = 1;")
+                    .fg(rgb_color((235, 210, 170)))
+                    .dim(),
+                RtSpan::from(" plain"),
+                RtSpan::from(" reset").fg(Color::Reset),
+            ];
+            let style = DiffRenderStyleContext {
+                theme: DiffTheme::Light,
+                color_level: DiffColorLevel::TrueColor,
+                diff_backgrounds: ResolvedDiffBackgrounds {
+                    add: Some(rgb_color((220, 250, 230))),
+                    del: Some(rgb_color((55, 25, 35))),
+                },
+            };
+            let lines = [DiffLineType::Insert, DiffLineType::Delete]
+                .into_iter()
+                .flat_map(|kind| {
+                    push_wrapped_diff_line_with_syntax_and_style_context(
+                        /*line_number*/ 1,
+                        kind,
+                        "let value = 1; plain reset",
+                        /*width*/ 40,
+                        /*line_number_width*/ 1,
+                        &spans,
+                        style,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let area = Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 2,
+            );
+            let mut buffer = Buffer::empty(area);
+            Paragraph::new(lines).render(area, &mut buffer);
+            assert!(!buffer[(3, 0)].modifier.contains(Modifier::DIM));
+            assert!(!buffer[(3, 1)].modifier.contains(Modifier::DIM));
+            assert_eq!(buffer[(3, 1)].fg, rgb_color((235, 210, 170)));
+            assert_ne!(buffer[(3, 0)].fg, buffer[(3, 1)].fg);
+            assert_ne!(buffer[(18, 0)].fg, buffer[(18, 1)].fg);
+            assert_ne!(buffer[(24, 0)].fg, buffer[(24, 1)].fg);
+            assert_snapshot!(format!("{buffer:?}"));
+        });
+    }
 
     #[test]
     fn ansi16_add_style_uses_foreground_only() {
@@ -2248,61 +2311,78 @@ mod tests {
 
     #[test]
     fn add_diff_uses_path_extension_for_highlighting() {
-        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
-        changes.insert(
-            PathBuf::from("highlight_add.rs"),
-            FileChange::Add {
-                content: "pub fn sum(a: i32, b: i32) -> i32 { a + b }\n".to_string(),
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
             },
-        );
+            || {
+                let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+                changes.insert(
+                    PathBuf::from("highlight_add.rs"),
+                    FileChange::Add {
+                        content: "pub fn sum(a: i32, b: i32) -> i32 { a + b }\n".to_string(),
+                    },
+                );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
-        let has_rgb = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
-        });
-        assert!(
-            has_rgb,
-            "add diff for .rs file should produce syntax-highlighted (RGB) spans"
+                let lines =
+                    create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
+                let has_rgb = lines.iter().any(|line| {
+                    line.spans
+                        .iter()
+                        .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+                });
+                assert!(
+                    has_rgb,
+                    "add diff for .rs file should produce syntax-highlighted (RGB) spans"
+                );
+            },
         );
     }
 
     #[test]
     fn cpp_module_extensions_use_cpp_highlighting() {
-        let highlighted_tokens = [
-            "cpp",
-            // CUDA source and header extensions use C++ highlighting as a fallback.
-            "cu", "cuh", "cppm", "CPPM", "cxxm", "CxXm", "ixx", "IXX",
-        ]
-        .into_iter()
-        .map(|extension| {
-            let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
-            changes.insert(
-                PathBuf::from(format!("math.{extension}")),
-                FileChange::Add {
-                    content:
-                        "export module math;\nexport int sum(int a, int b) { return a + b; }\n"
-                            .to_string(),
-                },
-            );
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
+            },
+            || {
+                let highlighted_tokens = [
+                    "cpp",
+                    // CUDA source and header extensions use C++ highlighting as a fallback.
+                    "cu", "cuh", "cppm", "CPPM", "cxxm", "CxXm", "ixx", "IXX",
+                ]
+                .into_iter()
+                .map(|extension| {
+                    let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+                    changes.insert(
+                        PathBuf::from(format!("math.{extension}")),
+                        FileChange::Add {
+                            content:
+                                "export module math;\nexport int sum(int a, int b) { return a + b; }\n"
+                                    .to_string(),
+                        },
+                    );
 
-            let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
-            let rgb_tokens = lines
-                .iter()
-                .flat_map(|line| &line.spans)
-                .filter(|span| matches!(span.style.fg, Some(ratatui::style::Color::Rgb(..))))
-                .map(|span| span.content.to_string())
+                    let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
+                    let rgb_tokens = lines
+                        .iter()
+                        .flat_map(|line| &line.spans)
+                        .filter(|span| matches!(span.style.fg, Some(ratatui::style::Color::Rgb(..))))
+                        .map(|span| span.content.to_string())
+                        .collect::<Vec<_>>();
+                    assert!(
+                        !rgb_tokens.is_empty(),
+                        "add diff for .{extension} file should produce syntax-highlighted (RGB) spans"
+                    );
+                    (extension, rgb_tokens.join("|"))
+                })
                 .collect::<Vec<_>>();
-            assert!(
-                !rgb_tokens.is_empty(),
-                "add diff for .{extension} file should produce syntax-highlighted (RGB) spans"
-            );
-            (extension, rgb_tokens.join("|"))
-        })
-        .collect::<Vec<_>>();
 
-        assert_debug_snapshot!("cpp_module_extension_highlighting", highlighted_tokens);
+                assert_debug_snapshot!("cpp_module_extension_highlighting", highlighted_tokens);
+            },
+        );
     }
 
     #[test]
@@ -2325,23 +2405,32 @@ mod tests {
 
     #[test]
     fn delete_diff_uses_path_extension_for_highlighting() {
-        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
-        changes.insert(
-            PathBuf::from("highlight_delete.py"),
-            FileChange::Delete {
-                content: "def scale(x):\n    return x * 2\n".to_string(),
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
             },
-        );
+            || {
+                let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+                changes.insert(
+                    PathBuf::from("highlight_delete.py"),
+                    FileChange::Delete {
+                        content: "def scale(x):\n    return x * 2\n".to_string(),
+                    },
+                );
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
-        let has_rgb = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
-        });
-        assert!(
-            has_rgb,
-            "delete diff for .py file should produce syntax-highlighted (RGB) spans"
+                let lines =
+                    create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
+                let has_rgb = lines.iter().any(|line| {
+                    line.spans
+                        .iter()
+                        .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+                });
+                assert!(
+                    has_rgb,
+                    "delete diff for .py file should produce syntax-highlighted (RGB) spans"
+                );
+            },
         );
     }
 
@@ -2532,69 +2621,88 @@ mod tests {
 
     #[test]
     fn rename_diff_uses_destination_extension_for_highlighting() {
-        // A rename from an unknown extension to .rs should highlight as Rust.
-        // Without the fix, detect_lang_for_path uses the source path (.xyzzy),
-        // which has no syntax definition, so highlighting is skipped.
-        let original = "fn main() {}\n";
-        let modified = "fn main() { println!(\"hi\"); }\n";
-        let patch = diffy::create_patch(original, modified).to_string();
-
-        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
-        changes.insert(
-            PathBuf::from("foo.xyzzy"),
-            FileChange::Update {
-                unified_diff: patch,
-                move_path: Some(PathBuf::from("foo.rs")),
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
             },
-        );
+            || {
+                // A rename from an unknown extension to .rs should highlight as Rust.
+                // Without the fix, detect_lang_for_path uses the source path (.xyzzy),
+                // which has no syntax definition, so highlighting is skipped.
+                let original = "fn main() {}\n";
+                let modified = "fn main() { println!(\"hi\"); }\n";
+                let patch = diffy::create_patch(original, modified).to_string();
 
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
-        let has_rgb = lines.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
-        });
-        assert!(
-            has_rgb,
-            "rename from .xyzzy to .rs should produce syntax-highlighted (RGB) spans"
+                let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+                changes.insert(
+                    PathBuf::from("foo.xyzzy"),
+                    FileChange::Update {
+                        unified_diff: patch,
+                        move_path: Some(PathBuf::from("foo.rs")),
+                    },
+                );
+
+                let lines =
+                    create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 80);
+                let has_rgb = lines.iter().any(|line| {
+                    line.spans
+                        .iter()
+                        .any(|s| matches!(s.style.fg, Some(ratatui::style::Color::Rgb(..))))
+                });
+                assert!(
+                    has_rgb,
+                    "rename from .xyzzy to .rs should produce syntax-highlighted (RGB) spans"
+                );
+            },
         );
     }
 
     #[test]
     fn update_diff_preserves_multiline_highlight_state_within_hunk() {
-        let original = "fn demo() {\n    let s = \"hello\";\n}\n";
-        let modified = "fn demo() {\n    let s = \"hello\nworld\";\n}\n";
-        let patch = diffy::create_patch(original, modified).to_string();
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
+            },
+            || {
+                let original = "fn demo() {\n    let s = \"hello\";\n}\n";
+                let modified = "fn demo() {\n    let s = \"hello\nworld\";\n}\n";
+                let patch = diffy::create_patch(original, modified).to_string();
 
-        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
-        changes.insert(
-            PathBuf::from("demo.rs"),
-            FileChange::Update {
-                unified_diff: patch,
-                move_path: None,
+                let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+                changes.insert(
+                    PathBuf::from("demo.rs"),
+                    FileChange::Update {
+                        unified_diff: patch,
+                        move_path: None,
+                    },
+                );
+
+                let expected_multiline =
+                    highlight_code_to_styled_spans("    let s = \"hello\nworld\";\n", "rust")
+                        .expect("rust highlighting");
+                let expected_style = expected_multiline
+                    .get(/*index*/ 1)
+                    .and_then(|line| {
+                        line.iter()
+                            .find(|span| span.content.as_ref().contains("world"))
+                    })
+                    .map(|span| span.style)
+                    .expect("expected highlighted span for second multiline string line");
+
+                let lines =
+                    create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 120);
+                let actual_style = lines
+                    .iter()
+                    .flat_map(|line| line.spans.iter())
+                    .find(|span| span.content.as_ref().contains("world"))
+                    .map(|span| span.style)
+                    .expect("expected rendered diff span containing 'world'");
+
+                assert!(matches!(expected_style.fg, Some(Color::Rgb(..))));
+                assert_eq!(actual_style, expected_style.remove_modifier(Modifier::DIM));
             },
         );
-
-        let expected_multiline =
-            highlight_code_to_styled_spans("    let s = \"hello\nworld\";\n", "rust")
-                .expect("rust highlighting");
-        let expected_style = expected_multiline
-            .get(1)
-            .and_then(|line| {
-                line.iter()
-                    .find(|span| span.content.as_ref().contains("world"))
-            })
-            .map(|span| span.style)
-            .expect("expected highlighted span for second multiline string line");
-
-        let lines = create_diff_summary(&changes, &PathBuf::from("/"), /*wrap_cols*/ 120);
-        let actual_style = lines
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .find(|span| span.content.as_ref().contains("world"))
-            .map(|span| span.style)
-            .expect("expected rendered diff span containing 'world'");
-
-        assert_eq!(actual_style, expected_style);
     }
 }

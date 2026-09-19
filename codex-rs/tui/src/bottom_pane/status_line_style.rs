@@ -1,13 +1,15 @@
 //! Theme-derived styling for the configurable footer statusline.
 
-use ratatui::prelude::Stylize;
 use ratatui::style::Color;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::text::Line;
 use ratatui::text::Span;
 
 use super::status_line_setup::StatusLineItem;
 use crate::render::highlight::foreground_style_for_scopes;
+use crate::style::readable_color_on;
+use crate::style::secondary_text_style;
 use crate::thread_color::thread_color;
 use codex_protocol::ThreadId;
 
@@ -112,7 +114,7 @@ where
     let mut spans = Vec::new();
     for (item, text) in segments {
         if !spans.is_empty() {
-            spans.push(STATUS_LINE_SEPARATOR.dim());
+            spans.push(STATUS_LINE_SEPARATOR.set_style(secondary_text_style()));
         }
         let style = if use_theme_colors
             && matches!(
@@ -128,7 +130,15 @@ where
                 theme_style_for_accent(accent).unwrap_or_else(|| accent.fallback_style()),
             )
         } else {
-            Style::default().dim()
+            secondary_text_style()
+        };
+        let style = if use_theme_colors {
+            style.fg(readable_color_on(
+                style.fg.unwrap_or(Color::Reset),
+                /*background*/ None,
+            ))
+        } else {
+            style
         };
         let style = if item == StatusLineItem::PullRequestNumber {
             style.underlined()
@@ -231,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn status_line_segments_dim_separators_and_use_theme_styles_first() {
+    fn status_line_segments_use_secondary_separators_and_theme_styles_first() {
         let line = status_line_from_segments_with_resolver(
             [
                 (StatusLineItem::ModelName, "gpt-5".to_string()),
@@ -248,13 +258,13 @@ mod tests {
 
         assert_eq!(line.spans[0].style.fg, Some(Color::Red));
         assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
-        assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(line.spans[1].style, secondary_text_style());
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
         assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
-    fn thread_usage_items_share_an_accent_and_dim_separator() {
+    fn thread_usage_items_share_an_accent_and_secondary_separator() {
         let line = status_line_from_segments_with_resolver(
             [
                 (StatusLineItem::ThreadCredits, "5.2 credits".to_string()),
@@ -268,7 +278,7 @@ mod tests {
 
         assert_eq!(line_text(&line), "5.2 credits · ~$0.21");
         assert_eq!(line.spans[0].style, line.spans[2].style);
-        assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(line.spans[1].style, secondary_text_style());
     }
 
     #[test]
@@ -282,7 +292,13 @@ mod tests {
         )
         .expect("status line");
 
-        assert_eq!(line.spans[0].style.fg, Some(Color::Rgb(228, 11, 11)));
+        assert_eq!(
+            line.spans[0].style.fg,
+            Some(readable_color_on(
+                Color::Rgb(228, 11, 11),
+                /*background*/ None
+            ))
+        );
         assert!(!line.spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -300,11 +316,9 @@ mod tests {
         .expect("status line");
 
         assert_eq!(line_text(&line), "gpt-5 · Context 12% used");
-        assert_eq!(line.spans[0].style.fg, None);
-        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
-        assert!(line.spans[1].style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(line.spans[2].style.fg, None);
-        assert!(line.spans[2].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(line.spans[0].style, secondary_text_style());
+        assert_eq!(line.spans[1].style, secondary_text_style());
+        assert_eq!(line.spans[2].style, secondary_text_style());
     }
 
     #[test]
@@ -317,14 +331,7 @@ mod tests {
         )
         .expect("status line");
 
-        assert_eq!(line.spans[0].style.fg, None);
-        assert!(line.spans[0].style.add_modifier.contains(Modifier::DIM));
-        assert!(
-            line.spans[0]
-                .style
-                .add_modifier
-                .contains(Modifier::UNDERLINED)
-        );
+        assert_eq!(line.spans[0].style, secondary_text_style().underlined());
     }
 
     #[test]
@@ -338,5 +345,46 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn light_status_line_corrects_pale_custom_theme_colors() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget;
+
+        let colors = crate::terminal_probe::DefaultColors {
+            fg: (30, 30, 30),
+            bg: (255, 255, 255),
+        };
+        crate::terminal_palette::with_test_default_colors(colors, || {
+            let line = status_line_from_segments_with_resolver(
+                [
+                    (StatusLineItem::ModelName, "gpt-5".to_string()),
+                    (StatusLineItem::CurrentDir, "~/code".to_string()),
+                    (
+                        StatusLineItem::Permissions,
+                        "Custom permissions".to_string(),
+                    ),
+                ],
+                /*use_theme_colors*/ true,
+                /*thread_id*/ None,
+                |accent| {
+                    let rgb = match accent {
+                        StatusLineAccent::Model => (240, 210, 160),
+                        StatusLineAccent::Path => (190, 230, 180),
+                        _ => (215, 180, 240),
+                    };
+                    Some(Style::default().fg(crate::terminal_palette::rgb_color(rgb)))
+                },
+            )
+            .expect("status line");
+            let area = Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 42, /*height*/ 1,
+            );
+            let mut buffer = Buffer::empty(area);
+            line.render(area, &mut buffer);
+            insta::assert_snapshot!(format!("{buffer:?}"));
+        });
     }
 }

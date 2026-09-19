@@ -20,7 +20,6 @@ use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::markdown_render::render_streaming_markdown_lines_with_width_and_cwd as render_assistant;
 use crate::pager_overlay::Overlay;
 use crate::status::format_directory_display;
-use crate::style::footer_hint_key_style;
 use crate::style::footer_hint_label_style;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
@@ -2691,7 +2690,7 @@ fn fit_footer_hint_refs(
         if idx > 0 {
             spans.push(" ".repeat(gap_width).set_style(footer_hint_label_style()));
         }
-        spans.push(hint.key.clone().set_style(footer_hint_key_style()));
+        spans.extend(crate::key_hint::key_label_spans(&hint.key));
         let label = match mode {
             FooterHintLabelMode::Wide => Some(hint.wide_label.as_str()),
             FooterHintLabelMode::Compact => Some(hint.compact_label.as_str()),
@@ -4547,7 +4546,7 @@ mod tests {
         state.list_keymap.move_right = vec![crate::key_hint::ctrl(KeyCode::Char('l'))];
         let remapped_footer = footer_lines_text(&state, /*width*/ 220);
         assert!(
-            remapped_footer.contains("ctrl + h/ctrl + l change option"),
+            remapped_footer.contains("ctrl+h/ctrl+l change option"),
             "{remapped_footer}"
         );
         state.list_keymap.move_left.clear();

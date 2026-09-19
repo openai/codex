@@ -1,6 +1,5 @@
 ---
 source: tui/src/markdown_render/mermaid_tests.rs
-assertion_line: 88
 expression: "cases.join(\"\\n\\n\")"
 ---
 dark

@@ -3,6 +3,7 @@
 
 use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
+use crate::style::accent_color_on;
 use crate::terminal_hyperlinks::annotate_web_urls_in_line;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::wrapping::url_preserving_wrap_options;
@@ -187,7 +188,7 @@ impl HistoryCell for UserHistoryCell {
             .max(1);
 
         let style = user_message_style();
-        let element_style = style.fg(Color::Cyan);
+        let element_style = style.fg(accent_color_on(style.bg));
 
         let wrapped_remote_images = if self.remote_image_urls.is_empty() {
             None

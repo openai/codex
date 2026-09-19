@@ -142,7 +142,7 @@ async fn startup_warnings_wait_for_splash_and_coalesce_with_full_details() -> Re
     let transcript = app.transcript_cells[1].transcript_lines(/*width*/ 80);
     insta::assert_snapshot!(format!("display:\n{}\n\ntranscript:\n{}", lines_to_single_string(&display), lines_to_single_string(&transcript)), @"
     display:
-    ⚠ 2 startup issues · ctrl + t for details
+    ⚠ 2 startup issues · ctrl+t for details
 
     transcript:
     ⚠ Skill manifest is invalid.

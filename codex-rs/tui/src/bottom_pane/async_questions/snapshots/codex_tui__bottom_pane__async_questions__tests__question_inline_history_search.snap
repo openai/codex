@@ -11,5 +11,5 @@ expression: buffer_text(&buffer)
   › 13. earlier answer
         reverse-i-search: e  enter accept · esc
 
-  enter submit   ctrl + ] skip   option 13/13
-  ⌥ + ↓ prev question
+  enter submit   ctrl+] skip   option 13/13
+  ⌥+↓ prev question

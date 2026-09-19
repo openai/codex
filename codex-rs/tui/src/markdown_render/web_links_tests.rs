@@ -1,6 +1,7 @@
 use super::WebLinkDisplay;
 use crate::markdown_render::render_markdown_lines_with_width_cwd_and_hidden_link_destinations;
 use crate::markdown_render::render_streaming_markdown_lines_with_width_and_cwd;
+use crate::style::accent_color;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::visible_lines;
@@ -49,23 +50,29 @@ fn supporting_terminals_render_only_the_styled_label_and_keep_its_target() {
     ] {
         let display = WebLinkDisplay::for_terminal(&terminal(name), /*term*/ None);
         for (markdown, label) in [
-            ("[label](https://example.com)", "label".cyan().underlined()),
+            (
+                "[label](https://example.com)",
+                "label".fg(accent_color()).underlined(),
+            ),
             (
                 "[`label`](https://example.com)",
-                "label".cyan().underlined(),
+                "label".fg(accent_color()).underlined(),
             ),
             (
                 "[**label**](https://example.com)",
-                "label".cyan().bold().underlined(),
+                "label".fg(accent_color()).bold().underlined(),
             ),
             (
                 "[*label*](https://example.com)",
-                "label".cyan().italic().underlined(),
+                "label".fg(accent_color()).italic().underlined(),
             ),
-            ("[<b>](https://example.com)", "<b>".cyan().underlined()),
+            (
+                "[<b>](https://example.com)",
+                "<b>".fg(accent_color()).underlined(),
+            ),
             (
                 "[https://example.com](https://example.com)",
-                "https://example.com".cyan().underlined(),
+                "https://example.com".fg(accent_color()).underlined(),
             ),
         ] {
             let label_width = label.width();

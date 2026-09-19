@@ -48,19 +48,4 @@ expression: rendered
             ]),
         ],
     ),
-    (
-        "no-markup-color",
-        [
-            Line::from_iter([
-                Span::from("Use "),
-                Span::from("src/main.rs").cyan(),
-                Span::from(" and "),
-                Span::from("./").cyan(),
-            ]),
-            Line::from_iter([
-                Span::from("src/lib.rs").cyan(),
-                Span::from("."),
-            ]),
-        ],
-    ),
 ]

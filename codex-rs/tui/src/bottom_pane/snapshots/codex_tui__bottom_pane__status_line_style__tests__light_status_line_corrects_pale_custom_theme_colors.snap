@@ -1,0 +1,19 @@
+---
+source: tui/src/bottom_pane/status_line_style.rs
+assertion_line: 377
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 42, height: 1 },
+    content: [
+        "gpt-5 · ~/code · Custom permissions       ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(131, 116, 93), bg: Reset, underline: Reset, modifier: NONE,
+        x: 5, y: 0, fg: Rgb(118, 118, 118), bg: Reset, underline: Reset, modifier: NONE,
+        x: 8, y: 0, fg: Rgb(105, 123, 100), bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 0, fg: Rgb(118, 118, 118), bg: Reset, underline: Reset, modifier: NONE,
+        x: 17, y: 0, fg: Rgb(129, 111, 143), bg: Reset, underline: Reset, modifier: NONE,
+        x: 35, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

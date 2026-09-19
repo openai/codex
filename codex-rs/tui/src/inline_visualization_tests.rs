@@ -344,7 +344,10 @@ fn finalized_agent_cell_replays_visualization_link() {
         .flat_map(|line| &line.line.spans)
         .find(|span| span.content.starts_with("file://"))
         .expect("visualization URL span");
-    assert_eq!(url_span.style, Style::new().cyan().underlined());
+    assert_eq!(
+        url_span.style,
+        Style::new().fg(crate::style::accent_color()).underlined()
+    );
     let destinations = lines
         .iter()
         .flat_map(|line| &line.hyperlinks)

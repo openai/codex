@@ -17,8 +17,8 @@ Palette:
 2: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
 3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 4: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
-6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+5: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold()
+6: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
 0: 0:0 30:1 31:0
 1: 0:0 1:2 2:0 27:3 34:0
@@ -43,8 +43,8 @@ Palette:
 2: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
 3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 4: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
-6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+5: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold()
+6: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
 0: 0:0 30:1 31:0
 1: 0:0 1:2 2:0 27:3 34:0
@@ -68,9 +68,9 @@ Palette:
 1: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
 2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 3: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
-4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+4: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold()
 5: Style::new().fg(Color::Rgb(165, 165, 165)).bg(Color::Reset).underline_color(Color::Reset)
-6: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+6: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
 0: 0:0 6:1 7:0
 1: 0:0 5:2 7:0
@@ -93,7 +93,7 @@ Palette:
 0: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
 1: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 2: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
-3: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
+3: Style::new().fg(Color::Rgb(99, 168, 248)).bg(Color::Reset).underline_color(Color::Reset).bold()
 4: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 Rows (column:palette):
 0: 0:0

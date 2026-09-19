@@ -1,0 +1,61 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "snapshots.join(\"\\n\")"
+---
+(255, 255, 255): Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 5 },
+    content: [
+        "                                ",
+        "  [Image #2]                    ",
+        "                                ",
+        "› [Image #1] describe these     ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Rgb(28, 100, 200), bg: Rgb(244, 244, 244), underline: Reset, modifier: NONE,
+        x: 12, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 3, fg: Rgb(28, 100, 200), bg: Rgb(244, 244, 244), underline: Reset, modifier: NONE,
+        x: 12, y: 3, fg: Reset, bg: Rgb(244, 244, 244), underline: Reset, modifier: NONE,
+        x: 27, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+(18, 20, 30): Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 5 },
+    content: [
+        "                                ",
+        "  [Image #2]                    ",
+        "                                ",
+        "› [Image #1] describe these     ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Rgb(99, 168, 248), bg: Rgb(46, 48, 57), underline: Reset, modifier: NONE,
+        x: 12, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Rgb(46, 48, 57), underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 3, fg: Rgb(99, 168, 248), bg: Rgb(46, 48, 57), underline: Reset, modifier: NONE,
+        x: 12, y: 3, fg: Reset, bg: Rgb(46, 48, 57), underline: Reset, modifier: NONE,
+        x: 27, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+(95, 95, 95): Buffer {
+    area: Rect { x: 0, y: 0, width: 32, height: 5 },
+    content: [
+        "                                ",
+        "  [Image #2]                    ",
+        "                                ",
+        "› [Image #1] describe these     ",
+        "                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Rgb(243, 248, 254), bg: Rgb(114, 114, 114), underline: Reset, modifier: NONE,
+        x: 12, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Rgb(114, 114, 114), underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 3, fg: Rgb(243, 248, 254), bg: Rgb(114, 114, 114), underline: Reset, modifier: NONE,
+        x: 12, y: 3, fg: Reset, bg: Rgb(114, 114, 114), underline: Reset, modifier: NONE,
+        x: 27, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

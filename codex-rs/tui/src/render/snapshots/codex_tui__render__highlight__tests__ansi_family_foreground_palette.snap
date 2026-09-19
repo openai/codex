@@ -1,5 +1,6 @@
 ---
 source: tui/src/render/highlight.rs
+assertion_line: 1196
 expression: out
 ---
 ansi:

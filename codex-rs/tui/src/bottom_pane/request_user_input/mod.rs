@@ -2512,7 +2512,7 @@ mod tests {
         let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
-            vec!["ctrl + j to submit answer", "esc to interrupt"]
+            vec!["ctrl+j to submit answer", "esc to interrupt"]
         );
     }
 
@@ -2521,21 +2521,21 @@ mod tests {
         for (specs, expected_tips) in [
             (
                 KeybindingsSpec::One(KeybindingSpec("ctrl-x enter".to_string())),
-                vec!["ctrl + x enter to submit answer", "esc to interrupt"],
+                vec!["ctrl+x enter to submit answer", "esc to interrupt"],
             ),
             (
                 KeybindingsSpec::Many(vec![
                     KeybindingSpec("ctrl-enter".to_string()),
                     KeybindingSpec("ctrl-x enter".to_string()),
                 ]),
-                vec!["ctrl + enter to submit answer", "esc to interrupt"],
+                vec!["ctrl+enter to submit answer", "esc to interrupt"],
             ),
             (
                 KeybindingsSpec::Many(vec![
                     KeybindingSpec("ctrl-x enter".to_string()),
                     KeybindingSpec("ctrl-enter".to_string()),
                 ]),
-                vec!["ctrl + x enter to submit answer", "esc to interrupt"],
+                vec!["ctrl+x enter to submit answer", "esc to interrupt"],
             ),
         ] {
             let (tx, _rx) = test_sender();
@@ -3755,16 +3755,16 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        insta::assert_snapshot!(snapshot, @r"
+        insta::assert_snapshot!(snapshot, @"
 
-          Question 1/1 (1 unanswered)
-          Share details.
+        Question 1/1 (1 unanswered)
+        Share details.
 
-          › Type your answer (optional)
+        › Type your answer (optional)
 
 
 
-          ctrl + x enter to submit answer | esc to interrupt
+        ctrl+x enter to submit answer | esc to interrupt
         ");
     }
 

@@ -1093,16 +1093,7 @@ mod tests {
             "hooks_browser_events_with_review_column",
             render_lines(&view, /*width*/ 112)
         );
-        assert_eq!(
-            view.event_table_lines()[1].spans[3].style.fg,
-            Some(Color::Cyan)
-        );
-        assert!(
-            view.event_table_lines()[1].spans[3]
-                .style
-                .add_modifier
-                .contains(ratatui::style::Modifier::BOLD)
-        );
+        assert_eq!(view.event_table_lines()[1].spans[3].style, accent_style());
     }
 
     #[test]

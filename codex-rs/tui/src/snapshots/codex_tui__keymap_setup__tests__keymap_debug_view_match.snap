@@ -6,7 +6,7 @@ Keypress Inspector
 Press any key to see what Codex receives. Esc is inspected; Ctrl+C closes.
 Tip: Codex can only inspect keys your terminal sends.
 
-Detected: ctrl + o
+Detected: ctrl+o
 Config key: ctrl-o
 Raw event: code=Char('o'), modifiers=ctrl, kind=Press
 

@@ -2,7 +2,7 @@
 source: tui/src/app/tests/pagination_completion_tests.rs
 expression: "snapshots.join(\"\\n\\n--- next overlapping page ---\\n\\n\")"
 ---
-Earlier messages are available — press ctrl + t to view the full transcript
+Earlier messages are available — press ctrl+t to view the full transcript
 • Middle answer
 
   Worked for 2m 5s · Sep 6, 2000 at 2:33 PM

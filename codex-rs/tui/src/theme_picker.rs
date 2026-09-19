@@ -413,7 +413,6 @@ pub(crate) fn build_theme_picker_params(
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use ratatui::style::Modifier;
 
     fn render_buffer(renderable: &dyn Renderable, width: u16, height: u16) -> Buffer {
         let area = Rect::new(0, 0, width, height);
@@ -438,17 +437,6 @@ mod tests {
                 line
             })
             .collect()
-    }
-
-    fn first_non_space_style_after_marker(buf: &Buffer, row: u16, width: u16) -> Option<Modifier> {
-        let marker_col = (0..width)
-            .find(|&col| buf[(col, row)].symbol() == "-" || buf[(col, row)].symbol() == "+")?;
-        for col in marker_col + 1..width {
-            if buf[(col, row)].symbol() != " " {
-                return Some(buf[(col, row)].style().add_modifier);
-            }
-        }
-        None
     }
 
     fn preview_line_number(line: &str) -> Option<usize> {
@@ -575,25 +563,6 @@ mod tests {
         assert!(
             first_numbered.starts_with("12  fn greet"),
             "expected narrow preview line numbers to start at the left edge"
-        );
-    }
-
-    #[test]
-    fn deleted_preview_code_uses_dim_overlay_like_real_diff_renderer() {
-        let width = 80;
-        let height = 6;
-        let buf = render_buffer(&ThemePreviewNarrowRenderable, width, height);
-        let lines = render_lines(&ThemePreviewNarrowRenderable, width, height);
-        let deleted_row = lines
-            .iter()
-            .enumerate()
-            .find_map(|(row, line)| (preview_line_marker(line) == Some('-')).then_some(row as u16))
-            .expect("expected a deleted preview row");
-        let modifiers = first_non_space_style_after_marker(&buf, deleted_row, width)
-            .expect("expected code text after diff marker");
-        assert!(
-            modifiers.contains(Modifier::DIM),
-            "expected deleted preview code to be dimmed"
         );
     }
 

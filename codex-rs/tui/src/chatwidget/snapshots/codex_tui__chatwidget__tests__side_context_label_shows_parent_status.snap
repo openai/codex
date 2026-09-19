@@ -6,4 +6,4 @@ expression: terminal.backend()
 "                                                                                "
 "› Ask a follow-up question                                                      "
 "                                                                                "
-"  Side from main thread · main needs input · ctrl + / to switch · ctrl + c to cl"
+" Side from main thread · main needs input · ctrl+/ to switch · ctrl+c to close  "

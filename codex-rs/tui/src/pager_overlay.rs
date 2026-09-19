@@ -117,9 +117,9 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<ShortcutHint>, &
         }
         for (i, key) in keys.iter().enumerate() {
             if i > 0 {
-                spans.push("/".into());
+                spans.extend(crate::key_hint::key_label_spans("/"));
             }
-            spans.push(Span::from(*key));
+            spans.extend(key.spans());
         }
         spans.push(" ".into());
         spans.push(Span::from(desc.to_string()));

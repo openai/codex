@@ -188,25 +188,19 @@ impl AsyncQuestions {
                     if self.keymap.chat.interrupt_turn.contains(&binding)
                         || self.keymap.chat.edit_queued_message.contains(&binding)))
         {
-            tips.push(
-                Span::styled(
-                    format!("{} submit", key.display_label()),
-                    crate::style::accent_style(),
-                )
-                .bold(),
-            );
+            tips.push(crate::footer_hint::shortcut(&key.display_label(), "submit"));
         }
         if let Some(key) = chat_hint("skip_question") {
-            tips.push(format!("{} skip", key.display_label()).dim());
+            tips.push(crate::footer_hint::shortcut(&key.display_label(), "skip"));
         }
-        tips.extend(option_tip);
+        tips.extend(option_tip.map(Line::from));
         if let Some(key) = chat_hint("prompt_stack_back") {
             let label = if self.state.current_idx > 0 {
                 "prev question"
             } else {
                 "main prompt"
             };
-            tips.push(format!("{} {label}", key.display_label()).dim());
+            tips.push(crate::footer_hint::shortcut(&key.display_label(), label));
         }
         let next = if self.state.current_idx + 1 < self.state.pending.len() {
             Some("next question")
@@ -218,7 +212,7 @@ impl AsyncQuestions {
         if let Some(label) = next
             && let Some(key) = self.next_hint
         {
-            tips.push(format!("{} {label}", key.display_label()).dim());
+            tips.push(crate::footer_hint::shortcut(&key.display_label(), label));
         }
         let mut lines = Vec::new();
         let mut line = Line::default();
@@ -230,7 +224,7 @@ impl AsyncQuestions {
                     line.spans.push(TIP_SEPARATOR.into());
                 }
             }
-            line.spans.push(tip);
+            line.spans.extend(tip.spans);
         }
         lines.push(line);
         lines

@@ -8,10 +8,10 @@ use pretty_assertions::assert_eq;
 #[test]
 fn voice_mute_resolves_custom_bindings_unbinding_and_visible_hints() {
     for (config, expected) in [
-        ("", Some("ctrl + x")),
+        ("", Some("ctrl+x")),
         ("[chat]\ntoggle_voice_mute = 'f8'", Some("f8")),
         ("[chat]\ntoggle_voice_mute = []", None),
-        ("[chat]\ntoggle_voice_mute = 'ctrl-x m'", Some("ctrl + x m")),
+        ("[chat]\ntoggle_voice_mute = 'ctrl-x m'", Some("ctrl+x m")),
     ] {
         let config = toml::from_str::<TuiKeymap>(config).expect("valid voice keymap config");
         let runtime = RuntimeKeymap::from_config(&config).expect("valid voice bindings");

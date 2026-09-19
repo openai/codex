@@ -9,5 +9,5 @@ expression: buffer_text(&clipped)
        long enough to wrap across
        multiple rows
 
-  enter submit   ctrl + ] skip
-  option 2/3   ⌥ + ↓ main prompt
+  enter submit   ctrl+] skip
+  option 2/3   ⌥+↓ main prompt

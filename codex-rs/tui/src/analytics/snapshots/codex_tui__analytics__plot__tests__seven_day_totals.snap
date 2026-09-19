@@ -20,8 +20,8 @@ Palette:
 1: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).dim()
 2: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset)
 3: Style::new().white().bg(Color::Reset).underline_color(Color::Reset).bold()
-4: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold()
-5: Style::new().cyan().bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
+4: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold()
+5: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().underlined()
 Rows (column:palette):
 0: 0:0 91:1 94:0
 1: 0:0 1:1 4:0 77:1 80:0

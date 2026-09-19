@@ -71,7 +71,25 @@ fn mermaid_styles_follow_the_supplied_theme() {
         ("light", themes.get(EmbeddedThemeName::SolarizedLight)),
         ("fallback", &fallback),
     ] {
-        let lines = super::render("flowchart LR; A[请求] --> B[Reply]", Some(40), theme).unwrap();
+        let colors = if name == "light" {
+            crate::terminal_probe::DefaultColors {
+                fg: (30, 30, 30),
+                bg: (255, 255, 255),
+            }
+        } else {
+            crate::terminal_probe::DefaultColors {
+                fg: (220, 220, 220),
+                bg: (20, 20, 20),
+            }
+        };
+        let lines = crate::terminal_palette::with_test_default_colors(colors, || {
+            super::render(
+                "flowchart LR; A[请求] --> B[Reply]",
+                /*width*/ Some(40),
+                theme,
+            )
+            .unwrap()
+        });
         let styled = lines
             .into_iter()
             .map(|line| {

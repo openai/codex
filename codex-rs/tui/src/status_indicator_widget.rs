@@ -246,11 +246,9 @@ impl StatusIndicator<'_> {
         if row.show_interrupt_hint
             && let Some(interrupt_binding) = row.interrupt_binding
         {
-            spans.extend(vec![
-                format!("({pretty_elapsed} • ").dim(),
-                interrupt_binding.into(),
-                " to interrupt)".dim(),
-            ]);
+            spans.push(format!("({pretty_elapsed} • ").dim());
+            spans.extend(interrupt_binding.spans());
+            spans.push(" to interrupt)".dim());
         } else {
             spans.push(format!("({pretty_elapsed})").dim());
         }

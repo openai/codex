@@ -80,12 +80,17 @@ async fn external_writer_view_shows_notice_instead_of_composer() {
     let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
     widget.show_external_writer_thread();
 
-    let frame = crate::terminal_palette::with_test_default_colors(
+    let (frame, label_style) = crate::terminal_palette::with_test_default_colors(
         crate::terminal_probe::DefaultColors {
             fg: (230, 230, 230),
             bg: (20, 20, 20),
         },
-        || render_frame(&widget, /*width*/ 60),
+        || {
+            (
+                render_frame(&widget, /*width*/ 60),
+                crate::style::footer_hint_label_style(),
+            )
+        },
     );
     let rows: Vec<String> = frame
         .content
@@ -100,17 +105,13 @@ async fn external_writer_view_shows_notice_instead_of_composer() {
     );
     assert_ne!(frame[(0, 1)].bg, ratatui::style::Color::Reset);
     assert_eq!(frame[(0, 1)].bg, frame[(59, 4)].bg);
-    assert!(
-        !frame[(3, 5)]
-            .style()
-            .add_modifier
-            .intersects(ratatui::style::Modifier::DIM | ratatui::style::Modifier::BOLD)
-    );
-    assert!(
-        frame[(5, 5)]
-            .style()
-            .add_modifier
-            .contains(ratatui::style::Modifier::DIM)
+    assert_eq!(frame[(3, 5)].modifier, ratatui::style::Modifier::BOLD);
+    assert_eq!(
+        (frame[(5, 5)].fg, frame[(5, 5)].modifier),
+        (
+            label_style.fg.unwrap_or(ratatui::style::Color::Reset),
+            ratatui::style::Modifier::empty(),
+        ),
     );
     assert!(!widget.bottom_pane.composer_input_enabled());
 }

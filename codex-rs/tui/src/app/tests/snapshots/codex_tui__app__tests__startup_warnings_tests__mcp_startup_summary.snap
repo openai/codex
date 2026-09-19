@@ -3,5 +3,5 @@ source: tui/src/app/tests/startup_warnings_tests.rs
 expression: warnings.display_lines(100)
 ---
 [
-    Line::from(Span::from("⚠ 3 MCP startup issues (2 need sign-in) · ctrl + t for details").yellow().dim()),
+    Line::from(Span::from("⚠ 3 MCP startup issues (2 need sign-in) · ctrl+t for details").yellow().dim()),
 ]

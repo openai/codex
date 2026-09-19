@@ -1,0 +1,8 @@
+---
+source: tui/src/bottom_pane/selection_tabs_tests.rs
+assertion_line: 24
+expression: "strips.join(\"\\n\")"
+---
+ All   Common                ›
+‹  Common   Customized (3)   ›
+‹  App   Composer   Debug

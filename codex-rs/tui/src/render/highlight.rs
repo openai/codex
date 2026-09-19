@@ -18,6 +18,9 @@
 //! swap/snapshot the theme for live preview.  All highlighting functions read
 //! the theme via `theme_lock()`. Unit tests isolate the active theme and its
 //! revision per thread so parallel tests cannot change each other’s rendering.
+//! Generic renderers preserve configured theme foregrounds because callers may paint them on
+//! shaded surfaces. Diff rendering separately resolves contrast against its actual row fills.
+//! ANSI colors remain owned by the terminal palette.
 //!
 //! **Guardrails:** inputs exceeding 512 KB or 10 000 lines, or containing an
 //! individual line longer than 4 KiB, are rejected early (returns `None`) to
@@ -140,7 +143,7 @@ pub(crate) fn validate_theme_name(name: Option<&str>, codex_home: Option<&Path>)
     // still surface a startup warning so users can diagnose configuration issues.
     if let Some(home) = codex_home {
         let custom_path = custom_theme_path(name, home);
-        if custom_path.try_exists().unwrap_or(true) {
+        if custom_path.try_exists().unwrap_or(/*default*/ true) {
             return Some(format!(
                 "Custom theme \"{name}\" at {custom_theme_path_display} could not \
                  be loaded (invalid .tmTheme format). Falling back to the default theme."
@@ -397,7 +400,9 @@ pub(crate) fn resolve_theme_by_name(name: &str, codex_home: Option<&Path>) -> Op
     }
     // Custom .tmTheme file?
     if let Some(home) = codex_home
-        && custom_theme_path(name, home).try_exists().unwrap_or(true)
+        && custom_theme_path(name, home)
+            .try_exists()
+            .unwrap_or(/*default*/ true)
     {
         return load_custom_theme(name, home);
     }
@@ -559,7 +564,8 @@ pub(crate) fn convert_syntect_color(color: SyntectColor) -> Option<RtColor> {
 /// Convert a syntect `Style` to a ratatui `Style`.
 ///
 /// Most themes produce RGB colors. The built-in `ansi`/`base16`/`base16-256`
-/// themes encode ANSI palette semantics in the alpha channel, matching bat.
+/// themes encode ANSI palette semantics in the alpha channel, matching bat. Preserve
+/// the decoded foreground so the final renderer can use its actual background.
 fn convert_style(syn_style: SyntectStyle) -> Style {
     let mut rt_style = Style::default();
 
@@ -728,6 +734,7 @@ fn highlight_to_line_spans(code: &str, lang: &str) -> Option<Vec<Vec<Span<'stati
 /// input exceeds safety guardrails.  Callers can always render the result
 /// directly -- the fallback path produces equivalent plain-text lines.
 ///
+/// Preserves theme foregrounds: callers may apply a shaded background after rendering.
 /// Used by `markdown_render` for fenced code blocks and by `exec_cell` for bash
 /// command highlighting.
 pub(crate) fn highlight_code_to_lines(code: &str, lang: &str) -> Vec<Line<'static>> {
@@ -758,8 +765,8 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
 /// plain diff coloring.
 ///
 /// Each inner `Vec<Span>` corresponds to one source line.  Styles are derived
-/// from the active theme but backgrounds are intentionally omitted so the
-/// terminal's own background shows through.
+/// from the active theme without contrast correction or backgrounds. The diff
+/// renderer corrects them against the background it paints for each row.
 pub(crate) fn highlight_code_to_styled_spans(
     code: &str,
     lang: &str,
@@ -901,13 +908,6 @@ mod tests {
         }
     }
 
-    fn assert_rgb(color: Option<RtColor>, expected: (u8, u8, u8)) {
-        let Some(RtColor::Rgb(r, g, b)) = color else {
-            panic!("expected RGB color {expected:?}, got {color:?}");
-        };
-        assert_eq!((r, g, b), expected);
-    }
-
     #[test]
     fn highlight_rust_has_keyword_style() {
         let code = "fn main() {}";
@@ -1006,7 +1006,10 @@ mod tests {
             font_style: FontStyle::BOLD | FontStyle::ITALIC,
         };
         let rt = convert_style(syn);
-        assert_eq!(rt.fg, Some(RtColor::Rgb(255, 128, 0)));
+        assert_eq!(
+            rt.fg,
+            Some(crate::terminal_palette::rgb_color((255, 128, 0)))
+        );
         // Background is intentionally skipped.
         assert_eq!(rt.bg, None);
         assert!(rt.add_modifier.contains(Modifier::BOLD));
@@ -1083,7 +1086,10 @@ mod tests {
             font_style: FontStyle::empty(),
         };
         let rt = convert_style(syn);
-        assert!(matches!(rt.fg, Some(RtColor::Indexed(0x9a))));
+        assert_eq!(
+            rt.fg,
+            Some(crate::terminal_palette::indexed_color(/*index*/ 0x9a))
+        );
     }
 
     #[test]
@@ -1125,7 +1131,10 @@ mod tests {
             font_style: FontStyle::empty(),
         };
         let rt = convert_style(syn);
-        assert!(matches!(rt.fg, Some(RtColor::Rgb(10, 20, 30))));
+        assert_eq!(
+            rt.fg,
+            Some(crate::terminal_palette::rgb_color((10, 20, 30)))
+        );
     }
 
     #[test]
@@ -1366,7 +1375,10 @@ mod tests {
         let style = foreground_style_for_scopes_with_theme(&theme, &["keyword"])
             .expect("expected keyword foreground style");
 
-        assert_rgb(style.fg, (10, 20, 30));
+        assert_eq!(
+            style.fg,
+            Some(crate::terminal_palette::rgb_color((10, 20, 30)))
+        );
     }
 
     #[test]
@@ -1380,7 +1392,10 @@ mod tests {
         let style = foreground_style_for_scopes_with_theme(&theme, &["keyword", "string"])
             .expect("expected string foreground style");
 
-        assert_rgb(style.fg, (40, 50, 60));
+        assert_eq!(
+            style.fg,
+            Some(crate::terminal_palette::rgb_color((40, 50, 60)))
+        );
     }
 
     #[test]

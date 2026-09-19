@@ -1,33 +1,32 @@
 ---
 source: tui/src/bottom_pane/footer.rs
-assertion_line: 1355
 expression: "(backend.to_string(), style_runs)"
 ---
 (
-    "\"   voice ● listen   ctrl+m mute         \"\n",
+    "\"  voice ● listen · ctrl+m mute          \"\n",
     [
         (
             0,
             Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
         ),
         (
-            3,
+            2,
             Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold(),
         ),
         (
-            8,
+            7,
             Style::new().red().bg(Color::Reset).underline_color(Color::Reset),
         ),
         (
-            10,
+            9,
             Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
         ),
         (
-            20,
+            19,
             Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold(),
         ),
         (
-            26,
+            25,
             Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset),
         ),
     ],

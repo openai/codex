@@ -11,5 +11,5 @@ expression: buffer_text(&buffer)
     2. Option 2 is long enough to wrap across
        rows
 
-  f9 submit   ctrl + ] skip   option 1/13
-  ⌥ + ↓ prev question
+  f9 submit   ctrl+] skip   option 1/13
+  ⌥+↓ prev question

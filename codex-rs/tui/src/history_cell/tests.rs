@@ -2394,6 +2394,46 @@ fn user_history_cell_renders_remote_image_urls() {
 }
 
 #[test]
+fn user_image_labels_follow_the_painted_prompt_surface() {
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::Widget;
+
+    let placeholder = "[Image #1]";
+    let cell = UserHistoryCell {
+        spoken: false,
+        message: format!("{placeholder} describe these"),
+        text_elements: vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.to_owned()),
+        )],
+        local_image_paths: Vec::new(),
+        remote_image_urls: vec![
+            "https://example.com/one.png".to_string(),
+            "https://example.com/two.png".to_string(),
+        ],
+    };
+    let mut snapshots = Vec::new();
+    for (fg, bg) in [
+        ((30, 30, 30), (255, 255, 255)),
+        ((235, 235, 235), (18, 20, 30)),
+        ((150, 150, 150), (95, 95, 95)),
+    ] {
+        crate::terminal_palette::with_test_default_colors(
+            crate::terminal_probe::DefaultColors { fg, bg },
+            || {
+                let area = Rect::new(
+                    /*x*/ 0, /*y*/ 0, /*width*/ 32, /*height*/ 5,
+                );
+                let mut buffer = Buffer::empty(area);
+                Paragraph::new(cell.display_lines(area.width)).render(area, &mut buffer);
+                snapshots.push(format!("{bg:?}: {buffer:?}"));
+            },
+        );
+    }
+    insta::assert_snapshot!(snapshots.join("\n"));
+}
+
+#[test]
 fn user_history_cell_summarizes_inline_data_urls() {
     let mut cell = UserHistoryCell {
         spoken: false,

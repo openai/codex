@@ -281,7 +281,7 @@ impl App {
         ) {
             label_parts.push(format!("{} to switch", binding.display_label()));
         }
-        label_parts.push("ctrl + c to close".to_string());
+        label_parts.push("ctrl+c to close".to_string());
         self.chat_widget
             .set_side_conversation_context_label(Some(format!("Side {}", label_parts.join(" · "))));
     }

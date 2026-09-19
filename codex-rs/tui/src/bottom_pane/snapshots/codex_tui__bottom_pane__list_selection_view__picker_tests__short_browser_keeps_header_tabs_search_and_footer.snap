@@ -1,0 +1,52 @@
+---
+source: tui/src/bottom_pane/selection_picker_tests.rs
+expression: "snapshots.join(\"\\n---\\n\")"
+---
+48×6:
+
+  Keymap
+   All   Common   Customized (3)             ›
+  Type to search shortcuts
+› Action 00  Ctrl+0
+  left/right group · enter edit · esc close
+---
+48×7:
+
+  Keymap
+  All configurable shortcuts.
+   All   Common   Customized (3)             ›
+  Type to search shortcuts
+› Action 00  Ctrl+0
+  left/right group · enter edit · esc close
+---
+48×13:
+
+  Keymap
+  All configurable shortcuts.
+
+   All   Common   Customized (3)             ›
+
+  Type to search shortcuts
+
+› Action 00  Ctrl+0
+  Action 01  Ctrl+1
+  Action 02  Ctrl+2
+↓
+  left/right group · enter edit · esc close
+---
+24×6:
+
+  Keymap
+   All   Common      ›
+  Type to search short
+› Action 00  Ctrl+0
+  left/right group ·
+---
+24×7:
+
+  Keymap
+   All   Common      ›
+  Type to search short
+› Action 00  Ctrl+0
+  left/right group ·
+  enter edit · esc close
