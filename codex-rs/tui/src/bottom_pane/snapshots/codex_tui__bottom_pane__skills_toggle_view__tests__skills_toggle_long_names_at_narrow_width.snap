@@ -1,14 +1,18 @@
 ---
 source: tui/src/bottom_pane/skills_toggle_view.rs
+assertion_line: 569
 expression: "render_lines(&view, 48)"
 ---
                                                 
   Enable/Disable Skills                         
-  Turn skills on or off. Your changes are save  
+  Turn skills on or off. Your changes are       
+  saved automatically.                          
                                                 
   Type to search skills                         
-  >                                             
-› [x] superpowers-systematic-d… Find root cau…  
-  [ ] superpowers-verification… Verify comple…  
                                                 
-  Press space or enter to toggle; esc to close
+› [x] superpowers-systematic-debugging (polish) 
+  [ ] superpowers-verification-before-completio…
+                                                
+                                                
+                                                
+  space/enter toggle · esc close

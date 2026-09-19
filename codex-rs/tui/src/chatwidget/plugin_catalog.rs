@@ -340,6 +340,7 @@ impl Renderable for PluginDisclosureLine {
 impl ChatWidget {
     pub(super) fn plugins_loading_popup_params(&self) -> SelectionViewParams {
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -353,12 +354,13 @@ impl ChatWidget {
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
     pub(super) fn marketplace_add_loading_popup_params(&self) -> SelectionViewParams {
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -374,7 +376,7 @@ impl ChatWidget {
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -384,14 +386,12 @@ impl ChatWidget {
         marketplace_name: String,
         marketplace_display_name: String,
     ) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from(
-            format!("Remove {marketplace_display_name} marketplace?").dim(),
-        ));
-        header.push(Line::from(
-            "This removes the configured marketplace from Codex.".dim(),
-        ));
+        let header = Paragraph::new(vec![
+            Line::from("Plugins".bold()),
+            Line::from(format!("Remove {marketplace_display_name} marketplace?").dim()),
+            Line::from("This removes the configured marketplace from Codex.".dim()),
+        ])
+        .wrap(Wrap { trim: false });
 
         let cwd_for_remove = self.config.cwd.to_path_buf();
         let cwd_for_cancel = self.config.cwd.to_path_buf();
@@ -400,6 +400,7 @@ impl ChatWidget {
         let plugins_response_for_on_cancel = plugins_response.clone();
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(Line::from(vec![
@@ -449,7 +450,7 @@ impl ChatWidget {
                     response: plugins_response_for_on_cancel.clone(),
                 });
             })),
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -457,22 +458,18 @@ impl ChatWidget {
         &self,
         marketplace_display_name: &str,
     ) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from(
-            format!("Removing {marketplace_display_name}...").dim(),
-        ));
-
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some(format!("Removing {marketplace_display_name}...")),
             items: vec![SelectionItem {
                 name: "Removing marketplace...".to_string(),
                 description: Some("This updates when marketplace removal completes.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -484,6 +481,7 @@ impl ChatWidget {
             .map(|name| format!("Upgrading {name} marketplace..."))
             .unwrap_or_else(|| "Upgrading marketplaces...".to_string());
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -497,7 +495,7 @@ impl ChatWidget {
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -506,6 +504,7 @@ impl ChatWidget {
         plugin_display_name: &str,
     ) -> SelectionViewParams {
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -519,7 +518,7 @@ impl ChatWidget {
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -527,22 +526,18 @@ impl ChatWidget {
         &self,
         plugin_display_name: &str,
     ) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from(
-            format!("Installing {plugin_display_name}...").dim(),
-        ));
-
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some(format!("Installing {plugin_display_name}...")),
             items: vec![SelectionItem {
                 name: "Installing plugin...".to_string(),
                 description: Some("This updates when plugin installation completes.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -550,48 +545,38 @@ impl ChatWidget {
         &self,
         plugin_display_name: &str,
     ) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from(
-            format!("Uninstalling {plugin_display_name}...").dim(),
-        ));
-
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some(format!("Uninstalling {plugin_display_name}...")),
             items: vec![SelectionItem {
                 name: "Uninstalling plugin...".to_string(),
                 description: Some("This updates when the plugin removal completes.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
     pub(super) fn plugins_error_popup_params(&self, err: &str) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Failed to load plugins.".dim()));
-
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some("Failed to load plugins.".to_string()),
             items: vec![SelectionItem {
                 name: "Plugin marketplace unavailable".to_string(),
                 description: Some(err.to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
     pub(super) fn marketplace_add_error_popup_params(&self) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Failed to add marketplace.".dim()));
-
         let mut items = vec![
             SelectionItem {
                 name: "Marketplace add failed".to_string(),
@@ -629,11 +614,13 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some("Failed to add marketplace.".to_string()),
             footer_hint: Some(plugin_detail_hint_line()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -642,10 +629,6 @@ impl ChatWidget {
         marketplace_name: &str,
         marketplace_display_name: &str,
     ) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Failed to remove marketplace.".dim()));
-
         let marketplace_name = marketplace_name.to_string();
         let marketplace_display_name = marketplace_display_name.to_string();
         let mut items = vec![
@@ -686,11 +669,13 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some("Failed to remove marketplace.".to_string()),
             footer_hint: Some(plugin_detail_hint_line()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -699,10 +684,6 @@ impl ChatWidget {
         err: &str,
         plugins_response: Option<&PluginListResponse>,
     ) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Failed to load plugin details.".dim()));
-
         let mut items = vec![SelectionItem {
             name: "Plugin detail unavailable".to_string(),
             description: Some(err.to_string()),
@@ -726,11 +707,13 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Plugins".to_string()),
+            subtitle: Some("Failed to load plugin details.".to_string()),
             footer_hint: Some(plugin_detail_hint_line()),
             items,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -755,7 +738,8 @@ impl ChatWidget {
                 PLUGIN_ROW_PREFIX_WIDTH + UnicodeWidthStr::width(display_name.as_str())
             })
             .chain([UnicodeWidthStr::width("Add marketplace")])
-            .max();
+            .max()
+            .map(|width| width.min(/*other*/ 36));
         let installed_entries = all_entries
             .iter()
             .filter(|(_, plugin, _)| plugin.installed)
@@ -950,6 +934,7 @@ impl ChatWidget {
             active_tab_id.and_then(|tab_id| plugin_tab_id_matching_saved_id(&tab_id, &tabs));
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(()),
             footer_hint: Some(plugins_popup_hint_line(
@@ -957,6 +942,7 @@ impl ChatWidget {
             )),
             tab_footer_hints,
             tabs,
+            reserve_result_rows: true,
             initial_tab_id,
             is_searchable: true,
             search_placeholder: Some("Type to search plugins".to_string()),
@@ -964,7 +950,7 @@ impl ChatWidget {
             row_display: SelectionRowDisplay::SingleLine,
             name_column_width,
             initial_selected_idx,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -1007,10 +993,16 @@ impl ChatWidget {
         let display_name = plugin_display_name(&plugin.summary);
         let detail_status_label = plugin_detail_status_label(&plugin.summary);
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from(
-            format!("{display_name} · {detail_status_label} · {marketplace_label}").bold(),
-        ));
+        header.push(
+            ratatui::widgets::Paragraph::new(Line::from("Plugins".bold()))
+                .wrap(ratatui::widgets::Wrap { trim: false }),
+        );
+        header.push(
+            ratatui::widgets::Paragraph::new(Line::from(
+                format!("{display_name} · {detail_status_label} · {marketplace_label}").bold(),
+            ))
+            .wrap(ratatui::widgets::Wrap { trim: false }),
+        );
         if !plugin.summary.installed {
             header.push(PluginDisclosureLine {
                 line: Line::from(vec![
@@ -1025,7 +1017,10 @@ impl ChatWidget {
             });
         }
         if let Some(description) = plugin_detail_description(plugin) {
-            header.push(Line::from(description.dim()));
+            header.push(
+                ratatui::widgets::Paragraph::new(Line::from(description.dim()))
+                    .wrap(ratatui::widgets::Wrap { trim: false }),
+            );
         }
 
         let cwd = self.config.cwd.to_path_buf();
@@ -1156,12 +1151,13 @@ impl ChatWidget {
         });
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(plugin_detail_hint_line()),
             items,
             col_width_mode: ColumnWidthMode::AutoAllRows,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -1302,30 +1298,31 @@ fn plugins_popup_hint_line(
 ) -> Line<'static> {
     match (can_remove_marketplace, can_upgrade_marketplace) {
         (true, true) => Line::from(
-            "ctrl + u upgrade · ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close",
+            "ctrl+u upgrade · ctrl+r remove · space toggle · ←/→ tabs · enter details · esc close",
         ),
         (true, false) => {
-            Line::from("ctrl + r remove · space toggle · ←/→ tabs · enter details · esc close")
+            Line::from("ctrl+r remove · space toggle · ←/→ tabs · enter details · esc close")
         }
         (false, true) => {
-            Line::from("ctrl + u upgrade · space toggle · ←/→ tabs · enter details · esc close")
+            Line::from("ctrl+u upgrade · space toggle · ←/→ tabs · enter details · esc close")
         }
-        (false, false) => Line::from(
-            "space enable/disable · ←/→ select marketplace · enter view details · esc close",
-        ),
+        (false, false) => Line::from("←/→ tabs · enter details · space toggle · esc close"),
     }
 }
 
 pub(super) fn plugin_detail_hint_line() -> Line<'static> {
-    Line::from("Press esc to close.")
+    Line::from("esc close")
 }
 
 pub(super) fn plugins_header(subtitle: String, count_line: String) -> Box<dyn Renderable> {
-    let mut header = ColumnRenderable::new();
-    header.push(Line::from("Plugins".bold()));
-    header.push(Line::from(subtitle.dim()));
-    header.push(Line::from(count_line.dim()));
-    Box::new(header)
+    Box::new(
+        Paragraph::new(vec![
+            Line::from("Plugins".bold()),
+            Line::from(subtitle.dim()),
+            Line::from(count_line.dim()),
+        ])
+        .wrap(Wrap { trim: false }),
+    )
 }
 
 fn dedupe_plugin_entries<'a>(

@@ -28,7 +28,7 @@ fn experimental_features_keep_following_choice_at_wrap_boundary() {
     );
 
     let mut snapshots = Vec::new();
-    for width in [70, 71, 72] {
+    for width in [68, 69, 70, 71, 72] {
         let area = Rect::new(
             /*x*/ 0,
             /*y*/ 0,

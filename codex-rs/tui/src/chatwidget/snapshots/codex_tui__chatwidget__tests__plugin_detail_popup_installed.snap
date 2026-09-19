@@ -6,6 +6,7 @@ expression: strip_osc8_for_snapshot(&popup)
   Figma · Installed by admin · ChatGPT Marketplace
   Turn Figma files into implementation context.
 
+
 › 1. Back to plugins     Return to the plugin list.
      Installed by admin  This plugin is installed by your workspace admin.
      Source              Local
@@ -15,4 +16,4 @@ expression: strip_osc8_for_snapshot(&popup)
      Apps                Figma, Slack
      MCP Servers         figma-mcp, docs-mcp
 
-  Press esc to close.
+  esc close

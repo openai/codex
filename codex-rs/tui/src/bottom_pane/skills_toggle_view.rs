@@ -9,7 +9,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use ratatui::widgets::Wrap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -19,8 +21,6 @@ use crate::key_hint::ShortcutHint;
 use crate::key_hint::is_plain_text_key_event;
 use crate::keymap::ListAction;
 use crate::keymap::ListKeymap;
-use crate::render::Insets;
-use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
@@ -28,13 +28,12 @@ use crate::style::user_message_style;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
+use super::picker_rows::render_rows_single_line;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
-use super::selection_popup_common::render_rows_single_line;
 
 const SEARCH_PLACEHOLDER: &str = "Type to search skills";
-const SEARCH_PROMPT_PREFIX: &str = "> ";
 
 pub(crate) struct SkillsToggleItem {
     pub name: String,
@@ -63,10 +62,15 @@ impl SkillsToggleView {
         keymap: ListKeymap,
     ) -> Self {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Enable/Disable Skills".bold()));
-        header.push(Line::from(
-            "Turn skills on or off. Your changes are saved automatically.".dim(),
-        ));
+        header.push(
+            Paragraph::new(Line::from("Enable/Disable Skills".bold())).wrap(Wrap { trim: false }),
+        );
+        header.push(
+            Paragraph::new(Line::from(
+                "Turn skills on or off. Your changes are saved automatically.".dim(),
+            ))
+            .wrap(Wrap { trim: false }),
+        );
 
         let mut view = Self {
             items,
@@ -148,6 +152,8 @@ impl SkillsToggleView {
                     let item_name = &item.name;
                     let name = format!("{prefix} [{marker}] {item_name}");
                     GenericDisplayRow {
+                        category_tag: None,
+                        selection_style: Some(super::picker_style::selection_style()),
                         name,
                         description: Some(item.description.clone()),
                         ..Default::default()
@@ -223,12 +229,8 @@ impl SkillsToggleView {
             .list_skills(Vec::new(), /*force_reload*/ true);
     }
 
-    fn rows_width(total_width: u16) -> u16 {
-        total_width.saturating_sub(2)
-    }
-
     fn rows_height(&self, rows: &[GenericDisplayRow]) -> u16 {
-        rows.len().clamp(1, MAX_POPUP_ROWS).try_into().unwrap_or(1)
+        (rows.len().clamp(/*min*/ 1, MAX_POPUP_ROWS) as u16).saturating_add(/*rhs*/ 2)
     }
 }
 
@@ -309,7 +311,13 @@ impl Renderable for SkillsToggleView {
         let mut height = self.header.desired_height(width.saturating_sub(4));
         height = height.saturating_add(rows_height + 3);
         height = height.saturating_add(2);
-        height.saturating_add(1)
+        height.saturating_add(
+            super::selection_popup_common::wrap_styled_line(
+                &self.footer_hint,
+                width.saturating_sub(/*rhs*/ 2),
+            )
+            .len() as u16,
+        )
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -317,9 +325,15 @@ impl Renderable for SkillsToggleView {
             return;
         }
 
-        // Reserve the footer line for the key-hint row.
-        let [content_area, footer_area] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
+        let hint_lines = super::selection_popup_common::wrap_styled_line(
+            &self.footer_hint,
+            area.width.saturating_sub(/*rhs*/ 2),
+        );
+        let [content_area, footer_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(hint_lines.len() as u16),
+        ])
+        .areas(area);
 
         Block::default()
             .style(user_message_style())
@@ -329,33 +343,13 @@ impl Renderable for SkillsToggleView {
             .header
             .desired_height(content_area.width.saturating_sub(4));
         let rows = self.build_rows();
-        let rows_width = Self::rows_width(content_area.width);
         let rows_height = self.rows_height(&rows);
-        let [header_area, _, search_area, list_area] = Layout::vertical([
-            Constraint::Max(header_height),
-            Constraint::Max(1),
-            Constraint::Length(2),
-            Constraint::Length(rows_height),
-        ])
-        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
+        let [header_area, search_area, render_area] =
+            super::picker_rows::layout(content_area, header_height, /*search*/ 1, rows_height);
 
         self.header.render(header_area, buf);
 
-        // Render the search prompt as two lines to mimic the composer.
-        if search_area.height >= 2 {
-            let [placeholder_area, input_area] =
-                Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(search_area);
-            Line::from(SEARCH_PLACEHOLDER.dim()).render(placeholder_area, buf);
-            let line = if self.search_query.is_empty() {
-                Line::from(vec![SEARCH_PROMPT_PREFIX.dim()])
-            } else {
-                Line::from(vec![
-                    SEARCH_PROMPT_PREFIX.dim(),
-                    self.search_query.clone().into(),
-                ])
-            };
-            line.render(input_area, buf);
-        } else if search_area.height > 0 {
+        if search_area.height > 0 {
             let query_span = if self.search_query.is_empty() {
                 SEARCH_PLACEHOLDER.dim()
             } else {
@@ -364,13 +358,7 @@ impl Renderable for SkillsToggleView {
             Line::from(query_span).render(search_area, buf);
         }
 
-        if list_area.height > 0 {
-            let render_area = Rect {
-                x: list_area.x.saturating_sub(2),
-                y: list_area.y,
-                width: rows_width.max(1),
-                height: list_area.height,
-            };
+        if render_area.height > 0 {
             render_rows_single_line(
                 render_area,
                 buf,
@@ -387,7 +375,7 @@ impl Renderable for SkillsToggleView {
             width: footer_area.width.saturating_sub(2),
             height: footer_area.height,
         };
-        self.footer_hint.clone().dim().render(hint_area, buf);
+        Paragraph::new(hint_lines).dim().render(hint_area, buf);
     }
 }
 
@@ -398,32 +386,19 @@ fn skills_toggle_hint_line(keymap: &ListKeymap) -> Line<'static> {
         .filter(|binding| *binding != ShortcutHint::Single(space));
     let cancel = keymap.primary_hint(ListAction::Cancel);
 
-    match (accept, cancel) {
-        (Some(accept), Some(cancel)) => Line::from(vec![
-            "Press ".into(),
-            space.into(),
-            " or ".into(),
-            accept.into(),
-            " to toggle; ".into(),
-            cancel.into(),
-            " to close".into(),
-        ]),
-        (Some(accept), None) => Line::from(vec![
-            "Press ".into(),
-            space.into(),
-            " or ".into(),
-            accept.into(),
-            " to toggle".into(),
-        ]),
-        (None, Some(cancel)) => Line::from(vec![
-            "Press ".into(),
-            space.into(),
-            " to toggle; ".into(),
-            cancel.into(),
-            " to close".into(),
-        ]),
-        (None, None) => Line::from(vec!["Press ".into(), space.into(), " to toggle".into()]),
+    let mut toggle = space.display_label();
+    if let Some(accept) = accept {
+        toggle.push('/');
+        toggle.push_str(&accept.display_label());
     }
+    let mut spans = key_hint::key_label_spans(&toggle);
+    spans.push(" toggle".dim());
+    if let Some(cancel) = cancel {
+        spans.push(" · ".dim());
+        spans.extend(cancel.spans());
+        spans.push(" close".dim());
+    }
+    spans.into()
 }
 
 #[cfg(test)]

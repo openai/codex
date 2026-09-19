@@ -6,7 +6,7 @@ expression: "render_lines(&view, 112)"
   PreToolUse hooks                                                                                              
   1 hook needs review before it can run.                                                                        
                                                                                                                 
-  [!] Hook 1 · new                                                                                              
+› [!] Hook 1 · new                                                                                              
                                                                                                                 
   Event     PreToolUse                                                                                          
   Matcher   Bash                                                                                                
@@ -16,4 +16,5 @@ expression: "render_lines(&view, 112)"
   Timeout   30s                                                                                                 
   Trust     New hook - review required                                                                          
                                                                                                                 
-  Press t to trust; esc to go back
+                                                                                                                
+  t trust · esc back

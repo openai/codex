@@ -8,6 +8,7 @@ expression: strip_osc8_for_snapshot(&popup)
   more.
   Turn Figma files into implementation context.
 
+
 › 1. Back to plugins  Return to the plugin list.
   2. Install plugin   Install this plugin now.
      Source           Local
@@ -17,4 +18,4 @@ expression: strip_osc8_for_snapshot(&popup)
      Apps             Figma, Slack
      MCP Servers      figma-mcp, docs-mcp
 
-  Press esc to close.
+  esc close

@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/experimental_features_view_tests.rs
-assertion_line: 208
 expression: buffer_text(&buffer)
 ---
 
@@ -9,6 +8,8 @@ expression: buffer_text(&buffer)
   only in new tasks or after restarting the Codex server.
   No server experiments available.
 
+
   No experimental features available for now
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close

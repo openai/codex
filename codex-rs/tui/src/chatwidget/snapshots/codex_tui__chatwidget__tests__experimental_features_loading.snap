@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 3167
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Experimental features
@@ -9,4 +10,6 @@ expression: "render_bottom_popup(&chat, 80)"
 
 
 
-  Press space to select or enter to save
+
+
+  space toggle · enter save · esc save/close

@@ -213,32 +213,27 @@ impl ChatWidget {
     }
 
     fn connectors_loading_popup_params(&self) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Apps".bold()));
-        header.push(Line::from("Loading installed and available apps...".dim()));
-
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            title: Some("Apps".to_string()),
+            subtitle: Some("Loading installed and available apps...".to_string()),
             items: vec![SelectionItem {
                 name: "Loading apps...".to_string(),
                 description: Some("This updates when the full list is ready.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
     fn connectors_error_popup_params(&self) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Apps".bold()));
-        header.push(Line::from("Failed to load apps.".dim()));
-
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
-            header: Box::new(header),
-            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
+            title: Some("Apps".to_string()),
+            subtitle: Some("Failed to load apps.".to_string()),
             items: vec![
                 SelectionItem {
                     name: "App directory unavailable".to_string(),
@@ -260,7 +255,7 @@ impl ChatWidget {
                     ..Default::default()
                 },
             ],
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 
@@ -274,14 +269,12 @@ impl ChatWidget {
             .iter()
             .filter(|connector| connector.is_accessible)
             .count();
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Apps".bold()));
-        header.push(Line::from(
-            "Use $ to insert an installed app into your prompt.".dim(),
-        ));
-        header.push(Line::from(
-            format!("Installed {installed} of {total} available apps.").dim(),
-        ));
+        let header = Paragraph::new(vec![
+            Line::from("Apps".bold()),
+            Line::from("Use $ to insert an installed app into your prompt.".dim()),
+            Line::from(format!("Installed {installed} of {total} available apps.").dim()),
+        ])
+        .wrap(Wrap { trim: false });
         let initial_selected_idx = selected_connector_id.and_then(|selected_connector_id| {
             connectors
                 .iter()
@@ -351,15 +344,15 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
+            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
-            footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             is_searchable: true,
             search_placeholder: Some("Type to search apps".to_string()),
             col_width_mode: ColumnWidthMode::AutoAllRows,
             initial_selected_idx,
-            ..Default::default()
+            ..SelectionViewParams::picker()
         }
     }
 

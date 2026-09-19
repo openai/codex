@@ -6,7 +6,7 @@ expression: terminal_title_popup_snapshot(&mut chat)
   Select which items to display in the terminal title.
 
   Type to search
-  >
+
 › [x] monthly-limit  Remaining usage on the monthly usage limit (omitted when unavailable)
   [x] weekly-limit   Remaining usage on the weekly usage limit (omitted when unavailable)
   [ ] app-name       Codex app name
@@ -15,6 +15,6 @@ expression: terminal_title_popup_snapshot(&mut chat)
   [ ] activity       Spinner while working, action-required message while blocked.
   [ ] run-state      Compact session run-state text (Ready, Working, Thinking)
   [ ] thread-name    Current thread name (omitted when unnamed)
-
+↓
   monthly 65% left | weekly 50% left
-  Press space to toggle; ←/→ to move; enter to confirm and close; esc to close
+  space toggle · ←/→ reorder · enter save · esc cancel

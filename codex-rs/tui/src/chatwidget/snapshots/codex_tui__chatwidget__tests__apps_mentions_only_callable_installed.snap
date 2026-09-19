@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2317
 expression: snapshot
 ---
 › $
@@ -14,9 +15,10 @@ expression: snapshot
   App setup 1/1: % Arabica UAE
   Already installed in this session.
 
+
      ChatGPT apps link unavailable  This app did not provide an install/manage
                                     URL.
 › 1. Continue                       Advance to the next app.
   2. Skip remaining app setup       Stop this follow-up flow for this plugin.
 
-  Press esc to close.
+  esc close

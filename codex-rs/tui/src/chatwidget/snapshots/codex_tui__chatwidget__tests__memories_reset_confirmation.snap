@@ -3,10 +3,13 @@ source: tui/src/chatwidget/tests/popups_and_settings.rs
 expression: popup
 ---
   Reset all memories?
+  This clears local memory files and rollout summaries for the current Codex
+  home.
+
 
 › Reset all memories  Delete local memory files and rollout summaries.
   Go back             Return to memory settings.
 
 
 
-  Press enter to confirm or esc to go back
+  enter select · esc back

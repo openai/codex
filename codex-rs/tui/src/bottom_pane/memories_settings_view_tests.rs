@@ -14,7 +14,7 @@ fn reset_confirmation_keeps_both_choices_at_wrap_boundary() {
     view.open_reset_confirmation();
 
     let mut snapshots = Vec::new();
-    for width in [70, 71, 72] {
+    for width in [68, 69, 70, 71, 72] {
         let area = Rect::new(
             /*x*/ 0,
             /*y*/ 0,

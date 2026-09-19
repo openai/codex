@@ -7,7 +7,9 @@ expression: buffer_text(&buffer)
   Checked features are configured on. Some experimental features take effect
   only in new tasks or after restarting the Codex server.
 
-› [ ] Analytics plan history  Preview five-hour and weekly allowance history
-                              for consumer accounts in /analytics.
 
-  Press space to select or enter to save
+› [ ] Analytics plan history  Preview five-hour and weekly allowance history for
+                              consumer accounts in /analytics.
+
+
+  space toggle · enter save · esc save/close

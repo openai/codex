@@ -1,11 +1,11 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 3083
 expression: popup
 ---
   Experimental features
   Checked features are configured on. Some experimental features take effect
   only in new tasks or after restarting the Codex server.
+
 
 › [ ] JavaScript REPL      Enable a persistent Node-backed JavaScript REPL for
                            interactive website debugging and other inline
@@ -13,4 +13,5 @@ expression: popup
   [x] Shell tool           Allow the model to run shell commands.
   [ ] Voice conversations  Talk with Codex using /voice.
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close

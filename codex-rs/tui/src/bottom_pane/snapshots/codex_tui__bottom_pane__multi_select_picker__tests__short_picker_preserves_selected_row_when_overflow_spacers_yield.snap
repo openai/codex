@@ -1,0 +1,45 @@
+---
+source: tui/src/bottom_pane/multi_select_picker.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+height=1
+  space toggle · ←/→ reorder · enter save · esc cancel
+
+height=2
+
+  space toggle · ←/→ reorder · enter save · esc cancel
+
+height=3
+
+  Type to search
+  space toggle · ←/→ reorder · enter save · esc cancel
+
+height=4
+
+  Type to search
+› [ ] field-11
+  space toggle · ←/→ reorder · enter save · esc cancel
+
+height=5
+
+  Type to search
+  [ ] field-10
+› [ ] field-11
+  space toggle · ←/→ reorder · enter save · esc cancel
+
+height=6
+
+  Type to search
+↑
+› [ ] field-11
+
+  space toggle · ←/→ reorder · enter save · esc cancel
+
+height=7
+
+  Type to search
+↑
+  [ ] field-10
+› [ ] field-11
+
+  space toggle · ←/→ reorder · enter save · esc cancel

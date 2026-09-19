@@ -84,7 +84,7 @@ async fn plugins_popup_uses_product_labels_for_remote_and_personal_tabs() {
     ]
     .into_iter()
     .map(|(selected_tab, product_label, plugin_name, raw_label)| {
-        let popup = select_plugins_tab_containing(&mut chat, /*width*/ 120, selected_tab);
+        let popup = select_plugins_tab_containing(&mut chat, /*width*/ 120, product_label);
         assert!(
             popup.contains(product_label)
                 && popup.contains(plugin_name)

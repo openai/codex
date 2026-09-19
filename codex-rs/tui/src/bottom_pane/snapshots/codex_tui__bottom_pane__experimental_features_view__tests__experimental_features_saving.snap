@@ -8,8 +8,10 @@ expression: buffer_text(&buffer)
   only in new tasks or after restarting the Codex server.
   Saving experimental features…
 
+
 › [ ] Server network_proxy       Description supplied by the server.
   [ ] Server future_feature      Description supplied by the server.
   [ ] Server prevent_idle_sleep  Description supplied by the server.
+
 
   Saving… Closing this popup will not cancel the write.

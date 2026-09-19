@@ -2,37 +2,74 @@
 source: tui/src/bottom_pane/memories_settings_view_tests.rs
 expression: "snapshots.join(\"\\n\\n\")"
 ---
+width=68
+
+  Reset all memories?
+  This clears local memory files and rollout summaries for the
+  current Codex home.
+
+
+› Reset all memories  Delete local memory files and rollout
+                      summaries.
+  Go back             Return to memory settings.
+
+
+
+  enter select · esc back
+
+width=69
+
+  Reset all memories?
+  This clears local memory files and rollout summaries for the
+  current Codex home.
+
+
+› Reset all memories  Delete local memory files and rollout
+                      summaries.
+  Go back             Return to memory settings.
+
+
+
+  enter select · esc back
+
 width=70
 
   Reset all memories?
+  This clears local memory files and rollout summaries for the
+  current Codex home.
 
-› Reset all memories  Delete local memory files and rollout
-                      summaries.
-  Go back             Return to memory settings.
-
-
-
-  Press enter to confirm or esc to go back
-
-width=71
-
-  Reset all memories?
-
-› Reset all memories  Delete local memory files and rollout
-                      summaries.
-  Go back             Return to memory settings.
-
-
-
-  Press enter to confirm or esc to go back
-
-width=72
-
-  Reset all memories?
 
 › Reset all memories  Delete local memory files and rollout summaries.
   Go back             Return to memory settings.
 
 
 
-  Press enter to confirm or esc to go back
+  enter select · esc back
+
+width=71
+
+  Reset all memories?
+  This clears local memory files and rollout summaries for the
+  current Codex home.
+
+
+› Reset all memories  Delete local memory files and rollout summaries.
+  Go back             Return to memory settings.
+
+
+
+  enter select · esc back
+
+width=72
+
+  Reset all memories?
+  This clears local memory files and rollout summaries for the current
+  Codex home.
+
+
+› Reset all memories  Delete local memory files and rollout summaries.
+  Go back             Return to memory settings.
+
+
+
+  enter select · esc back

@@ -7,8 +7,10 @@ expression: buffer_text(&buffer)
   Checked features are configured on. Some experimental features take effect only in new tasks or
   after restarting the Codex server.
 
+
 › [x] Server network_proxy       Description supplied by the server.
   [x] Server future_feature      Description supplied by the server.
   [x] Server prevent_idle_sleep  Description supplied by the server.
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close

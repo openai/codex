@@ -6,6 +6,8 @@ expression: popup
   Checked features are configured on. Some experimental features take effect
   only in new tasks or after restarting the Codex server.
 
+
 › [x] Shell tool  Allow the model to run shell commands.
 
-  Press space to select or ctrl+x enter to save
+
+  space toggle · ctrl+x enter save · esc save/close

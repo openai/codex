@@ -8,6 +8,8 @@ expression: buffer_text(&buffer)
   only in new tasks or after restarting the Codex server.
   No server experiments available.
 
+
   No experimental features available for now
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close

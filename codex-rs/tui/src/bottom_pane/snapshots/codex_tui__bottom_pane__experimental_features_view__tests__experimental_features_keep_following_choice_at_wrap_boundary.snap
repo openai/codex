@@ -2,6 +2,36 @@
 source: tui/src/bottom_pane/experimental_features_view_tests.rs
 expression: "snapshots.join(\"\\n\\n\")"
 ---
+width=68
+
+  Experimental features
+  Checked features are configured on. Some experimental features
+  take effect only in new tasks or after restarting the Codex
+  server.
+
+
+› [x] First feature  A description that fits exactly at this
+                     boundary.
+  [ ] Last feature   Keep this choice visible.
+
+
+  space toggle · enter save · esc save/close
+
+width=69
+
+  Experimental features
+  Checked features are configured on. Some experimental features
+  take effect only in new tasks or after restarting the Codex
+  server.
+
+
+› [x] First feature  A description that fits exactly at this
+                     boundary.
+  [ ] Last feature   Keep this choice visible.
+
+
+  space toggle · enter save · esc save/close
+
 width=70
 
   Experimental features
@@ -9,11 +39,12 @@ width=70
   take effect only in new tasks or after restarting the Codex
   server.
 
-› [x] First feature  A description that fits exactly at this
-                     boundary.
+
+› [x] First feature  A description that fits exactly at this boundary.
   [ ] Last feature   Keep this choice visible.
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close
 
 width=71
 
@@ -21,11 +52,12 @@ width=71
   Checked features are configured on. Some experimental features take
   effect only in new tasks or after restarting the Codex server.
 
-› [x] First feature  A description that fits exactly at this
-                     boundary.
+
+› [x] First feature  A description that fits exactly at this boundary.
   [ ] Last feature   Keep this choice visible.
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close
 
 width=72
 
@@ -33,7 +65,9 @@ width=72
   Checked features are configured on. Some experimental features take
   effect only in new tasks or after restarting the Codex server.
 
+
 › [x] First feature  A description that fits exactly at this boundary.
   [ ] Last feature   Keep this choice visible.
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close

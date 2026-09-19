@@ -9,6 +9,8 @@ expression: buffer_text(&buffer)
   Server experiments unavailable. Reopen /experimental to retry; restart this
   Codex client if requests remain unanswered.
 
+
   No experimental features available for now
 
-  Press space to select or enter to save
+
+  space toggle · enter save · esc save/close

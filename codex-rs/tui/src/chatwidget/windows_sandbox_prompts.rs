@@ -1,6 +1,8 @@
 //! Windows sandbox prompts and warning surfaces for `ChatWidget`.
 
 use super::*;
+#[cfg(any(target_os = "windows", test))]
+use crate::render::renderable::ColumnRenderable;
 
 impl ChatWidget {
     #[cfg(any(target_os = "windows", test))]

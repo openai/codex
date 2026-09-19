@@ -277,7 +277,7 @@ async fn plugins_popup_truncates_long_descriptions_in_list_rows() {
         .expect("expected verbose plugin row in popup");
     insta::assert_snapshot!(
         verbose_row,
-        @"  [-] Verbose Plugin  Available · OpenAI Curated · This description…"
+        @"  [-] Verbose Plugin  Available · OpenAI Curated · This description k…"
     );
     assert!(
         !popup
@@ -379,8 +379,8 @@ async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace
     let popup = select_plugins_tab_containing(&mut chat, /*width*/ 100, "Repo Marketplace.");
     assert!(
         popup.contains("Repo Marketplace.")
-            && popup.contains("ctrl + u upgrade")
-            && popup.contains("ctrl + r remove")
+            && popup.contains("ctrl+u upgrade")
+            && popup.contains("ctrl+r remove")
             && popup.contains("Debug Plugin"),
         "expected upgradeable user-configured marketplace tab, got:\n{popup}"
     );
@@ -476,8 +476,8 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     assert_chatwidget_snapshot!("plugins_popup_newly_installed_marketplace", popup);
     assert!(
         popup.contains("Debug Marketplace installed successfully.")
-            && popup.contains("ctrl + u upgrade")
-            && popup.contains("ctrl + r remove")
+            && popup.contains("ctrl+u upgrade")
+            && popup.contains("ctrl+r remove")
             && popup.contains("Debug Plugin"),
         "expected marketplace add refresh to switch to the new marketplace tab, got:\n{popup}"
     );
@@ -487,7 +487,7 @@ async fn marketplace_add_success_refreshes_to_new_marketplace_tab() {
     let reopened_popup = (0..8)
         .find_map(|_| {
             let popup = render_bottom_popup(&chat, /*width*/ 100);
-            if popup.contains("[Debug Marketplace]") {
+            if popup.contains("Installed 0 of 1 Debug Marketplace plugins.") {
                 Some(popup)
             } else {
                 chat.handle_key_event(KeyEvent::from(KeyCode::Right));
@@ -542,8 +542,8 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
         select_plugins_tab_containing(&mut chat, /*width*/ 100, "Repo Marketplace.");
     assert!(
         repo_tab.contains("Repo Marketplace.")
-            && repo_tab.contains("ctrl + u upgrade")
-            && repo_tab.contains("ctrl + r remove")
+            && repo_tab.contains("ctrl+u upgrade")
+            && repo_tab.contains("ctrl+r remove")
             && repo_tab.contains("Debug Plugin"),
         "expected removable user-configured marketplace tab, got:\n{repo_tab}"
     );
@@ -611,7 +611,7 @@ async fn plugins_popup_removes_user_configured_marketplace_flow() {
         refreshed.contains("Browse plugins from available marketplaces.")
             && !refreshed.contains("Repo Marketplace")
             && !refreshed.contains("Debug Plugin")
-            && !refreshed.contains("ctrl + r remove"),
+            && !refreshed.contains("ctrl+r remove"),
         "expected refreshed plugin list without removed marketplace, got:\n{refreshed}"
     );
 }

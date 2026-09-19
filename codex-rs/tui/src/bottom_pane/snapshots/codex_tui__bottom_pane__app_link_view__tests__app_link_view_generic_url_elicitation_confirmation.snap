@@ -12,6 +12,6 @@ expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72))
   Link:
   https://payments.example/checkout/123
 
-  › 1. I finished
-    2. Back
-  Use tab / ↑ ↓ to move, enter to select, esc to close
+› 1. I finished
+  2. Back
+  tab / ↑ ↓ move · enter select · esc close

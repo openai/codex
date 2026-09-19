@@ -8,8 +8,10 @@ expression: buffer_text(&buffer)
   only in new tasks or after restarting the Codex server.
   Saved but readback failed
 
+
 › [ ] Server network_proxy       Description supplied by the server.
   [ ] Server future_feature      Description supplied by the server.
   [ ] Server prevent_idle_sleep  Description supplied by the server.
+
 
   Selections retained. Save to retry, or cancel to close.

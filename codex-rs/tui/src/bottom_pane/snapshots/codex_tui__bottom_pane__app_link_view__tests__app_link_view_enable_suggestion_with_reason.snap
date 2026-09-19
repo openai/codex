@@ -14,7 +14,7 @@ expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72))
   Newly installed apps can take a few minutes to appear in /apps.
 
 
-  › 1. Manage on ChatGPT
-    2. Enable app
-    3. Back
-  Use tab / ↑ ↓ to move, enter to select, esc to close
+› 1. Manage on ChatGPT
+  2. Enable app
+  3. Back
+  tab / ↑ ↓ move · enter select · esc close
