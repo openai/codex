@@ -2,9 +2,9 @@
 source: tui/src/chatwidget/tests/slash_commands.rs
 expression: popup
 ---
-▌ Rename thread
-▌ Generating a title suggestion…
-▌
-▌ Current project title
+  Rename thread
+  Generating a title suggestion…
 
-Press enter to confirm or esc to go back
+› Current project title
+
+  enter submit · esc back

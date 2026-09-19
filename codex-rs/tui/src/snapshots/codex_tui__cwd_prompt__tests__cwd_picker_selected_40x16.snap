@@ -1,0 +1,19 @@
+---
+source: tui/src/cwd_prompt.rs
+expression: rendered
+---
+
+  Working directory · resume
+  Session = latest cwd recorded in the
+  resumed session                     
+  Current = your current working      
+  directory                           
+↑
+  3. Always use session directory
+› 4. Always use current directory (/    
+     Users/example/current)             
+
+
+
+  enter continue · esc use session ·
+  ctrl+c quit

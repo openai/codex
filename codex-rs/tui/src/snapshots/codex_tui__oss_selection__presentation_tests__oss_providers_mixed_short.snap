@@ -1,0 +1,14 @@
+---
+source: tui/src/oss_selection_tests.rs
+expression: terminal.backend()
+---
+  Select an open-source
+  provider
+
+  1. LM Studio · ○ Not
+     running
+› 2. Ollama · ● Running     
+
+  ↑/↓ choose · enter
+  select · esc LM Studio ·
+  ctrl+c exit

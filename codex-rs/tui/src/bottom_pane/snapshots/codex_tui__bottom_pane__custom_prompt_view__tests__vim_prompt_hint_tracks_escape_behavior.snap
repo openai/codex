@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/custom_prompt_view_tests.rs
+assertion_line: 164
+expression: "hints.join(\"\\n\")"
+---
+  enter submit · esc back
+  enter submit · esc normal mode                                 Vim: Insert
+  enter submit · esc normal mode             Vim: Insert
+  enter subm
+  enter submit · esc back                                        Vim: Normal
+  enter submit · esc normal mode                                Vim: Replace

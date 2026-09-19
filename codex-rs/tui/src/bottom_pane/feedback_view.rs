@@ -68,7 +68,10 @@ pub(crate) fn feedback_success_cell(
         Some(url) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
             lines.extend([
                 "".into(),
-                Line::from(vec!["  ".into(), url.cyan().underlined()]),
+                Line::from(vec![
+                    "  ".into(),
+                    url.fg(crate::style::accent_color()).underlined(),
+                ]),
                 "".into(),
                 Line::from(vec![
                     "  Sentry Feedback ID: ".into(),
@@ -77,7 +80,7 @@ pub(crate) fn feedback_success_cell(
                 Line::from(vec![
                     "  Sentry URL: ".into(),
                     format!("https://go/codex-feedback/{thread_id}")
-                        .cyan()
+                        .fg(crate::style::accent_color())
                         .underlined(),
                 ]),
             ]);
@@ -85,7 +88,10 @@ pub(crate) fn feedback_success_cell(
         Some(url) => {
             lines.extend([
                 "".into(),
-                Line::from(vec!["  ".into(), url.cyan().underlined()]),
+                Line::from(vec![
+                    "  ".into(),
+                    url.fg(crate::style::accent_color()).underlined(),
+                ]),
                 "".into(),
                 Line::from(vec![
                     "  Or mention your thread ID ".into(),
@@ -139,6 +145,7 @@ pub(crate) fn feedback_selection_params(
     app_event_tx: AppEventSender,
 ) -> super::SelectionViewParams {
     super::SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         title: Some("How was this?".to_string()),
         items: vec![
             make_feedback_item(
@@ -172,13 +179,14 @@ pub(crate) fn feedback_selection_params(
                 FeedbackCategory::Other,
             ),
         ],
-        ..Default::default()
+        ..super::SelectionViewParams::picker()
     }
 }
 
 /// Build the selection popup params shown when feedback is disabled.
 pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
     super::SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         title: Some("Sending feedback is disabled".to_string()),
         subtitle: Some("This action is disabled by configuration.".to_string()),
         footer_hint: Some(standard_popup_hint_line()),
@@ -187,7 +195,7 @@ pub(crate) fn feedback_disabled_params() -> super::SelectionViewParams {
             dismiss_on_select: true,
             ..Default::default()
         }],
-        ..Default::default()
+        ..super::SelectionViewParams::picker()
     }
 }
 
@@ -302,6 +310,7 @@ pub(crate) fn feedback_upload_consent_params(
     }
 
     super::SelectionViewParams {
+        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         footer_hint: Some(standard_popup_hint_line()),
         items: vec![
             super::SelectionItem {
@@ -324,7 +333,7 @@ pub(crate) fn feedback_upload_consent_params(
         header: Box::new(crate::render::renderable::ColumnRenderable::with(
             header_lines,
         )),
-        ..Default::default()
+        ..super::SelectionViewParams::picker()
     }
 }
 

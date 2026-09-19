@@ -713,6 +713,7 @@ fn is_ctrl_exit_combo(key_event: KeyEvent) -> bool {
 mod tests {
     use super::ExternalAgentConfigMigrationOutcome;
     use super::ExternalAgentConfigMigrationScreen;
+    use super::FocusArea;
     use super::MigrationView;
     use crate::custom_terminal::Terminal;
     use crate::test_backend::VT100Backend;
@@ -939,6 +940,61 @@ mod tests {
         );
         #[cfg(not(windows))]
         assert_snapshot!("external_agent_config_migration_customize_action", rendered);
+    }
+
+    #[test]
+    fn action_rows_keep_single_line_allocation_and_focus_style() {
+        let items = sample_items();
+        let mut screen = ExternalAgentConfigMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            &items,
+            &items,
+            /*error*/ None,
+        );
+        screen.customize();
+        screen.highlighted_action = screen.available_actions()[0];
+        for focus in [FocusArea::Items, FocusArea::Actions] {
+            screen.focus = focus;
+            for width in [30, 80] {
+                let area = Rect::new(/*x*/ 0, /*y*/ 0, width, /*height*/ 30);
+                let mut buf = ratatui::buffer::Buffer::empty(area);
+                ratatui::widgets::WidgetRef::render_ref(&&screen, area, &mut buf);
+                let mut action_rows = Vec::new();
+                for (idx, action) in screen.available_actions().iter().enumerate() {
+                    let marker =
+                        if focus == FocusArea::Actions && *action == screen.highlighted_action {
+                            '›'
+                        } else {
+                            ' '
+                        };
+                    let expected = format!("{marker} {}. {}", idx + 1, action.label());
+                    let y = (0..area.height)
+                        .find(|&y| {
+                            (0..width)
+                                .map(|x| buf[(x, y)].symbol())
+                                .collect::<String>()
+                                .contains(&expected)
+                        })
+                        .expect("action remains on one row");
+                    action_rows.push(y);
+                    assert_eq!(
+                        buf[(2, y)].modifier.contains(ratatui::style::Modifier::DIM),
+                        focus == FocusArea::Items
+                    );
+                    if marker == '›' {
+                        assert_eq!(
+                            buf[(2, y)].bg,
+                            crate::bottom_pane::selection_style().bg.unwrap()
+                        );
+                    }
+                }
+                assert!(
+                    action_rows
+                        .windows(/*size*/ 2)
+                        .all(|rows| rows[1] == rows[0] + 1)
+                );
+            }
+        }
     }
 
     #[test]

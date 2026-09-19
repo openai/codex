@@ -1,0 +1,15 @@
+---
+source: tui/src/model_migration.rs
+expression: rendered
+---
+
+  # Introducing gpt-new
+
+  A faster coding model
+  with better reasoning.
+
+  1. Try new model
+› 2. Use existing model     
+
+  enter/esc confirm ·
+  ctrl+c quit

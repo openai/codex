@@ -184,6 +184,10 @@ impl AsyncQuestions {
                 let number = index + 1;
                 let prefix = format!("{prefix} {number}. ");
                 GenericDisplayRow {
+                    category_tag: None,
+                    // Other stays an inline editor with foreground-only focus.
+                    selection_style: (index < self.options().len())
+                        .then(super::picker_style::selection_style),
                     name: format!("{prefix}{label}"),
                     wrap_indent: Some(prefix.width()),
                     ..Default::default()

@@ -1,9 +1,10 @@
 ---
 source: tui/src/onboarding/trust_directory.rs
-assertion_line: 357
 expression: terminal.backend()
 ---
-> You are in /workspace/project
+
+  Folder access
+  /workspace/project                                                
 
   Config, hooks, and exec policies from untrusted folders stay
   disabled. Trusted project folders can still contribute settings.
@@ -13,4 +14,4 @@ expression: terminal.backend()
 › 1. Open restricted                                                  
   2. Back to Agent Command Center
 
-  Press enter to continue; esc to go back
+  enter continue · esc back

@@ -1,9 +1,10 @@
 ---
 source: tui/src/onboarding/trust_directory.rs
-assertion_line: 355
 expression: terminal.backend()
 ---
-> You are in /workspace/project
+
+  Folder access
+  /workspace/project                                                
 
   This existing task may retain settings and history, including
   project configuration or hooks loaded while it was trusted. To use
@@ -13,4 +14,4 @@ expression: terminal.backend()
 › 1. Open existing task                                               
   2. Back to Agent Command Center
 
-  Press enter to continue; esc to go back
+  enter continue · esc back

@@ -1,0 +1,21 @@
+---
+source: tui/src/onboarding/trust_directory.rs
+expression: terminal.backend()
+---
+
+  Folder access
+  /workspace/project/long-nested-folde
+  r                                   
+
+  Config, hooks, and exec policies
+  from untrusted folders stay
+  disabled. Trusted project folders
+  can still contribute settings.
+  Skills still load, and tools follow
+  your permission settings. Opening
+  will not change saved trust.
+
+› 1. Open restricted                    
+  2. Back to Agent Command Center
+
+  enter continue · esc back

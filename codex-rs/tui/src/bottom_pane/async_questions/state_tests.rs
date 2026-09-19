@@ -450,6 +450,38 @@ fn question_navigation_resets_history_recall() {
 }
 
 #[test]
+fn named_choices_share_selection_while_other_keeps_its_inline_cursor() {
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (30, 30, 30),
+            bg: (255, 255, 255),
+        },
+        || {
+            let mut editor = editor();
+            editor.navigate(/*forward*/ true);
+            for width in [40, 80] {
+                editor.select_option(/*index*/ 0);
+                let buffer = render_editor(&editor, width, /*height*/ 16);
+                let cell = buffer
+                    .content
+                    .iter()
+                    .find(|cell| cell.symbol() == "N")
+                    .unwrap();
+                assert_eq!(cell.bg, crate::bottom_pane::selection_style().bg.unwrap());
+                editor.select_option(/*index*/ 1);
+                let buffer = render_editor(&editor, width, /*height*/ 16);
+                let cursor = editor.cursor_pos(buffer.area).unwrap();
+                assert_eq!(buffer[cursor].symbol(), "O");
+                assert_ne!(
+                    buffer[cursor].bg,
+                    crate::bottom_pane::selection_style().bg.unwrap()
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn answered_questions_do_not_reopen_when_history_precedes_local_drafts() {
     let mut original = editor();
     let saved = original.capture();

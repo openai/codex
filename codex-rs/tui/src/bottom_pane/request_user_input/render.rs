@@ -288,7 +288,7 @@ impl RequestUserInputOverlay {
             let question_line = if answered {
                 Line::from(line.clone())
             } else {
-                Line::from(line.clone()).cyan()
+                Line::from(line.clone()).fg(crate::style::accent_color())
             };
             Paragraph::new(question_line).render(
                 Rect {
@@ -347,7 +347,7 @@ impl RequestUserInputOverlay {
         let option_tip = if options_hidden {
             let selected = self.selected_option_index().unwrap_or(0).saturating_add(1);
             let total = self.options_len();
-            Some(super::FooterTip::new(format!("option {selected}/{total}")))
+            Some(Line::from(format!("option {selected}/{total}").dim()))
         } else {
             None
         };
@@ -362,11 +362,7 @@ impl RequestUserInputOverlay {
                 if tip_idx > 0 {
                     spans.push(TIP_SEPARATOR.into());
                 }
-                if tip.highlight {
-                    spans.push(tip.text.cyan().bold().not_dim());
-                } else {
-                    spans.push(tip.text.into());
-                }
+                spans.extend(tip.spans);
             }
             let line = Line::from(spans).dim();
             let line = truncate_line_word_boundary_with_ellipsis(line, footer_area.width as usize);

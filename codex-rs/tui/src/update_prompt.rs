@@ -1,17 +1,27 @@
-#![cfg(not(debug_assertions))]
+//! Shared picker presentation for the installed CLI's update choices.
+//! Update discovery and execution remain disabled in debug builds.
 
+#![cfg(any(not(debug_assertions), test))]
+
+use crate::bottom_pane::picker_option_list;
+use crate::bottom_pane::render_menu_surface;
 use crate::key_hint;
+#[cfg(not(debug_assertions))]
 use crate::legacy_core::config::Config;
 use crate::render::Insets;
-use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
-use crate::selection_list::selection_option_row;
+use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
+#[cfg(not(debug_assertions))]
 use crate::tui::Tui;
+#[cfg(not(debug_assertions))]
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+#[cfg(not(debug_assertions))]
 use crate::updates;
+#[cfg(not(debug_assertions))]
 use color_eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -23,16 +33,21 @@ use ratatui::prelude::Widget;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
+#[cfg(not(debug_assertions))]
 use tokio_stream::StreamExt;
 
 const RELEASE_NOTES_URL: &str = "https://github.com/openai/codex/releases/latest";
 
+#[cfg(not(debug_assertions))]
 pub(crate) enum UpdatePromptOutcome {
     Continue,
     RunUpdate(UpdateAction),
 }
 
+#[cfg(not(debug_assertions))]
 pub(crate) async fn run_update_prompt_if_needed(
     tui: &mut Tui,
     config: &Config,
@@ -161,6 +176,7 @@ impl UpdatePromptScreen {
         self.selection
     }
 
+    #[cfg(not(debug_assertions))]
     fn latest_version(&self) -> &str {
         self.latest_version.as_str()
     }
@@ -187,56 +203,69 @@ impl UpdateSelection {
 impl WidgetRef for &UpdatePromptScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let mut column = ColumnRenderable::new();
+        let mut column = FlexRenderable::new();
 
         let update_command = self.update_action.command_str();
 
-        column.push("");
-        column.push(Line::from(vec![
-            "  ✨\u{200A}".bold().cyan(),
-            "Update available!".bold(),
-            " ".into(),
-            format!(
-                "{current} -> {latest}",
-                current = self.current_version,
-                latest = self.latest_version
-            )
-            .dim(),
-        ]));
-        column.push("");
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
         column.push(
-            Line::from(vec![
+            /*flex*/ 0,
+            Paragraph::new(Line::from(vec![
+                "Update available".bold(),
+                " · ".dim(),
+                format!(
+                    "{current} → {latest}",
+                    current = self.current_version,
+                    latest = self.latest_version
+                )
+                .dim(),
+            ]))
+            .wrap(Wrap { trim: false })
+            .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        column.push(
+            /*flex*/ 1,
+            Paragraph::new(Line::from(vec![
                 "Release notes: ".dim(),
                 RELEASE_NOTES_URL.dim().underlined(),
-            ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            ]))
+            .wrap(Wrap { trim: false })
+            .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
         );
-        column.push("");
-        column.push(selection_option_row(
-            0,
-            format!("Update now (runs `{update_command}`)"),
-            self.highlighted == UpdateSelection::UpdateNow,
-        ));
-        column.push(selection_option_row(
-            1,
-            "Skip".to_string(),
-            self.highlighted == UpdateSelection::NotNow,
-        ));
-        column.push(selection_option_row(
-            2,
-            "Skip until next version".to_string(),
-            self.highlighted == UpdateSelection::DontRemind,
-        ));
-        column.push("");
+        let selected_index = match self.highlighted {
+            UpdateSelection::UpdateNow => 0,
+            UpdateSelection::NotNow => 1,
+            UpdateSelection::DontRemind => 2,
+        };
         column.push(
-            Line::from(vec![
-                "Press ".dim(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to continue".dim(),
-            ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            /*flex*/ 1,
+            picker_option_list(
+                vec![
+                    format!("Update now (runs `{update_command}`)"),
+                    "Skip".to_string(),
+                    "Skip until next version".to_string(),
+                ],
+                selected_index,
+            ),
         );
-        column.render(area, buf);
+        column.push(
+            /*flex*/ 0,
+            Paragraph::new(Line::from(vec![
+                key_hint::plain(KeyCode::Enter).into(),
+                " continue · ".dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " skip".dim(),
+            ]))
+            .wrap(Wrap { trim: false })
+            .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
+        let panel = Rect {
+            height: column.desired_height(area.width).min(area.height),
+            ..area
+        };
+        render_menu_surface(panel, buf);
+        column.render(panel, buf);
         crate::terminal_hyperlinks::mark_underlined_hyperlink(buf, area, RELEASE_NOTES_URL);
     }
 }
@@ -249,6 +278,7 @@ mod tests {
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::widgets::FrameExt;
 
@@ -263,7 +293,8 @@ mod tests {
     #[test]
     fn update_prompt_snapshot() {
         let screen = new_prompt();
-        let mut terminal = Terminal::new(VT100Backend::new(80, 12)).expect("terminal");
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 80, /*height*/ 12)).expect("terminal");
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
             .expect("render update prompt");
@@ -312,5 +343,25 @@ mod tests {
         assert_eq!(screen.highlighted, UpdateSelection::DontRemind);
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         assert_eq!(screen.highlighted, UpdateSelection::UpdateNow);
+    }
+
+    #[test]
+    fn long_update_command_keeps_selected_skip_visible_in_a_short_viewport() {
+        let mut screen = new_prompt();
+        screen.update_action = UpdateAction::StandaloneWindows;
+        screen.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let (width, height) = (28, 12);
+        let mut terminal = Terminal::new(VT100Backend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
+            .expect("render resized update picker");
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("› 3. Skip until next version"));
+        let words = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(words.contains("enter continue · esc skip"));
+        assert_eq!(screen.selection(), None);
+        insta::assert_snapshot!(format!("update_picker_selected_{width}x{height}"), rendered);
+        screen.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(screen.selection(), Some(UpdateSelection::NotNow));
     }
 }

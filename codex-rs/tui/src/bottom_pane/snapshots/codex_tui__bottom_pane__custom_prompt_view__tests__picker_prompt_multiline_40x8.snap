@@ -1,0 +1,12 @@
+---
+source: tui/src/bottom_pane/custom_prompt_view_tests.rs
+expression: "rows.join(\"\\n\")"
+---
+
+  Edit goal
+
+› Check the parser and preserve 日 本
+  語 .
+
+
+  enter submit · esc normal mode

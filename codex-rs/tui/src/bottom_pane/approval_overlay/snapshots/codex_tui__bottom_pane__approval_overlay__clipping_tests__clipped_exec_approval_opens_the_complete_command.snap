@@ -12,24 +12,24 @@ bound=true 80x14
   Reason: A reason requiring review.A reason requiring review.A reason
   requiring review.A reason requiring review.A reason requiring review.A
   reason requiring review.A reason requiring review.A reason requiring
+  review.A reason requiring review.A reason requiring review.A reason
+  requiring review.A reason requiring review.A reason requiring review.A
   [… 34 lines] ctrl+g view all
-
 › 1. Yes, proceed (y)
   2. No, and tell Codex what to do differently (esc)
-
   Press enter to confirm or esc to cancel
 
 bound=true 40x10
 
   Would you like to run the following
+  command?
 
-  [… 42 lines] ctrl+g view all
-
+  [… 43 lines] ctrl+g view all
 › 1. Yes, proceed (y)
   2. No, and tell Codex what to do
      differently (esc)
-
-  Press enter to confirm or esc to cance
+  Press enter to confirm or esc to
+  cancel
 
 bound=false 80x14
 
@@ -40,21 +40,21 @@ bound=false 80x14
   Reason: A reason requiring review.A reason requiring review.A reason
   requiring review.A reason requiring review.A reason requiring review.A
   reason requiring review.A reason requiring review.A reason requiring
+  review.A reason requiring review.A reason requiring review.A reason
+  requiring review.A reason requiring review.A reason requiring review.A
   [… 34 lines]
-
 › 1. Yes, proceed (y)
   2. No, and tell Codex what to do differently (esc)
-
   Press enter to confirm or esc to cancel
 
 bound=false 40x10
 
   Would you like to run the following
+  command?
 
-  [… 42 lines]
-
+  [… 43 lines]
 › 1. Yes, proceed (y)
   2. No, and tell Codex what to do
      differently (esc)
-
-  Press enter to confirm or esc to cance
+  Press enter to confirm or esc to
+  cancel

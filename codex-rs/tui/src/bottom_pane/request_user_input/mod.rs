@@ -17,6 +17,8 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 mod layout;
 pub(super) mod render;
 
@@ -30,6 +32,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
+use crate::footer_hint::shortcut;
 use crate::history_cell;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
@@ -131,28 +134,6 @@ struct AnswerState {
     answer_committed: bool,
     // Whether the notes UI has been explicitly opened for this question.
     notes_visible: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct FooterTip {
-    pub(super) text: String,
-    pub(super) highlight: bool,
-}
-
-impl FooterTip {
-    fn new(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            highlight: false,
-        }
-    }
-
-    fn highlighted(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            highlight: true,
-        }
-    }
 }
 
 pub(crate) struct RequestUserInputOverlay {
@@ -443,6 +424,8 @@ impl RequestUserInputOverlay {
                         let prefix_label = format!("{prefix} {number}. ");
                         let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                         GenericDisplayRow {
+                            category_tag: None,
+                            selection_style: Some(crate::bottom_pane::selection_style()),
                             name: format!("{prefix_label}{label}"),
                             description: Some(opt.description.clone()),
                             wrap_indent: Some(wrap_indent),
@@ -459,6 +442,8 @@ impl RequestUserInputOverlay {
                     let prefix_label = format!("{prefix} {number}. ");
                     let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                     rows.push(GenericDisplayRow {
+                        category_tag: None,
+                        selection_style: Some(crate::bottom_pane::selection_style()),
                         name: format!("{prefix_label}{OTHER_OPTION_LABEL}"),
                         description: Some(OTHER_OPTION_DESCRIPTION.to_string()),
                         wrap_indent: Some(wrap_indent),
@@ -586,15 +571,23 @@ impl RequestUserInputOverlay {
         self.sync_composer_placeholder();
     }
 
-    fn footer_tips(&self) -> Vec<FooterTip> {
+    fn footer_tips(&self) -> Vec<Line<'static>> {
         let mut tips = Vec::new();
         let notes_visible = self.notes_ui_visible();
         if self.has_options() {
             if self.selected_option_index().is_some() && !notes_visible {
-                tips.push(FooterTip::highlighted("tab to add notes"));
+                tips.push(shortcut("tab", "to add notes"));
             }
             if self.selected_option_index().is_some() && notes_visible {
-                tips.push(FooterTip::new("tab or esc to clear notes"));
+                tips.push(Line::from(
+                    [
+                        crate::key_hint::key_label_spans("tab"),
+                        vec![" or ".dim()],
+                        crate::key_hint::key_label_spans("esc"),
+                        vec![" to clear notes".dim()],
+                    ]
+                    .concat(),
+                ));
             }
         }
 
@@ -609,19 +602,19 @@ impl RequestUserInputOverlay {
         };
         if let Some(submit_key) = submit_key {
             let submit_tip = if question_count == 1 {
-                FooterTip::highlighted(format!("{submit_key} to submit answer"))
+                shortcut(&submit_key, "to submit answer")
             } else if is_last_question {
-                FooterTip::highlighted(format!("{submit_key} to submit all"))
+                shortcut(&submit_key, "to submit all")
             } else {
-                FooterTip::new(format!("{submit_key} to submit answer"))
+                shortcut(&submit_key, "to submit answer")
             };
             tips.push(submit_tip);
         }
         if question_count > 1 {
             if self.has_options() && !self.focus_is_notes() {
-                tips.push(FooterTip::new("←/→ to navigate questions"));
+                tips.push(shortcut("←/→", "to navigate questions"));
             } else if !self.has_options() {
-                tips.push(FooterTip::new("ctrl + p / ctrl + n change question"));
+                tips.push(shortcut("ctrl+p / ctrl+n", "change question"));
             }
         }
         if let Some(interrupt_key) = self.interrupt_turn_hint
@@ -629,23 +622,20 @@ impl RequestUserInputOverlay {
                 && notes_visible
                 && interrupt_key == ShortcutHint::Single(crate::key_hint::plain(KeyCode::Esc)))
         {
-            tips.push(FooterTip::new(format!(
-                "{} to interrupt",
-                interrupt_key.display_label()
-            )));
+            tips.push(shortcut(&interrupt_key.display_label(), "to interrupt"));
         }
         tips
     }
 
-    pub(super) fn footer_tip_lines(&self, width: u16) -> Vec<Vec<FooterTip>> {
+    pub(super) fn footer_tip_lines(&self, width: u16) -> Vec<Vec<Line<'static>>> {
         self.wrap_footer_tips(width, self.footer_tips())
     }
 
     pub(super) fn footer_tip_lines_with_prefix(
         &self,
         width: u16,
-        prefix: Option<FooterTip>,
-    ) -> Vec<Vec<FooterTip>> {
+        prefix: Option<Line<'static>>,
+    ) -> Vec<Vec<Line<'static>>> {
         let mut tips = Vec::new();
         if let Some(prefix) = prefix {
             tips.push(prefix);
@@ -654,12 +644,12 @@ impl RequestUserInputOverlay {
         self.wrap_footer_tips(width, tips)
     }
 
-    fn wrap_footer_tips(&self, width: u16, tips: Vec<FooterTip>) -> Vec<Vec<FooterTip>> {
+    fn wrap_footer_tips(&self, width: u16, tips: Vec<Line<'static>>) -> Vec<Vec<Line<'static>>> {
         crate::footer_hint::wrap_hint_rows(
             tips,
             width,
             UnicodeWidthStr::width(TIP_SEPARATOR),
-            |tip| UnicodeWidthStr::width(tip.text.as_str()),
+            Line::width,
         )
     }
 
@@ -993,6 +983,8 @@ impl RequestUserInputOverlay {
                 let prefix = if idx == selected { '›' } else { ' ' };
                 let number = idx + 1;
                 GenericDisplayRow {
+                    category_tag: None,
+                    selection_style: Some(crate::bottom_pane::selection_style()),
                     name: format!("{prefix} {number}. {label}"),
                     description: Some(description.clone()),
                     ..Default::default()
@@ -2444,7 +2436,7 @@ mod tests {
             /*disable_paste_burst*/ false,
         );
         let tips = overlay.footer_tips();
-        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        let tip_texts = tips.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
             vec![
@@ -2457,7 +2449,7 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         let tips = overlay.footer_tips();
-        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        let tip_texts = tips.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
             vec!["tab or esc to clear notes", "enter to submit answer",]
@@ -2483,12 +2475,12 @@ mod tests {
         overlay.move_question(/*next*/ true);
 
         let tips = overlay.footer_tips();
-        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        let tip_texts = tips.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
             vec![
                 "enter to submit all",
-                "ctrl + p / ctrl + n change question",
+                "ctrl+p / ctrl+n change question",
                 "esc to interrupt",
             ]
         );
@@ -2509,7 +2501,7 @@ mod tests {
         );
 
         let tips = overlay.footer_tips();
-        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        let tip_texts = tips.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
             vec!["ctrl+j to submit answer", "esc to interrupt"]
@@ -2553,7 +2545,7 @@ mod tests {
             let tips = overlay.footer_tips();
 
             assert_eq!(
-                tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>(),
+                tips.iter().map(ToString::to_string).collect::<Vec<_>>(),
                 expected_tips
             );
         }
@@ -2577,7 +2569,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
 
         let tips = overlay.footer_tips();
-        let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
+        let tip_texts = tips.iter().map(ToString::to_string).collect::<Vec<_>>();
         assert_eq!(
             tip_texts,
             vec![
@@ -3493,7 +3485,7 @@ mod tests {
         let separator_width = UnicodeWidthStr::width(TIP_SEPARATOR);
         for tips in lines {
             let used = tips.iter().enumerate().fold(0usize, |acc, (idx, tip)| {
-                let tip_width = UnicodeWidthStr::width(tip.text.as_str()).min(width as usize);
+                let tip_width = tip.width().min(width as usize);
                 let extra = if idx == 0 {
                     tip_width
                 } else {
@@ -3755,16 +3747,16 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        insta::assert_snapshot!(snapshot, @"
+        insta::assert_snapshot!(snapshot, @r"
 
-        Question 1/1 (1 unanswered)
-        Share details.
+          Question 1/1 (1 unanswered)
+          Share details.
 
-        › Type your answer (optional)
+          › Type your answer (optional)
 
 
 
-        ctrl+x enter to submit answer | esc to interrupt
+          ctrl+x enter to submit answer | esc to interrupt
         ");
     }
 

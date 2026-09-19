@@ -3,13 +3,14 @@ source: tui/src/chatwidget/tests/approval_requests.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 80, height: 10 },
+    area: Rect { x: 0, y: 0, width: 80, height: 11 },
     content: [
         "                                                                                ",
         "                                                                                ",
         "  Would you like to send input to terminal 42?                                  ",
         "                                                                                ",
         "  Input: "confirm\n"                                                            ",
+        "                                                                                ",
         "                                                                                ",
         "› 1. Yes, proceed (y)                                                           ",
         "  2. No, and tell Codex what to do differently (esc)                            ",
@@ -20,14 +21,14 @@ Buffer {
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 2, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 46, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 21, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 48, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 51, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
-        x: 2, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 8, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 13, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 28, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 31, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | REVERSED,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 48, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 51, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 8, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 13, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 28, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 31, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
     ]
 }

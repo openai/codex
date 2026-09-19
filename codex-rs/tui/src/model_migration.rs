@@ -1,10 +1,16 @@
+//! Model upgrade copy and choices with shared picker presentation.
+//! Mandatory and optional migration outcomes retain their existing keyboard policy.
+
+use crate::bottom_pane::picker_option_list;
+use crate::bottom_pane::render_menu_surface;
 use crate::key_hint;
 use crate::markdown_render::render_markdown_text_with_width;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::FlexRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
-use crate::selection_list::selection_option_row;
+use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -12,6 +18,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use ratatui::layout::Rect;
 use ratatui::prelude::Stylize as _;
 use ratatui::prelude::Widget;
 use ratatui::text::Line;
@@ -110,7 +117,7 @@ pub(crate) fn migration_copy_for_models(
     if let Some(model_link) = model_link {
         content.push(Line::from(vec![
             format!("{description_line} Learn more about {target_display_name} at ").into(),
-            model_link.cyan().underlined(),
+            model_link.fg(crate::style::accent_color()).underlined(),
         ]));
         content.push(Line::from(""));
     } else {
@@ -122,8 +129,6 @@ pub(crate) fn migration_copy_for_models(
         content.push(Line::from(format!(
             "You can continue using {current_model} if you prefer."
         )));
-    } else {
-        content.push(Line::from("Press enter to continue".dim()));
     }
 
     ModelMigrationCopy {
@@ -255,20 +260,62 @@ impl WidgetRef for &ModelMigrationScreen {
     fn render_ref(&self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         Clear.render(area, buf);
 
-        let mut column = ColumnRenderable::new();
-        column.push("");
+        let mut body = ColumnRenderable::new();
         if let Some(markdown) = self.copy.markdown.as_ref() {
-            self.render_markdown_content(markdown, area.width, &mut column);
+            self.render_markdown_content(markdown, area.width, &mut body);
         } else {
-            column.push(self.heading_line());
-            column.push(Line::from(""));
-            self.render_content(&mut column);
+            body.push(
+                Paragraph::new(Line::from(self.copy.heading.clone()))
+                    .wrap(Wrap { trim: false })
+                    .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+            );
+            body.push(Line::from(""));
+            self.render_content(&mut body);
         }
+        let mut column = FlexRenderable::new();
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&body));
         if self.copy.can_opt_out {
-            self.render_menu(&mut column);
+            let selected_index = match self.highlighted_option {
+                MigrationMenuOption::TryNewModel => 0,
+                MigrationMenuOption::UseExistingModel => 1,
+            };
+            column.push(
+                /*flex*/ 0,
+                picker_option_list(
+                    MigrationMenuOption::all()
+                        .into_iter()
+                        .map(|option| option.label().to_string())
+                        .collect(),
+                    selected_index,
+                ),
+            );
         }
-
-        column.render(area, buf);
+        let mut hints = key_hint::key_label_spans(&format!(
+            "{}/{}",
+            key_hint::plain(KeyCode::Enter).display_label(),
+            key_hint::plain(KeyCode::Esc).display_label()
+        ));
+        hints.push(if self.copy.can_opt_out {
+            " confirm · ".dim()
+        } else {
+            " continue · ".dim()
+        });
+        hints.push(key_hint::ctrl(KeyCode::Char('c')).into());
+        hints.push(" quit".dim());
+        column.push(
+            /*flex*/ 0,
+            Paragraph::new(Line::from(hints))
+                .wrap(Wrap { trim: false })
+                .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
+        let panel = Rect {
+            height: column.desired_height(area.width).min(area.height),
+            ..area
+        };
+        render_menu_surface(panel, buf);
+        column.render(panel, buf);
     }
 }
 
@@ -294,12 +341,6 @@ impl ModelMigrationScreen {
         }
     }
 
-    fn heading_line(&self) -> Line<'static> {
-        let mut heading = vec![Span::raw("> ")];
-        heading.extend(self.copy.heading.iter().cloned());
-        Line::from(heading)
-    }
-
     fn render_content(&self, column: &mut ColumnRenderable) {
         self.render_lines(&self.copy.content, column);
     }
@@ -309,9 +350,7 @@ impl ModelMigrationScreen {
             column.push(
                 Paragraph::new(line.clone())
                     .wrap(Wrap { trim: false })
-                    .inset(Insets::tlbr(
-                        /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-                    )),
+                    .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
             );
         }
     }
@@ -323,57 +362,16 @@ impl ModelMigrationScreen {
         column: &mut ColumnRenderable,
     ) {
         let horizontal_inset = 2;
-        let content_width = area_width.saturating_sub(horizontal_inset);
+        let content_width = area_width.saturating_sub(horizontal_inset * 2);
         let wrap_width = (content_width > 0).then_some(content_width as usize);
         let rendered = render_markdown_text_with_width(markdown, wrap_width);
         for line in rendered.lines {
             column.push(
                 Paragraph::new(line)
                     .wrap(Wrap { trim: false })
-                    .inset(Insets::tlbr(
-                        /*top*/ 0,
-                        horizontal_inset,
-                        /*bottom*/ 0,
-                        /*right*/ 0,
-                    )),
+                    .inset(Insets::vh(/*v*/ 0, horizontal_inset)),
             );
         }
-    }
-
-    fn render_menu(&self, column: &mut ColumnRenderable) {
-        column.push(Line::from(""));
-        column.push(
-            Paragraph::new("Choose how you'd like Codex to proceed.")
-                .wrap(Wrap { trim: false })
-                .inset(Insets::tlbr(
-                    /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-                )),
-        );
-        column.push(Line::from(""));
-
-        for (idx, option) in MigrationMenuOption::all().into_iter().enumerate() {
-            column.push(selection_option_row(
-                idx,
-                option.label().to_string(),
-                self.highlighted_option == option,
-            ));
-        }
-
-        column.push(Line::from(""));
-        column.push(
-            Line::from(vec![
-                "Use ".dim(),
-                key_hint::plain(KeyCode::Up).into(),
-                "/".dim(),
-                key_hint::plain(KeyCode::Down).into(),
-                " to move, press ".dim(),
-                key_hint::plain(KeyCode::Enter).into(),
-                " to confirm".dim(),
-            ])
-            .inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
-        );
     }
 }
 
@@ -418,8 +416,11 @@ mod tests {
     use crate::tui::FrameRequester;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
+    use ratatui::widgets::FrameExt;
 
     #[test]
     fn prompt_snapshot() {
@@ -625,5 +626,36 @@ mod tests {
             rendered.contains("tail42"),
             "expected wrapped markdown URL tail to remain visible, got:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn migration_choice_and_hints_stay_visible_in_a_short_viewport() {
+        let mut screen = ModelMigrationScreen::new(
+            FrameRequester::test_dummy(),
+            migration_copy_for_models(
+                "gpt-old",
+                "gpt-new",
+                /*model_link*/ None,
+                /*migration_copy*/ None,
+                Some("# Introducing {model_to}\n\nA faster coding model with better reasoning.\n\nYou can keep using {model_from} if you prefer.".to_string()),
+                "GPT New".to_string(),
+                /*target_description*/ None,
+                /*can_opt_out*/ true,
+            ),
+        );
+        screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (width, height) = (28, 12);
+        let mut terminal =
+            ratatui::Terminal::new(VT100Backend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
+            .expect("render resized model migration picker");
+        let rendered = terminal.backend().to_string();
+        assert!(rendered.contains("› 2. Use existing model"));
+        assert!(rendered.contains("enter/esc confirm"));
+        assert!(!screen.is_done());
+        assert_snapshot!(format!("model_picker_selected_{width}x{height}"), rendered);
+        screen.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(screen.outcome(), super::ModelMigrationOutcome::Rejected);
     }
 }

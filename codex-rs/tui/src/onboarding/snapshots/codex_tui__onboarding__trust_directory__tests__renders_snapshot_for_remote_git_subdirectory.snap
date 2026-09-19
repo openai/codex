@@ -1,19 +1,21 @@
 ---
 source: tui/src/onboarding/trust_directory.rs
-assertion_line: 314
 expression: "terminal.backend().to_string().lines().map(str::trim_end).collect::<Vec<_>>().join(\"\\n\")"
 ---
-> You are in /srv/remote/project/nested
 
-  Note: You’re in a subdirectory of a Git project. Trusting will apply
-  to the repository root: /srv/remote/project
+  Folder access
+  /srv/remote/project/nested
 
-  Trust this folder? Codex can read, edit, and run files here, subject
-  to your permission settings. Folder settings can run code
+  Note: You’re in a subdirectory of a Git project. Trusting will
+  apply to the repository root:
+  /srv/remote/project
+
+  Trust this folder? Codex can read, edit, and run files here,
+  subject to your permission settings. Folder settings can run code
   automatically, even without a model request. Continue only if you
   trust these files. Your trust decision will be saved.
 
 › 1. Trust and continue
   2. Back to Agent Command Center
 
-  Press enter to continue; esc to go back
+  enter continue · esc back

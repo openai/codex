@@ -221,6 +221,8 @@ impl Renderable for FeedbackNoteView {
             return;
         }
 
+        buf.set_style(area, crate::style::user_message_style());
+
         // Four rows leave room for one intro line; show the disclosure before submission.
         let intro_content = if area.height == 4 {
             IntroContent::DisclosureOnly
@@ -289,6 +291,7 @@ impl Renderable for FeedbackNoteView {
                         height: 1,
                     };
                     Clear.render(blank_rect, buf);
+                    buf.set_style(blank_rect, crate::style::user_message_style());
                 }
                 let textarea_rect = Rect {
                     x: input_area.x.saturating_add(2),
@@ -314,6 +317,7 @@ impl Renderable for FeedbackNoteView {
                 height: 1,
             };
             Clear.render(blank_area, buf);
+            buf.set_style(blank_area, crate::style::user_message_style());
             if max_scroll > 0 {
                 Paragraph::new(Line::from(vec![
                     key_hint::plain(KeyCode::PageUp).into(),
@@ -384,13 +388,13 @@ impl FeedbackNoteView {
                 );
                 lines.push(Line::from(vec![
                     "By submitting feedback, you agree that OpenAI can use your feedback for safety purposes and internal model training, as explained in more detail ".dim(),
-                    "here".cyan().underlined(),
+                    "here".fg(crate::style::accent_color()).underlined(),
                     ". Please avoid sharing tented information under NDA, or privileged, HR-related, or sensitive personal information.".dim(),
                 ]));
             }
             FeedbackAudience::External => lines.push(Line::from(vec![
                 "Your feedback can be used to improve ChatGPT. ".dim(),
-                "Learn more".cyan().underlined(),
+                "Learn more".fg(crate::style::accent_color()).underlined(),
                 ".".dim(),
             ])),
         }
@@ -404,7 +408,7 @@ impl FeedbackNoteView {
 }
 
 fn gutter() -> Span<'static> {
-    "▌ ".cyan()
+    "▌ ".fg(crate::style::accent_color())
 }
 
 fn feedback_title_and_placeholder(category: FeedbackCategory) -> (String, String) {

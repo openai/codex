@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-assertion_line: 1743
 expression: normalize_snapshot_paths(contents)
 ---
 
@@ -10,7 +9,8 @@ expression: normalize_snapshot_paths(contents)
   Description: The model wants to apply changes
   Destination: /tmp/project/README.md
 
-› 1. Yes, proceed (y)
+
+› 1. Yes, proceed (y)                                                           
   2. Yes, and don't ask again for these files (a)
   3. No, and tell Codex what to do differently (esc)
 

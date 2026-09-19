@@ -3,8 +3,7 @@ source: tui/src/cwd_prompt.rs
 expression: rendered
 ---
 
-Choose working directory to resume this session
-
+  Working directory · resume
   Session = latest cwd recorded in the resumed session
   Current = your current working directory
 
@@ -12,4 +11,4 @@ Choose working directory to resume this session
   2. Use current directory (/Users/example/current)
   3. Always use session directory
 
-  Press enter to continue
+  enter continue · esc use session · ctrl+c quit

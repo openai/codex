@@ -1,9 +1,19 @@
+//! Local provider discovery and shared startup picker presentation.
+//! Discovery and selection outcomes stay independent of the picker layout.
+
 use std::io;
 use std::sync::LazyLock;
 
+use crate::bottom_pane::picker_option_list;
+use crate::bottom_pane::render_menu_surface;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
+use crate::render::Insets;
+use crate::render::renderable::FlexRenderable;
+use crate::render::renderable::Renderable;
+use crate::render::renderable::RenderableExt as _;
+use crate::render::renderable::RenderableItem;
 use codex_http_client::HttpClient;
 use codex_http_client::HttpClientBuilder;
 use codex_model_provider_info::DEFAULT_LMSTUDIO_PORT;
@@ -24,29 +34,16 @@ use crossterm::terminal::enable_raw_mode;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Constraint;
-use ratatui::layout::Direction;
-use ratatui::layout::HorizontalAlignment;
-use ratatui::layout::Layout;
-use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::text::Line;
-use ratatui::text::Span;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::time::Duration;
-
-#[derive(Clone)]
-struct ProviderOption {
-    name: String,
-    status: ProviderStatus,
-}
 
 #[derive(Clone)]
 pub(crate) enum ProviderStatus {
@@ -83,7 +80,7 @@ static OSS_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
 });
 
 // This startup wizard runs before the main TUI runtime keymap is available, so
-// it mirrors the built-in horizontal list defaults instead of reading config.
+// it retains the built-in horizontal shortcuts alongside vertical navigation.
 // The shared matcher still covers raw C0 Ctrl-H/Ctrl-L terminal reports.
 const MOVE_LEFT_KEYS: [KeyBinding; 2] = [
     key_hint::plain(KeyCode::Left),
@@ -96,7 +93,7 @@ const MOVE_RIGHT_KEYS: [KeyBinding; 2] = [
 
 pub struct OssSelectionWidget<'a> {
     select_options: &'a Vec<SelectOption>,
-    confirmation_prompt: Paragraph<'a>,
+    provider_statuses: [ProviderStatus; 2],
 
     /// Currently selected index in *select* mode.
     selected_option: usize,
@@ -109,70 +106,17 @@ pub struct OssSelectionWidget<'a> {
 }
 
 impl OssSelectionWidget<'_> {
-    fn new(lmstudio_status: ProviderStatus, ollama_status: ProviderStatus) -> io::Result<Self> {
-        let providers = vec![
-            ProviderOption {
-                name: "LM Studio".to_string(),
-                status: lmstudio_status,
-            },
-            ProviderOption {
-                name: "Ollama (Responses)".to_string(),
-                status: ollama_status.clone(),
-            },
-            ProviderOption {
-                name: "Ollama (Chat)".to_string(),
-                status: ollama_status,
-            },
-        ];
-
-        let mut contents: Vec<Line> = vec![
-            Line::from(vec![
-                "? ".fg(Color::Blue),
-                "Select an open-source provider".bold(),
-            ]),
-            Line::from(""),
-            Line::from("  Choose which local AI server to use for your session."),
-            Line::from(""),
-        ];
-
-        // Add status indicators for each provider
-        for provider in &providers {
-            let (status_symbol, status_color) = get_status_symbol_and_color(&provider.status);
-            contents.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(status_symbol, Style::default().fg(status_color)),
-                Span::raw(format!(" {} ", provider.name)),
-            ]));
-        }
-        contents.push(Line::from(""));
-        contents.push(Line::from("  ● Running  ○ Not Running").add_modifier(Modifier::DIM));
-
-        contents.push(Line::from(""));
-        contents.push(
-            Line::from("  Press Enter to select • Ctrl+C to exit").add_modifier(Modifier::DIM),
-        );
-
-        let confirmation_prompt = Paragraph::new(contents).wrap(Wrap { trim: false });
-
-        Ok(Self {
+    fn new(lmstudio_status: ProviderStatus, ollama_status: ProviderStatus) -> Self {
+        Self {
             select_options: &OSS_SELECT_OPTIONS,
-            confirmation_prompt,
+            provider_statuses: [lmstudio_status, ollama_status],
             selected_option: 0,
             done: false,
             selection: None,
-        })
+        }
     }
 
-    fn get_confirmation_prompt_height(&self, width: u16) -> u16 {
-        // Should cache this for last value of width.
-        self.confirmation_prompt.line_count(width) as u16
-    }
-
-    /// Process a `KeyEvent` coming from crossterm. Always consumes the event
-    /// while the modal is visible.
-    /// Process a key event originating from crossterm. As the modal fully
-    /// captures input while visible, we don't need to report whether the event
-    /// was consumed—callers can assume it always is.
+    /// Consume a press while the picker is visible, returning a completed decision.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<String> {
         if key.kind == KeyEventKind::Press {
             self.handle_select_key(key);
@@ -203,11 +147,15 @@ impl OssSelectionWidget<'_> {
             } if modifiers.contains(KeyModifiers::CONTROL) => {
                 self.send_decision("__CANCELLED__".to_string());
             }
-            _ if MOVE_LEFT_KEYS.is_pressed(key_event) => {
+            _ if MOVE_LEFT_KEYS.is_pressed(key_event)
+                || matches!(key_event.code, KeyCode::Up | KeyCode::Char('k')) =>
+            {
                 self.selected_option = (self.selected_option + self.select_options.len() - 1)
                     % self.select_options.len();
             }
-            _ if MOVE_RIGHT_KEYS.is_pressed(key_event) => {
+            _ if MOVE_RIGHT_KEYS.is_pressed(key_event)
+                || matches!(key_event.code, KeyCode::Down | KeyCode::Char('j')) =>
+            {
                 self.selected_option = (self.selected_option + 1) % self.select_options.len();
             }
             KeyEvent {
@@ -221,6 +169,13 @@ impl OssSelectionWidget<'_> {
                 code: KeyCode::Esc, ..
             } => {
                 self.send_decision(LMSTUDIO_OSS_PROVIDER_ID.to_string());
+            }
+            KeyEvent {
+                code: KeyCode::Char('1' | '2'),
+                ..
+            } => {
+                let index = usize::from(key_event.code == KeyCode::Char('2'));
+                self.send_decision(self.select_options[index].provider_id.to_string());
             }
             KeyEvent { code, .. } => {
                 let other = code;
@@ -246,70 +201,73 @@ impl OssSelectionWidget<'_> {
     pub fn is_complete(&self) -> bool {
         self.done
     }
-
-    pub fn desired_height(&self, width: u16) -> u16 {
-        self.get_confirmation_prompt_height(width) + self.select_options.len() as u16
-    }
 }
 
 impl WidgetRef for &OssSelectionWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let prompt_height = self.get_confirmation_prompt_height(area.width);
-        let [prompt_chunk, response_chunk] = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(prompt_height), Constraint::Min(0)])
-            .areas(area);
-
-        let lines: Vec<Line> = self
+        Clear.render(area, buf);
+        let mut column = FlexRenderable::new();
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
+        column.push(
+            /*flex*/ 0,
+            Paragraph::new("Select an open-source provider".bold())
+                .wrap(Wrap { trim: false })
+                .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        column.push(
+            /*flex*/ 1,
+            Paragraph::new("Choose a local AI server for this session.".dim())
+                .wrap(Wrap { trim: false })
+                .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        let labels: Vec<_> = self
             .select_options
             .iter()
-            .enumerate()
-            .map(|(idx, opt)| {
-                let style = if idx == self.selected_option {
-                    Style::new().bg(Color::Cyan).fg(Color::Black)
-                } else {
-                    Style::new().bg(Color::DarkGray)
+            .zip(&self.provider_statuses)
+            .map(|(option, status)| {
+                let (label, color) = match status {
+                    ProviderStatus::Running => ("● Running", Color::Green),
+                    ProviderStatus::NotRunning => ("○ Not running", Color::Red),
+                    ProviderStatus::Unknown => ("? Unknown", Color::Yellow),
                 };
-                opt.label
-                    .clone()
-                    .alignment(HorizontalAlignment::Center)
-                    .style(style)
+                let mut line = option.label.clone();
+                line.spans.extend([" · ".dim(), label.fg(color)]);
+                line
             })
             .collect();
-
-        let [title_area, button_area, description_area] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .areas(response_chunk.inner(Margin::new(1, 0)));
-
-        Line::from("Select provider?").render(title_area, buf);
-
-        self.confirmation_prompt.clone().render(prompt_chunk, buf);
-        let areas = Layout::horizontal(
-            lines
-                .iter()
-                .map(|l| Constraint::Length(l.width() as u16 + 2)),
-        )
-        .spacing(1)
-        .split(button_area);
-        for (idx, area) in areas.iter().enumerate() {
-            let line = &lines[idx];
-            line.render(*area, buf);
-        }
-
-        Line::from(self.select_options[self.selected_option].description)
-            .style(Style::new().italic().fg(Color::DarkGray))
-            .render(description_area.inner(Margin::new(1, 0)), buf);
-    }
-}
-
-fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Color) {
-    match status {
-        ProviderStatus::Running => ("●", Color::Green),
-        ProviderStatus::NotRunning => ("○", Color::Red),
-        ProviderStatus::Unknown => ("?", Color::Yellow),
+        column.push(
+            /*flex*/ 0,
+            picker_option_list(labels, self.selected_option),
+        );
+        column.push(
+            /*flex*/ 1,
+            Paragraph::new(self.select_options[self.selected_option].description.dim())
+                .wrap(Wrap { trim: false })
+                .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
+        column.push(
+            /*flex*/ 0,
+            Paragraph::new(Line::from(vec![
+                "↑/↓".bold(),
+                " choose · ".dim(),
+                key_hint::plain(KeyCode::Enter).into(),
+                " select · ".dim(),
+                key_hint::plain(KeyCode::Esc).into(),
+                " LM Studio · ".dim(),
+                key_hint::ctrl(KeyCode::Char('c')).into(),
+                " exit".dim(),
+            ]))
+            .wrap(Wrap { trim: false })
+            .inset(Insets::vh(/*v*/ 0, /*h*/ 2)),
+        );
+        column.push(/*flex*/ 1, RenderableItem::Borrowed(&""));
+        let panel = Rect {
+            height: column.desired_height(area.width).min(area.height),
+            ..area
+        };
+        render_menu_surface(panel, buf);
+        column.render(panel, buf);
     }
 }
 
@@ -366,7 +324,7 @@ pub(crate) async fn select_oss_provider(
     lmstudio_status: ProviderStatus,
     ollama_status: ProviderStatus,
 ) -> io::Result<OssProviderSelection> {
-    let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
+    let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -439,8 +397,7 @@ mod tests {
 
     #[test]
     fn ctrl_h_l_move_provider_selection() {
-        let mut widget = OssSelectionWidget::new(ProviderStatus::Unknown, ProviderStatus::Unknown)
-            .expect("widget should initialize");
+        let mut widget = OssSelectionWidget::new(ProviderStatus::Unknown, ProviderStatus::Unknown);
 
         assert_eq!(widget.selected_option, 0);
         widget.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
@@ -499,3 +456,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "oss_selection_tests.rs"]
+mod presentation_tests;

@@ -7,6 +7,7 @@ expression: rendered
   Description: Apply proposed file edits
   Destination: /tmp/project/visible-target.md
 
+
 › 1. Yes, proceed (y)
   2. Yes, and don't ask again for these files (a)
   3. No, and tell Codex what to do differently (esc)

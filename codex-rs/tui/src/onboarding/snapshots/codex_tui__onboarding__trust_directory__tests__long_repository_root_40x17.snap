@@ -1,0 +1,21 @@
+---
+source: tui/src/onboarding/trust_directory.rs
+expression: "terminal.backend().to_string().replace('\\\\', \"/\")"
+---
+  Folder access
+  workspace/…/repository/checkout     
+  Note: You’re in a subdirectory of a 
+  Git project. Trusting will apply to 
+  the repository root:                
+  workspace/…/repository              
+  Trust this folder? Codex can read,
+  edit, and run files here, subject to
+  your permission settings. Folder
+  settings can run code automatically,
+  even without a model request.
+  Continue only if you trust these
+  files. Your trust decision will be
+  saved.
+› 1. Trust and continue                 
+  2. Quit
+  enter continue · esc quit
