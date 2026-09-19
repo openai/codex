@@ -234,6 +234,11 @@ where
                 return;
             }
 
+            let Some(token_usage_at_turn_start) = input.token_usage_at_turn_start else {
+                tracing::warn!("skipping goal turn accounting: token baseline unavailable");
+                return;
+            };
+
             if let Err(err) = self
                 .state_dbs
                 .thread_goals()
@@ -247,7 +252,7 @@ where
             accounting.start_turn(
                 input.turn_id,
                 input.collaboration_mode.mode,
-                input.token_usage_at_turn_start,
+                token_usage_at_turn_start,
             );
             if matches!(
                 input.collaboration_mode.mode,

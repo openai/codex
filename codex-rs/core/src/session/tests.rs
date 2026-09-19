@@ -3,6 +3,9 @@ mod notification_tests;
 
 use super::mcp_refresh::McpRefresh;
 use super::step_context::StepInputs;
+
+#[path = "turn_start_mcp_tests.rs"]
+mod turn_start_mcp_tests;
 use super::step_settings::ResolvedStepSettings;
 use super::step_settings::StepSettings;
 use super::step_settings::StepSettingsUpdate;
@@ -3285,7 +3288,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         turn_level_id: String,
         turn_id: String,
         collaboration_mode: CollaborationMode,
-        token_usage_at_turn_start: TokenUsage,
+        token_usage_at_turn_start: Option<TokenUsage>,
         saw_session_store: bool,
         saw_thread_store: bool,
     }
@@ -3309,7 +3312,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
                         turn_level_id: input.turn_store.level_id().to_string(),
                         turn_id: input.turn_id.to_string(),
                         collaboration_mode: input.collaboration_mode.clone(),
-                        token_usage_at_turn_start: input.token_usage_at_turn_start.clone(),
+                        token_usage_at_turn_start: input.token_usage_at_turn_start.cloned(),
                         saw_session_store: input
                             .session_store
                             .get::<SessionTurnStartMarker>()
@@ -3356,7 +3359,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
         turn_level_id: turn_context.sub_id.clone(),
         turn_id: turn_context.sub_id.clone(),
         collaboration_mode: turn_context.collaboration_mode(),
-        token_usage_at_turn_start,
+        token_usage_at_turn_start: Some(token_usage_at_turn_start),
         saw_session_store: true,
         saw_thread_store: true,
     };

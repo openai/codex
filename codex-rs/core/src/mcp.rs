@@ -82,6 +82,7 @@ impl<'a> McpEnvironmentScope<'a> {
 }
 
 pub(crate) struct McpThreadIdentity<'a> {
+    pub(crate) auth_changed: bool,
     pub(crate) session_source: &'a SessionSource,
     pub(crate) originator: &'a str,
     pub(crate) environments: McpEnvironmentScope<'a>,
@@ -171,7 +172,8 @@ impl McpManager {
                 ready_selected_capability_roots,
                 executor_capability_discovery,
             )
-            .with_session_source(identity.session_source),
+            .with_session_source(identity.session_source)
+            .with_auth_changed(identity.auth_changed),
             Some(identity.originator),
             identity.environments,
             identity.disabled_plugin_ids,

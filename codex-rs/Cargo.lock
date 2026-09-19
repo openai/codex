@@ -3935,6 +3935,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-path-uri",
+ "core_test_support",
  "futures",
  "pretty_assertions",
  "serde_json",
@@ -3943,6 +3944,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]

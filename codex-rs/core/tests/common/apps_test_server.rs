@@ -102,6 +102,7 @@ enum AppsTestToolsListBehavior {
     AlwaysAvailable,
     AvailableWhen(Arc<AtomicBool>),
     AlwaysUnavailable,
+    Custom(Arc<Mutex<Vec<Value>>>),
 }
 
 impl AppsTestServer {
@@ -224,6 +225,13 @@ impl AppsTestServer {
             AppsTestToolsListBehavior::AvailableWhen(tools_available),
         )
         .await
+    }
+
+    pub async fn mount_with_tools(
+        server: &MockServer,
+        tools: Arc<Mutex<Vec<Value>>>,
+    ) -> Result<Self> {
+        Self::mount_with_tools_list_behavior(server, AppsTestToolsListBehavior::Custom(tools)).await
     }
 
     pub async fn mount_without_tools(server: &MockServer) -> Result<Self> {
@@ -551,7 +559,8 @@ impl Respond for CodexAppsJsonRpcResponder {
             "notifications/initialized" => ResponseTemplate::new(202),
             "tools/list" => {
                 let tools_available = match &self.tools_list_behavior {
-                    AppsTestToolsListBehavior::AlwaysAvailable => true,
+                    AppsTestToolsListBehavior::AlwaysAvailable
+                    | AppsTestToolsListBehavior::Custom(_) => true,
                     AppsTestToolsListBehavior::AvailableWhen(tools_available) => {
                         tools_available.load(Ordering::SeqCst)
                     }
@@ -660,6 +669,14 @@ impl Respond for CodexAppsJsonRpcResponder {
                         "nextCursor": null
                     }
                 });
+                if let AppsTestToolsListBehavior::Custom(tools) = &self.tools_list_behavior {
+                    response["result"]["tools"] = json!(
+                        tools
+                            .lock()
+                            .expect("Apps test tools lock should not be poisoned")
+                            .clone()
+                    );
+                }
                 if !tools_available
                     && let Some(tools) = response
                         .pointer_mut("/result/tools")

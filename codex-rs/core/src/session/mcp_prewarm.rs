@@ -9,6 +9,11 @@ impl Session {
     pub(crate) fn request_mcp_runtime_refresh(&self) {
         // Plugin changes can reuse connections but still change their skill resources.
         self.services.mcp_runtime.invalidate_resource_caches();
+        self.request_mcp_runtime_reprojection();
+    }
+
+    /// Reproject contributor state without invalidating cached MCP resources.
+    pub(crate) fn request_mcp_runtime_reprojection(&self) {
         self.mark_mcp_runtime_dirty();
         self.schedule_mcp_prewarm();
     }

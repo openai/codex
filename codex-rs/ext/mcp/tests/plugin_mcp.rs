@@ -1,8 +1,20 @@
+use anyhow::Context;
 use codex_config::AppToolApproval;
 use codex_config::McpServerToolConfig;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_core::EnvironmentConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_core_plugins::ExecutorPluginProvider;
+use codex_core_plugins::PluginCatalog;
+use codex_core_plugins::PluginCatalogEntry;
+use codex_core_plugins::PluginIdentity;
+use codex_core_plugins::PluginListQuery;
+use codex_core_plugins::PluginProvider;
+use codex_core_plugins::PluginProviderError;
+use codex_core_plugins::PluginProviderFuture;
+use codex_core_plugins::PluginSourceLocation;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorCapabilityDiscoveryCache;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -12,12 +24,34 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_features::Feature;
+use codex_login::CodexAuth;
+use codex_mcp_extension::PluginProviders;
+use codex_mcp_extension::PluginsThreadState;
+use codex_mcp_extension::install_plugin_providers;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_utils_path_uri::PathUri;
+use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::recorded_apps_tool_calls;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_sequence;
+use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
+use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::run_test_with_large_stack;
+use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -405,7 +439,7 @@ async fn raw_selected_plugin_contributions(
         None
     };
 
-    Ok(registry.mcp_server_contributors()[0]
+    let contributions = registry.mcp_server_contributors()[0]
         .contribute(McpServerContributionContext::for_step(
             config,
             &thread_init,
@@ -414,5 +448,252 @@ async fn raw_selected_plugin_contributions(
             &selected_capability_roots,
             executor_capability_discovery.as_ref(),
         ))
-        .await)
+        .await;
+    Ok(contributions)
+}
+
+struct CloudCatalogFixture {
+    reply: Result<PluginCatalog, String>,
+    calls: AtomicUsize,
+}
+
+impl PluginProvider for CloudCatalogFixture {
+    fn list(&self, _query: PluginListQuery) -> PluginProviderFuture<'_, PluginCatalog> {
+        Box::pin(async {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.reply.clone().map_err(PluginProviderError::Message)
+        })
+    }
+}
+
+#[test]
+fn cloud_plugins_append_apps_without_changing_executor_tools() -> anyhow::Result<()> {
+    run_test_with_large_stack(
+        "cloud-plugin-projection",
+        run_cloud_plugin_projection_scenarios,
+    )
+}
+
+async fn run_cloud_plugin_projection_scenarios() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_remote!(Ok(()), "V1 plugin fixtures use host-local files");
+    // Fresh sessions keep unavailable-cloud fallback independent of a previously cached catalog.
+    for (case, installed, cloud_enabled, cloud_available, cloud_empty) in [
+        ("cloud_only", false, true, true, false),
+        ("cloud_and_executor", true, true, true, false),
+        ("unavailable_cloud", true, true, false, false),
+        ("rollout_disabled", true, false, true, false),
+        ("empty_cloud", true, true, true, true),
+    ] {
+        let server = start_mock_server().await;
+        let apps = AppsTestServer::mount(&server).await?;
+        let plugin_server = start_mock_server().await;
+        let plugin_mcp = AppsTestServer::mount_with_tools(
+            &plugin_server,
+            Arc::new(std::sync::Mutex::new(vec![json!({
+                "name": "echo", "description": "Echo a note.",
+                "annotations": {"readOnlyHint": true},
+                "inputSchema": {"type": "object", "properties": {"title": {"type": "string"}}}
+            })])),
+        )
+        .await?;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::body_partial_json(json!({"method": "tools/call"})))
+            .respond_with(|request: &wiremock::Request| {
+                let body: serde_json::Value = serde_json::from_slice(&request.body)
+                    .unwrap_or_else(|error| panic!("invalid MCP request JSON: {error}"));
+                wiremock::ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0", "id": body["id"],
+                    "result": {"content": [], "structuredContent": {"echo": body["params"]["arguments"]["title"]}, "isError": false}
+                }))
+            })
+            .with_priority(1)
+            .mount(&plugin_server).await;
+        let declaration =
+            json!({"url": format!("{}/api/codex/ps/mcp", plugin_mcp.chatgpt_base_url)});
+        let cloud = Arc::new(CloudCatalogFixture {
+            reply: if cloud_empty {
+                Ok(PluginCatalog::default())
+            } else if cloud_available {
+                Ok(PluginCatalog {
+                    entries: vec![PluginCatalogEntry {
+                        id: PluginIdentity::Remote {
+                            remote_plugin_id: "plugin_notes".into(),
+                        },
+                        display_name: "Cloud Notes".into(),
+                        version: Some("1".into()),
+                        mcp_servers: [("notes".into(), declaration.to_string())].into(),
+                        connector_ids: vec!["calendar".into()],
+                        locations: vec![PluginSourceLocation::Cloud {
+                            resource_uri: "plugin://plugin_notes".into(),
+                            bundle_uri: None,
+                        }],
+                    }],
+                    warnings: Vec::new(),
+                })
+            } else {
+                Err("plugin-service unavailable".into())
+            },
+            calls: AtomicUsize::new(0),
+        });
+        let mut extensions = ExtensionRegistryBuilder::new();
+        let mut providers = PluginProviders::new(Arc::new(ExecutorPluginProvider::new(Arc::new(
+            EnvironmentManager::default_for_tests(),
+        ))));
+        if cloud_enabled {
+            providers = providers.with_cloud_provider(cloud.clone());
+        }
+        install_plugin_providers(&mut extensions, providers);
+        let mut builder = test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.5", |model| model.supports_search_tool = false)
+            .with_config(move |config| {
+                assert!(config.features.enable(Feature::Plugins).is_ok());
+                assert!(config.features.enable(Feature::Apps).is_ok());
+                assert!(
+                    config
+                        .features
+                        .enable(Feature::ExecutorCapabilityDiscovery)
+                        .is_ok()
+                );
+                config.chatgpt_base_url = apps.chatgpt_base_url;
+            });
+        let test = builder.build(&server).await?;
+        if installed {
+            let selection = test
+                .codex
+                .environment_selections()
+                .await
+                .into_iter()
+                .next()
+                .context("selected environment missing")?;
+            let root = selection.cwd.join("notes")?;
+            let root_path = root.to_abs_path()?;
+            fs::create_dir_all(root_path.join(".codex-plugin"))?;
+            fs::write(root_path.join(".codex-plugin/plugin.json"), json!({
+                "name": "notes", "version": "1", "interface": {"displayName": "Installed Notes"},
+                "mcpServers": "./.mcp.json"
+            }).to_string())?;
+            fs::write(
+                root_path.join(".mcp.json"),
+                json!({"mcpServers": {"notes": declaration}}).to_string(),
+            )?;
+            test.codex
+                .environment_ready(
+                    &selection,
+                    EnvironmentConfig {
+                        allow_login_shell: false,
+                        workspace_roots: selection.workspace_roots.clone(),
+                        permission_profile: PermissionProfileSnapshot::legacy(
+                            test.config.permissions.permission_profile().clone(),
+                        ),
+                        shell_environment_policy: Default::default(),
+                        windows_sandbox_level: WindowsSandboxLevel::from_config(&test.config),
+                        windows_sandbox_type: test.config.permissions.windows_sandbox_type,
+                        use_legacy_landlock: test.config.features.use_legacy_landlock(),
+                        exec_policy: None,
+                        mcp_policy: None,
+                        network_policy: None,
+                        selected_capability_roots: vec![SelectedCapabilityRoot {
+                            id: "notes@marketplace".into(),
+                            location: CapabilityRootLocation::Environment {
+                                environment_id: selection.environment_id.clone(),
+                                path: root,
+                            },
+                        }],
+                    },
+                )
+                .await?;
+        }
+        let response = mount_sse_sequence(
+            &server,
+            vec![
+                sse(vec![
+                    ev_response_created("call"),
+                    ev_function_call_with_namespace(
+                        "notes-call",
+                        "mcp__notes",
+                        "echo",
+                        r#"{"title":"release check"}"#,
+                    ),
+                    ev_completed("call"),
+                ]),
+                sse(vec![
+                    ev_assistant_message("done", "Finished checking Notes."),
+                    ev_completed("done"),
+                ]),
+            ],
+        )
+        .await;
+        test.submit_turn("Use the Notes MCP to check the release.")
+            .await?;
+        let requests = response.requests();
+        assert_eq!(requests.len(), 2, "{case}");
+        let tool = requests[0].tool_by_name("mcp__notes", "echo");
+        assert_eq!(tool.is_some(), installed, "{case}");
+        let output = requests[1].function_call_output("notes-call");
+        if installed {
+            assert!(
+                tool.context("Notes tool missing")?["description"]
+                    .as_str()
+                    .context("tool description missing")?
+                    .contains("Installed Notes")
+            );
+            assert!(
+                output.to_string().contains("release check"),
+                "{case}: {output}"
+            );
+        }
+        let calls = recorded_apps_tool_calls(&plugin_server).await;
+        assert_eq!(calls.len(), usize::from(installed), "{case}");
+        if installed {
+            assert_eq!(calls[0]["params"]["name"], "echo");
+            assert_eq!(
+                calls[0]["params"]["arguments"],
+                json!({"title": "release check"})
+            );
+        }
+        let initialized = plugin_server
+            .received_requests()
+            .await
+            .context("MCP requests missing")?
+            .iter()
+            .any(|request| {
+                serde_json::from_slice::<serde_json::Value>(&request.body)
+                    .is_ok_and(|body| body["method"] == "initialize")
+            });
+        assert_eq!(
+            initialized, installed,
+            "{case}: cloud-only declarations must not start MCPs"
+        );
+        assert_eq!(
+            cloud.calls.load(Ordering::SeqCst),
+            usize::from(cloud_enabled),
+            "{case}"
+        );
+        let state = test
+            .codex
+            .thread_extension_data()
+            .get::<PluginsThreadState>()
+            .context("plugin state missing")?;
+        assert_eq!(
+            state.cloud_catalog().is_some(),
+            cloud_enabled && cloud_available,
+            "{case}"
+        );
+        let calendar = requests[0]
+            .tool_by_name("mcp__codex_apps__calendar", "_list_events")
+            .context("Calendar tool missing")?;
+        assert_eq!(
+            calendar["description"]
+                .as_str()
+                .context("Apps description missing")?
+                .contains("Cloud Notes"),
+            cloud_enabled && cloud_available && !cloud_empty,
+            "{case}"
+        );
+        test.codex.shutdown_and_wait().await?;
+    }
+    Ok(())
 }

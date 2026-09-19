@@ -16,6 +16,7 @@ pub use resource_client::McpEventDefinition;
 pub use resource_client::McpEventNotification;
 pub use resource_client::McpEventStream;
 pub use resource_client::McpResourceClient;
+pub use resource_client::McpResourceClientAuthKey;
 pub use resource_client::McpResourceClientCacheKey;
 pub use resource_client::McpResourcePage;
 pub use resource_client::McpResourceReadResult;

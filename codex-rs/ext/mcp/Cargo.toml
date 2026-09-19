@@ -33,6 +33,7 @@ tracing = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+core_test_support = { workspace = true }
 axum = { workspace = true }
 codex-exec-server-test-support = { workspace = true }
 codex-login = { workspace = true }
@@ -41,3 +42,4 @@ pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-util = { workspace = true, features = ["rt"] }
+wiremock = { workspace = true }

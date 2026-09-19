@@ -14,6 +14,8 @@ use crate::ExtensionDataInit;
 pub struct McpServerContributionContext<'a, C> {
     /// Host configuration visible during MCP resolution.
     config: &'a C,
+    /// Whether pending auth differs from published auth; invalidate catalogs before projection.
+    auth_changed: bool,
     /// Extension-owned data for the active thread, when resolution is thread-scoped.
     thread_store: Option<&'a ExtensionData>,
     /// Stable host inputs for the active thread, when resolution is thread-scoped.
@@ -41,6 +43,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     pub fn global(config: &'a C) -> Self {
         Self {
             config,
+            auth_changed: false,
             thread_store: None,
             thread_init: None,
             session_source: None,
@@ -61,6 +64,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     ) -> Self {
         Self {
             config,
+            auth_changed: false,
             thread_store: Some(thread_store),
             thread_init: Some(thread_init),
             session_source: None,
@@ -68,6 +72,17 @@ impl<'a, C> McpServerContributionContext<'a, C> {
             ready_selected_capability_roots: Some(ready_selected_capability_roots),
             executor_capability_discovery,
         }
+    }
+
+    /// Marks whether this projection replaces the published MCP authentication.
+    pub fn with_auth_changed(mut self, auth_changed: bool) -> Self {
+        self.auth_changed = auth_changed;
+        self
+    }
+
+    /// Returns whether auth-scoped catalogs must be invalidated before projection.
+    pub fn auth_changed(&self) -> bool {
+        self.auth_changed
     }
 
     /// Attaches the stable source of the active thread to this contribution.

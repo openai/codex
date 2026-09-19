@@ -55,6 +55,7 @@ pub use turn_input::TurnInputEnvironment;
 pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
+pub use turn_lifecycle::TurnStartPhase;
 pub use turn_lifecycle::TurnStopInput;
 pub use world_state::PreviousWorldStateSection;
 pub use world_state::RenderedWorldStateFragment;
@@ -185,8 +186,21 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
 /// extension-private turn state. The host exposes stable identifiers and
 /// extension stores instead of core runtime objects.
 pub trait TurnLifecycleContributor: Send + Sync {
-    /// Called after turn-scoped extension stores are created, before the task
-    /// for the turn starts running.
+    /// Selects the start phase using the current thread policy. Disabled callbacks
+    /// may retain the default phase and return without doing any work.
+    fn turn_start_phase(&self, _thread_store: &ExtensionData) -> TurnStartPhase {
+        TurnStartPhase::BeforeTaskRegistration
+    }
+
+    /// Whether regular-task startup must reconcile MCP before this callback runs.
+    /// Ignored before task registration; contributors unrelated to MCP keep the default.
+    fn requires_mcp_runtime(&self, _thread_store: &ExtensionData) -> bool {
+        false
+    }
+
+    /// Called once in the selected phase, before task-specific work begins.
+    /// Regular-task preparation may be cancelled before this callback completes;
+    /// stop and abort callbacks must tolerate missing or partial initialization.
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let _self = self;

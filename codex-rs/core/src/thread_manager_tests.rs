@@ -1704,6 +1704,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             &first_session.services.mcp_thread_init,
             &first_session.services.thread_extension_data,
             McpThreadIdentity {
+                auth_changed: false,
                 session_source: &SessionSource::Exec,
                 originator: &first_originator,
                 disabled_plugin_ids: &[],
@@ -1725,6 +1726,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             &second_session.services.mcp_thread_init,
             &second_session.services.thread_extension_data,
             McpThreadIdentity {
+                auth_changed: false,
                 session_source: &second_session_source,
                 originator: &second_originator,
                 disabled_plugin_ids: &[],
@@ -1799,6 +1801,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 &first_session.services.mcp_thread_init,
                 &first_session.services.thread_extension_data,
                 McpThreadIdentity {
+                    auth_changed: false,
                     session_source: &SessionSource::Exec,
                     originator: &first_originator,
                     disabled_plugin_ids: &disabled_plugin_ids,
