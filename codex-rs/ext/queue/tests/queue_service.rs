@@ -569,7 +569,14 @@ async fn registered_queue_lifecycle_starts_messages_in_fifo_order() -> anyhow::R
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Skip a watcher/retry interval while keeping real I/O on an advancing clock.
+async fn advance_queue_poll() {
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(/*secs*/ 11)).await;
+    tokio::time::resume();
+}
+
+#[tokio::test]
 async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes()
 -> anyhow::Result<()> {
     let server = start_mock_server().await;
@@ -638,6 +645,7 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
         )
         .await?;
 
+    advance_queue_poll().await;
     wait_for_event_with_timeout(
         independent_thread.thread.as_ref(),
         |event| matches!(event, EventMsg::TurnComplete(_)),
@@ -647,13 +655,14 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
     assert_eq!(1, model_responses.requests().len());
     assert_eq!(vec![updated], queue.list(thread_id).await?);
 
+    advance_queue_poll().await;
     wait_for_event_with_timeout(
         test.codex.as_ref(),
         |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(/*secs*/ 25),
     )
     .await;
-    tokio::time::sleep(Duration::from_secs(/*secs*/ 11)).await;
+    advance_queue_poll().await;
 
     assert!(queue.list(thread_id).await?.is_empty());
     assert!(queue.list(independent_thread.thread_id).await?.is_empty());
@@ -664,7 +673,7 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
     external_queue
         .enqueue(thread_id, user_input("queued before ordinary resume"))
         .await?;
-    tokio::time::sleep(Duration::from_secs(/*secs*/ 11)).await;
+    advance_queue_poll().await;
     let resumed = test
         .thread_manager
         .resume_thread_from_rollout(
@@ -675,6 +684,7 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
             Default::default(),
         )
         .await?;
+    advance_queue_poll().await;
     wait_for_event_with_timeout(
         resumed.thread.as_ref(),
         |event| matches!(event, EventMsg::TurnComplete(_)),
