@@ -38,6 +38,8 @@ use codex_exec_server::ExecProcess;
 use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::Command;
+use codex_utils_pty::ProcessMode;
 #[cfg(unix)]
 use codex_utils_pty::process_group::kill_process_group;
 #[cfg(unix)]
@@ -50,7 +52,6 @@ use rmcp::service::TxJsonRpcMessage;
 use rmcp::transport::Transport;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
-use tokio::process::Command;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tracing::info;
@@ -276,13 +277,8 @@ impl LocalStdioServerLauncher {
 
         let build_command = || {
             let mut command = Command::new(&resolved_program);
-            command
-                .current_dir(&cwd)
-                .env_clear()
-                .envs(&envs)
-                .args(&args);
-            #[cfg(unix)]
-            command.process_group(0);
+            command.current_dir(&cwd).envs(&envs).args(&args);
+            command.process_mode(ProcessMode::NewGroup);
             command
         };
         #[cfg(windows)]
@@ -292,7 +288,7 @@ impl LocalStdioServerLauncher {
         #[cfg(windows)]
         let job = match codex_utils_pty::JobObject::create_without_breakaway() {
             Ok(job) => {
-                job.prepare_suspended_spawn(&mut command);
+                command.prepare_suspended_spawn(&job);
                 Some(job)
             }
             Err(error) => {

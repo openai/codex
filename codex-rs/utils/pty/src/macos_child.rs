@@ -3,7 +3,7 @@
 //! Rust falls back to fork for a historical relative-path/cwd bug in Apple's
 //! `posix_spawnp`. Calling `posix_spawn` directly avoids that wrapper. This module only
 //! accepts the launcher's cleared-environment command shape, with piped stdio,
-//! a new process group, and default `argv[0]`. Bare commands search the child's
+//! an explicit process-group mode, and default `argv[0]`. Bare commands search the child's
 //! PATH. Unsuccessful searches and executable files without shebangs retain the
 //! existing launcher. Each native child owns its PID until it has been reaped.
 
@@ -15,80 +15,15 @@ use std::os::fd::FromRawFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
 use std::process::ExitStatus;
 use std::ptr;
 
-use tokio::process::Child as TokioChild;
 use tokio::process::ChildStderr;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
-use tokio::process::Command;
 use tokio::signal::unix::Signal;
 use tokio::signal::unix::SignalKind;
 use tokio::signal::unix::signal;
-
-/// Matches Tokio's child API while keeping native spawning private to macOS.
-pub struct Child {
-    inner: ChildKind,
-    pub stdin: Option<ChildStdin>,
-    pub stdout: Option<ChildStdout>,
-    pub stderr: Option<ChildStderr>,
-}
-
-enum ChildKind {
-    Tokio(TokioChild),
-    Native(NativeChild),
-}
-
-impl Child {
-    /// Uses native spawning for relative paths and bare names, retaining Tokio's
-    /// fallback for unsuccessful PATH searches and executable text without a shebang.
-    pub(super) fn spawn(mut command: Command) -> io::Result<Self> {
-        let program = command.as_std().get_program();
-        if Path::new(program).is_relative()
-            && !program.is_empty()
-            && let Some((child, stdin, stdout, stderr)) = NativeChild::spawn(command.as_std())?
-        {
-            return Ok(Self {
-                inner: ChildKind::Native(child),
-                stdin: Some(stdin),
-                stdout: Some(stdout),
-                stderr: Some(stderr),
-            });
-        }
-        let mut child = command.spawn()?;
-        Ok(Self {
-            stdin: child.stdin.take(),
-            stdout: child.stdout.take(),
-            stderr: child.stderr.take(),
-            inner: ChildKind::Tokio(child),
-        })
-    }
-
-    pub fn id(&self) -> Option<u32> {
-        match &self.inner {
-            ChildKind::Tokio(child) => child.id(),
-            ChildKind::Native(child) => child.id(),
-        }
-    }
-
-    pub async fn wait(&mut self) -> io::Result<ExitStatus> {
-        self.stdin.take();
-        match &mut self.inner {
-            ChildKind::Tokio(child) => child.wait().await,
-            ChildKind::Native(child) => child.wait().await,
-        }
-    }
-
-    pub async fn kill(&mut self) -> io::Result<()> {
-        self.stdin.take();
-        match &mut self.inner {
-            ChildKind::Tokio(child) => child.kill().await,
-            ChildKind::Native(child) => child.kill().await,
-        }
-    }
-}
 
 // libc does not expose this Apple extension. It is available since macOS 10.15,
 // before Codex's minimum supported macOS version (12).
@@ -101,7 +36,7 @@ unsafe extern "C" {
 
 /// Owns a child PID until reaping, so cancellation cannot lose or reuse it.
 /// Dropping a live child kills it and reaps it independently of the Tokio runtime.
-struct NativeChild {
+pub(crate) struct NativeChild {
     pid: Option<libc::pid_t>,
     status: Option<ExitStatus>,
     sigchld: Signal,
@@ -111,8 +46,9 @@ impl NativeChild {
     /// Spawns the MCP command without changing its executable path or `argv[0]`.
     /// The caller must clear inherited environment variables before setting the
     /// child's environment, because only explicit command entries are copied.
-    fn spawn(
+    pub(crate) fn spawn(
         command: &std::process::Command,
+        process_mode: crate::ProcessMode,
     ) -> io::Result<Option<(Self, ChildStdin, ChildStdout, ChildStderr)>> {
         let program = c_string(command.get_program())?;
         let search_path = !program.as_bytes().contains(&b'/');
@@ -180,10 +116,16 @@ impl NativeChild {
                     target as i32,
                 ))?;
             }
-            cvt(libc::posix_spawnattr_setpgroup(
-                &mut attrs.0,
-                /*pgroup*/ 0,
-            ))?;
+            let group_flags = match process_mode {
+                crate::ProcessMode::Inherit => 0,
+                crate::ProcessMode::NewGroup => {
+                    cvt(libc::posix_spawnattr_setpgroup(
+                        &mut attrs.0,
+                        /*pgroup*/ 0,
+                    ))?;
+                    libc::POSIX_SPAWN_SETPGROUP
+                }
+            };
             let mut defaults = 0;
             cvt_errno(libc::sigemptyset(&mut defaults))?;
             cvt_errno(libc::sigaddset(&mut defaults, libc::SIGPIPE))?;
@@ -192,7 +134,7 @@ impl NativeChild {
             // than introducing a different policy with CLOEXEC_DEFAULT.
             cvt(libc::posix_spawnattr_setflags(
                 &mut attrs.0,
-                (libc::POSIX_SPAWN_SETPGROUP | libc::POSIX_SPAWN_SETSIGDEF) as _,
+                (group_flags | libc::POSIX_SPAWN_SETSIGDEF) as _,
             ))?;
             let mut spawn = |executable: &CString| {
                 libc::posix_spawn(
@@ -255,7 +197,7 @@ impl NativeChild {
         Ok(Some((child, stdin, stdout, stderr)))
     }
 
-    fn id(&self) -> Option<u32> {
+    pub(crate) fn id(&self) -> Option<u32> {
         self.pid.map(|pid| pid as u32)
     }
 
@@ -289,7 +231,7 @@ impl NativeChild {
 
     /// Waits without transferring child ownership into the future, so callers
     /// may cancel a wait and then wait again or kill the same child.
-    async fn wait(&mut self) -> io::Result<ExitStatus> {
+    pub(crate) async fn wait(&mut self) -> io::Result<ExitStatus> {
         loop {
             match self.try_wait() {
                 Ok(Some(status)) => return Ok(status),
@@ -305,7 +247,7 @@ impl NativeChild {
     }
 
     /// Sends SIGKILL if still owned, then waits for the child to be reaped.
-    async fn kill(&mut self) -> io::Result<()> {
+    pub(crate) async fn kill(&mut self) -> io::Result<()> {
         if let Some(pid) = self.pid {
             // SAFETY: An unreaped child retains its PID, even after it exits.
             let result = unsafe { libc::kill(pid, libc::SIGKILL) };
@@ -409,7 +351,3 @@ impl Drop for Attributes {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "macos_child_tests.rs"]
-mod tests;
