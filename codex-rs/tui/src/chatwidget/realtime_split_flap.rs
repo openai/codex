@@ -164,6 +164,8 @@ impl SplitFlapTranscriptCell {
                 continue;
             }
 
+            // Animated glyphs and board padding no longer map to authored source bytes.
+            line.source = None;
             let original_spans = std::mem::take(&mut line.line.spans);
             line.line.style = line.line.style.patch(board_style);
             for span in original_spans {

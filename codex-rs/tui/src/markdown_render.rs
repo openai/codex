@@ -2001,6 +2001,11 @@ where
                 }
             } else {
                 let mut spans = self.current_initial_indent.clone();
+                let mut source =
+                    crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line);
+                source.prefix_bytes = spans.iter().map(|span| span.content.len()).sum();
+                source.continuation_indent = self.current_subsequent_indent.clone().into();
+                line.source = Some(source);
                 let shift = Self::spans_display_width(&spans);
                 spans.append(&mut line.line.spans);
                 for hyperlink in &mut line.hyperlinks {
@@ -2180,6 +2185,7 @@ mod markdown_render_tests {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Stylize;
     use ratatui::text::Text;
 
     fn lines_to_strings(text: &Text<'_>) -> Vec<String> {
@@ -2257,9 +2263,19 @@ mod tests {
 
     #[test]
     fn wraps_blockquotes() {
-        let markdown = "> block quote with content that should wrap nicely";
-        let rendered = render_markdown_text_with_width(markdown, Some(22));
-        let lines = lines_to_strings(&rendered);
+        let markdown = "> block quote with **content** that should wrap nicely";
+        let rendered =
+            render_markdown_lines_with_width_and_cwd(markdown, Some(22), /*cwd*/ None);
+        let source = rendered[0].source.as_ref().expect("blockquote source");
+        assert_eq!(
+            source.styled_range(0..source.text.len()),
+            Line::from(vec![
+                "block quote with ".green(),
+                "content".green().bold(),
+                " that should wrap nicely".green(),
+            ])
+        );
+        let lines: Vec<_> = rendered.iter().map(|line| line.line.to_string()).collect();
         assert_eq!(
             lines,
             vec![

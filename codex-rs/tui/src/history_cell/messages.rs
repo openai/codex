@@ -4,10 +4,12 @@
 use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
 use crate::style::accent_color_on;
+use crate::style::history_prompt_style;
 use crate::terminal_hyperlinks::annotate_web_urls_in_line;
-use crate::terminal_hyperlinks::remap_wrapped_line;
+use crate::terminal_hyperlinks::lines_with_sources_eq;
+use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::wrapping::url_preserving_wrap_options;
-use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_line_with_source;
 use std::borrow::Cow;
 
 #[derive(Debug)]
@@ -185,9 +187,9 @@ impl HistoryCell for UserHistoryCell {
             .saturating_sub(
                 LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
             )
-            .max(1);
+            .max(/*other*/ 1);
 
-        let style = user_message_style();
+        let style = history_prompt_style();
         let element_style = style.fg(accent_color_on(style.bg));
 
         let wrapped_remote_images = if self.remote_image_urls.is_empty() {
@@ -202,60 +204,7 @@ impl HistoryCell for UserHistoryCell {
         }
         .filter(|lines| !lines.is_empty());
 
-        let wrapped_message = if message.is_empty() && text_elements.is_empty() {
-            None
-        } else {
-            let wrap_options = RtOptions::new(usize::from(wrap_width))
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
-            let mut wrapped = if text_elements.is_empty() {
-                let message_without_trailing_newlines = message.trim_end_matches(['\r', '\n']);
-                adaptive_wrap_lines(
-                    message_without_trailing_newlines
-                        .split('\n')
-                        .map(|line| Line::from(line).style(style)),
-                    wrap_options,
-                )
-            } else {
-                adaptive_wrap_lines(
-                    build_user_message_lines_with_elements(
-                        message,
-                        text_elements,
-                        style,
-                        element_style,
-                    ),
-                    wrap_options,
-                )
-            }
-            .into_iter()
-            .flat_map(|line| {
-                if line.width() <= usize::from(wrap_width) {
-                    return vec![HyperlinkLine::new(line)];
-                }
-
-                // Terminal autowrap loses the message gutter and background. Explicitly split
-                // oversized URL tokens while retaining their complete OSC-8 destination.
-                let line = annotate_web_urls_in_line(line);
-                let forced_lines = word_wrap_line(
-                    &line.line,
-                    url_preserving_wrap_options(RtOptions::new(usize::from(wrap_width)))
-                        .break_words(/*break_words*/ true),
-                )
-                .iter()
-                .map(line_to_static)
-                .collect();
-                remap_wrapped_line(&line, forced_lines)
-            })
-            .collect::<Vec<_>>();
-            while wrapped.last().is_some_and(|line| {
-                line.line
-                    .spans
-                    .iter()
-                    .all(|span| span.content.trim().is_empty())
-            }) {
-                wrapped.pop();
-            }
-            (!wrapped.is_empty()).then_some(wrapped)
-        };
+        let wrapped_message = wrap_user_message(message, text_elements, style, wrap_width);
 
         if wrapped_remote_images.is_none() && wrapped_message.is_none() {
             return Vec::new();
@@ -287,6 +236,9 @@ impl HistoryCell for UserHistoryCell {
         }
 
         lines.push(HyperlinkLine::new(Line::from("").style(style)));
+        for source in lines.iter_mut().filter_map(|line| line.source.as_mut()) {
+            source.right_reserve = 1;
+        }
         lines
     }
 
@@ -306,6 +258,61 @@ impl HistoryCell for UserHistoryCell {
         }
         lines
     }
+}
+
+/// Wrap a prompt body before the user-message gutter and background padding are added.
+fn wrap_user_message(
+    message: &str,
+    text_elements: &[TextElement],
+    style: Style,
+    wrap_width: u16,
+) -> Option<Vec<HyperlinkLine>> {
+    let element_style = style.fg(accent_color_on(style.bg));
+    if message.is_empty() && text_elements.is_empty() {
+        return None;
+    }
+
+    let wrap_options =
+        RtOptions::new(usize::from(wrap_width)).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit);
+    let logical_lines = if text_elements.is_empty() {
+        let message_without_trailing_newlines = message.trim_end_matches(['\r', '\n']);
+        message_without_trailing_newlines
+            .split('\n')
+            .map(|line| Line::from(line.to_owned()).style(style))
+            .collect()
+    } else {
+        build_user_message_lines_with_elements(message, text_elements, style, element_style)
+    };
+    let mut wrapped = crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
+        &plain_hyperlink_lines(logical_lines),
+        wrap_options,
+    )
+    .into_iter()
+    .flat_map(|mut line| {
+        if line.width() <= usize::from(wrap_width) {
+            return vec![line];
+        }
+
+        // Terminal autowrap loses the message gutter and background. Explicitly split
+        // oversized URL tokens while retaining their complete OSC-8 destination.
+        line.hyperlinks = annotate_web_urls_in_line(line.line.clone()).hyperlinks;
+        let forced_lines = word_wrap_line_with_source(
+            &line.line,
+            url_preserving_wrap_options(RtOptions::new(usize::from(wrap_width)))
+                .break_words(/*break_words*/ true),
+        );
+        remap_source_wrapped_line(&line, forced_lines)
+    })
+    .collect::<Vec<_>>();
+    while wrapped.last().is_some_and(|line| {
+        line.line
+            .spans
+            .iter()
+            .all(|span| span.content.trim().is_empty())
+    }) {
+        wrapped.pop();
+    }
+    (!wrapped.is_empty()).then_some(wrapped)
 }
 
 #[derive(Debug)]
@@ -522,6 +529,10 @@ fn normalize_whitespace_only_hyperlink_lines(mut lines: Vec<HyperlinkLine>) -> V
         {
             line.line = Line::default().style(line.line.style);
             line.hyperlinks.clear();
+            if let Some(source) = &mut line.source {
+                source.prefix_bytes = 0;
+                source.range.end = source.range.start;
+            }
         }
     }
     lines
@@ -594,11 +605,18 @@ mod tests;
 ///
 /// During streaming, lines that have not yet been committed to scrollback because they belong to
 /// an in-progress table are displayed via this cell in the `active_cell` slot. It is replaced on
-/// deltas that change the visible tail and cleared when the stream finalizes.
-#[derive(Debug, Eq, PartialEq)]
+/// deltas that change the visible tail or retained source, and cleared when the stream finalizes.
+#[derive(Debug, Eq)]
 pub(crate) struct StreamingAgentTailCell {
     lines: Vec<HyperlinkLine>,
     is_first_line: bool,
+}
+
+impl PartialEq for StreamingAgentTailCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_first_line == other.is_first_line
+            && lines_with_sources_eq(&self.lines, &other.lines)
+    }
 }
 
 impl StreamingAgentTailCell {

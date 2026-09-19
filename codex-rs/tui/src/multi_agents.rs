@@ -318,6 +318,7 @@ pub(crate) fn sub_agent_activity_history_cell(item: &ThreadItem) -> Option<Plain
     ))
 }
 
+#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn sub_agent_activity_summary(kind: SubAgentActivityKind, agent_path: &str) -> String {
     match kind {
         SubAgentActivityKind::Started => format!("Started `{agent_path}`"),

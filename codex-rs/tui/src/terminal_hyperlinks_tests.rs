@@ -15,6 +15,7 @@ fn oversized_destinations_remain_plain_text() {
 
     // Explicit Markdown links can reach the cell marker without bare-URL detection.
     let line = HyperlinkLine {
+        source: None,
         line: Line::from("visible"),
         hyperlinks: vec![TerminalHyperlink::web(/*columns*/ 0..7, oversized)],
     };

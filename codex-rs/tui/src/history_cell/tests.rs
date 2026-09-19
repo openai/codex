@@ -120,13 +120,17 @@ fn streaming_agent_tail_blank_line_uses_one_viewport_row() {
     let cell = StreamingAgentTailCell::new(
         vec![
             HyperlinkLine::from("first"),
-            HyperlinkLine::from(""),
+            HyperlinkLine::from(" "),
             HyperlinkLine::from("second"),
         ],
         /*is_first_line*/ false,
     );
 
-    let lines = cell.display_lines(/*width*/ 80);
+    let rendered = cell.display_hyperlink_lines(/*width*/ 80);
+    let source = rendered[1].source.as_ref().expect("blank row source");
+    assert_eq!((source.prefix_bytes, source.range.clone()), (0, 0..0));
+    assert_eq!(source.text.as_ref(), " ");
+    let lines = visible_lines(rendered);
     insta::assert_snapshot!(render_lines(&lines).join("\n"), @"  first
 
   second");

@@ -2,16 +2,24 @@
 
 use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
+use crate::terminal_hyperlinks::lines_with_sources_eq;
 
 /// Transient active-cell representation of the mutable tail of a proposed-plan stream.
 ///
 /// The controller prepares the full styled plan lines because plan tails need the same header,
 /// padding, and background treatment as committed `ProposedPlanStreamCell`s while remaining
 /// preview-only during streaming.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq)]
 pub(crate) struct StreamingPlanTailCell {
     lines: Vec<HyperlinkLine>,
     is_stream_continuation: bool,
+}
+
+impl PartialEq for StreamingPlanTailCell {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_stream_continuation == other.is_stream_continuation
+            && lines_with_sources_eq(&self.lines, &other.lines)
+    }
 }
 
 impl StreamingPlanTailCell {

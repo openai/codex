@@ -6,6 +6,7 @@ use super::render::render_source;
 use crate::history_cell::HistoryRenderMode;
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::lines_with_sources_eq;
 use ratatui::text::Line;
 use std::path::Path;
 
@@ -67,7 +68,7 @@ impl ProsePreview {
         if start > 0 {
             lines.insert(0, HyperlinkLine::new(Line::from("…")));
         }
-        if self.lines == lines {
+        if lines_with_sources_eq(&self.lines, &lines) {
             return false;
         }
         self.lines = lines;

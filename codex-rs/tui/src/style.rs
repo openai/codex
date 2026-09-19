@@ -62,7 +62,6 @@ pub fn user_message_style() -> Style {
 }
 
 /// Submitted prompts use a lighter fill than the editable composer in either theme.
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn history_prompt_style() -> Style {
     let Some(background) = default_bg() else {
         return Style::default();

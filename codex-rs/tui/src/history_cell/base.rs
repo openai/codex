@@ -80,13 +80,24 @@ impl PrefixedWrappedHistoryCell {
 
 impl HistoryCell for PrefixedWrappedHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         if width == 0 {
             return Vec::new();
         }
-        let opts = RtOptions::new(width.max(1) as usize)
+        let opts = RtOptions::new(usize::from(width))
             .initial_indent(self.initial_prefix.clone())
             .subsequent_indent(self.subsequent_prefix.clone());
-        adaptive_wrap_lines(&self.text, opts)
+        crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
+            &plain_hyperlink_lines(self.text.lines.clone()),
+            opts,
+        )
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -173,3 +184,7 @@ impl HistoryCell for CompositeHistoryCell {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "base_tests.rs"]
+mod tests;

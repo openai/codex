@@ -46,12 +46,16 @@ struct ProjectedText {
     grapheme_boundaries: Vec<usize>,
 }
 
-/// Replaces halfwidth sound-mark graphemes with equally wide, textwrap-safe placeholders.
+/// Replaces compound graphemes with equally wide, textwrap-safe placeholders.
 ///
 /// Source boundaries recover original byte offsets, while grapheme boundaries keep placeholders
 /// indivisible and preserve leading whitespace as a wrapping opportunity.
-fn project_halfwidth_sound_marks(text: &str) -> Option<ProjectedText> {
-    if !text.contains(['\u{FF9E}', '\u{FF9F}']) {
+fn project_complex_graphemes(text: &str) -> Option<ProjectedText> {
+    if !text.contains(['\u{FF9E}', '\u{FF9F}'])
+        && !text
+            .graphemes(/*is_extended*/ true)
+            .any(|grapheme| grapheme.chars().count() > 1)
+    {
         return None;
     }
 
@@ -59,7 +63,7 @@ fn project_halfwidth_sound_marks(text: &str) -> Option<ProjectedText> {
     let mut source_boundaries = vec![(0, 0)];
     let mut grapheme_boundaries = vec![0];
     for (source_start, grapheme) in text.grapheme_indices(/*is_extended*/ true) {
-        if grapheme.contains(['\u{FF9E}', '\u{FF9F}']) {
+        if grapheme.chars().count() > 1 || grapheme.contains(['\u{FF9E}', '\u{FF9F}']) {
             let source_end = source_start + grapheme.len();
             let content_start = grapheme
                 .find(|ch: char| !ch.is_whitespace())
@@ -72,6 +76,10 @@ fn project_halfwidth_sound_marks(text: &str) -> Option<ProjectedText> {
             }
 
             let width = display_width(content);
+            if width == 0 && !content.is_empty() {
+                projected.push_str(content);
+                source_boundaries.push((projected.len(), source_end));
+            }
             let projected_start = projected.len();
             for _ in 0..width / 2 {
                 if projected.len() > projected_start {
@@ -233,7 +241,7 @@ where
     O: Into<Options<'a>>,
 {
     let opts = width_or_options.into();
-    if let Some(projected) = project_halfwidth_sound_marks(text) {
+    if let Some(projected) = project_complex_graphemes(text) {
         return wrap_projected_ranges(&projected, &opts, /*include_trailing_spaces*/ true);
     }
     let mut lines: Vec<Range<usize>> = Vec::new();
@@ -279,7 +287,7 @@ where
     O: Into<Options<'a>>,
 {
     let opts = width_or_options.into();
-    if let Some(projected) = project_halfwidth_sound_marks(text) {
+    if let Some(projected) = project_complex_graphemes(text) {
         return wrap_projected_ranges(&projected, &opts, /*include_trailing_spaces*/ false);
     }
     let mut lines: Vec<Range<usize>> = Vec::new();
@@ -701,6 +709,24 @@ pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<
 /// while a genuinely overlong non-URL token can still split if needed.
 #[must_use]
 pub(crate) fn adaptive_wrap_line<'a>(line: &'a Line<'a>, base: RtOptions<'a>) -> Vec<Line<'a>> {
+    adaptive_wrap_line_with_source(line, base)
+        .into_iter()
+        .map(|wrapped| wrapped.line)
+        .collect()
+}
+
+/// A display row and the exact source fragment used to build it.
+pub(crate) struct WrappedLine<'a> {
+    pub(crate) line: Line<'a>,
+    pub(crate) range: Range<usize>,
+    pub(crate) prefix_bytes: usize,
+}
+
+/// Preserve wrapping's source ranges for selection and hyperlink projection.
+pub(crate) fn adaptive_wrap_line_with_source<'a>(
+    line: &'a Line<'a>,
+    base: RtOptions<'a>,
+) -> Vec<WrappedLine<'a>> {
     let (flat, span_bounds) = flatten_line(line);
     let mut saw_url = false;
     let mut saw_non_url = false;
@@ -857,6 +883,20 @@ pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> 
 where
     O: Into<RtOptions<'a>>,
 {
+    word_wrap_line_with_source(line, width_or_options)
+        .into_iter()
+        .map(|wrapped| wrapped.line)
+        .collect()
+}
+
+/// Standard wrapping with the same source ranges used to slice styled spans.
+pub(crate) fn word_wrap_line_with_source<'a, O>(
+    line: &'a Line<'a>,
+    width_or_options: O,
+) -> Vec<WrappedLine<'a>>
+where
+    O: Into<RtOptions<'a>>,
+{
     let (flat, span_bounds) = flatten_line(line);
     word_wrap_flattened_line(line, &flat, &span_bounds, width_or_options.into())
 }
@@ -866,7 +906,7 @@ fn word_wrap_flattened_line<'a>(
     flat: &str,
     span_bounds: &[(Range<usize>, ratatui::style::Style)],
     rt_opts: RtOptions<'a>,
-) -> Vec<Line<'a>> {
+) -> Vec<WrappedLine<'a>> {
     let opts = Options::new(rt_opts.width)
         .line_ending(rt_opts.line_ending)
         .break_words(rt_opts.break_words)
@@ -874,7 +914,7 @@ fn word_wrap_flattened_line<'a>(
         .word_separator(rt_opts.word_separator)
         .word_splitter(rt_opts.word_splitter);
 
-    let mut out: Vec<Line<'a>> = Vec::new();
+    let mut out: Vec<WrappedLine<'a>> = Vec::new();
 
     // Compute first line range with reduced width due to initial indent.
     let initial_width_available = opts
@@ -883,7 +923,16 @@ fn word_wrap_flattened_line<'a>(
         .max(1);
     let initial_wrapped = wrap_ranges_trim(flat, opts.clone().width(initial_width_available));
     let Some(first_line_range) = initial_wrapped.first() else {
-        return vec![rt_opts.initial_indent.clone()];
+        return vec![WrappedLine {
+            line: rt_opts.initial_indent.clone().style(line.style),
+            range: 0..0,
+            prefix_bytes: rt_opts
+                .initial_indent
+                .spans
+                .iter()
+                .map(|span| span.content.len())
+                .sum(),
+        }];
     };
 
     // Build first wrapped line with initial indent.
@@ -895,14 +944,22 @@ fn word_wrap_flattened_line<'a>(
             &mut sliced
                 .spans
                 .into_iter()
-                .map(|s| s.patch_style(line.style))
+                .map(|span| Span::styled(span.content, line.style.patch(span.style)))
                 .collect(),
         );
         first_line.spans = spans;
-        out.push(first_line);
+        out.push(WrappedLine {
+            line: first_line,
+            range: first_line_range.clone(),
+            prefix_bytes: rt_opts
+                .initial_indent
+                .spans
+                .iter()
+                .map(|span| span.content.len())
+                .sum(),
+        });
     }
 
-    // Wrap the remainder using subsequent indent width and map back to original indices.
     let base = first_line_range.end;
     let skip_leading_spaces = flat[base..].chars().take_while(|c| *c == ' ').count();
     let base = base + skip_leading_spaces;
@@ -910,24 +967,55 @@ fn word_wrap_flattened_line<'a>(
         .width
         .saturating_sub(line_width(&rt_opts.subsequent_indent))
         .max(1);
-    let remaining_wrapped = wrap_ranges_trim(&flat[base..], opts.width(subsequent_width_available));
-    for r in &remaining_wrapped {
-        if r.is_empty() {
+    // First-fit decisions do not depend on later rows. Reuse the full first pass when
+    // both indents leave the same width and the remainder starts after a complete word.
+    // Splitting inside a word can change hyphenation when the remainder is tokenized again.
+    // Custom tokenizers can also repartition the remainder, so they retain the second pass.
+    let remaining_wrapped = if initial_width_available == subsequent_width_available
+        && matches!(rt_opts.wrap_algorithm, textwrap::WrapAlgorithm::FirstFit)
+        && matches!(
+            rt_opts.word_separator,
+            WordSeparator::AsciiSpace | WordSeparator::UnicodeBreakProperties
+        )
+        && (skip_leading_spaces > 0 || base == flat.len())
+        // The projected and plain text wrappers interpret control characters differently.
+        && !flat.as_bytes().iter().any(u8::is_ascii_control)
+        && initial_wrapped
+            .get(/*index*/ 1)
+            .map_or(base == flat.len(), |range| range.start == base)
+    {
+        initial_wrapped.into_iter().skip(/*n*/ 1).collect()
+    } else {
+        wrap_ranges_trim(&flat[base..], opts.width(subsequent_width_available))
+            .into_iter()
+            .map(|range| (range.start + base)..(range.end + base))
+            .collect::<Vec<_>>()
+    };
+    for offset_range in remaining_wrapped {
+        if offset_range.is_empty() {
             continue;
         }
         let mut subsequent_line = rt_opts.subsequent_indent.clone().style(line.style);
-        let offset_range = (r.start + base)..(r.end + base);
         let sliced = slice_line_spans(line, span_bounds, &offset_range);
         let mut spans = subsequent_line.spans;
         spans.append(
             &mut sliced
                 .spans
                 .into_iter()
-                .map(|s| s.patch_style(line.style))
+                .map(|span| Span::styled(span.content, line.style.patch(span.style)))
                 .collect(),
         );
         subsequent_line.spans = spans;
-        out.push(subsequent_line);
+        out.push(WrappedLine {
+            line: subsequent_line,
+            range: offset_range,
+            prefix_bytes: rt_opts
+                .subsequent_indent
+                .spans
+                .iter()
+                .map(|span| span.content.len())
+                .sum(),
+        });
     }
 
     out
@@ -950,7 +1038,7 @@ fn mixed_url_wrap_line<'a>(
     flat: &str,
     span_bounds: &[(Range<usize>, ratatui::style::Style)],
     rt_opts: RtOptions<'a>,
-) -> Vec<Line<'a>> {
+) -> Vec<WrappedLine<'a>> {
     let initial_width_available = rt_opts
         .width
         .saturating_sub(line_width(&rt_opts.initial_indent))
@@ -969,20 +1057,38 @@ fn mixed_url_wrap_line<'a>(
             rt_opts.subsequent_indent.clone()
         }
         .style(line.style);
+        let prefix_bytes = wrapped_line
+            .spans
+            .iter()
+            .map(|span| span.content.len())
+            .sum();
         let sliced = slice_line_spans(line, span_bounds, range);
         let mut spans = wrapped_line.spans;
         spans.extend(
             sliced
                 .spans
                 .into_iter()
-                .map(|span| span.patch_style(line.style)),
+                .map(|span| Span::styled(span.content, line.style.patch(span.style))),
         );
         wrapped_line.spans = spans;
-        out.push(wrapped_line);
+        out.push(WrappedLine {
+            line: wrapped_line,
+            range: range.clone(),
+            prefix_bytes,
+        });
     }
 
     if out.is_empty() {
-        vec![rt_opts.initial_indent.clone()]
+        vec![WrappedLine {
+            line: rt_opts.initial_indent.clone().style(line.style),
+            range: 0..0,
+            prefix_bytes: rt_opts
+                .initial_indent
+                .spans
+                .iter()
+                .map(|span| span.content.len())
+                .sum(),
+        }]
     } else {
         out
     }
@@ -1270,6 +1376,10 @@ fn slice_line_spans<'a>(
 }
 
 #[cfg(test)]
+#[path = "wrapping_reuse_tests.rs"]
+mod reuse_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use itertools::Itertools as _;
@@ -1291,6 +1401,24 @@ mod tests {
         let out = word_wrap_line(&line, /*width_or_options*/ 10);
         assert_eq!(out.len(), 1);
         assert_eq!(concat_line(&out[0]), "hello");
+    }
+
+    #[test]
+    fn narrow_wrap_ranges_preserve_compound_graphemes() {
+        assert_eq!(
+            wrap_ranges_trim("👩‍💻e\u{301}x", /*width_or_options*/ 2),
+            vec![0..11, 11..15],
+        );
+        for text in ["\u{301}\u{302}", " \u{301}\u{302}"] {
+            assert_eq!(
+                wrap_ranges_trim(text, /*width_or_options*/ 2),
+                vec![0..text.len()]
+            );
+        }
+        assert_eq!(
+            wrap_ranges("\u{301}\u{302}", /*width_or_options*/ 2),
+            vec![0..5],
+        );
     }
 
     #[test]

@@ -90,11 +90,12 @@ fn split_flap_frames_assemble_a_transcript_from_dark_tiles() {
 #[test]
 fn split_flap_paints_the_entire_transcript_row_black() {
     let cell = cell("GATE", MotionMode::Animated);
-    let lines = cell.animate_lines(
-        cell.inner.display_hyperlink_lines(/*width*/ 12),
-        /*width*/ 12,
-        Duration::ZERO,
-    );
+    let mut source_lines = cell.inner.display_hyperlink_lines(/*width*/ 12);
+    source_lines[0].source = Some(crate::terminal_hyperlinks::LogicalLineSource::from_line(
+        &source_lines[0].line,
+    ));
+    let lines = cell.animate_lines(source_lines, /*width*/ 12, Duration::ZERO);
+    assert!(lines[0].source.is_none());
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 1,
     );

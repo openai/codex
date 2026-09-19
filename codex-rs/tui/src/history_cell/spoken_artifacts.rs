@@ -7,12 +7,14 @@ use crate::width::display_width;
 use ratatui::style::Modifier;
 use ratatui::text::Span;
 use std::path::Path;
+use std::sync::Arc;
 
 const MAX_ARTIFACT_CANDIDATES: usize = 16;
 
 pub(super) fn annotate_spoken_artifacts(lines: &mut [HyperlinkLine], cwd: &Path) {
     let mut inspected = 0;
-    for line in lines {
+    let mut source_patches = Vec::new();
+    'lines: for line in &mut *lines {
         let text = line
             .line
             .spans
@@ -46,7 +48,7 @@ pub(super) fn annotate_spoken_artifacts(lines: &mut [HyperlinkLine], cwd: &Path)
             }
             inspected += 1;
             if inspected > MAX_ARTIFACT_CANDIDATES {
-                return;
+                break 'lines;
             }
             let Some(file) = TrustedWorkspaceFile::validate(cwd, path) else {
                 continue;
@@ -61,6 +63,17 @@ pub(super) fn annotate_spoken_artifacts(lines: &mut [HyperlinkLine], cwd: &Path)
             }
             line.hyperlinks
                 .push(TerminalHyperlink::trusted_workspace_file(columns, file));
+            if let Some(source) = &line.source {
+                let start = byte_start.max(source.prefix_bytes);
+                let end = byte_end.min(source.prefix_bytes + source.range.len());
+                if start < end {
+                    source_patches.push((
+                        Arc::clone(&source.text),
+                        source.range.start + start - source.prefix_bytes
+                            ..source.range.start + end - source.prefix_bytes,
+                    ));
+                }
+            }
 
             let mut offset = 0;
             for span in std::mem::take(&mut line.line.spans) {
@@ -90,5 +103,53 @@ pub(super) fn annotate_spoken_artifacts(lines: &mut [HyperlinkLine], cwd: &Path)
             }
         }
         line.hyperlinks.sort_by_key(|link| link.columns.start);
+    }
+
+    // Every wrapped fragment must retain all annotations on its shared logical line.
+    while let Some((text, range)) = source_patches.pop() {
+        let mut ranges = vec![range];
+        source_patches.retain(|(other, range)| {
+            if Arc::ptr_eq(&text, other) {
+                ranges.push(range.clone());
+                false
+            } else {
+                true
+            }
+        });
+        let mut sources = lines
+            .iter_mut()
+            .filter_map(|line| line.source.as_mut())
+            .filter(|source| Arc::ptr_eq(&source.text, &text));
+        let Some(first) = sources.next() else {
+            continue;
+        };
+        let mut styles = Vec::new();
+        for (span, style) in first.styles.iter() {
+            let mut boundaries = vec![span.start, span.end];
+            boundaries.extend(
+                ranges
+                    .iter()
+                    .flat_map(|range| [range.start, range.end])
+                    .filter(|offset| span.start < *offset && *offset < span.end),
+            );
+            boundaries.sort_unstable();
+            boundaries.dedup();
+            for pair in boundaries.windows(/*size*/ 2) {
+                let range = pair[0]..pair[1];
+                let style = if ranges
+                    .iter()
+                    .any(|patch| patch.start < range.end && range.start < patch.end)
+                {
+                    style.add_modifier(Modifier::UNDERLINED)
+                } else {
+                    *style
+                };
+                styles.push((range, style));
+            }
+        }
+        first.styles = styles.into();
+        for source in sources {
+            source.styles = Arc::clone(&first.styles);
+        }
     }
 }

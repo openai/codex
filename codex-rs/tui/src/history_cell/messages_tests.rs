@@ -234,6 +234,21 @@ fn spoken_artifacts_link_only_real_workspace_files_and_preserve_existing_urls() 
         span.content == "src/lib.rs:42" && span.style.add_modifier.contains(Modifier::UNDERLINED)
     }));
     assert_eq!(spoken.raw_lines(), vec![Line::from(markdown)]);
+    for width in [90, 24] {
+        for line in spoken.display_hyperlink_lines(width) {
+            let source = line.source.expect("spoken source");
+            assert!(
+                source
+                    .styled_range(0..source.text.len())
+                    .spans
+                    .iter()
+                    .any(|span| {
+                        span.content == "src/lib.rs:42"
+                            && span.style.add_modifier.contains(Modifier::UNDERLINED)
+                    })
+            );
+        }
+    }
     insta::assert_snapshot!(
         format!(
             "{}\n{:?} -> <workspace>/src/lib.rs\n{:?} -> https://example.com",

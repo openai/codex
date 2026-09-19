@@ -3,6 +3,38 @@ use crate::terminal_hyperlinks::visible_lines;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn source_only_changes_refresh_the_preview_and_active_tail() {
+    let cwd = std::env::temp_dir();
+    let mut controller = StreamController::new(Some(5), &cwd, HistoryRenderMode::Rich);
+    controller.push("hello");
+    let before = controller.current_tail_lines();
+
+    // An entity preserves trailing whitespace that Markdown otherwise trims at EOF.
+    assert!(controller.push("&#32;"));
+    let after = controller.current_tail_lines();
+    assert_eq!(visible_lines(before.clone()), visible_lines(after.clone()));
+    assert_eq!(
+        after[0].source,
+        render_source(
+            "hello&#32;",
+            Some(5),
+            &cwd,
+            HistoryRenderMode::Rich,
+            /*inline_visualization_context*/ None,
+        )[0]
+        .source,
+    );
+    assert_ne!(
+        history_cell::StreamingAgentTailCell::new(before.clone(), /*is_first_line*/ true),
+        history_cell::StreamingAgentTailCell::new(after.clone(), /*is_first_line*/ true),
+    );
+    assert_ne!(
+        history_cell::StreamingPlanTailCell::new(before, /*is_stream_continuation*/ false),
+        history_cell::StreamingPlanTailCell::new(after, /*is_stream_continuation*/ false),
+    );
+}
+
+#[test]
 fn unterminated_prose_reflows_and_finishes_without_duplication() {
     let cwd = std::env::temp_dir();
     for ending in ["", "\n"] {
