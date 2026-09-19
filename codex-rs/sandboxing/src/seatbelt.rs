@@ -1067,6 +1067,7 @@ pub(crate) fn create_seatbelt_command_args_with_profile(
             .map_err(|error| SeatbeltPreparationError::FileSystem(error.to_string()))?;
         policy_sections.push(daemon::protection_policy(&directory)?);
     }
+    policy_sections.push("(deny mach-lookup (xpc-service-name-prefix \"\"))".to_string());
     policy_sections.push(deny_read_policy);
     // Renaming an allowed ancestor relocates its protected descendants past
     // their pathname carveouts. Keep these denies last so no broader allowance
