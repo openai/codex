@@ -430,7 +430,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     let mut app = make_test_app().await;
     trust_fixture_folders(&mut app);
     let mut ids = Vec::new();
-    for day in 1..=22 {
+    for day in 1..=12 {
         let source = match day {
             3 => codex_protocol::protocol::SessionSource::Custom("atlas".to_string()),
             4 => codex_protocol::protocol::SessionSource::Custom("chatgpt".to_string()),
@@ -457,13 +457,13 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     }
     let message_path = app_test_support::rollout_path(
         &app.config.codex_home,
-        "2025-01-21T12-00-00",
-        &ids[20].to_string(),
+        "2025-01-11T12-00-00",
+        &ids[10].to_string(),
     );
     let mut history = std::fs::read_to_string(&message_path)?;
     history.push_str(
         &serde_json::json!({
-            "timestamp": "2025-01-21T12:00:01Z",
+            "timestamp": "2025-01-11T12:00:01Z",
             "type": "event_msg",
             "payload": { "type": "agent_message", "message": "Found the regression in the parser." }
         })
@@ -473,7 +473,7 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     std::fs::write(message_path, history)?;
     let config = app.config.clone();
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
-    for thread_id in [ids[0], ids[21]] {
+    for thread_id in [ids[0], ids[11]] {
         app_server
             .resume_thread(
                 &app.local_settings,
@@ -486,8 +486,8 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     // A newer rollout missing from the index must not trigger a startup filesystem scan.
     app_test_support::create_fake_rollout_with_source(
         &app.config.codex_home,
-        "2025-01-23T12-00-00",
-        "2025-01-23T12:00:00Z",
+        "2025-01-13T12-00-00",
+        "2025-01-13T12:00:00Z",
         "Unindexed task",
         Some(&app.config.model_provider_id),
         /*git_info*/ None,
@@ -511,9 +511,9 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     assert_eq!(retained, expected);
     assert_eq!(
         app.agents_overview.last_messages,
-        HashMap::from([(ids[20], "Found the regression in the parser.".to_string())])
+        HashMap::from([(ids[10], "Found the regression in the parser.".to_string())])
     );
-    let thread = app.agents_overview.threads[&ids[20]].as_ref().unwrap();
+    let thread = app.agents_overview.threads[&ids[10]].as_ref().unwrap();
     assert_eq!(thread.status, ThreadStatus::NotLoaded);
 
     let created = app_server.start_thread(&config).await?.session.thread_id;
@@ -596,6 +596,12 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     finish_overview_refresh(&mut restarted, &app_server, &mut event_rx).await;
     let retained: HashSet<_> = restarted.agents_overview.threads.keys().copied().collect();
     assert_eq!(retained, recent_ids);
+    restarted.open_agents_overview(&app_server);
+    insta::assert_snapshot!(
+        "agents_overview_recent_sessions",
+        render_bottom_popup(&restarted.chat_widget, /*width*/ 80)
+            .replace(&test_path_display("/"), "/")
+    );
     app_server.shutdown().await?;
     Ok(())
 }
