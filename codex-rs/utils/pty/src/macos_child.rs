@@ -1,11 +1,9 @@
-//! Native spawning for macOS MCP executables, without rewriting script paths.
+//! Native macOS spawning without rewriting executable paths or argv[0].
 //!
-//! Rust falls back to fork for a historical relative-path/cwd bug in Apple's
-//! `posix_spawnp`. Calling `posix_spawn` directly avoids that wrapper. This module only
-//! accepts the launcher's cleared-environment command shape, with piped stdio,
-//! an explicit process-group mode, and default `argv[0]`. Bare commands search the child's
-//! PATH. Unsuccessful searches and executable files without shebangs retain the
-//! existing launcher. Each native child owns its PID until it has been reaped.
+//! Spawn attributes and file actions implement the shared command's process-group
+//! and descriptor policies. Bare commands search the child's PATH. Callers choose
+//! whether incompatible executable formats and failed searches may retry through
+//! Tokio. Each native child owns its PID until it has been reaped.
 
 use std::ffi::CString;
 use std::ffi::OsStr;
@@ -43,16 +41,12 @@ pub(crate) struct NativeChild {
 }
 
 impl NativeChild {
-    /// Spawns the MCP command without changing its executable path or `argv[0]`.
-    /// The caller must clear inherited environment variables before setting the
-    /// child's environment, because only explicit command entries are copied.
-    pub(crate) fn spawn(
-        command: &std::process::Command,
-        process_mode: crate::ProcessMode,
-    ) -> io::Result<Option<(Self, ChildStdin, ChildStdout, ChildStderr)>> {
+    /// Spawn the explicit command, retaining the caller's executable spelling and argv[0].
+    pub(crate) fn spawn(request: &crate::Command) -> io::Result<Option<crate::Child>> {
+        let command = request.inner.as_std();
         let program = c_string(command.get_program())?;
         let search_path = !program.as_bytes().contains(&b'/');
-        let args = std::iter::once(command.get_program())
+        let args = std::iter::once(request.arg0.as_deref().unwrap_or(command.get_program()))
             .chain(command.get_args())
             .map(c_string)
             .collect::<io::Result<Vec<_>>>()?;
@@ -83,15 +77,23 @@ impl NativeChild {
 
         // Subscribe before spawning so a child that exits immediately cannot be missed.
         let sigchld = signal(SignalKind::child())?;
-        let (stdin_read, stdin_write) = io::pipe()?;
+        let (stdin_read, stdin) = match &request.stdin {
+            crate::ChildStdin::Piped => {
+                let (reader, writer) = io::pipe()?;
+                (
+                    OwnedFd::from(reader),
+                    Some(ChildStdin::from_std(OwnedFd::from(writer).into())?),
+                )
+            }
+            crate::ChildStdin::File(fd) => (fd.try_clone()?, None),
+        };
         let (stdout_read, stdout_write) = io::pipe()?;
         let (stderr_read, stderr_write) = io::pipe()?;
         let child_fds = [
-            child_fd(stdin_read.into())?,
+            child_fd(stdin_read)?,
             child_fd(stdout_write.into())?,
             child_fd(stderr_write.into())?,
         ];
-        let stdin = ChildStdin::from_std(OwnedFd::from(stdin_write).into())?;
         let stdout = ChildStdout::from_std(OwnedFd::from(stdout_read).into())?;
         let stderr = ChildStderr::from_std(OwnedFd::from(stderr_read).into())?;
 
@@ -116,7 +118,7 @@ impl NativeChild {
                     target as i32,
                 ))?;
             }
-            let group_flags = match process_mode {
+            let group_flags = match request.process_mode {
                 crate::ProcessMode::Inherit => 0,
                 crate::ProcessMode::NewGroup => {
                     cvt(libc::posix_spawnattr_setpgroup(
@@ -130,11 +132,13 @@ impl NativeChild {
             cvt_errno(libc::sigemptyset(&mut defaults))?;
             cvt_errno(libc::sigaddset(&mut defaults, libc::SIGPIPE))?;
             cvt(libc::posix_spawnattr_setsigdefault(&mut attrs.0, &defaults))?;
-            // Match Command's descriptor inheritance: honor FD_CLOEXEC rather
-            // than introducing a different policy with CLOEXEC_DEFAULT.
+            let descriptor_flags = match request.descriptor_policy {
+                crate::DescriptorPolicy::Inherit => 0,
+                crate::DescriptorPolicy::StdioOnly => libc::POSIX_SPAWN_CLOEXEC_DEFAULT,
+            };
             cvt(libc::posix_spawnattr_setflags(
                 &mut attrs.0,
-                (group_flags | libc::POSIX_SPAWN_SETSIGDEF) as _,
+                (group_flags | descriptor_flags | libc::POSIX_SPAWN_SETSIGDEF) as _,
             ))?;
             let mut spawn = |executable: &CString| {
                 libc::posix_spawn(
@@ -167,7 +171,11 @@ impl NativeChild {
                     executable.push("/");
                     executable.push(command.get_program());
                     if executable.as_bytes().len() >= libc::PATH_MAX as usize {
-                        return Ok(None);
+                        return if request.fallback == crate::SpawnFallback::Compatible {
+                            Ok(None)
+                        } else {
+                            Err(io::Error::from_raw_os_error(libc::ENAMETOOLONG))
+                        };
                     }
                     result = spawn(&c_string(&executable)?);
                     if !matches!(
@@ -185,7 +193,9 @@ impl NativeChild {
             }
         };
         // Retain Command's shell fallback and exact PATH search errors.
-        if result == libc::ENOEXEC || (search_path && result != 0) {
+        if request.fallback == crate::SpawnFallback::Compatible
+            && (result == libc::ENOEXEC || (search_path && result != 0))
+        {
             return Ok(None);
         }
         cvt(result)?;
@@ -194,7 +204,12 @@ impl NativeChild {
             status: None,
             sigchld,
         };
-        Ok(Some((child, stdin, stdout, stderr)))
+        Ok(Some(crate::Child {
+            inner: super::ChildKind::Native(child),
+            stdin,
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+        }))
     }
 
     pub(crate) fn id(&self) -> Option<u32> {

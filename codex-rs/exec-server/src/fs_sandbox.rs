@@ -25,12 +25,17 @@ use codex_utils_path_uri::LegacyAppPathString;
 #[cfg(any(windows, test))]
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::Child;
+use codex_utils_pty::ChildStdin;
+use codex_utils_pty::Command;
+#[cfg(target_os = "macos")]
+use codex_utils_pty::DescriptorPolicy;
+use codex_utils_pty::SpawnFallback;
 #[cfg(any(windows, test))]
 use tokio::io::AsyncBufReadExt;
 #[cfg(any(windows, test))]
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
 use crate::ExecServerRuntimePaths;
 use crate::FileSystemSandboxContext;
@@ -367,7 +372,7 @@ async fn run_command(
     command: SandboxExecRequest,
     request_json: Vec<u8>,
 ) -> Result<FsHelperPayload, JSONRPCErrorError> {
-    let mut child = spawn_command(command, std::process::Stdio::piped())?;
+    let mut child = spawn_command(command, ChildStdin::Piped)?;
     let mut stdin = child
         .stdin
         .take()
@@ -426,7 +431,7 @@ pub(crate) async fn read_helper_response(
 
 #[cfg(any(windows, test))]
 pub(crate) fn drain_helper_stderr(
-    child: &mut tokio::process::Child,
+    child: &mut Child,
 ) -> tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>> {
     let stderr_pipe = child.stderr.take();
     tokio::spawn(async move {
@@ -444,7 +449,7 @@ pub(crate) fn drain_helper_stderr(
 
 #[cfg(any(windows, test))]
 pub(crate) async fn reap_helper_after_response(
-    mut child: tokio::process::Child,
+    mut child: Child,
     stderr: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
 ) -> Result<(), JSONRPCErrorError> {
     let (status, stderr) = match tokio::time::timeout(FS_HELPER_EXIT_TIMEOUT, async {
@@ -477,7 +482,7 @@ pub(crate) async fn reap_helper_after_response(
 
 #[cfg(not(windows))]
 pub(crate) async fn wait_for_helper_output(
-    child: tokio::process::Child,
+    child: Child,
 ) -> Result<std::process::Output, JSONRPCErrorError> {
     let output = child.wait_with_output().await.map_err(io_error)?;
     if !output.status.success() {
@@ -498,8 +503,8 @@ pub(crate) fn spawn_command(
         arg0,
         ..
     }: SandboxExecRequest,
-    stdin: std::process::Stdio,
-) -> Result<tokio::process::Child, JSONRPCErrorError> {
+    stdin: ChildStdin,
+) -> Result<Child, JSONRPCErrorError> {
     let Some((program, args)) = argv.split_first() else {
         return Err(invalid_request("fs sandbox command was empty".to_string()));
     };
@@ -515,21 +520,13 @@ pub(crate) fn spawn_command(
     let cwd = cwd.to_abs_path().map_err(io_error)?;
     command.current_dir(cwd.as_path());
     env.retain(|name, _| !codex_protocol::shell_environment::is_non_inheritable_env_var(name));
-    command.env_clear();
     command.envs(env);
     command.stdin(stdin);
-    command.stdout(std::process::Stdio::piped());
-    command.stderr(std::process::Stdio::piped());
-    command.kill_on_drop(true);
+    // A helper is a known executable: native launch errors must not retry through fork.
+    command.fallback(SpawnFallback::ReturnError);
     // macOS cannot receive passed fds with close-on-exec set atomically.
     #[cfg(target_os = "macos")]
-    // SAFETY: Descriptor cleanup only uses fork-safe system calls.
-    unsafe {
-        command.pre_exec(|| {
-            codex_utils_pty::pty::close_inherited_fds_except(&[]);
-            Ok(())
-        });
-    }
+    command.descriptor_policy(DescriptorPolicy::StdioOnly);
     command.spawn().map_err(io_error)
 }
 

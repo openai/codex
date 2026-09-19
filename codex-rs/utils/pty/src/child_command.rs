@@ -2,12 +2,15 @@
 //!
 //! The wrapped Tokio command is private: callers cannot install callbacks or
 //! change settings that the native backend cannot inspect. Children receive only
-//! explicitly supplied environment variables, piped stdio, and kill-on-drop.
+//! explicitly supplied environment variables and kill-on-drop. Stdio, descriptor
+//! inheritance, and compatibility fallbacks are configured independently.
 
 use std::ffi::OsStr;
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::io;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::Stdio as TokioStdio;
 
 use crate::child::Child;
 use crate::child::ChildKind;
@@ -19,10 +22,36 @@ pub enum ProcessMode {
     NewGroup,
 }
 
+/// Descriptors visible to a Unix child beyond its explicit stdio.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DescriptorPolicy {
+    Inherit,
+    StdioOnly,
+}
+
+/// Whether a native launch may use Command's executable-text and PATH fallbacks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SpawnFallback {
+    Compatible,
+    ReturnError,
+}
+
+/// An explicit child stdin, including a socket used for bidirectional fd transfer.
+pub enum ChildStdin {
+    Piped,
+    #[cfg(unix)]
+    File(std::os::fd::OwnedFd),
+}
+
 /// A local command whose complete launch contract is known to both backends.
 pub struct Command {
-    inner: tokio::process::Command,
-    process_mode: ProcessMode,
+    pub(crate) inner: tokio::process::Command,
+    pub(crate) process_mode: ProcessMode,
+    pub(crate) descriptor_policy: DescriptorPolicy,
+    pub(crate) fallback: SpawnFallback,
+    pub(crate) stdin: ChildStdin,
+    #[cfg(unix)]
+    pub(crate) arg0: Option<OsString>,
 }
 
 impl Command {
@@ -31,12 +60,17 @@ impl Command {
         inner
             .env_clear()
             .kill_on_drop(true)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(TokioStdio::piped())
+            .stdout(TokioStdio::piped())
+            .stderr(TokioStdio::piped());
         Self {
             inner,
             process_mode: ProcessMode::Inherit,
+            descriptor_policy: DescriptorPolicy::Inherit,
+            fallback: SpawnFallback::Compatible,
+            stdin: ChildStdin::Piped,
+            #[cfg(unix)]
+            arg0: None,
         }
     }
 
@@ -74,6 +108,28 @@ impl Command {
         self
     }
 
+    pub fn stdin(&mut self, stdin: ChildStdin) -> &mut Self {
+        self.stdin = stdin;
+        self
+    }
+
+    pub fn descriptor_policy(&mut self, policy: DescriptorPolicy) -> &mut Self {
+        self.descriptor_policy = policy;
+        self
+    }
+
+    pub fn fallback(&mut self, fallback: SpawnFallback) -> &mut Self {
+        self.fallback = fallback;
+        self
+    }
+
+    #[cfg(unix)]
+    pub fn arg0(&mut self, arg0: impl AsRef<OsStr>) -> &mut Self {
+        self.inner.arg0(arg0.as_ref());
+        self.arg0 = Some(arg0.as_ref().to_owned());
+        self
+    }
+
     /// Preserve Job Object assignment before the child begins executing on Windows.
     #[cfg(windows)]
     pub fn prepare_suspended_spawn(&mut self, job: &crate::JobObject) {
@@ -90,16 +146,27 @@ impl Command {
         {
             let command = self.inner.as_std();
             let program = command.get_program();
-            if Path::new(program).is_relative()
+            if (Path::new(program).is_relative()
+                || self.descriptor_policy == DescriptorPolicy::StdioOnly
+                || self.fallback == SpawnFallback::ReturnError)
                 && !program.is_empty()
-                && let Some((child, stdin, stdout, stderr)) =
-                    crate::child::macos::NativeChild::spawn(command, self.process_mode)?
+                && let Some(child) = crate::child::macos::NativeChild::spawn(&self)?
             {
-                return Ok(Child {
-                    inner: ChildKind::Native(child),
-                    stdin: Some(stdin),
-                    stdout: Some(stdout),
-                    stderr: Some(stderr),
+                return Ok(child);
+            }
+        }
+        self.inner.stdin(match self.stdin {
+            ChildStdin::Piped => TokioStdio::piped(),
+            #[cfg(unix)]
+            ChildStdin::File(fd) => TokioStdio::from(fd),
+        });
+        #[cfg(unix)]
+        if self.descriptor_policy == DescriptorPolicy::StdioOnly {
+            // SAFETY: This preserves the existing Unix descriptor cleanup before exec.
+            unsafe {
+                self.inner.pre_exec(|| {
+                    crate::pty::close_inherited_fds_except(&[]);
+                    Ok(())
                 });
             }
         }
@@ -116,3 +183,7 @@ impl Command {
 #[cfg(all(test, target_os = "macos"))]
 #[path = "macos_child_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "macos_descriptor_tests.rs"]
+mod descriptor_tests;

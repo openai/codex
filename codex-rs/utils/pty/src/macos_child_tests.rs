@@ -19,29 +19,9 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 async fn native_output(command: Command) -> anyhow::Result<std::process::Output> {
-    let mut child = command.spawn()?;
+    let child = command.spawn()?;
     assert!(matches!(child.inner, ChildKind::Native(_)));
-    drop(child.stdin.take());
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| io::Error::other("piped stdout"))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::other("piped stderr"))?;
-    let mut output = Vec::new();
-    let mut diagnostic = Vec::new();
-    let (_, _, status) = tokio::try_join!(
-        stdout.read_to_end(&mut output),
-        stderr.read_to_end(&mut diagnostic),
-        child.wait()
-    )?;
-    Ok(std::process::Output {
-        status,
-        stdout: output,
-        stderr: diagnostic,
-    })
+    Ok(child.wait_with_output().await?)
 }
 
 #[tokio::test]
@@ -111,12 +91,18 @@ async fn relative_script_preserves_paths_stdio_environment_and_process_group() -
         .env("MCP_TEST", "kept")
         .arg("spaces ; literal $arg")
         .arg(std::ffi::OsString::from_vec(b"raw-\xff".to_vec()));
-    let (mut child, mut stdin, mut stdout, mut stderr) =
-        NativeChild::spawn(command.inner.as_std(), command.process_mode)?.expect("native child");
+    let mut child = NativeChild::spawn(&command)?.expect("native child");
+    let mut stdin = child.stdin.take();
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
     let pid = child.id().expect("live PID") as libc::pid_t;
     // SAFETY: getpgid only inspects the live child, which waits for input below.
     assert_eq!(unsafe { libc::getpgid(pid) }, pid);
-    stdin.write_all(b"hello\n").await?;
+    stdin
+        .as_mut()
+        .expect("piped stdin")
+        .write_all(b"hello\n")
+        .await?;
     drop(stdin);
     let mut output = Vec::new();
     let mut diagnostic = String::new();
@@ -148,8 +134,9 @@ async fn native_executable_preserves_argv0() -> anyhow::Result<()> {
         .current_dir(root.path())
         .process_mode(ProcessMode::NewGroup)
         .args(["-c", "printf '%s' \"$0\""]);
-    let (mut child, stdin, mut stdout, _stderr) =
-        NativeChild::spawn(command.inner.as_std(), command.process_mode)?.expect("native child");
+    let mut child = NativeChild::spawn(&command)?.expect("native child");
+    let stdin = child.stdin.take();
+    let mut stdout = child.stdout.take().expect("piped stdout");
     drop(stdin);
     let mut output = Vec::new();
     stdout.read_to_end(&mut output).await?;
@@ -166,8 +153,8 @@ async fn cancelled_wait_can_still_kill_and_reap_child() -> anyhow::Result<()> {
     command
         .current_dir(root.path())
         .process_mode(ProcessMode::NewGroup);
-    let (mut child, _stdin, _stdout, _stderr) =
-        NativeChild::spawn(command.inner.as_std(), command.process_mode)?.expect("native child");
+    let mut child = NativeChild::spawn(&command)?.expect("native child");
+    let _stdin = child.stdin.take();
     assert!(
         tokio::time::timeout(Duration::from_millis(20), child.wait())
             .await
@@ -202,9 +189,9 @@ async fn descriptor_inheritance_matches_command() -> anyhow::Result<()> {
                 "-c",
                 "if [ -e /dev/fd/\"$SENTINEL\" ]; then printf inherited; else printf closed; fi",
             ]);
-        let (mut child, stdin, mut stdout, _stderr) =
-            NativeChild::spawn(command.inner.as_std(), command.process_mode)?
-                .expect("native child");
+        let mut child = NativeChild::spawn(&command)?.expect("native child");
+        let stdin = child.stdin.take();
+        let mut stdout = child.stdout.take().expect("piped stdout");
         drop(stdin);
         let mut output = String::new();
         stdout.read_to_string(&mut output).await?;
@@ -274,15 +261,16 @@ fn dropping_after_runtime_shutdown_kills_and_reaps_child() -> anyhow::Result<()>
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let (child, stdin, _stdout, _stderr) = runtime
+    let mut child = runtime
         .block_on(async {
             let mut command = Command::new("./server");
             command
                 .current_dir(root.path())
                 .process_mode(ProcessMode::NewGroup);
-            NativeChild::spawn(command.inner.as_std(), command.process_mode)
+            NativeChild::spawn(&command)
         })?
         .expect("native child");
+    let stdin = child.stdin.take();
     let pid = child.id().expect("live PID") as libc::pid_t;
     drop(runtime);
     drop(child);
