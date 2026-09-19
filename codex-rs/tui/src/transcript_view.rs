@@ -183,10 +183,14 @@ impl TranscriptView {
     }
 
     pub(crate) fn jump_to_latest(&mut self) {
+        self.cancel_beginning();
         self.position = Position::Latest;
     }
 
     pub(crate) fn scroll(&mut self, cells: &[Arc<dyn HistoryCell>], rows: isize) {
+        if rows != 0 {
+            self.cancel_beginning();
+        }
         let start = self.start(cells);
         let (index, row) = self.move_rows(cells, start.0, start.1, rows);
         if rows < 0
@@ -218,6 +222,13 @@ impl TranscriptView {
             index,
             row: 0,
         });
+    }
+
+    pub(crate) fn cancel_beginning(&mut self) {
+        if self.history == TranscriptHistoryState::LoadingBeginning {
+            // Keep the in-flight page, but let the user's new navigation supersede the jump.
+            self.history = TranscriptHistoryState::LoadingOlder;
+        }
     }
 
     /// Reveal an entire entry when prompt backtracking changes the highlight.

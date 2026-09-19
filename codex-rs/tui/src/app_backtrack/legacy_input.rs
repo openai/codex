@@ -12,6 +12,15 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<bool> {
+        if let TuiEvent::Key(key) = &event
+            && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && (key.code == KeyCode::Esc
+                || (self.backtrack.overlay_preview_active
+                    && matches!(key.code, KeyCode::Left | KeyCode::Right)))
+            && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
+        {
+            overlay.cancel_pending_jump();
+        }
         if let TuiEvent::Key(key_event) = &event
             && let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut()
             && (overlay.should_load_older(*key_event)

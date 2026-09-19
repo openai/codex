@@ -195,35 +195,51 @@ async fn loading_beginning_keeps_the_entry_until_history_is_complete() -> Result
     Ok(())
 }
 
-#[tokio::test]
-async fn navigation_before_the_first_draw_preserves_the_full_latest_viewport() -> Result<()> {
+#[test]
+fn navigation_supersedes_home_before_and_after_the_first_draw() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 10,
     );
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    for key in [
-        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
-        KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-    ] {
-        let cells = vec![Arc::new(TestCell {
-            lines: (0..30)
-                .map(|index| Line::from(format!("line {index}")))
-                .collect(),
-        }) as Arc<dyn HistoryCell>];
-        let mut expected_overlay = transcript_overlay(cells.clone());
-        let mut expected = Buffer::empty(area);
-        expected_overlay.render(area, &mut expected);
-        let mut overlay = transcript_overlay(cells);
-        overlay.handle_event(&mut tui, TuiEvent::Key(key))?;
-        let mut actual = Buffer::empty(area);
-        overlay.render(area, &mut actual);
-        assert_eq!(actual, expected);
+    for rendered in [false, true] {
+        for key in [
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+        ] {
+            let cells = vec![Arc::new(TestCell {
+                lines: (0..30)
+                    .map(|index| Line::from(format!("line {index}")))
+                    .collect(),
+            }) as Arc<dyn HistoryCell>];
+            let mut expected = transcript_overlay(cells.clone());
+            let mut actual = transcript_overlay(cells);
+            actual.set_history_state(TranscriptHistoryState::Partial);
+            if rendered {
+                expected.render(area, &mut Buffer::empty(area));
+                actual.render(area, &mut Buffer::empty(area));
+            }
+            expected.navigate(key);
+            actual.navigate(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+            actual.navigate(key);
+            assert_eq!(actual.view.history, TranscriptHistoryState::LoadingOlder);
+            actual.prepend(vec![Arc::new(TestCell {
+                lines: vec!["received older history".into()],
+            })]);
+            actual.set_history_state(TranscriptHistoryState::Complete);
+            let mut expected_buffer = Buffer::empty(area);
+            let mut actual_buffer = Buffer::empty(area);
+            expected.render(area, &mut expected_buffer);
+            actual.render(area, &mut actual_buffer);
+            assert_eq!(
+                buffer_to_text(&actual_buffer, actual.content_area),
+                buffer_to_text(&expected_buffer, expected.content_area)
+            );
+        }
     }
-    Ok(())
 }
 
 #[test]
@@ -242,6 +258,9 @@ fn transcript_overlay_snapshots_paginated_history_states() {
         ("failed", TranscriptHistoryState::Failed),
         ("complete", TranscriptHistoryState::Complete),
     ] {
+        overlay.set_history_state(TranscriptHistoryState::Partial);
+        overlay.navigate(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        overlay.navigate(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         overlay.set_history_state(state);
         let mut buf = Buffer::empty(area);
         overlay.render(area, &mut buf);

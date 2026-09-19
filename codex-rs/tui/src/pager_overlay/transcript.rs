@@ -228,6 +228,11 @@ impl TranscriptOverlay {
         self.view.sync_live_tail(width, key, compute_lines);
     }
 
+    /// Explicit prompt navigation supersedes Home; passive highlight restoration does not.
+    pub(crate) fn cancel_pending_jump(&mut self) {
+        self.view.cancel_beginning();
+    }
+
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell.filter(|index| *index < self.cells.len());
         self.reveal_highlight = self.highlight_cell.is_some();
@@ -270,6 +275,7 @@ impl TranscriptOverlay {
         let Some(delta) = delta else {
             return false;
         };
+        self.view.cancel_beginning();
         if !self.content_area.is_empty() {
             self.scroll(delta);
         }

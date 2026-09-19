@@ -4,6 +4,7 @@
 //! Analytics also preserves the composer and stays separate from transcript backtracking.
 
 use super::*;
+use crate::pager_overlay::TranscriptHistoryState;
 use crate::test_support::test_path_display;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -271,7 +272,22 @@ async fn transcript_flag_off_preserves_viewer_and_backtracking() -> Result<()> {
         (KeyCode::Right, 1),
         (KeyCode::Right, 1),
     ] {
+        if let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() {
+            overlay.set_history_state(TranscriptHistoryState::LoadingBeginning);
+            overlay.render(area, &mut buffer);
+            assert_eq!(
+                overlay.set_history_state(TranscriptHistoryState::LoadingBeginning),
+                TranscriptHistoryState::LoadingBeginning,
+            );
+        }
         press_key(&mut app, &mut tui, &mut app_server, key).await?;
+        let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() else {
+            panic!("viewer closed")
+        };
+        assert_eq!(
+            overlay.set_history_state(TranscriptHistoryState::Complete),
+            TranscriptHistoryState::LoadingOlder,
+        );
         assert_eq!(app.backtrack.nth_user_message, selected);
     }
     press_key(&mut app, &mut tui, &mut app_server, KeyCode::Enter).await?;
