@@ -83,8 +83,33 @@ strip_request_headers = ["authorization"]
 
 ### 2) Run the proxy
 
+The proxy can also run without a full Codex permissions profile. Put the network policy in a
+standalone JSON file:
+
+```json
+{
+  "network": {
+    "enabled": true,
+    "proxy_url": "http://127.0.0.1:3128",
+    "enable_socks5": false,
+    "enable_socks5_udp": false,
+    "allow_upstream_proxy": false,
+    "allow_local_binding": false,
+    "mode": "full",
+    "mitm": false,
+    "domains": {
+      "api.example.com": "allow"
+    }
+  }
+}
+```
+
+HTTPS MITM is enabled automatically for limited mode or configured `mitm_hooks`. Set `mitm` to
+`true` to enable it explicitly. The proxy requires `network.enabled = true` and rejects unknown
+fields, including fields nested inside MITM hooks.
+
 ```bash
-cargo run -p codex-network-proxy --
+cargo run -p codex-network-proxy -- --config /path/to/network-proxy.json
 ```
 
 ### 3) Point a client at it

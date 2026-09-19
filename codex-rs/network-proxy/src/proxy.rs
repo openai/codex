@@ -1792,6 +1792,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_fails_fast_when_either_listener_fails() {
+        for failing_listener in ["http", "socks"] {
+            let http_fails = failing_listener == "http";
+            let mut listeners = ProxyListeners::new();
+            listeners.spawn(move |_guard| async move {
+                if http_fails {
+                    anyhow::bail!("http proxy listener failed");
+                }
+                std::future::pending::<Result<()>>().await
+            });
+            listeners.spawn(move |_guard| async move {
+                if !http_fails {
+                    anyhow::bail!("socks proxy listener failed");
+                }
+                std::future::pending::<Result<()>>().await
+            });
+            let handle = NetworkProxyHandle {
+                runtime: Some(ProxyRuntime::Listeners(listeners)),
+                environment_proxies: Some(Arc::new(Mutex::new(HashMap::new()))),
+                #[cfg(target_os = "windows")]
+                windows_active_route: None,
+            };
+
+            let error = tokio::time::timeout(std::time::Duration::from_secs(1), handle.wait())
+                .await
+                .expect("proxy wait should not hang when a listener fails")
+                .unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                format!("{failing_listener} proxy listener failed")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn proxy_startup_ignores_macos_unix_socket_permissions_on_windows() -> Result<()> {
         let unix_sockets = crate::config::NetworkUnixSocketPermissions {
             entries: [

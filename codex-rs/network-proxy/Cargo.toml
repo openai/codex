@@ -9,6 +9,10 @@ name = "codex_network_proxy"
 path = "src/lib.rs"
 doctest = false
 
+[[bin]]
+name = "codex-network-proxy"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
@@ -30,11 +34,13 @@ regex-automata = { workspace = true }
 regex-syntax = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_ignored = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
 rama-core = { version = "=0.3.0-alpha.4" }
 rama-http = { version = "=0.3.0-alpha.4" }

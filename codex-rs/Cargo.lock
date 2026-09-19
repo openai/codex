@@ -4165,6 +4165,7 @@ dependencies = [
  "schemars 0.8.22",
  "security-framework 3.5.1",
  "serde",
+ "serde_ignored",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
@@ -4172,6 +4173,7 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "url",
  "windows-sys 0.52.0",
 ]
