@@ -78,25 +78,14 @@ pub(crate) fn query_package_name(
     Ok(Some(String::from_utf16(family)?))
 }
 
-/// Only an OS-verified packaged runner may propagate package context to sandbox children.
-pub(crate) fn current_process_is_registered_core_runner() -> Result<bool> {
-    let executable = std::env::current_exe().context("resolve current Core runner image")?;
-    if !executable
-        .file_name()
-        .is_some_and(|name| name.eq_ignore_ascii_case("codex-command-runner.exe"))
-    {
-        return Ok(false);
-    }
-    let process = unsafe { GetCurrentProcess() };
-    if process_package_name(process)?.is_none() {
-        ensure!(
-            !registered_core_requested(),
-            "registered Core runner has no package identity"
-        );
-        return Ok(false);
-    }
-    verify_registered_core_runner(process, &executable)?;
-    Ok(true)
+/// Preserve the caller's OS-assigned package identity for sandboxed descendants.
+pub(crate) fn current_process_has_package_identity() -> Result<bool> {
+    let has_identity = current_package_full_name()?.is_some();
+    ensure!(
+        has_identity || !registered_core_requested(),
+        "registered Core process has no package identity"
+    );
+    Ok(has_identity)
 }
 
 fn staged_package_root(name: &[u16]) -> Result<PathBuf> {

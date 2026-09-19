@@ -134,7 +134,7 @@ pub fn spawn_conpty_process_as_user(
         job: Some(Arc::clone(&job)),
         _desktop: Some(desktop),
     };
-    let preserve_app_context = crate::app_package::current_process_is_registered_core_runner()?;
+    let preserve_app_context = crate::app_package::current_process_has_package_identity()?;
     let mut attrs = ProcThreadAttributeList::new(2 + u32::from(preserve_app_context))?;
     attrs.set_pseudoconsole(hpc)?;
     attrs.set_job(job.as_raw_handle() as HANDLE)?;
