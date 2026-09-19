@@ -340,7 +340,6 @@ impl Renderable for PluginDisclosureLine {
 impl ChatWidget {
     pub(super) fn plugins_loading_popup_params(&self) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -360,7 +359,6 @@ impl ChatWidget {
 
     pub(super) fn marketplace_add_loading_popup_params(&self) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -400,7 +398,6 @@ impl ChatWidget {
         let plugins_response_for_on_cancel = plugins_response.clone();
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(Line::from(vec![
@@ -459,7 +456,6 @@ impl ChatWidget {
         marketplace_display_name: &str,
     ) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some(format!("Removing {marketplace_display_name}...")),
@@ -481,7 +477,6 @@ impl ChatWidget {
             .map(|name| format!("Upgrading {name} marketplace..."))
             .unwrap_or_else(|| "Upgrading marketplaces...".to_string());
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -504,7 +499,6 @@ impl ChatWidget {
         plugin_display_name: &str,
     ) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(DelayedLoadingHeader::new(
                 self.frame_requester.clone(),
@@ -527,7 +521,6 @@ impl ChatWidget {
         plugin_display_name: &str,
     ) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some(format!("Installing {plugin_display_name}...")),
@@ -546,7 +539,6 @@ impl ChatWidget {
         plugin_display_name: &str,
     ) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some(format!("Uninstalling {plugin_display_name}...")),
@@ -562,7 +554,6 @@ impl ChatWidget {
 
     pub(super) fn plugins_error_popup_params(&self, err: &str) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some("Failed to load plugins.".to_string()),
@@ -614,7 +605,6 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some("Failed to add marketplace.".to_string()),
@@ -669,7 +659,6 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some("Failed to remove marketplace.".to_string()),
@@ -707,7 +696,6 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             title: Some("Plugins".to_string()),
             subtitle: Some("Failed to load plugin details.".to_string()),
@@ -934,7 +922,6 @@ impl ChatWidget {
             active_tab_id.and_then(|tab_id| plugin_tab_id_matching_saved_id(&tab_id, &tabs));
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(()),
             footer_hint: Some(plugins_popup_hint_line(
@@ -1151,7 +1138,6 @@ impl ChatWidget {
         });
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(plugin_detail_hint_line()),

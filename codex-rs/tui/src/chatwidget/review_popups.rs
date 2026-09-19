@@ -62,7 +62,6 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Select a review preset".into()),
             items,
             ..SelectionViewParams::picker()
@@ -92,7 +91,6 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             picker_surface: PickerSurface::Panel,
             title: Some("Select a base branch".to_string()),
             subtitle: Some(format!("Current branch: {current_branch}")),
@@ -130,7 +128,6 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             picker_surface: PickerSurface::Panel,
             title: Some("Select a commit to review".into()),
             items,

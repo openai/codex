@@ -97,7 +97,6 @@ impl ChatWidget {
             .collect();
 
         self.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Copy to clipboard".into()),
             items,
             ..SelectionViewParams::picker()

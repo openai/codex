@@ -114,7 +114,6 @@ async fn permission_discovery_discards_stale_results_and_preserves_covering_moda
     chat.open_permissions_popup();
     let request_id = chat.permission_popup_request_id.unwrap();
     chat.bottom_pane.show_selection_view(SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some("other-modal"),
         title: Some("Other modal".to_string()),
         ..Default::default()

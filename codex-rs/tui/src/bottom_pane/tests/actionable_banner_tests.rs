@@ -135,15 +135,21 @@ fn partially_clipped_banner_preserves_hidden_action_shortcuts() {
     );
     pane.set_inline_banner(Some(ActionableBanner {
         title: "Usage limit reached".into(),
-        actions: vec![SelectionItem {
-            name: "View usage".into(),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::OpenUrlInBrowser {
-                    url: "https://example.com/usage".into(),
-                });
-            })],
-            ..Default::default()
-        }],
+        actions: vec![
+            SelectionItem {
+                name: "Keep working".into(),
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "View usage".into(),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenUrlInBrowser {
+                        url: "https://example.com/usage".into(),
+                    });
+                })],
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     }));
     let width = 70;
@@ -155,9 +161,10 @@ fn partially_clipped_banner_preserves_hidden_action_shortcuts() {
     );
 
     let rendered = render_snapshot(&pane, footer_only_area);
+    assert!(rendered.contains("Keep working"));
     assert!(!rendered.contains("View usage"));
-    pane.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
-    assert_eq!(pane.composer_text(), "1");
+    pane.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    assert_eq!(pane.composer_text(), "2");
     assert!(rx.try_recv().is_err());
 }
 

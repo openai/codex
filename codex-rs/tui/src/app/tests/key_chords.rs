@@ -496,7 +496,6 @@ async fn physical_dispatch_band_events_are_dropped() -> Result<()> {
 async fn physical_chords_route_list_and_mixed_request_input_modals() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
     app.chat_widget.show_selection_view(SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some("list"),
         items: ["First", "Second"]
             .into_iter()

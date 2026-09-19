@@ -16,7 +16,6 @@ fn popup_hints_follow_configured_bindings() {
         keymap.list.cancel = vec![crate::key_hint::plain(KeyCode::F(/*n*/ 2))];
         pane.set_keymap_bindings(&keymap);
         pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Choose an action".into()),
             items: vec![SelectionItem {
                 name: "Continue".into(),
@@ -59,7 +58,6 @@ fn custom_and_noncancelable_popup_hints_keep_their_policy() {
         ),
     ] {
         let mut params = SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             allow_cancel,
             footer_hint: supplied,
             ..Default::default()

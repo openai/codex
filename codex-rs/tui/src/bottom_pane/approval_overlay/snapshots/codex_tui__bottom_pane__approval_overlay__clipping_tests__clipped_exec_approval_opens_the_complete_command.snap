@@ -31,6 +31,25 @@ bound=true 40x10
   Press enter to confirm or esc to
   cancel
 
+bound=true 40x8
+
+  Would you like to run the following
+  [… 43 lines] ctrl+g view all
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do
+     differently (esc)
+  Press enter to confirm or esc to
+  cancel
+
+bound=true 40x7
+
+  [… 43 lines] ctrl+g view all
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do
+     differently (esc)
+  Press enter to confirm or esc to
+  cancel
+
 bound=false 80x14
 
   Would you like to run the following command?
@@ -51,6 +70,25 @@ bound=false 40x10
 
   Would you like to run the following
   command?
+
+  [… 43 lines]
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do
+     differently (esc)
+  Press enter to confirm or esc to
+  cancel
+
+bound=false 40x8
+
+  Would you like to run the following
+  [… 43 lines]
+› 1. Yes, proceed (y)
+  2. No, and tell Codex what to do
+     differently (esc)
+  Press enter to confirm or esc to
+  cancel
+
+bound=false 40x7
 
   [… 43 lines]
 › 1. Yes, proceed (y)

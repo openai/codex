@@ -297,7 +297,6 @@ pub(crate) fn build_keymap_action_menu_params(
     });
 
     SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some(KEYMAP_ACTION_MENU_VIEW_ID),
         header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
         footer_note: Some(Line::from(vec![
@@ -363,7 +362,6 @@ pub(crate) fn build_keymap_replace_binding_menu_params(
         .collect();
 
     SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some(KEYMAP_REPLACE_BINDING_MENU_VIEW_ID),
         header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
         footer_hint: Some(picker_hint_line_for_keymap(&runtime_keymap.list)),
@@ -386,7 +384,6 @@ pub(crate) fn build_keymap_conflict_params(
         KeymapCaptureMode::SingleKey
     };
     SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         header: Box::new(
             Paragraph::new(vec![
                 Line::from("Shortcut Conflict".bold()),
@@ -722,11 +719,6 @@ mod tests {
     use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::sync::mpsc::unbounded_channel;
 
-    // Keep layout fixtures portable while runtime defaults remain platform-specific.
-    fn snapshot_runtime(runtime: RuntimeKeymap) -> RuntimeKeymap {
-        runtime
-    }
-
     fn app_event_sender() -> AppEventSender {
         let (tx, _rx) = unbounded_channel();
         AppEventSender::new(tx)
@@ -901,7 +893,7 @@ mod tests {
 
     #[test]
     fn keymap_picker_fast_mode_enabled_snapshot() {
-        let runtime = snapshot_runtime(RuntimeKeymap::defaults());
+        let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params_with_filter(
             &runtime,
             &TuiKeymap::default(),
@@ -995,7 +987,7 @@ mod tests {
 
     #[test]
     fn picker_content_snapshot() {
-        let runtime = snapshot_runtime(RuntimeKeymap::defaults());
+        let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
         let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
         let snapshot = params
@@ -1190,7 +1182,7 @@ mod tests {
 
     #[test]
     fn picker_question_actions_snapshot() {
-        let runtime = snapshot_runtime(RuntimeKeymap::defaults());
+        let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params_for_selected_action(
             &runtime,
             &TuiKeymap::default(),
@@ -1223,7 +1215,7 @@ mod tests {
 
     #[test]
     fn picker_all_tab_items_remain_searchable() {
-        let runtime = snapshot_runtime(RuntimeKeymap::defaults());
+        let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
         let all_tab = selection_tab(&params, KEYMAP_ALL_TAB_ID);
         let snapshot = all_tab
@@ -1246,7 +1238,7 @@ mod tests {
 
     #[test]
     fn picker_wide_render_snapshot() {
-        let runtime = snapshot_runtime(RuntimeKeymap::defaults());
+        let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
 
         assert_snapshot!("keymap_picker_wide", render_picker(params, /*width*/ 120));
@@ -1254,7 +1246,7 @@ mod tests {
 
     #[test]
     fn picker_narrow_render_snapshot() {
-        let runtime = snapshot_runtime(RuntimeKeymap::defaults());
+        let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
 
         assert_snapshot!("keymap_picker_narrow", render_picker(params, /*width*/ 78));
@@ -1265,8 +1257,7 @@ mod tests {
         let keymap =
             keymap_with_replacement(&TuiKeymap::default(), "composer", "submit", "ctrl-enter")
                 .expect("replace binding");
-        let runtime =
-            snapshot_runtime(RuntimeKeymap::from_config(&keymap).expect("runtime keymap"));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
         let params = build_keymap_picker_params(&runtime, &keymap);
 
         assert_snapshot!("keymap_picker_custom", render_picker(params, /*width*/ 120));
@@ -1281,8 +1272,7 @@ mod tests {
             &["ctrl-t".to_string(), "ctrl-x ctrl-t".to_string()],
         )
         .expect("global chord binding");
-        let runtime =
-            snapshot_runtime(RuntimeKeymap::from_config(&keymap).expect("runtime keymap"));
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("runtime keymap");
         let params = build_keymap_picker_params(&runtime, &keymap);
 
         assert_snapshot!(

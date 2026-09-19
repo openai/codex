@@ -297,7 +297,6 @@ fn build_keymap_picker_params_for_action(
     tabs.push(keymap_debug_tab());
 
     SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some(KEYMAP_PICKER_VIEW_ID),
         picker_surface: PickerSurface::Panel,
         max_visible_rows: 24,

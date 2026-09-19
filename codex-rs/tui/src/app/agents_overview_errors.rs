@@ -33,7 +33,6 @@ impl App {
                 ..Default::default()
             }];
             self.chat_widget.show_selection_view(SelectionViewParams {
-                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 header: Box::new(AgentsOverviewErrorHeader(vec![
                     Line::from("Unable to complete action".bold()),
                     Line::from(message.clone().dim()),

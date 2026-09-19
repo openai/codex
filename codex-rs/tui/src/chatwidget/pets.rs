@@ -294,7 +294,6 @@ impl ChatWidget {
         self.pet_picker_preview_state.clear();
         self.pet_picker_preview_pet = None;
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PET_SELECTION_LOADING_VIEW_ID),
             title: Some("Loading Pet".to_string()),
             subtitle: Some("Preparing the terminal pet.".to_string()),

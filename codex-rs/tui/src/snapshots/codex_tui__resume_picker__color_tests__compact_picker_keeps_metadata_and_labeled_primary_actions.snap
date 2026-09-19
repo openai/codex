@@ -1,0 +1,70 @@
+---
+source: tui/src/resume_picker_color_tests.rs
+expression: "snapshots.join(\"\\n\")"
+---
+Resume 118x30
+ Resume a previous session
+
+ Filter:  Cwd  All    Status:  Active  Archived    Sort:  Updated  Created
+
+ Type to search
+
+  › Session 1                                                                                                       
+    now            fcoury/contrast                                                                                 
+
+    Session 2
+    now            fcoury/contrast
+
+    Session 3                                                                                                       
+    now            fcoury/contrast                                                                                 
+
+    Session 4
+    now            fcoury/contrast
+
+    Session 5                                                                                                       
+    now            fcoury/contrast                                                                                 
+
+    Session 6
+    now            fcoury/contrast
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────── 1 / 6 · 100% ─
+ enter resume   ctrl+a archive   esc new   ctrl+c quit   tab focus   ←/→ option
+ ctrl+o dense   ctrl+t preview   ctrl+e exp   ↑/↓ browse
+Resume 70x12
+ Resume a previous session
+ Filter: Cwd   Active  Sort: Updated 
+ Type to search
+  › Session 1                                                       
+    now            fcoury/contrast                                 
+
+    Session 2
+  ↓ more
+───────────────────────────────────────────────────────── 1 / 6 · 0% ─
+ enter resume   ctrl+a archive   esc new   ctrl+c quit   tab focus
+ ctrl+o dense   ctrl+t preview   ctrl+e exp   ↑/↓ browse
+Resume 38x12
+ Resume a previous session
+ Filter: Cwd   Active  Sort: Updated 
+ Type to search
+  › Session 1                       
+    now            fcoury/contrast 
+
+    Session 2
+  ↓ more
+───────────────────────── 1 / 6 · 0% ─
+ enter resume   esc new
+ ctrl+o dense   ctrl+t preview
+Fork 38x12
+ Fork a previous session
+ Filter: Cwd    Sort: Updated 
+ Type to search
+  › Session 1                       
+    now            fcoury/contrast 
+
+    Session 2
+  ↓ more
+───────────────────────── 1 / 6 · 0% ─
+ enter fork   esc new   ctrl+c quit
+ ctrl+o dense   ctrl+t preview

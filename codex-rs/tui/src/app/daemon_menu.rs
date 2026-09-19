@@ -79,7 +79,6 @@ impl App {
         })
         .collect();
         self.chat_widget.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(DaemonMenuHeader(header)),
             items,
             ..SelectionViewParams::picker()
@@ -106,7 +105,6 @@ impl App {
         let mut header = vec![Line::from("Update daemon and exit Codex?".bold())];
         header.extend(explanation.lines().map(|line| Line::from(line.to_owned())));
         self.chat_widget.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(DaemonMenuHeader(header)),
             items: vec![
                 SelectionItem {

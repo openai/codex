@@ -1,30 +1,29 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2890
 expression: rendered
 ---
 width 20:
-                    
   Halfwidth sound   
+  marks             
                     
-› 1. abｶﾞc           
-            dakute  
-            n       
-            descri  
-            ption   
+                    
+› 1. abｶﾞc  dakuten  
+            descript
+            ion     
   2. aﾊﾟc            
-            handak  
-            uten    
-            descri  
-            ption   
+            handakut
+            en      
+            descript
+            ion     
                     
 
 width 24:
+  Halfwidth sound       
+  marks                 
                         
-  Halfwidth sound mark  
                         
 › 1. abｶﾞc  dakuten      
-            descriptio  
-            n           
+            description 
   2. aﾊﾟc   handakuten   
-            descriptio  
-            n
+            description

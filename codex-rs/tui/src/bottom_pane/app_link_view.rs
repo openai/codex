@@ -654,7 +654,6 @@ impl AppLinkView {
                     ' '
                 };
                 GenericDisplayRow {
-                    category_tag: None,
                     selection_style: Some(crate::bottom_pane::selection_style()),
                     name: format!("{prefix} {}. {label}", index + 1),
                     ..Default::default()

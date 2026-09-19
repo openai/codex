@@ -25,7 +25,6 @@ impl ChatWidget {
             })
             .collect();
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Select voice".to_string()),
             subtitle: Some("Applies to your next voice conversation.".to_string()),
             footer_hint: Some(standard_popup_hint_line()),

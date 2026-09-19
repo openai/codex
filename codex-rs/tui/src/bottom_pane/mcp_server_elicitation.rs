@@ -921,7 +921,6 @@ impl McpServerElicitationOverlay {
                 let prefix_label = format!("{prefix} {number}. ");
                 let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                 GenericDisplayRow {
-                    category_tag: None,
                     selection_style: Some(crate::bottom_pane::selection_style()),
                     name: format!("{prefix_label}{}", option.label),
                     description: option.description.clone(),

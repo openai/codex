@@ -43,7 +43,6 @@ impl ChatWidget {
         };
         let current_name = name.clone();
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some(title.into()),
             items: vec![
                 SelectionItem {
@@ -95,7 +94,6 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Worktrees".into()),
             items: vec![
                 SelectionItem {
@@ -149,7 +147,6 @@ impl ChatWidget {
         self.bottom_pane.dismiss_view_by_id(BROWSER_VIEW_ID);
         self.worktree_popup_request_id = Some(request.id);
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(BROWSER_VIEW_ID),
             picker_surface: PickerSurface::Panel,
             title: Some("Managed worktrees".into()),
@@ -194,7 +191,6 @@ impl ChatWidget {
             }
         };
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Managed worktrees".to_string()),
             subtitle: Some(
                 if entries.is_empty() {
@@ -344,7 +340,6 @@ impl ChatWidget {
             Owner::None | Owner::Unavailable(_) => "Worktree".to_string(),
         };
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some(title),
             subtitle: Some(entry.cwd.display().to_string()),
             items,
@@ -357,7 +352,6 @@ impl ChatWidget {
             return;
         }
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Delete this worktree?".to_string()),
             subtitle: Some(root.display().to_string()),
             items: vec![

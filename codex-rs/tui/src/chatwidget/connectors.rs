@@ -214,7 +214,6 @@ impl ChatWidget {
 
     fn connectors_loading_popup_params(&self) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             title: Some("Apps".to_string()),
             subtitle: Some("Loading installed and available apps...".to_string()),
@@ -230,7 +229,6 @@ impl ChatWidget {
 
     fn connectors_error_popup_params(&self) -> SelectionViewParams {
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             title: Some("Apps".to_string()),
             subtitle: Some("Failed to load apps.".to_string()),
@@ -344,7 +342,6 @@ impl ChatWidget {
         }
 
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(CONNECTORS_SELECTION_VIEW_ID),
             header: Box::new(header),
             items,

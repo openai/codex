@@ -53,7 +53,6 @@ async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()>
     let overview = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(overview));
     app.chat_widget.show_selection_view(SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         items: vec![SelectionItem {
             name: "Stale server action".into(),
             actions: vec![Box::new(|tx| tx.send(AppEvent::CodexOp(Op::Interrupt)))],

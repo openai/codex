@@ -424,7 +424,6 @@ impl RequestUserInputOverlay {
                         let prefix_label = format!("{prefix} {number}. ");
                         let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                         GenericDisplayRow {
-                            category_tag: None,
                             selection_style: Some(crate::bottom_pane::selection_style()),
                             name: format!("{prefix_label}{label}"),
                             description: Some(opt.description.clone()),
@@ -442,7 +441,6 @@ impl RequestUserInputOverlay {
                     let prefix_label = format!("{prefix} {number}. ");
                     let wrap_indent = UnicodeWidthStr::width(prefix_label.as_str());
                     rows.push(GenericDisplayRow {
-                        category_tag: None,
                         selection_style: Some(crate::bottom_pane::selection_style()),
                         name: format!("{prefix_label}{OTHER_OPTION_LABEL}"),
                         description: Some(OTHER_OPTION_DESCRIPTION.to_string()),
@@ -983,7 +981,6 @@ impl RequestUserInputOverlay {
                 let prefix = if idx == selected { '›' } else { ' ' };
                 let number = idx + 1;
                 GenericDisplayRow {
-                    category_tag: None,
                     selection_style: Some(crate::bottom_pane::selection_style()),
                     name: format!("{prefix} {number}. {label}"),
                     description: Some(description.clone()),

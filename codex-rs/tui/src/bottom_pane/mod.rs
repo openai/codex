@@ -144,7 +144,6 @@ pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::OnSelectionChangedCallback;
 pub(crate) use list_selection_view::PickerSurface;
-pub(crate) use list_selection_view::SelectionAppearance;
 pub(crate) use list_selection_view::SelectionDescriptionLayout;
 pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
@@ -153,6 +152,7 @@ pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
+pub(crate) use picker_style::selection_style;
 use slash_commands::ServiceTierCommand;
 mod feedback_note_view;
 mod feedback_view;
@@ -178,11 +178,11 @@ mod pending_input_preview;
 mod pending_thread_approvals;
 mod picker_option;
 mod picker_presets;
+mod picker_rows;
 pub(crate) use picker_option::picker_option_list;
 pub(crate) use picker_option::picker_option_row;
-mod picker_rows;
 mod picker_style;
-pub(crate) use picker_style::selection_style;
+pub(crate) use picker_style::active_tab_style;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_picker_layout;
@@ -1343,12 +1343,7 @@ impl BottomPane {
         if params.footer_hint.is_none()
             || params.footer_hint.as_ref() == Some(&popup_consts::standard_popup_hint_line())
         {
-            params.footer_hint = Some(match params.appearance {
-                SelectionAppearance::Picker => {
-                    popup_consts::picker_hint_line_for_keymap(&self.keymap.list)
-                }
-                SelectionAppearance::Legacy => self.standard_popup_hint_line(),
-            });
+            params.footer_hint = Some(popup_consts::picker_hint_line_for_keymap(&self.keymap.list));
         }
     }
 
@@ -1406,10 +1401,6 @@ impl BottomPane {
         }
         self.request_redraw();
         true
-    }
-
-    pub(crate) fn standard_popup_hint_line(&self) -> Line<'static> {
-        popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
     pub(crate) fn replace_view_if_present(
@@ -3371,7 +3362,6 @@ mod tests {
 
         pane.set_task_running(/*running*/ true);
         pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Agents".to_string()),
             items: vec![SelectionItem {
                 name: "Main".to_string(),
@@ -3475,7 +3465,6 @@ mod tests {
         keymap.list.cancel = vec![crate::key_hint::plain(KeyCode::Char('q'))];
         pane.set_keymap_bindings(&keymap);
         pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Agents".to_string()),
             items: vec![SelectionItem {
                 name: "Main".to_string(),

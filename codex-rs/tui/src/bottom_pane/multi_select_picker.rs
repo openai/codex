@@ -319,7 +319,6 @@ impl MultiSelectPicker {
             let item_name = truncate_text(&item.name, ITEM_NAME_TRUNCATE_LEN);
             let name = format!("{prefix} [{marker}] {item_name}");
             rows.push(GenericDisplayRow {
-                category_tag: None,
                 name,
                 description: item.description.clone(),
                 selection_style: Some(picker_style::selection_style()),
@@ -328,7 +327,6 @@ impl MultiSelectPicker {
 
             if item.section_break_after && visible_idx + 1 < self.filtered_indices.len() {
                 rows.push(GenericDisplayRow {
-                    category_tag: None,
                     name: SECTION_BREAK_ROW.to_string(),
                     is_disabled: true,
                     ..Default::default()

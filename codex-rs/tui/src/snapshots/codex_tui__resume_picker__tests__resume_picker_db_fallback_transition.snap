@@ -5,8 +5,8 @@ expression: "format!(\"---- loading fallback ----\\n{loading_snapshot}\\n---- re
 ---- loading fallback ----
 Loading sessions…
 ---- repaired results ----
-❯ first store result
-  1d ago        ⌁ no cwd                          no branch
+› first store result                                                            
+  1d ago        ⌁ no cwd                          no branch                    
 
   repaired store result
   1d ago        ⌁ no cwd                          no branch

@@ -25,7 +25,6 @@ impl ChatWidget {
 
     pub(super) fn show_transcript_export_popup(&mut self) {
         self.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(
                 Paragraph::new(vec![
                     Line::from("Export conversation".bold()),

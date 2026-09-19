@@ -507,7 +507,6 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(RATE_LIMIT_SWITCH_PROMPT_VIEW_ID),
             title: Some("Approaching rate limits".to_string()),
             subtitle: Some(format!("Switch to {switch_model} for lower credit usage?")),

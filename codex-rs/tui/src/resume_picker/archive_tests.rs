@@ -213,7 +213,7 @@ fn archived_status_preserves_directory_filter_and_hides_archive_shortcut() {
     ");
     insta::assert_snapshot!(
         super::super::toolbar_line(&state, /*compact*/ true).to_string(),
-        @"Filter:[Cwd] [Archived] Sort:[Updated]"
+        @"Filter: Cwd   Archived  Sort: Updated "
     );
 
     state.toggle_filter_mode();

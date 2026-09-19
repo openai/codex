@@ -57,7 +57,6 @@ fn numbered_row(index: usize, label: Line<'static>, is_selected: bool) -> Generi
         span
     }));
     GenericDisplayRow {
-        category_tag: None,
         name_prefix_spans: spans,
         selection_style: Some(selection_style()),
         wrap_indent: Some(prefix_width),

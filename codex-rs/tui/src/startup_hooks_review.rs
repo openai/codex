@@ -262,7 +262,6 @@ fn selection_view_params(
     }
 
     SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         footer_hint: Some(hints.into()),
         items: vec![
             selection_item("Review hooks", trusting_all),

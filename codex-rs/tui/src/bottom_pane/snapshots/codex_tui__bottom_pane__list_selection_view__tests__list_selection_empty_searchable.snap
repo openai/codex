@@ -1,11 +1,12 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2046
 expression: rendered
 ---
-
   Select a base branch
 
   Type to search branches
-  no matches
+
+no matches
 
   Press enter to confirm or esc to go back

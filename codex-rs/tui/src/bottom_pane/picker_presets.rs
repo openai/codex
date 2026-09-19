@@ -12,7 +12,6 @@ impl SelectionViewParams {
     /// Titles and subtitles wrap; standard hints follow the active list keymap.
     pub(crate) fn picker() -> Self {
         Self {
-            appearance: super::SelectionAppearance::Picker,
             picker_surface: PickerSurface::Panel,
             col_width_mode: ColumnWidthMode::AutoAllRows,
             description_layout: SelectionDescriptionLayout::HideWhenNarrow {

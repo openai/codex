@@ -19,9 +19,14 @@ pub(super) fn picker_areas(area: Rect, sizes: PickerLayoutSizes) -> [Rect; 10] {
     let tabs = sizes.tabs.min(area.height);
     let search = sizes.search.min(area.height.saturating_sub(tabs));
     let minimum_rows = sizes.rows.min(if tabs > 0 { 1 } else { 3 });
+    // Keep the elision notice when it fits alongside at least one result row.
+    let minimum_header = u16::from(
+        sizes.header > 0 && area.height.saturating_sub(tabs + search) > u16::from(sizes.rows > 0),
+    );
     let header = sizes
         .header
-        .min(area.height.saturating_sub(tabs + search + minimum_rows));
+        .min(area.height.saturating_sub(tabs + search + minimum_rows))
+        .max(minimum_header);
     let mut remaining = area.height.saturating_sub(header + tabs + search);
     let indicators = u16::from(remaining >= minimum_rows + 2);
     remaining = remaining.saturating_sub(indicators * 2);

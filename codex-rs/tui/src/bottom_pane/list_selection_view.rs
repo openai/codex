@@ -1,5 +1,6 @@
-//! Render selectable lists while existing callers retain the legacy presentation.
-//! Picker appearance opts into stable controls, full-width selection, and separate overflow rows.
+//! Render selectable lists with shared picker controls and full-width focus rows.
+//! Selection and scrolling use filtered row indices; actions map back to source items.
+//! Controls and overflow indicators keep their own rows outside the result viewport.
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -19,7 +20,6 @@ use ratatui::widgets::Wrap;
 use super::selection_picker_layout::PickerLayoutSizes;
 use super::selection_picker_layout::picker_areas;
 
-use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::clipboard_paste::normalize_pasted_search_query;
@@ -49,7 +49,6 @@ use super::selection_popup_common::render_rows_single_line_with_col_width_mode;
 use super::selection_popup_common::render_rows_with_col_width_mode;
 pub(crate) use super::selection_row_layout::SelectionDescriptionLayout;
 use super::selection_tabs::SelectionTab;
-use super::selection_tabs::TabAppearance;
 use super::selection_tabs::render_tab_bar;
 use super::selection_tabs::tab_bar_height;
 use unicode_width::UnicodeWidthStr;
@@ -116,15 +115,6 @@ pub(crate) enum SelectionRowDisplay {
     #[default]
     Wrapped,
     SingleLine,
-}
-
-/// Visual treatment is opt-in while existing workflows retain their current layout.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum SelectionAppearance {
-    #[default]
-    Legacy,
-    /// Full-width focus and separate overflow rows on a terminal or panel surface.
-    Picker,
 }
 
 /// One selectable item in the generic selection list.
@@ -197,12 +187,9 @@ pub(crate) struct SelectionItem {
 /// `col_width_mode` controls column width mode in selection lists:
 /// `AutoVisible` (default) measures only rows visible in the viewport
 /// `AutoAllRows` measures all rows to ensure stable column widths as the user scrolls
-/// `Fixed` used a fixed 30/70  split between columns
 /// `row_display` controls whether rows can wrap or stay single-line with ellipsis truncation
-/// `description_layout` optionally moves descriptions below labels when their
-/// column would become too narrow.
+/// `description_layout` optionally hides descriptions when their column would become too narrow.
 pub(crate) struct SelectionViewParams {
-    pub appearance: SelectionAppearance,
     pub picker_surface: PickerSurface,
     /// Upper row budget; compact completion menus retain the default of eight.
     pub max_visible_rows: usize,
@@ -225,6 +212,7 @@ pub(crate) struct SelectionViewParams {
     /// Rendered left-column width to use for auto-sized rows.
     pub name_column_width: Option<usize>,
     pub header: Box<dyn Renderable>,
+    /// Optional shortcut to the complete header, shown when its text is clipped.
     pub header_view_all_hint: Option<ShortcutHint>,
     /// Blank rows after the header; defaults to one. Inline banners use zero.
     pub header_gap: u16,
@@ -263,7 +251,6 @@ pub(crate) struct SelectionViewParams {
 impl Default for SelectionViewParams {
     fn default() -> Self {
         Self {
-            appearance: SelectionAppearance::default(),
             picker_surface: PickerSurface::default(),
             max_visible_rows: MAX_POPUP_ROWS,
             reserve_result_rows: false,
@@ -304,7 +291,6 @@ impl Default for SelectionViewParams {
 /// visible rows and source items and for preserving selection while filters
 /// change.
 pub(crate) struct ListSelectionView {
-    appearance: SelectionAppearance,
     picker_surface: PickerSurface,
     max_visible_rows: usize,
     reserve_result_rows: bool,
@@ -423,20 +409,13 @@ impl ListSelectionView {
         if params.title.is_some() || params.subtitle.is_some() {
             let title = params.title.map(|title| Line::from(title.bold()));
             let subtitle = params.subtitle.map(|subtitle| Line::from(subtitle.dim()));
-            header = match params.appearance {
-                SelectionAppearance::Legacy => Box::new(ColumnRenderable::with([
-                    header,
-                    Box::new(title),
-                    Box::new(subtitle),
-                ])),
-                SelectionAppearance::Picker => Box::new(ColumnRenderable::with([
-                    header,
-                    Box::new(
-                        Paragraph::new(title.into_iter().chain(subtitle).collect::<Vec<_>>())
-                            .wrap(Wrap { trim: false }),
-                    ),
-                ])),
-            };
+            header = Box::new(ColumnRenderable::with([
+                header,
+                Box::new(
+                    Paragraph::new(title.into_iter().chain(subtitle).collect::<Vec<_>>())
+                        .wrap(Wrap { trim: false }),
+                ),
+            ]));
         }
         let active_tab_idx = params.initial_tab_id.as_ref().and_then(|initial_tab_id| {
             params
@@ -451,7 +430,6 @@ impl ListSelectionView {
         };
         let has_initial_selected_idx = params.initial_selected_idx.is_some();
         let mut s = Self {
-            appearance: params.appearance,
             picker_surface: params.picker_surface,
             max_visible_rows: params.max_visible_rows.max(/*other*/ 1),
             reserve_result_rows: params.reserve_result_rows,
@@ -528,17 +506,14 @@ impl ListSelectionView {
     fn active_header(&self, width: u16) -> &dyn Renderable {
         self.active_tab_idx
             .and_then(|idx| self.tabs.get(idx))
-            .filter(|tab| {
-                self.appearance == SelectionAppearance::Legacy
-                    || tab.header.desired_height(width) > 0
-            })
+            .filter(|tab| tab.header.desired_height(width) > 0)
             .map(|tab| tab.header.as_ref())
             .unwrap_or(self.header.as_ref())
     }
 
     fn header_height(&self, width: u16) -> u16 {
         let active_height = self.active_header(width).desired_height(width);
-        if self.appearance == SelectionAppearance::Picker && self.reserve_result_rows {
+        if self.reserve_result_rows {
             self.tabs
                 .iter()
                 .map(|tab| tab.header.desired_height(width))
@@ -575,7 +550,7 @@ impl ListSelectionView {
 
     fn visible_rows(&self, len: usize) -> usize {
         let rendered = self.rendered_item_count.get();
-        let limit = if self.appearance == SelectionAppearance::Picker && rendered > 0 {
+        let limit = if rendered > 0 {
             self.max_visible_rows.min(rendered)
         } else {
             self.max_visible_rows
@@ -675,8 +650,7 @@ impl ListSelectionView {
             .to_string()
             .len();
         let mut enabled_row_number = 0;
-        let row_selection_style =
-            (self.appearance == SelectionAppearance::Picker).then(selection_style);
+        let row_selection_style = Some(selection_style());
         self.filtered_indices
             .iter()
             .enumerate()
@@ -726,13 +700,13 @@ impl ListSelectionView {
                     let wrap_indent = (description.is_none() && item.disabled_reason.is_none())
                         .then_some(wrap_prefix_width);
                     GenericDisplayRow {
+                        category_tag: None,
                         selection_style: row_selection_style,
                         name: name_with_marker,
                         name_prefix_spans,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
-                        category_tag: None,
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
@@ -758,9 +732,7 @@ impl ListSelectionView {
         };
         self.active_tab_idx = Some(next_idx);
         self.search_query.clear();
-        if self.appearance == SelectionAppearance::Picker {
-            self.rendered_item_count.set(/*val*/ 0);
-        }
+        self.rendered_item_count.set(/*val*/ 0);
         self.state.reset();
         self.apply_filter();
         if self.state.selected_idx.is_none() {
@@ -948,20 +920,10 @@ impl ListSelectionView {
         self.last_selected_actual_idx.take()
     }
 
-    fn tab_appearance(&self) -> TabAppearance {
-        match self.appearance {
-            SelectionAppearance::Legacy => TabAppearance::Legacy,
-            SelectionAppearance::Picker => TabAppearance::Filled,
-        }
-    }
-
     fn footer_hint_lines(&self, width: u16) -> Vec<Line<'_>> {
         let Some(hint) = self.active_footer_hint() else {
             return Vec::new();
         };
-        if self.appearance == SelectionAppearance::Legacy {
-            return vec![hint.clone()];
-        }
         let mut lines = wrap_styled_line(hint, width);
         if self.reserve_result_rows {
             let height = self
@@ -981,18 +943,11 @@ impl ListSelectionView {
     }
 
     fn result_area_height(&self, measured_height: u16) -> u16 {
-        if self.appearance == SelectionAppearance::Picker && self.reserve_result_rows {
+        if self.reserve_result_rows {
             let reserved_height = self.max_visible_rows.min(usize::from(u16::MAX)) as u16;
             measured_height.max(reserved_height)
         } else {
             measured_height
-        }
-    }
-
-    fn rows_width(&self, total_width: u16) -> u16 {
-        match self.appearance {
-            SelectionAppearance::Legacy => total_width.saturating_sub(/*rhs*/ 2),
-            SelectionAppearance::Picker => total_width,
         }
     }
 
@@ -1315,7 +1270,7 @@ impl Renderable for ListSelectionView {
             // Leave the preview's right inset outside the full-width focus row.
             width.saturating_sub(MENU_SURFACE_HORIZONTAL_INSET / 2 + SIDE_CONTENT_GAP + side_w)
         } else {
-            self.rows_width(width)
+            width
         };
 
         // Measure at the same width as the painted rows, including any side panel.
@@ -1336,27 +1291,13 @@ impl Renderable for ListSelectionView {
         };
 
         let rows_height = self.result_area_height(rows_height);
-        let tab_height = tab_bar_height(
-            &self.tabs,
-            self.active_tab_idx.unwrap_or(/*default*/ 0),
-            inner_width,
-            self.tab_appearance(),
-        );
+        let tab_height = tab_bar_height(&self.tabs, inner_width);
         let mut height = self.header_height(inner_width);
-        let header_gap = if self.appearance == SelectionAppearance::Picker && height == 0 {
-            0
-        } else {
-            self.header_gap
-        };
-        let tab_gap = u16::from(
-            tab_height > 0
-                && (self.appearance == SelectionAppearance::Legacy || self.is_searchable),
-        );
+        let header_gap = if height == 0 { 0 } else { self.header_gap };
+        let tab_gap = u16::from(tab_height > 0 && self.is_searchable);
         height = height.saturating_add(tab_height + tab_gap);
         height = height.saturating_add(rows_height + 2 + header_gap);
-        if self.appearance == SelectionAppearance::Picker
-            && self.picker_surface == PickerSurface::Panel
-        {
+        if self.picker_surface == PickerSurface::Panel {
             height = height.saturating_add(/*rhs*/ 1);
         }
         if self.is_searchable {
@@ -1403,62 +1344,50 @@ impl Renderable for ListSelectionView {
         let hint_height = hint_lines.len() as u16;
         let inner_width = popup_content_width(area.width);
         let header_height = self.header_height(inner_width);
-        let tab_height = tab_bar_height(
-            &self.tabs,
-            self.active_tab_idx.unwrap_or(/*default*/ 0),
-            inner_width,
-            self.tab_appearance(),
-        );
+        let tab_height = tab_bar_height(&self.tabs, inner_width);
         let mut footer_rows = note_height + hint_height;
-        if self.appearance == SelectionAppearance::Picker {
-            // Wrapped hints yield before the title, controls, and selected result.
-            let minimum_content = u16::from(self.picker_surface == PickerSurface::Panel)
-                + header_height.min(/*other*/ 1)
-                + tab_height
-                + u16::from(self.is_searchable)
-                + 1;
-            footer_rows = footer_rows.min(area.height.saturating_sub(minimum_content));
-        }
+        // Wrapped hints yield before the title, controls, and selected result.
+        let minimum_content = u16::from(self.picker_surface == PickerSurface::Panel)
+            + header_height.min(/*other*/ 1)
+            + tab_height
+            + u16::from(self.is_searchable)
+            + 1;
+        footer_rows = footer_rows.min(area.height.saturating_sub(minimum_content));
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
         let outer_content_area = content_area;
-        // Paint the shared menu surface and then layout inside the returned inset.
-        let content_area = match self.appearance {
-            SelectionAppearance::Legacy => render_menu_surface(outer_content_area, buf),
-            SelectionAppearance::Picker => {
-                Self::clear_to_terminal_bg(buf, outer_content_area);
-                if self.picker_surface == PickerSurface::Panel {
-                    ratatui::widgets::Block::default()
-                        .style(crate::style::user_message_style())
-                        .render(outer_content_area, buf);
-                }
-                // The list owns its vertical spacer rows so hints remain adjacent
-                // to results even when search, tabs, or a header are present.
-                let area = outer_content_area.inset(Insets::vh(/*v*/ 0, /*h*/ 2));
-                if self.picker_surface == PickerSurface::Panel {
-                    Rect::new(
-                        area.x,
-                        area.y.saturating_add(/*rhs*/ 1),
-                        area.width,
-                        area.height.saturating_sub(/*rhs*/ 1),
-                    )
-                } else {
-                    area
-                }
-            }
+        Self::clear_to_terminal_bg(buf, outer_content_area);
+        if self.picker_surface == PickerSurface::Panel {
+            ratatui::widgets::Block::default()
+                .style(crate::style::user_message_style())
+                .render(outer_content_area, buf);
+        }
+        // The list owns its vertical spacer rows so hints remain adjacent
+        // to results even when search, tabs, or a header are present.
+        let content_area = outer_content_area.inset(Insets::vh(/*v*/ 0, /*h*/ 2));
+        let content_area = if self.picker_surface == PickerSurface::Panel {
+            // At tiny heights, leave room for both the clipped header and selected row.
+            let top_gap = u16::from(content_area.height > 2);
+            Rect::new(
+                content_area.x,
+                content_area.y.saturating_add(top_gap),
+                content_area.width,
+                content_area.height.saturating_sub(top_gap),
+            )
+        } else {
+            content_area
         };
 
         let side_w = self.side_layout_width(inner_width);
 
         // When side-by-side is active, shrink the list to make room.
-        let full_rows_width = self.rows_width(outer_content_area.width);
         let effective_rows_width = if let Some(sw) = side_w {
             outer_content_area
                 .width
                 .saturating_sub(MENU_SURFACE_HORIZONTAL_INSET / 2 + SIDE_CONTENT_GAP + sw)
         } else {
-            full_rows_width
+            outer_content_area.width
         };
 
         let header = self.active_header(inner_width);
@@ -1486,7 +1415,6 @@ impl Renderable for ListSelectionView {
         } else {
             0
         };
-        let stacked_gap = if stacked_side_h > 0 { 1 } else { 0 };
 
         let [
             header_area,
@@ -1499,52 +1427,17 @@ impl Renderable for ListSelectionView {
             below_area,
             _,
             stacked_side_area,
-        ] = if self.appearance == SelectionAppearance::Picker {
-            picker_areas(
-                content_area,
-                PickerLayoutSizes {
-                    header: header_height,
-                    header_gap: self.header_gap,
-                    tabs: tab_height,
-                    search: u16::from(self.is_searchable),
-                    rows: rows_height,
-                    side: stacked_side_h,
-                },
-            )
-        } else {
-            let [
-                header,
-                header_gap,
-                tabs,
-                tab_gap,
-                search,
-                rows,
-                side_gap,
-                side,
-            ] = Layout::vertical([
-                Constraint::Max(header_height),
-                Constraint::Max(self.header_gap),
-                Constraint::Length(tab_height),
-                Constraint::Length(u16::from(tab_height > 0)),
-                Constraint::Length(if self.is_searchable { 1 } else { 0 }),
-                Constraint::Length(rows_height),
-                Constraint::Length(stacked_gap),
-                Constraint::Length(stacked_side_h),
-            ])
-            .areas(content_area);
-            [
-                header,
-                header_gap,
-                tabs,
-                tab_gap,
-                search,
-                Rect::default(),
-                rows,
-                Rect::default(),
-                side_gap,
-                side,
-            ]
-        };
+        ] = picker_areas(
+            content_area,
+            PickerLayoutSizes {
+                header: header_height,
+                header_gap: self.header_gap,
+                tabs: tab_height,
+                search: u16::from(self.is_searchable),
+                rows: rows_height,
+                side: stacked_side_h,
+            },
+        );
 
         if !self.is_searchable && header_area.height < header_height {
             let [header_area, elision_area] =
@@ -1568,7 +1461,6 @@ impl Renderable for ListSelectionView {
                 self.active_tab_idx.unwrap_or(/*default*/ 0),
                 tabs_area,
                 buf,
-                self.tab_appearance(),
             );
         }
 
@@ -1589,11 +1481,7 @@ impl Renderable for ListSelectionView {
         // -- List rows --
         if list_area.height > 0 {
             let render_area = Rect {
-                x: if rows.is_empty() && self.appearance == SelectionAppearance::Legacy {
-                    list_area.x
-                } else {
-                    list_area.x.saturating_sub(2)
-                },
+                x: list_area.x.saturating_sub(/*rhs*/ 2),
                 y: list_area.y,
                 width: effective_rows_width.max(1),
                 height: list_area.height,
@@ -1619,10 +1507,7 @@ impl Renderable for ListSelectionView {
                 ),
             };
             self.rendered_item_count.set(rendered_rows.items);
-            if self.appearance == SelectionAppearance::Picker
-                && above_area.height > 0
-                && below_area.height > 0
-            {
+            if above_area.height > 0 && below_area.height > 0 {
                 render_scroll_indicators(
                     Rect::new(
                         render_area.x,
@@ -1720,14 +1605,7 @@ impl Renderable for ListSelectionView {
                     width: hint_area.width.saturating_sub(2),
                     height: hint_area.height,
                 };
-                match self.appearance {
-                    SelectionAppearance::Legacy => {
-                        hint_lines[0].clone().dim().render(hint_area, buf)
-                    }
-                    SelectionAppearance::Picker => {
-                        Paragraph::new(hint_lines).dim().render(hint_area, buf);
-                    }
-                }
+                Paragraph::new(hint_lines).dim().render(hint_area, buf);
             }
         }
     }
@@ -2108,7 +1986,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_searchable_list_aligns_message_with_search() {
+    fn empty_searchable_list_keeps_search_and_no_matches_visible() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let view = new_view(

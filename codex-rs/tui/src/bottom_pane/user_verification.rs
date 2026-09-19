@@ -90,7 +90,6 @@ impl UserVerificationView {
             .collect();
         let header = prompt_header(&request);
         let params = SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             footer_note: Some(
                 accept_cancel_hint_line(
                     list_keymap.primary_hint(ListAction::Accept),

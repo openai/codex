@@ -47,7 +47,6 @@ impl ChatWidget {
         self.show_model_selection_view(
             vec![LUNA_RESERVE_MODEL.to_string()],
             SelectionViewParams {
-                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 view_id: Some(view_id),
                 header,
                 footer_hint: Some(picker_hint_line_for_keymap(&self.bottom_pane.list_keymap())),

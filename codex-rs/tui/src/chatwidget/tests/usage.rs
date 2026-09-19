@@ -1110,7 +1110,6 @@ fn dismiss_popup(chat: &mut ChatWidget) {
 
 fn show_usage_test_overlay(chat: &mut ChatWidget) {
     chat.bottom_pane.show_selection_view(SelectionViewParams {
-        appearance: crate::bottom_pane::SelectionAppearance::Picker,
         view_id: Some(TEST_OVERLAY_VIEW_ID),
         title: Some("Covering overlay".to_string()),
         items: vec![SelectionItem {

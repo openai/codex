@@ -1,16 +1,11 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 2852
 expression: "render_lines_with_width(&view, 24)"
 ---
-                        
   Debug                 
                         
-› 1. Item 1             
-             xxxxxxxxx  
-             x          
-  2. Item 2             
-             xxxxxxxxx  
-             x          
-  3. Item 3             
-             xxxxxxxxx  
-             x
+                        
+› 1. Item 1  xxxxxxxxxx 
+  2. Item 2  xxxxxxxxxx 
+  3. Item 3  xxxxxxxxxx

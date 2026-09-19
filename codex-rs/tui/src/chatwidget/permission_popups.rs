@@ -173,7 +173,6 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             footer_note,
             items,
             title: Some("Update Model Permissions".into()),
@@ -230,7 +229,6 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(
                 Paragraph::new(vec![
                     Line::from("Auto-review Denials".bold()),
@@ -512,7 +510,6 @@ impl ChatWidget {
         ];
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             items,
             header: Box::new(header),
             ..SelectionViewParams::picker()

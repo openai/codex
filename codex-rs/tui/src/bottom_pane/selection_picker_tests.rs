@@ -10,7 +10,6 @@ fn browser() -> ListSelectionView {
     let (tx, _rx) = unbounded_channel::<AppEvent>();
     ListSelectionView::new(
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             picker_surface: PickerSurface::Panel,
             max_visible_rows: 24,
             title: Some("Keymap".to_owned()),
@@ -65,7 +64,6 @@ fn shared_menu_presentation_at_wide_and_narrow_sizes() {
     let (tx, _rx) = unbounded_channel();
     let view = ListSelectionView::new(
         SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some("Choose an option".into()),
             subtitle: Some("A menu with descriptions and disabled choices.".into()),
             items: vec![

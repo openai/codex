@@ -137,7 +137,6 @@ impl App {
             ),
         };
         self.chat_widget.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             header: Box::new(LifecycleHeader(vec![
                 title.bold().into(),
                 description.dim().into(),
@@ -308,7 +307,6 @@ impl App {
                 );
             }
             self.chat_widget.show_selection_view(SelectionViewParams {
-                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 header: Box::new(LifecycleHeader(header)),
                 items: vec![SelectionItem {
                     name: "Back to agents".to_string(),

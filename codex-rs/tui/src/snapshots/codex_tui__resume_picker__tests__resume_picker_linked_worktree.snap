@@ -2,5 +2,5 @@
 source: tui/src/resume_picker.rs
 expression: "render_picker_list(&state, 100, 12)"
 ---
-❯ Linked session
+› Linked session                                                                                    
   1d ago        ⌁ /repo/linked                              no branch

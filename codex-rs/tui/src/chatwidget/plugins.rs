@@ -955,7 +955,6 @@ impl ChatWidget {
         });
 
         Some(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
             header: Box::new(header),
             footer_hint: Some(plugin_detail_hint_line()),

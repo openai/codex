@@ -1088,7 +1088,6 @@ impl ChatWidget {
             _ => return,
         };
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             title: Some(format!("Enable {name}?")),
             subtitle: Some(format!("{label} are disabled in this TUI session.")),
             footer_note: (feature == Feature::MemoryTool).then(|| {

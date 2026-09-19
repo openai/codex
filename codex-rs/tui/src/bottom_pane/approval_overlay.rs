@@ -314,7 +314,6 @@ impl ApprovalOverlay {
             .collect();
 
         let params = SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             footer_hint: Some(approval_footer_hint(request, approval_keymap, list_keymap)),
             items,
             header,

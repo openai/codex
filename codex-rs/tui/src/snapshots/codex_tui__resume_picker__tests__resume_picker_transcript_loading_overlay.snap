@@ -2,7 +2,7 @@
 source: tui/src/resume_picker.rs
 expression: snapshot
 ---
-❯ Find pending threads and emails
+› Find pending threads and emails
   -             ⌁ no cwd                          no branch
 
   Plan raw scrollback mod     Loading transcript…

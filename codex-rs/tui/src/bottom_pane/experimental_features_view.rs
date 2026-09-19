@@ -151,7 +151,6 @@ impl ExperimentalFeaturesView {
             let read_only = if item.writable { "" } else { " (read-only)" };
             let name = format!("{prefix} [{marker}] {}{read_only}", item.name);
             rows.push(GenericDisplayRow {
-                category_tag: None,
                 selection_style: Some(super::picker_style::selection_style()),
                 wrap_indent: Some(6),
                 name,

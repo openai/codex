@@ -24,15 +24,6 @@ pub(crate) fn standard_popup_hint_line() -> Line<'static> {
     ])
 }
 
-pub(crate) fn standard_popup_hint_line_for_keymap(list_keymap: &ListKeymap) -> Line<'static> {
-    accept_cancel_hint_line(
-        list_keymap.primary_hint(ListAction::Accept),
-        "to confirm",
-        list_keymap.primary_hint(ListAction::Cancel),
-        "to go back",
-    )
-}
-
 /// Compact footer for shared pickers, using only the configured list actions.
 pub(crate) fn picker_hint_line_for_keymap(list_keymap: &ListKeymap) -> Line<'static> {
     let mut spans = Vec::new();

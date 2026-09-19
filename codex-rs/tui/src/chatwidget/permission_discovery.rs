@@ -18,7 +18,6 @@ impl ChatWidget {
         let request_id = uuid::Uuid::new_v4();
         self.permission_popup_request_id = Some(request_id);
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            appearance: crate::bottom_pane::SelectionAppearance::Picker,
             view_id: Some(VIEW_ID),
             title: Some("Update Model Permissions".into()),
             items: vec![SelectionItem {
@@ -65,7 +64,6 @@ impl ChatWidget {
                 self.open_permission_profiles_popup(discovery);
             }
             Err(message) => self.bottom_pane.show_selection_view(SelectionViewParams {
-                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 view_id: Some(VIEW_ID),
                 title: Some("Update Model Permissions".to_string()),
                 subtitle: Some(message),

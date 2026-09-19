@@ -40,7 +40,7 @@ fn clipped_exec_approval_opens_the_complete_command() {
             keymap.approval,
             keymap.list,
         );
-        for (width, height) in [(80, 14), (40, 10)] {
+        for (width, height) in [(80, 14), (40, 10), (40, 8), (40, 7)] {
             let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
             let mut buffer = Buffer::empty(area);
             view.render(area, &mut buffer);

@@ -1,0 +1,33 @@
+---
+source: tui/src/resume_picker_color_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+Resume 38x12 Filter: Cwd
+ Filter: Cwd
+
+Resume 38x12 Status: Archived
+ Status: Archived
+
+Resume 38x12 Sort: Updated
+ Sort: Updated
+
+Resume 24x9 Filter: Cwd
+ Filter: Cwd
+
+Resume 24x9 Status: Archived
+ Status: Archived
+
+Resume 24x9 Sort: Updated
+ Sort: Updated
+
+Fork 38x12 Filter: Cwd
+ Filter: Cwd    Sort: Updated
+
+Fork 38x12 Sort: Updated
+ Filter: Cwd    Sort: Updated
+
+Fork 24x9 Filter: Cwd
+ Filter: Cwd
+
+Fork 24x9 Sort: Updated
+ Sort: Updated

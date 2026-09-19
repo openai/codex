@@ -152,7 +152,6 @@ impl SkillsToggleView {
                     let item_name = &item.name;
                     let name = format!("{prefix} [{marker}] {item_name}");
                     GenericDisplayRow {
-                        category_tag: None,
                         selection_style: Some(super::picker_style::selection_style()),
                         name,
                         description: Some(item.description.clone()),

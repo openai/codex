@@ -74,7 +74,6 @@ impl App {
         if matches!(self.app_server_target, AppServerTarget::Embedded) {
             let workload_identity_selected = codex_login::is_workload_identity_selected();
             self.chat_widget.show_selection_view(SelectionViewParams {
-                appearance: crate::bottom_pane::SelectionAppearance::Picker,
                 title: Some("Shared agents unavailable".to_string()),
                 subtitle: Some(
                     if workload_identity_selected {

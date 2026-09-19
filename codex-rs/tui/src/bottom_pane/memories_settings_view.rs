@@ -167,7 +167,6 @@ impl MemoriesSettingsView {
                 .into_iter()
                 .enumerate()
                 .map(|(idx, name)| GenericDisplayRow {
-                    category_tag: None,
                     selection_style: Some(super::picker_style::selection_style()),
                     wrap_indent: Some(2),
                     name: if state.selected_idx == Some(idx) {
@@ -210,7 +209,6 @@ impl MemoriesSettingsView {
                     } => (format!("{prefix} {name}"), description),
                 };
                 GenericDisplayRow {
-                    category_tag: None,
                     selection_style: Some(super::picker_style::selection_style()),
                     wrap_indent: Some(if matches!(item, MemoriesMenuItem::Setting { .. }) {
                         6
