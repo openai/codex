@@ -1,17 +1,13 @@
 ---
-source: tui/src/pager_overlay.rs
+source: tui/src/pager_overlay/transcript_tests.rs
 expression: term.backend()
 ---
 "/ T R A N S C R I P T / / / / / / / / / "
-"line16                                  "
+"alpha                                   "
 "                                        "
-"line17                                  "
+"beta                                    "
 "                                        "
-"line18                                  "
-"                                        "
-"line19                                  "
-"                                        "
-"tail                                    "
+"gamma                                   "
 "───────────────────────────────── 100% ─"
 " ↑/↓ to scroll   pgup/pgdn to page   hom"
 " q close   esc to edit prev             "

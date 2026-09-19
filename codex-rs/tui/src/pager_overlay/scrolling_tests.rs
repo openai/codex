@@ -1,13 +1,9 @@
 use super::super::CachedRenderable;
-use super::super::TranscriptOverlay;
 use super::CellRenderable;
 use super::HyperlinkLinesRenderable;
 use super::render_offset_content;
-use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::UserHistoryCell;
-use crate::keymap::RuntimeKeymap;
 use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
@@ -195,65 +191,6 @@ fn scrolled_transcript_renderables_match_full_height_fallback() {
                     );
                 }
             }
-        }
-    }
-}
-
-#[test]
-fn transcript_overlay_scrolled_cells_and_live_tail_match_full_height_fallback() {
-    let lines = scrolled_hyperlink_lines();
-    let cell: Arc<dyn HistoryCell> = Arc::new(HyperlinkTestCell {
-        lines: lines.clone(),
-    });
-
-    for width in [7, 13, 28] {
-        let cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(PlainHistoryCell::new(vec![Line::from(
-                "leading stable history",
-            )])),
-            cell.clone(),
-        ];
-        let mut actual = TranscriptOverlay::new(cells.clone(), RuntimeKeymap::defaults().pager);
-        let mut expected = TranscriptOverlay::new(cells, RuntimeKeymap::defaults().pager);
-        for overlay in [&mut actual, &mut expected] {
-            overlay.sync_live_tail(
-                width,
-                Some(ActiveCellTranscriptKey {
-                    revision: 1,
-                    is_stream_continuation: false,
-                    animation_tick: None,
-                }),
-                |_| Some(lines.clone()),
-            );
-        }
-        expected.view.renderables = expected
-            .view
-            .renderables
-            .into_iter()
-            .map(|inner| Box::new(LegacyOnlyRenderable { inner }) as Box<dyn Renderable>)
-            .collect();
-
-        let area = Rect::new(/*x*/ 2, /*y*/ 1, width, /*height*/ 10);
-        let full_area = Rect::new(
-            /*x*/ 0,
-            /*y*/ 0,
-            area.right().saturating_add(/*rhs*/ 1),
-            area.bottom().saturating_add(/*rhs*/ 1),
-        );
-        let total_height = actual.view.content_height(width);
-        for offset in [0, 1, 3, total_height.saturating_sub(/*rhs*/ 2), usize::MAX] {
-            actual.view.scroll_offset = offset;
-            expected.view.scroll_offset = offset;
-            let mut actual_buffer = Buffer::empty(full_area);
-            let mut expected_buffer = Buffer::empty(full_area);
-
-            actual.render(area, &mut actual_buffer);
-            expected.render(area, &mut expected_buffer);
-
-            assert_eq!(
-                actual_buffer, expected_buffer,
-                "width={width}, offset={offset}",
-            );
         }
     }
 }

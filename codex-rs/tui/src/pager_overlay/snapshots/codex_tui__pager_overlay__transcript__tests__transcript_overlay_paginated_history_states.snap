@@ -1,5 +1,5 @@
 ---
-source: tui/src/pager_overlay.rs
+source: tui/src/pager_overlay/transcript_tests.rs
 expression: snapshots
 ---
 --- loading ---
