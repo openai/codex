@@ -12,6 +12,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyState;
+use codex_network_proxy::Platform;
 use codex_network_proxy::build_config_state;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -92,8 +93,12 @@ async fn main() -> Result<()> {
         "standalone network proxy requires network.enabled = true"
     );
 
-    let config_state = build_config_state(config.network, NetworkProxyConstraints::default())
-        .context("failed to initialize network proxy policy")?;
+    let config_state = build_config_state(
+        config.network,
+        NetworkProxyConstraints::default(),
+        Platform::native(),
+    )
+    .context("failed to initialize network proxy policy")?;
     let reloader = Arc::new(StaticConfigReloader {
         state: config_state.clone(),
     });
