@@ -16,7 +16,6 @@ use std::borrow::Cow;
 pub(crate) struct UserHistoryCell {
     pub message: String,
     pub text_elements: Vec<TextElement>,
-    #[allow(dead_code)]
     pub local_image_paths: Vec<PathBuf>,
     pub remote_image_urls: Vec<String>,
     pub(crate) spoken: bool,
@@ -154,7 +153,9 @@ fn build_user_message_lines_with_elements(
 
 impl UserHistoryCell {
     fn image_labels_not_in_message(&self) -> impl Iterator<Item = String> + '_ {
-        (1..=self.remote_image_urls.len())
+        // Composer images already have placeholders; command-line images may not.
+        // Both kinds must keep an image-only user turn visible after submission.
+        (1..=self.remote_image_urls.len() + self.local_image_paths.len())
             .map(local_image_label_text)
             .filter(|label| {
                 !self
@@ -192,29 +193,24 @@ impl HistoryCell for UserHistoryCell {
         let style = history_prompt_style();
         let element_style = style.fg(accent_color_on(style.bg));
 
-        let wrapped_remote_images = if self.remote_image_urls.is_empty() {
-            None
-        } else {
-            Some(plain_hyperlink_lines(adaptive_wrap_lines(
-                self.image_labels_not_in_message()
-                    .map(|label| Line::from(label).style(element_style)),
-                RtOptions::new(usize::from(wrap_width))
-                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-            )))
-        }
-        .filter(|lines| !lines.is_empty());
+        let wrapped_images = plain_hyperlink_lines(adaptive_wrap_lines(
+            self.image_labels_not_in_message()
+                .map(|label| Line::from(label).style(element_style)),
+            RtOptions::new(usize::from(wrap_width))
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+        ));
 
         let wrapped_message = wrap_user_message(message, text_elements, style, wrap_width);
 
-        if wrapped_remote_images.is_none() && wrapped_message.is_none() {
+        if wrapped_images.is_empty() && wrapped_message.is_none() {
             return Vec::new();
         }
 
         let mut lines = vec![HyperlinkLine::new(Line::from("").style(style))];
 
-        if let Some(wrapped_remote_images) = wrapped_remote_images {
+        if !wrapped_images.is_empty() {
             lines.extend(prefix_hyperlink_lines(
-                wrapped_remote_images,
+                wrapped_images,
                 "  ".into(),
                 "  ".into(),
             ));

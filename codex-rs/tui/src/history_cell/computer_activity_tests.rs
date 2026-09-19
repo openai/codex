@@ -33,6 +33,38 @@ fn render(cell: &ComputerActivityCell, width: u16) -> String {
 }
 
 #[test]
+fn prepending_completed_history_preserves_the_pending_call_clock() {
+    let mut older = ComputerActivityCell::default();
+    older.complete(
+        call("older", "Read the page"),
+        Duration::ZERO,
+        result("read"),
+    );
+    let mut live = ComputerActivityCell::default();
+    live.start(call("pending", "Inspect selection"));
+    let start_time = live.group.calls[0].start_time;
+
+    live.prepend(older);
+    assert_eq!(
+        (
+            live.call_ids().collect::<Vec<_>>(),
+            live.group.calls[1].start_time,
+            live.is_active()
+        ),
+        (vec!["older", "pending"], start_time, true),
+    );
+    live.complete(
+        call("pending", "Inspect selection"),
+        Duration::ZERO,
+        result("inspected"),
+    );
+    assert_eq!(
+        (live.call_ids().collect::<Vec<_>>(), live.is_active()),
+        (vec!["older", "pending"], false),
+    );
+}
+
+#[test]
 fn computer_activity_active_and_interrupted() {
     let mut cell = ComputerActivityCell::default();
     cell.complete(call("1", "Opened Chrome"), Duration::ZERO, result("ready"));
@@ -83,10 +115,18 @@ fn computer_activity_prioritizes_errors_and_images_without_reordering() {
     );
     insta::assert_snapshot!("computer_activity_mixed", render(&cell, /*width*/ 90));
     insta::assert_snapshot!("computer_activity_narrow", render(&cell, /*width*/ 24));
+    insta::assert_snapshot!(
+        "computer_activity_compact",
+        cell.compact_hyperlink_lines(/*width*/ 24)
+            .iter()
+            .map(|line| line.line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     let transcript = cell
         .transcript_lines(/*width*/ 100)
         .iter()
-        .map(ToString::to_string)
+        .map(|line| line.to_string().trim_end().to_owned())
         .collect::<Vec<_>>()
         .join("\n");
     insta::assert_snapshot!("computer_activity_expanded", transcript);

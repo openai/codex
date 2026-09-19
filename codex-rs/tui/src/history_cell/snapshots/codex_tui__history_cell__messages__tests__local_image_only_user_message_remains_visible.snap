@@ -1,0 +1,6 @@
+---
+source: tui/src/history_cell/messages_tests.rs
+expression: "ratatui::text::Text::from(display)"
+---
+
+  [Image #1]

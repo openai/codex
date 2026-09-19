@@ -111,6 +111,19 @@ impl McpToolResult {
 }
 
 impl McpContentBlock {
+    /// Returns all retained text, with honest markers for media and embedded resource bodies.
+    pub(super) fn render_full(&self) -> &str {
+        if let Some(text) = &self.original_text {
+            return text.trim_end_matches('\n');
+        }
+        match &self.display {
+            McpContentDisplay::Text(text) | McpContentDisplay::Json(text) => {
+                text.trim_end_matches('\n')
+            }
+            McpContentDisplay::Summary(summary) => summary,
+        }
+    }
+
     /// Returns the untruncated top-level text used by node_repl and cua_repl's compact and
     /// transcript views.
     ///

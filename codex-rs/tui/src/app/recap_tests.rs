@@ -24,6 +24,7 @@ use crate::history_cell::ThreadRecapHistoryCell;
 use crate::history_cell::ThreadRecapLoadingCell;
 use crate::history_cell::UserHistoryCell;
 use crate::line_truncation::line_width;
+use crate::style::accent_color;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
@@ -831,7 +832,7 @@ fn recap_history_cell_wraps_next_action_urls_in_narrow_terminals() {
             .iter()
             .flat_map(|line| &line.spans)
             .find(|span| span.content == "Next: "),
-        Some(&"Next: ".bold().italic()),
+        Some(&"Next: ".bold().fg(accent_color()).italic()),
     );
     let rendered = lines
         .iter()
@@ -854,13 +855,31 @@ fn recap_history_cell_preserves_line_breaks_and_optional_next() {
         .with_next_action(Some(
             "Run focused tests and check the empty-input case.".to_string(),
         ));
-    let lines = cell.display_lines(/*width*/ 48);
+    let hyperlink_lines = cell.display_hyperlink_lines(/*width*/ 48);
+    for line in &hyperlink_lines {
+        let source = line.source.as_ref().expect("recap source");
+        assert!(
+            source
+                .styled_range(source.range.clone())
+                .spans
+                .iter()
+                .all(|span| {
+                    span.style
+                        .add_modifier
+                        .contains(ratatui::style::Modifier::DIM)
+                })
+        );
+    }
+    let lines = hyperlink_lines
+        .into_iter()
+        .map(|line| line.line)
+        .collect::<Vec<_>>();
     assert_eq!(
         lines
             .iter()
             .flat_map(|line| &line.spans)
             .find(|span| span.content == "Next: "),
-        Some(&"Next: ".bold().italic()),
+        Some(&"Next: ".bold().fg(accent_color()).italic()),
     );
     let area = Rect::new(
         /*x*/ 0,

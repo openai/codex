@@ -367,6 +367,23 @@ pub(super) fn drain_insert_history_transcript(
     drain_insert_history_with(rx, |cell| cell.transcript_lines(/*width*/ 80))
 }
 
+// Preserve ordering checks for history cells intentionally hidden from compact chat.
+pub(super) fn drain_insert_history_transcript_normalized(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Vec<Vec<ratatui::text::Line<'static>>> {
+    drain_insert_history_with(rx, |cell| {
+        cell.transcript_lines(/*width*/ 80)
+            .into_iter()
+            .map(|mut line| {
+                if cell.as_any().is::<history_cell::FinalMessageSeparator>() {
+                    line.spans = vec![normalize_completion_timestamps(cell, &line).into()];
+                }
+                line
+            })
+            .collect()
+    })
+}
+
 pub(super) fn drain_insert_history_with(
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     render: impl Fn(&dyn HistoryCell) -> Vec<ratatui::text::Line<'static>>,

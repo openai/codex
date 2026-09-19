@@ -1,16 +1,22 @@
 ---
 source: tui/src/history_cell/mcp_tests.rs
-expression: "format!(\"history:\\n{}\\n\\ntranscript:\\n{}\",\ndisplay.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ntranscript.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),)"
+expression: "format!(\"compact:\\n{}\\n\\nhistory:\\n{}\\n\\ntranscript:\\n{}\",\nvisible_lines(cell.compact_hyperlink_lines(80)).iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ndisplay.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ntranscript.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),)"
 ---
+compact:
+• Called search.lookup
+  └ third
+    fourth
+    fifth
+
 history:
-• Called search.lookup()
+• Called search.lookup({"title":"Search query"})
   └ first
     second
     third
-    +2 lines (ctrl + t to view transcript)
+    +2 lines (ctrl+t to view transcript)
 
 transcript:
-• Called search.lookup()
+• Called search.lookup({"title":"Search query"})
   └ first
     second
     third

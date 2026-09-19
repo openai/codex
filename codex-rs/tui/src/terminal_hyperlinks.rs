@@ -7,6 +7,7 @@ mod paragraph;
 mod source;
 
 pub(crate) use paragraph::HyperlinkParagraph;
+pub(crate) use source::LineWrapPolicy;
 pub(crate) use source::LogicalLineSource;
 
 use std::num::NonZeroU16;
@@ -276,6 +277,46 @@ pub(crate) fn prefix_hyperlink_lines(
             line
         })
         .collect()
+}
+
+/// Retain a known first-line label in copy text without changing the existing wrapping.
+///
+/// Callers pass the suffix of the first row's synthetic prefix that carries meaning, such as
+/// a checkbox or `answer:`. Only that row's shared logical source is updated.
+pub(crate) fn retain_initial_prefix(lines: &mut [HyperlinkLine], prefix: &str) {
+    let Some(origin) = lines.first().and_then(|line| line.source.clone()) else {
+        return;
+    };
+    debug_assert!(origin.prefix_bytes >= prefix.len());
+    let prefix_line = LogicalLineSource::from_line(&lines[0].line)
+        .styled_range(origin.prefix_bytes - prefix.len()..origin.prefix_bytes);
+    let mut styles = LogicalLineSource::from_line(&prefix_line).styles.to_vec();
+    styles.extend(origin.styles.iter().map(|(range, style)| {
+        (
+            range.start + prefix.len()..range.end + prefix.len(),
+            origin.line_style.patch(*style).patch(origin.span_style),
+        )
+    }));
+    let styles = std::sync::Arc::from(styles);
+    let text: std::sync::Arc<str> = format!("{prefix}{}", origin.text).into();
+    for (index, line) in lines.iter_mut().enumerate() {
+        let Some(source) = line
+            .source
+            .as_mut()
+            .filter(|source| std::sync::Arc::ptr_eq(&source.text, &origin.text))
+        else {
+            continue;
+        };
+        source.text = std::sync::Arc::clone(&text);
+        source.styles = std::sync::Arc::clone(&styles);
+        source.line_style = ratatui::style::Style::default();
+        source.span_style = ratatui::style::Style::default();
+        source.range = source.range.start + prefix.len()..source.range.end + prefix.len();
+        if index == 0 {
+            source.range.start = 0;
+            source.prefix_bytes -= prefix.len();
+        }
+    }
 }
 
 pub(crate) fn adaptive_wrap_hyperlink_lines(

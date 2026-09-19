@@ -11,6 +11,9 @@ use std::sync::Arc;
 pub(crate) enum LineWrapPolicy {
     #[default]
     Word,
+    /// Keep fitting URL tokens intact and split oversized tokens to fit the viewport.
+    UrlAware,
+    Hard,
 }
 
 /// A displayed line's contiguous fragment of one original logical line.
@@ -72,10 +75,6 @@ impl LogicalLineSource {
         source
     }
 
-    #[allow(
-        dead_code,
-        reason = "Used by the activity presentation layer of this stack."
-    )]
     pub(crate) fn styled_range(&self, range: Range<usize>) -> Line<'static> {
         Line::from(
             self.styles

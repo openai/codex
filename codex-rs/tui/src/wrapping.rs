@@ -752,6 +752,26 @@ pub(crate) fn adaptive_wrap_line_with_source<'a>(
     }
 }
 
+/// Preserve fitting URL tokens while splitting oversized tokens within the requested width.
+/// Source ranges and hanging indents survive the fallback, without terminal autowrap.
+pub(crate) fn adaptive_wrap_line_to_width<'a>(
+    line: &'a Line<'a>,
+    options: RtOptions<'a>,
+) -> Vec<WrappedLine<'a>> {
+    let wrapped = adaptive_wrap_line_with_source(line, options.clone());
+    if wrapped
+        .iter()
+        .any(|row| line_width(&row.line) > options.width)
+    {
+        word_wrap_line_with_source(
+            line,
+            url_preserving_wrap_options(options).break_words(/*break_words*/ true),
+        )
+    } else {
+        wrapped
+    }
+}
+
 /// Wraps multiple input lines with URL-aware heuristics, applying
 /// `initial_indent` to the first line and `subsequent_indent` to the
 /// rest. Each line is independently checked for URLs; URL detection on

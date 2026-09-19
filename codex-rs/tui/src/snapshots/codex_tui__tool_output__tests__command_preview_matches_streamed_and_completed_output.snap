@@ -1,13 +1,20 @@
 ---
 source: tui/src/tool_output_tests.rs
-expression: "format!(\"history:\\n{}\\n\\ntranscript:\\n{}\",\ncompleted.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ncell.transcript_lines(80).iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),)"
+assertion_line: 190
+expression: "format!(\"history:\\n{}\\n\\ncompact:\\n{}\\n\\ntranscript:\\n{}\",\ncompleted.iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\nvisible_lines(cell.compact_hyperlink_lines(80)).iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),\ncell.transcript_lines(80).iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\"),)"
 ---
 history:
 • Ran echo output
   └ first
     second
     third
-    +2 lines (ctrl + t to view transcript)
+    +2 lines (ctrl+t to view transcript)
+
+compact:
+• Ran echo output
+  └ third
+    fourth
+    fifth
 
 transcript:
 $ echo output

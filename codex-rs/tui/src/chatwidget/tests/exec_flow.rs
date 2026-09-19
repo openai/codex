@@ -172,6 +172,18 @@ async fn exploration_nonzero_exits_remain_visible_beside_successful_reads() {
         end_exec(&mut chat, item, "", "", exit_code);
     }
     insta::assert_snapshot!(active_blob(&chat));
+    insta::assert_snapshot!(
+        "compact_exploration_with_failures",
+        chat.transcript
+            .active_cell
+            .as_ref()
+            .unwrap()
+            .compact_hyperlink_lines(/*width*/ 24)
+            .iter()
+            .map(|line| line.line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     let statuses = chat
         .transcript
         .active_cell
@@ -1045,7 +1057,7 @@ async fn unified_exec_wait_after_final_agent_message_snapshot() {
     complete_assistant_message(&mut chat, "msg-1", "Final response.", /*phase*/ None);
     handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
 
-    let cells = drain_insert_history_normalized(&mut rx);
+    let cells = drain_insert_history_transcript_normalized(&mut rx);
     let combined = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -1069,7 +1081,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
     handle_agent_message_delta(&mut chat, "Streaming response.");
     handle_turn_completed(&mut chat, "turn-wait-1", /*duration_ms*/ None);
 
-    let cells = drain_insert_history_normalized(&mut rx);
+    let cells = drain_insert_history_transcript_normalized(&mut rx);
     let combined = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -1186,11 +1198,31 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 
     handle_turn_completed(&mut chat, "turn-wait-3", /*duration_ms*/ None);
 
-    let cells = drain_insert_history_normalized(&mut rx);
-    let combined = cells
+    let cells = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let compact = cells
         .iter()
-        .map(|lines| lines_to_single_string(lines))
+        .map(|cell| {
+            normalize_completion_timestamps(
+                cell.as_ref(),
+                lines_to_single_string(&cell.display_lines(/*width*/ 80)),
+            )
+        })
         .collect::<String>();
+    let transcript = cells
+        .iter()
+        .map(|cell| {
+            normalize_completion_timestamps(
+                cell.as_ref(),
+                lines_to_single_string(&cell.transcript_lines(/*width*/ 80)),
+            )
+        })
+        .collect::<String>();
+    let combined = format!("Chat:\n{compact}\nTranscript:\n{transcript}");
     assert_chatwidget_snapshot!("unified_exec_waiting_multiple_empty_after", combined);
 }
 
@@ -1223,7 +1255,7 @@ async fn unified_exec_empty_then_non_empty_snapshot() {
     terminal_interaction(&mut chat, "call-wait-2a", "proc-2", "");
     terminal_interaction(&mut chat, "call-wait-2b", "proc-2", "ls\n");
 
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     let combined = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -1249,7 +1281,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Waiting for background terminal");
     assert_eq!(status.details(), Some("just fix"));
-    let pre_cells = drain_insert_history(&mut rx);
+    let pre_cells = drain_insert_history_transcript(&mut rx);
     let active_combined = pre_cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -1258,7 +1290,7 @@ async fn unified_exec_non_empty_then_empty_snapshots() {
 
     handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
 
-    let post_cells = drain_insert_history_normalized(&mut rx);
+    let post_cells = drain_insert_history_transcript_normalized(&mut rx);
     let mut combined = pre_cells
         .iter()
         .map(|lines| lines_to_single_string(lines))

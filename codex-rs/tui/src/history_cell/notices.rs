@@ -1,9 +1,10 @@
 //! Informational, warning, update, and policy notice history cells.
 
 use super::*;
-use crate::line_truncation::line_width;
-use crate::wrapping::url_preserving_wrap_options;
-use crate::wrapping::word_wrap_line;
+use crate::style::accent_color;
+use crate::terminal_hyperlinks::LineWrapPolicy;
+use crate::terminal_hyperlinks::remap_source_wrapped_line;
+use crate::wrapping::adaptive_wrap_line_to_width;
 
 #[cfg_attr(not(test), allow(dead_code))]
 const RECAP_HEADING: &str = "Conversation recap";
@@ -30,19 +31,25 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         use ratatui_macros::line;
         use ratatui_macros::text;
         let update_instruction = if let Some(update_action) = self.update_action {
-            line!["Run ", update_action.command_str().cyan(), " to update."]
+            line![
+                "Run ",
+                update_action.command_str().fg(accent_color()),
+                " to update."
+            ]
         } else {
             line![
                 "See ",
-                "https://github.com/openai/codex".cyan().underlined(),
+                "https://github.com/openai/codex"
+                    .fg(accent_color())
+                    .underlined(),
                 " for installation options."
             ]
         };
 
         let content = text![
             line![
-                "✨\u{200A}".bold().cyan(),
-                "Update available!".bold().cyan(),
+                "✨\u{200A}".bold().fg(accent_color()),
+                "Update available!".bold().fg(accent_color()),
                 " ",
                 format!("{CODEX_CLI_VERSION} -> {}", self.latest_version).bold(),
             ],
@@ -50,7 +57,7 @@ impl HistoryCell for UpdateAvailableHistoryCell {
             "",
             "See full release notes:",
             "https://github.com/openai/codex/releases/latest"
-                .cyan()
+                .fg(accent_color())
                 .underlined(),
         ];
 
@@ -86,25 +93,42 @@ impl HistoryCell for UpdateAvailableHistoryCell {
         self.display_hyperlink_lines(width)
     }
 }
-#[allow(clippy::disallowed_methods)]
-pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
-    PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
+pub(crate) fn new_warning_event(message: String) -> WarningHistoryCell {
+    let style = crate::style::status_style(crate::style::StatusTone::Attention);
+    WarningHistoryCell {
+        key: message.clone(),
+        diagnostic: message.clone(),
+        details: PrefixedWrappedHistoryCell::new(
+            message.set_style(style),
+            "⚠ ".set_style(style),
+            "  ",
+        ),
+    }
 }
 
-#[allow(clippy::disallowed_methods)]
 pub(crate) fn new_server_version_warning(
     notice: crate::status::remote_connection::ServerVersionNotice,
-) -> PrefixedWrappedHistoryCell {
-    let mut lines = vec![Line::from(notice.message.yellow())];
+) -> WarningHistoryCell {
+    let key = notice.message.clone();
+    let style = crate::style::status_style(crate::style::StatusTone::Attention);
+    let mut lines = vec![Line::from(notice.message.set_style(style))];
     if notice.offer_update {
         lines.push(Line::from(
-            "Use /daemon to manage the local background server.".cyan(),
+            "Use /daemon to manage the local background server.".fg(accent_color()),
         ));
         lines.push(Line::from(
-            "Updating may interrupt active or queued work.".yellow(),
+            "Updating may interrupt active or queued work.".set_style(style),
         ));
     }
-    PrefixedWrappedHistoryCell::new(Text::from(lines), "⚠ ".yellow(), "  ")
+    WarningHistoryCell {
+        key,
+        diagnostic: lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        details: PrefixedWrappedHistoryCell::new(Text::from(lines), "⚠ ".set_style(style), "  "),
+    }
 }
 
 #[derive(Debug)]
@@ -168,7 +192,7 @@ impl HistoryCell for SafetyAccessBlockCell {
 
     fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         let mut lines = vec![HyperlinkLine::new(
-            vec!["ⓘ ".cyan(), self.title.bold()].into(),
+            vec!["ⓘ ".fg(accent_color()), self.title.bold()].into(),
         )];
         let body = Line::from(vec!["  ".into(), self.body.dim()]);
         let wrap_width = width.saturating_sub(2).max(1) as usize;
@@ -182,7 +206,11 @@ impl HistoryCell for SafetyAccessBlockCell {
 
         for &(label, url) in self.actions {
             let source = crate::terminal_hyperlinks::annotate_web_urls_in_line(
-                vec![format!("  {label}: ").dim(), url.cyan().underlined()].into(),
+                vec![
+                    format!("  {label}: ").dim(),
+                    url.fg(accent_color()).underlined(),
+                ]
+                .into(),
             );
             let wrapped = crate::wrapping::word_wrap_line(
                 &source.line,
@@ -227,7 +255,32 @@ pub(crate) fn new_deprecation_notice(
 }
 
 impl HistoryCell for DeprecationNoticeCell {
+    fn warning_entries(&self) -> Vec<WarningEntry> {
+        vec![WarningEntry {
+            id: WarningId::Message(self.summary.clone()),
+            source: "Deprecation".into(),
+            details: self
+                .raw_lines()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }]
+    }
+
+    fn live_raw_lines(&self) -> Vec<Line<'static>> {
+        self.raw_lines()
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.transcript_lines(width)
+    }
+
+    fn warning_keys(&self) -> Vec<WarningKey<'_>> {
+        vec![WarningKey::Message(&self.summary)]
+    }
+
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(vec!["⚠ ".red().bold(), self.summary.clone().red()].into());
 
@@ -338,6 +391,10 @@ impl ThreadRecapHistoryCell {
 
 impl HistoryCell for ThreadRecapHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         if width == 0 {
             return Vec::new();
         }
@@ -347,7 +404,7 @@ impl HistoryCell for ThreadRecapHistoryCell {
         if let Some(action) = &self.next_action {
             body.extend(prefix_lines(
                 raw_lines_from_source(action),
-                "Next: ".bold(),
+                "Next: ".bold().fg(accent_color()),
                 "".into(),
             ));
         }
@@ -367,20 +424,28 @@ impl HistoryCell for ThreadRecapHistoryCell {
         };
         let mut lines = Vec::new();
         for line in body {
-            let mut wrapped = adaptive_wrap_line(&line, options.clone());
-            if wrapped.iter().any(|line| line_width(line) > wrap_width) {
-                // Terminal autowrap loses the hanging indent. Rewrap the source line so only
-                // oversized tokens split, without applying the recap prefix a second time.
-                wrapped = word_wrap_line(
-                    &line,
-                    url_preserving_wrap_options(options.clone())
-                        .break_words(/*break_words*/ true),
-                );
+            let line = HyperlinkLine::new(line);
+            let mut wrapped = remap_source_wrapped_line(
+                &line,
+                adaptive_wrap_line_to_width(&line.line, options.clone()),
+            );
+            for source in wrapped.iter_mut().filter_map(|line| line.source.as_mut()) {
+                source.wrap_policy = LineWrapPolicy::UrlAware;
+                source.continuation_indent = options.subsequent_indent.clone();
+                source.right_reserve = 2;
             }
-            push_owned_lines(&wrapped, &mut lines);
+            lines.extend(wrapped);
             options.initial_indent = options.subsequent_indent.clone();
         }
-        lines.into_iter().map(Line::dim).collect()
+        for line in &mut lines {
+            let style = line.line.style.dim();
+            *line = std::mem::take(line).style(style);
+        }
+        lines
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {

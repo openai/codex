@@ -8,7 +8,7 @@ use super::*;
 
 #[derive(Debug)]
 pub(crate) struct ComputerActivityCell {
-    group: ActivityGroup<McpToolCallCell>,
+    pub(crate) group: ActivityGroup<McpToolCallCell>,
 }
 
 impl Default for ComputerActivityCell {
@@ -20,6 +20,26 @@ impl Default for ComputerActivityCell {
 }
 
 impl ComputerActivityCell {
+    fn detailed_hyperlink_lines(&self, width: u16, mode: HistoryRenderMode) -> Vec<HyperlinkLine> {
+        let mut lines = Vec::new();
+        for (index, call) in self.group.calls.iter().enumerate() {
+            lines.extend(call.transcript_hyperlink_lines(width));
+            lines.extend(self.group.details.lines_after(index + 1, width, mode));
+        }
+        lines
+    }
+
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn call_ids(&self) -> impl Iterator<Item = &str> {
+        self.group.calls.iter().map(McpToolCallCell::call_id)
+    }
+
+    /// Prepend validated historical calls without recreating pending live calls or their clocks.
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn prepend(&mut self, older: Self) {
+        self.group.prepend(older.group);
+    }
+
     pub(crate) fn start(&mut self, call: McpToolCallCell) {
         if !self
             .group
@@ -105,9 +125,24 @@ impl HistoryCell for ComputerActivityCell {
         if self.group.calls.is_empty() {
             Err(cell)
         } else {
-            self.group.push_reasoning(cell);
+            self.group.push_detail(std::sync::Arc::from(cell));
             Ok(())
         }
+    }
+
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = self.display_lines(width);
+        if width > 0 && !self.is_active() && self.group.calls.len() > 3 {
+            // The owned transcript supplies the shared disclosure control. Legacy history keeps
+            // its built-in summary, which is the final row whenever completed calls are hidden.
+            lines.pop();
+            if let Some(line) = lines.last_mut()
+                && let Some(prefix) = line.spans.first_mut()
+            {
+                *prefix = "  └ ".dim();
+            }
+        }
+        plain_hyperlink_lines(lines)
     }
 
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -217,19 +252,20 @@ impl HistoryCell for ComputerActivityCell {
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.group
-            .transcript_lines(width, HistoryRenderMode::Rich, |_, call, lines| {
-                lines.extend(call.transcript_lines(width));
-            })
+        visible_lines(self.transcript_hyperlink_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.detailed_hyperlink_lines(width, HistoryRenderMode::Rich)
+    }
+
+    fn activity_ids(&self) -> Vec<String> {
+        self.call_ids().map(|id| format!("mcp:{id}")).collect()
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.group.transcript_lines(
-            u16::MAX,
-            HistoryRenderMode::Raw,
-            |_, call, lines| {
-                lines.extend(call.transcript_lines(u16::MAX));
-            },
+        plain_lines(visible_lines(
+            self.detailed_hyperlink_lines(u16::MAX, HistoryRenderMode::Raw),
         ))
     }
 

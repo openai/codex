@@ -1,7 +1,10 @@
 ---
 source: tui/src/chatwidget/tests/exec_flow.rs
-expression: normalize_completion_timestamps(& (combined))
+expression: combined
 ---
-• Waited for background terminal · just fix
+Chat:
+  [completion time]
 
+Transcript:
+• Waited for background terminal · just fix
   [completion time]

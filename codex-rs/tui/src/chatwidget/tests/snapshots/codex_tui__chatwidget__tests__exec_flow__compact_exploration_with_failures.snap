@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/exec_flow.rs
+assertion_line: 175
+expression: "chat.transcript.active_cell.as_ref().unwrap().compact_hyperlink_lines(24).iter().map(|line|\nline.line.to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+• Explored · 4 failed
+  └ Read first.txt
+    Read missing.txt (e…
+         1)

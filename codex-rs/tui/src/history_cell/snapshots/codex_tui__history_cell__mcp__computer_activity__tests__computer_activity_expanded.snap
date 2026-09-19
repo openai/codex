@@ -4,8 +4,9 @@ expression: transcript
 ---
 • Called cua_repl.js({"title":"Open browser","code":"await cua.getState()"})
   └ Error: No browser is available
-        ## Computer Use
-        Full tool documentation
+
+    ## Computer Use
+    Full tool documentation
 • Called cua_repl.js({"title":"Connect to Chrome","code":"await cua.getState()"})
   └ connected
 • Called cua_repl.js({"title":"Reproduce the clear-command bug","code":"await cua.getState()"})

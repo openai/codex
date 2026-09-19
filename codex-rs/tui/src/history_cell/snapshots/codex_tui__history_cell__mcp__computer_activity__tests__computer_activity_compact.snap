@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/computer_activity_tests.rs
+assertion_line: 118
+expression: "cell.compact_hyperlink_lines(24).iter().map(|line|\nline.line.to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+• Used computer · 5
+  actions · 1 failed
+  ├ Failed: No browser …
+  └ Captured screenshot…

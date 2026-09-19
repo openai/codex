@@ -3,6 +3,7 @@
 use super::*;
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::style::accent_color;
 use crate::width::display_width;
 
 pub(crate) const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
@@ -79,6 +80,11 @@ impl TooltipHistoryCell {
 }
 
 impl HistoryCell for TooltipHistoryCell {
+    fn compact_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
+        // Optional tips stay available in detailed history without occupying the conversation.
+        Vec::new()
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let indent = "  ";
         let indent_width = display_width(indent);
@@ -105,6 +111,10 @@ impl HistoryCell for TooltipHistoryCell {
 pub struct SessionInfoCell(CompositeHistoryCell);
 
 impl HistoryCell for SessionInfoCell {
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.0.compact_hyperlink_lines(width)
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.display_lines(width)
     }
@@ -362,7 +372,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 spans.push(Span::styled("fast", self.model_style.magenta()));
             }
             spans.push("   ".dim());
-            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+            spans.push(CHANGE_MODEL_HINT_COMMAND.fg(accent_color()));
             spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
             spans
         };

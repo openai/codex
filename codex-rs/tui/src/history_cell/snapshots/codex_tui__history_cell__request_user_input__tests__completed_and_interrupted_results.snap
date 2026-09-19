@@ -1,0 +1,49 @@
+---
+source: tui/src/history_cell/request_user_input_tests.rs
+assertion_line: 44
+expression: "snapshots.join(\"\\n\")"
+---
+completed: Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 5 },
+    content: [
+        "• Questions 1/1 answered                ",
+        "  • Which approach should we use for the",
+        "    next step?                          ",
+        "    answer: Keep it small               ",
+        "    note: Preserve the behavior         ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 11, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 24, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 12, y: 3, fg: Rgb(99, 168, 248), bg: Reset, underline: Reset, modifier: NONE,
+        x: 25, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 10, y: 4, fg: Rgb(99, 168, 248), bg: Reset, underline: Reset, modifier: NONE,
+        x: 31, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+interrupted: Buffer {
+    area: Rect { x: 0, y: 0, width: 40, height: 4 },
+    content: [
+        "• Questions 0/1 answered (interrupted)  ",
+        "  • Which approach should we use for the",
+        "    next step? (unanswered)             ",
+        "  ↳ interrupted with 1 unanswered       ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 11, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 24, y: 0, fg: Rgb(99, 168, 248), bg: Reset, underline: Reset, modifier: NONE,
+        x: 38, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 14, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 27, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Rgb(99, 168, 248), bg: Reset, underline: Reset, modifier: NONE,
+        x: 33, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

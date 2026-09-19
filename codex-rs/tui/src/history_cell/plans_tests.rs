@@ -2,11 +2,14 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn finalized_plan_reuses_lines_primed_by_transcript_height() {
+fn finalized_plan_reuses_rendered_transcript_lines() {
     let cell = new_proposed_plan("1. Inspect **markdown**".to_string(), Path::new("/tmp"));
     let width = 48;
 
-    assert_eq!(cell.desired_transcript_height(width), 5);
+    assert_eq!(
+        visible_lines(cell.transcript_hyperlink_lines(width)),
+        cell.display_lines(width)
+    );
     cell.rendered_lines
         .cached
         .lock()

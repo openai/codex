@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use codex_ansi_escape::ansi_escape;
 use codex_utils_path_uri::LegacyAppPathString;
 
 #[cfg(test)]
@@ -10,13 +11,40 @@ mod tests;
 
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    activity_id: String,
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
 }
 
 impl HistoryCell for PatchHistoryCell {
+    fn activity_ids(&self) -> Vec<String> {
+        vec![self.activity_id.clone()]
+    }
+
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        crate::diff_render::create_diff_preview_with_links(
+            &self.changes,
+            &self.cwd,
+            usize::from(width),
+            super::activity_preview::DETAIL_PREVIEW_LINES,
+        )
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        create_diff_summary(&self.changes, &self.cwd, width as usize)
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        crate::diff_render::create_diff_summary_with_links(
+            &self.changes,
+            &self.cwd,
+            usize::from(width),
+        )
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -35,31 +63,93 @@ pub(crate) fn new_patch_event(
     cwd: &Path,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
+        activity_id: format!("patch:{}", uuid::Uuid::new_v4()),
         changes,
         cwd: cwd.to_path_buf(),
     }
 }
 
-pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
+pub(crate) fn new_patch_apply_failure(stderr: String) -> PatchFailureCell {
+    PatchFailureCell {
+        activity_id: format!("patch-failure:{}", uuid::Uuid::new_v4()),
+        stderr,
+    }
+}
 
-    // Failure title
-    lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
+/// Failed patch attempts retain available diagnostics for local disclosure and full transcript.
+#[derive(Debug)]
+pub(crate) struct PatchFailureCell {
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    activity_id: String,
+    stderr: String,
+}
 
-    if !stderr.trim().is_empty() {
-        let output = output_lines(
-            Some(&CommandOutput::new(/*exit_code*/ 1, stderr)),
-            OutputLinesParams {
-                line_limit: TOOL_CALL_MAX_LINES,
-                only_err: true,
-                include_angle_pipe: true,
-                include_prefix: true,
-            },
-        );
-        lines.extend(output.lines);
+impl HistoryCell for PatchFailureCell {
+    fn activity_ids(&self) -> Vec<String> {
+        vec![self.activity_id.clone()]
     }
 
-    PlainHistoryCell { lines }
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = self.transcript_hyperlink_lines(width);
+        lines.truncate(1 + super::activity_preview::DETAIL_PREVIEW_LINES);
+        lines
+            .into_iter()
+            .map(|line| super::activity_preview::clipped_line(line.line, width))
+            .collect()
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut lines = vec![Line::from("✘ Failed to apply patch".magenta().bold()).into()];
+        let error = if self.stderr.trim().is_empty() {
+            "(error details unavailable)"
+        } else {
+            &self.stderr
+        };
+        let mut diagnostics = ansi_escape(&error.replace('\t', "    ")).lines;
+        for line in &mut diagnostics {
+            for span in &mut line.spans {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            }
+        }
+        lines.extend(crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
+            &plain_hyperlink_lines(diagnostics),
+            RtOptions::new(usize::from(width).max(/*other*/ 1))
+                .initial_indent("  └ ".dim().into())
+                .subsequent_indent("    ".into()),
+        ));
+        lines
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = vec![Line::from("Failed to apply patch")];
+        lines.extend(plain_lines(ansi_escape(&self.stderr).lines));
+        lines
+    }
+
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // Failure title
+        lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
+
+        if !self.stderr.trim().is_empty() {
+            let output = output_lines(
+                Some(&CommandOutput::new(
+                    /*exit_code*/ 1,
+                    self.stderr.clone(),
+                )),
+                OutputLinesParams {
+                    line_limit: TOOL_CALL_MAX_LINES,
+                    only_err: true,
+                    include_angle_pipe: true,
+                    include_prefix: true,
+                },
+            );
+            lines.extend(output.lines);
+        }
+
+        lines
+    }
 }
 
 #[derive(Debug)]

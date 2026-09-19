@@ -146,7 +146,10 @@ impl LiveCommandOutput {
                 self.head
                     .iter()
                     .map(|line| Cow::Borrowed(line.as_str()))
-                    .chain((omitted > 0).then(|| Cow::Owned(format!("… +{omitted} lines"))))
+                    .chain((omitted > 0).then(|| {
+                        let noun = if omitted == 1 { "line" } else { "lines" };
+                        Cow::Owned(format!("… +{omitted} {noun}"))
+                    }))
                     .chain(self.tail.iter().map(|line| Cow::Borrowed(line.as_str())))
                     .chain(
                         self.has_partial_line

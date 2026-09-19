@@ -4,6 +4,36 @@ use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn local_image_only_user_message_remains_visible() {
+    let cell = new_user_prompt(
+        String::new(),
+        Vec::new(),
+        vec![PathBuf::from("fixture.png")],
+        Vec::new(),
+    );
+    let display = cell.display_lines(/*width*/ 40);
+
+    assert_eq!(cell.transcript_lines(/*width*/ 40), display);
+    insta::assert_snapshot!(ratatui::text::Text::from(display));
+}
+
+#[test]
+fn mixed_image_labels_preserve_existing_placeholders_without_duplicates() {
+    let placeholder = "[Image #2]";
+    let cell = new_user_prompt(
+        format!("{placeholder} compare these"),
+        vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        vec![PathBuf::from("one.png"), PathBuf::from("two.png")],
+        vec!["https://example.test/remote.png".to_string()],
+    );
+
+    insta::assert_snapshot!(ratatui::text::Text::from(cell.display_lines(/*width*/ 40)));
+}
+
+#[test]
 fn sanitizer_borrows_clean_text_and_removes_control_sequences() {
     for (text, expected) in [
         ("clean\ttext\n", "clean\ttext\n"),
@@ -124,11 +154,14 @@ fn replace_cached_lines(
 }
 
 #[test]
-fn finalized_markdown_reuses_lines_primed_by_transcript_height() {
+fn finalized_markdown_reuses_rendered_transcript_lines() {
     let cell = AgentMarkdownCell::new("finalized **markdown**".to_string(), Path::new("/tmp"));
     let width = 48;
 
-    assert_eq!(cell.desired_transcript_height(width), 1);
+    assert_eq!(
+        visible_lines(cell.transcript_hyperlink_lines(width)),
+        cell.display_lines(width)
+    );
     replace_cached_lines(&cell, |_| {});
 
     assert_eq!(

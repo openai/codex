@@ -115,6 +115,12 @@ impl ExecCell {
         }
     }
 
+    /// Preserve live clocks and pending output when a validated older page extends exploration.
+    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
+    pub(crate) fn prepend(&mut self, older: Self) {
+        self.group.prepend(older.group);
+    }
+
     /// Marks the most recently matching call as finished and returns whether a call was found.
     ///
     /// Callers should treat `false` as a routing mismatch rather than silently ignoring it. The

@@ -1,0 +1,51 @@
+---
+source: tui/src/history_cell/patches_tests.rs
+assertion_line: 28
+expression: "snapshots.join(\"\\n\\n\")"
+---
+patch
+Compact
+• Edited 2 files (+6 -1)
+  └ existing.txt (+1 -1)
+    2 -before
+    2 +after
+
+  └ new.txt (+5 -0)
+    1 +one
+    2 +two
+    3 +three
+Full
+• Edited 2 files (+6 -1)
+  └ existing.txt (+1 -1)
+    1  context
+    2 -before
+    2 +after
+    3  tail
+
+  └ new.txt (+5 -0)
+    1 +one
+    2 +two
+    3 +three
+    4 +four
+    5 +five
+
+failure
+Compact
+✘ Failed to apply patch
+  └ first
+    second
+    third
+Full
+✘ Failed to apply patch
+  └ first
+    second
+    third
+    fourth diagnostic
+
+missing diagnostics
+Compact
+✘ Failed to apply patch
+  └ (error details unavailable)
+Full
+✘ Failed to apply patch
+  └ (error details unavailable)
