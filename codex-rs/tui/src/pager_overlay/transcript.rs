@@ -172,7 +172,12 @@ impl TranscriptOverlay {
         let index = self
             .cells
             .iter()
-            .rposition(|cell| cell.as_any().is::<SessionInfoCell>())
+            .rposition(|cell| {
+                cell.as_any().is::<SessionInfoCell>()
+                    || cell
+                        .as_any()
+                        .is::<crate::history_cell::SessionHeaderHistoryCell>()
+            })
             .map_or(/*default*/ 0, |index| index + 1);
         let added = cells.len();
         self.cells.splice(index..index, cells);

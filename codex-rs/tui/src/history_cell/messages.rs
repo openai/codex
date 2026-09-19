@@ -319,7 +319,6 @@ pub(crate) struct ReasoningSummaryCell {
     cwd: PathBuf,
     transcript_only: bool,
     /// Persisted identity verifies page folds without comparing rendered reasoning text.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     source_item_id: Option<String>,
 }
 
@@ -332,12 +331,10 @@ impl ReasoningSummaryCell {
         self.source_item_id = Some(id);
     }
 
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn source_item_id(&self) -> Option<&str> {
         self.source_item_id.as_deref()
     }
 
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn is_transcript_only(&self) -> bool {
         self.transcript_only
     }

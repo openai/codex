@@ -11,8 +11,9 @@ impl ChatWidget {
             return;
         };
         let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        if let Err(cell) = self.absorb_activity_detail(Box::new(cell)) {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
+        }
         self.restore_reasoning_status_header();
     }
 
@@ -368,6 +369,25 @@ impl ChatWidget {
         let is_unified_exec_interaction =
             matches!(source, ExecCommandSource::UnifiedExecInteraction);
         let is_user_shell = source == ExecCommandSource::UserShell;
+        // Completion-only replay has no begin event to join adjacent exploration. Extend only
+        // a finished, compatible group; an unrelated running group must retain orphan routing.
+        if let Some(cell) = self
+            .transcript
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<ExecCell>())
+            && !cell.is_active()
+            && !cell.should_flush()
+            && !cell.iter_calls().any(|call| call.call_id == id)
+        {
+            cell.add_call(
+                id.clone(),
+                command.clone(),
+                parsed.clone(),
+                source,
+                /*interaction_input*/ None,
+            );
+        }
         let end_target = match self.transcript.active_cell.as_ref() {
             Some(cell) => match cell.as_any().downcast_ref::<ExecCell>() {
                 Some(exec_cell) if exec_cell.iter_calls().any(|call| call.call_id == id) => {
@@ -389,8 +409,6 @@ impl ChatWidget {
             None => ExecEndTarget::NewCell,
         };
 
-        // Unified exec interaction rows intentionally hide command output text in the exec cell and
-        // instead render the interaction-specific content elsewhere in the UI.
         let output = if is_unified_exec_interaction {
             CommandOutput::new(exit_code, String::new())
         } else {

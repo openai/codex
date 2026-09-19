@@ -37,6 +37,7 @@ pub(super) async fn make_test_app() -> App {
         pending_server_profiles: HashMap::new(),
         file_search,
         transcript_cells: Vec::new(),
+        native_history: Default::default(),
         last_rendered_history_tail: None,
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,

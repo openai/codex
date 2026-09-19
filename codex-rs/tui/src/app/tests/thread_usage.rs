@@ -271,6 +271,22 @@ async fn account_change_discards_thread_usage_deferred_while_overlay_is_open() -
 async fn terminal_reflow_rebases_pending_status_update_to_new_width() -> Result<()> {
     let (mut app, mut app_server, mut tui, thread_id, request_id) =
         app_with_pending_thread_usage().await?;
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(
+            history_cell::DynamicToolCallCell::from_item(ThreadItem::DynamicToolCall {
+                id: "pending-tool".into(),
+                namespace: None,
+                tool: "lookup".into(),
+                arguments: serde_json::json!({}),
+                status: codex_app_server_protocol::DynamicToolCallStatus::InProgress,
+                success: None,
+                duration_ms: None,
+                content_items: None,
+            })
+            .unwrap(),
+        ),
+    );
     let original = app
         .last_rendered_history_tail
         .as_ref()
@@ -307,6 +323,27 @@ async fn terminal_reflow_rebases_pending_status_update_to_new_width() -> Result<
     .await?;
     assert!(tui.pending_history_lines_for_test().is_empty());
     assert!(!app.transcript_reflow.has_pending_reflow());
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn queued_status_reads_refreshed_usage_only_when_emitted() -> Result<()> {
+    let (mut app, mut app_server, mut tui, thread_id, request_id) =
+        app_with_pending_thread_usage().await?;
+    let status = Arc::clone(app.transcript_cells.last().unwrap());
+    tui.clear_pending_history_lines();
+    app.native_history.defer(&status);
+    app.render_inserted_history_cell(&mut tui, &status, /*deferred*/ true);
+    app.handle_event(
+        &mut tui,
+        &mut app_server,
+        successful_thread_usage(thread_id, request_id),
+    )
+    .await?;
+    assert!(tui.pending_history_lines_for_test().is_empty());
+    app.flush_native_history(&mut tui);
+    assert_eq!(pending_history_text(&tui).matches("50 credits").count(), 1);
     app_server.shutdown().await?;
     Ok(())
 }

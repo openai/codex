@@ -738,6 +738,7 @@ impl App {
         };
 
         self.transcript_cells.remove(index);
+        self.native_history.retain(&self.transcript_cells);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }

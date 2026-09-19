@@ -952,7 +952,11 @@ impl App {
                 let turns = match thread.history_mode {
                     ThreadHistoryMode::Paginated if app_server.supports_paginated_history() => {
                         app_server
-                            .thread_turns_page(thread_id, /*cursor*/ None)
+                            .thread_turns_page(
+                                thread_id,
+                                /*cursor*/ None,
+                                crate::app_server_session::INITIAL_HISTORY_TURN_LIMIT,
+                            )
                             .await?
                             .data
                     }

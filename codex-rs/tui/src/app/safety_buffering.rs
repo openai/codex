@@ -4,6 +4,7 @@ use super::session_lifecycle::ThreadAttachPresentation;
 use super::*;
 use crate::app_server_session::ForkGoalContinuation;
 use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
+use crate::app_server_session::INITIAL_HISTORY_TURN_LIMIT;
 use crate::app_server_session::turn_permissions_overrides;
 use crate::chatwidget::ThreadInputState;
 use crate::chatwidget::ThreadInputStateRestoreMode;
@@ -115,7 +116,7 @@ impl App {
                     .await?;
             } else {
                 let page = app_server
-                    .thread_turns_page(thread_id, /*cursor*/ None)
+                    .thread_turns_page(thread_id, /*cursor*/ None, INITIAL_HISTORY_TURN_LIMIT)
                     .await?;
                 thread.turns = page.data.into_iter().rev().collect();
                 if let Some(turn_index) = thread.turns.iter().position(|turn| turn.id == turn_id) {

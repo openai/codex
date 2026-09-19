@@ -249,6 +249,7 @@ mod computer_activity_tests;
 mod config_errors;
 #[path = "tests/copy_export_picker_tests.rs"]
 mod copy_export_picker_tests;
+mod dynamic_activity_tests;
 mod exec_flow;
 mod goal_menu;
 mod goal_validation;

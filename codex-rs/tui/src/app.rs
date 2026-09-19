@@ -207,6 +207,7 @@ mod agents_overview_details;
 mod agents_overview_threads;
 mod agents_overview_usage;
 mod agents_overview_view;
+mod native_history;
 pub(crate) use agents_overview::AGENTS_OVERVIEW_VIEW_ID;
 mod app_server_event_targets;
 mod app_server_events;
@@ -568,6 +569,7 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    native_history: native_history::NativeHistory,
     last_rendered_history_tail: Option<history_ui::RenderedHistoryTail>,
     last_thread_usage_status_cell: Option<history_ui::ThreadUsageStatusHistory>,
     pub(crate) pending_thread_usage_history_refresh: bool,

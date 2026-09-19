@@ -245,7 +245,21 @@ impl ChatWidget {
         turn_id: String,
         replay_kind: ReplayKind,
     ) {
-        self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+        match item {
+            // Snapshots contain the completed item, without the live start that renders its diff.
+            ThreadItem::FileChange {
+                changes,
+                status: codex_app_server_protocol::PatchApplyStatus::Completed,
+                ..
+            } => {
+                if !changes.is_empty() {
+                    self.on_patch_apply_begin(file_update_changes_to_display(changes));
+                }
+            }
+            item => {
+                self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+            }
+        }
     }
 
     pub(super) fn handle_thread_item(
@@ -458,7 +472,7 @@ impl ChatWidget {
                 agents_states,
             }),
             item @ ThreadItem::SubAgentActivity { .. } => self.on_sub_agent_activity(item),
-            ThreadItem::DynamicToolCall { .. } => {}
+            item @ ThreadItem::DynamicToolCall { .. } => self.on_dynamic_tool_item(item),
             ThreadItem::Sleep(_) => {}
         }
 

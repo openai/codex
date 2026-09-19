@@ -64,10 +64,9 @@ impl ChatWidget {
     pub(super) fn flush_answer_and_plan_streams(&mut self) {
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take() {
-            let had_live_tail = controller.has_live_tail();
             self.clear_active_stream_tail();
             let (cell, source) = controller.finalize();
-            if !had_live_tail && let Some(cell) = cell {
+            if let Some(cell) = cell {
                 self.add_boxed_history(cell);
             }
             if let Some(source) = source {
@@ -256,10 +255,10 @@ impl ChatWidget {
         self.transcript.saw_plan_item_this_turn = true;
         let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
-                let had_live_tail = controller.has_live_tail();
+                let source_only = controller.has_live_tail() && controller.tail_starts_stream();
                 self.clear_active_stream_tail();
                 let (cell, source) = controller.finalize();
-                if had_live_tail {
+                if source_only {
                     (None, source)
                 } else {
                     (cell, source)
@@ -349,8 +348,12 @@ impl ChatWidget {
             .or(self.reasoning_header.take());
         if !self.reasoning_summary_parts.is_empty() {
             let reasoning_parts = std::mem::take(&mut self.reasoning_summary_parts);
-            let cell: Box<dyn HistoryCell> =
+            let mut cell =
                 history_cell::new_reasoning_summary_block(reasoning_parts, &self.config.cwd);
+            if let Some(id) = &self.status_state.reasoning_item_id {
+                cell.set_source_item_id(id.clone());
+            }
+            let cell: Box<dyn HistoryCell> = cell;
             let result = match self.transcript.active_cell.as_mut() {
                 Some(active) => active.append_reasoning(cell),
                 None => Err(cell),

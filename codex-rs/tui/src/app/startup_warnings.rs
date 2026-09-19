@@ -43,8 +43,12 @@ impl App {
             .rposition(|cell| cell.as_any().is::<history_cell::SessionInfoCell>());
         warnings.pending_header = header.is_none() && self.chat_widget.thread_id().is_none();
         let ready_to_render = !warnings.pending_header;
-        self.transcript_cells
-            .insert(header.map_or(0, |index| index + 1), Arc::new(warnings));
+        let warnings: Arc<dyn HistoryCell> = Arc::new(warnings);
+        self.transcript_cells.insert(
+            header.map_or(/*default*/ 0, |index| index + 1),
+            warnings.clone(),
+        );
+        self.native_history.retain(&self.transcript_cells);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }

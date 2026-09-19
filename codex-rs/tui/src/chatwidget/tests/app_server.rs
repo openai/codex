@@ -1074,20 +1074,21 @@ async fn startup_config_warning_is_not_repeated_by_thread() {
 async fn live_app_server_file_change_item_started_preserves_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
+    let item = AppServerThreadItem::FileChange {
+        id: "patch-1".to_string(),
+        changes: vec![FileUpdateChange {
+            path: "foo.txt".to_string(),
+            kind: PatchChangeKind::Add,
+            diff: "hello\n".to_string(),
+        }],
+        status: AppServerPatchApplyStatus::InProgress,
+    };
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             started_at_ms: 0,
-            item: AppServerThreadItem::FileChange {
-                id: "patch-1".to_string(),
-                changes: vec![FileUpdateChange {
-                    path: "foo.txt".to_string(),
-                    kind: PatchChangeKind::Add,
-                    diff: "hello\n".to_string(),
-                }],
-                status: AppServerPatchApplyStatus::InProgress,
-            },
+            item: item.clone(),
         }),
         /*replay_kind*/ None,
     );
@@ -1095,10 +1096,25 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
     let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected patch history to be rendered");
     let transcript = lines_to_single_string(cells.last().expect("patch cell"));
-    assert!(
-        transcript.contains("Added foo.txt") || transcript.contains("Edited foo.txt"),
-        "expected patch summary to include foo.txt, got: {transcript}"
+    let AppServerThreadItem::FileChange { id, changes, .. } = item else {
+        unreachable!()
+    };
+    chat.replay_thread_item(
+        AppServerThreadItem::FileChange {
+            id,
+            changes,
+            status: AppServerPatchApplyStatus::Completed,
+        },
+        "turn-1".to_string(),
+        ReplayKind::ResumeInitialMessages,
     );
+    let replayed = drain_insert_history(&mut rx);
+    assert_eq!(replayed.len(), 1);
+    assert_eq!(lines_to_single_string(&replayed[0]), transcript);
+    insta::assert_snapshot!(transcript, @"
+    • Added foo.txt (+1 -0)
+        1 +hello
+    ");
 }
 
 #[tokio::test]

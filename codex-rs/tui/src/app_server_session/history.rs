@@ -102,8 +102,8 @@ impl AppServerSession {
                     ..ThreadHistoryPagination::default()
                 },
             );
-        } else {
-            self.cancel_older_history_page(thread_id);
+        } else if let Some(page) = self.history_pagination.get_mut(&thread_id) {
+            page.loading_older = false;
         }
         Ok(response)
     }
@@ -124,8 +124,17 @@ impl AppServerSession {
         Some(cursor)
     }
 
-    pub(crate) fn cancel_older_history_page(&mut self, thread_id: ThreadId) {
-        if let Some(page) = self.history_pagination.get_mut(&thread_id) {
+    /// Match a completion to the page still pending for this thread, before interpreting its result.
+    pub(crate) fn is_older_history_page_pending(&self, thread_id: ThreadId, cursor: &str) -> bool {
+        self.history_pagination.get(&thread_id).is_some_and(|page| {
+            page.loading_older && page.next_item_cursor.as_deref() == Some(cursor)
+        })
+    }
+
+    pub(crate) fn cancel_older_history_page(&mut self, thread_id: ThreadId, cursor: &str) {
+        if let Some(page) = self.history_pagination.get_mut(&thread_id)
+            && page.next_item_cursor.as_deref() == Some(cursor)
+        {
             page.loading_older = false;
         }
     }
@@ -137,12 +146,12 @@ impl AppServerSession {
         page: ThreadItemsListResponse,
         turns: &mut Vec<Turn>,
     ) -> Result<Vec<ThreadItem>> {
+        if !self.is_older_history_page_pending(thread_id, cursor) {
+            return Ok(Vec::new());
+        }
         let Some(mut state) = self.history_pagination.get(&thread_id).cloned() else {
             return Ok(Vec::new());
         };
-        if !state.loading_older || state.next_item_cursor.as_deref() != Some(cursor) {
-            return Ok(Vec::new());
-        }
         let items = self
             .merge_thread_item_page(thread_id, page, &mut state, turns)
             .await?;
@@ -172,6 +181,7 @@ impl AppServerSession {
         &mut self,
         thread_id: ThreadId,
         cursor: Option<String>,
+        limit: u32,
     ) -> Result<ThreadTurnsListResponse> {
         let request_id = self.next_request_id();
         self.client
@@ -180,7 +190,7 @@ impl AppServerSession {
                 params: ThreadTurnsListParams {
                     thread_id: thread_id.to_string(),
                     cursor,
-                    limit: Some(INITIAL_HISTORY_TURN_LIMIT),
+                    limit: Some(limit),
                     sort_direction: Some(SortDirection::Desc),
                     items_view: Some(TurnItemsView::NotLoaded),
                 },
@@ -201,20 +211,32 @@ impl AppServerSession {
             page.next_cursor,
             &mut state.seen_item_cursors,
         );
+        let mut missing_turn_ids = page
+            .data
+            .iter()
+            .filter(|entry| !turns.iter().any(|turn| turn.id == entry.turn_id))
+            .map(|entry| entry.turn_id.clone())
+            .collect::<HashSet<_>>();
         let mut items = Vec::new();
         for entry in page.data {
             while !turns.iter().any(|turn| turn.id == entry.turn_id) {
                 let Some(cursor) = state.next_turn_cursor.take() else {
                     break;
                 };
+                // Fetch only the remaining item-backed turns so metadata does not run ahead
+                // of this page. Empty turns between them may require another bounded request.
+                let limit = missing_turn_ids.len().min(HISTORY_ITEM_PAGE_LIMIT as usize) as u32;
                 let page = self
-                    .thread_turns_page(thread_id, Some(cursor.clone()))
+                    .thread_turns_page(thread_id, Some(cursor.clone()), limit)
                     .await?;
                 state.next_turn_cursor = advancing_cursor(
                     Some(&cursor),
                     page.next_cursor,
                     &mut state.seen_turn_cursors,
                 );
+                for turn in &page.data {
+                    missing_turn_ids.remove(&turn.id);
+                }
                 turns.splice(0..0, page.data.into_iter().rev());
             }
             if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id)
@@ -254,7 +276,9 @@ impl AppServerSession {
             return Ok(());
         }
 
-        let page = self.thread_turns_page(thread_id, turn_cursor).await?;
+        let page = self
+            .thread_turns_page(thread_id, turn_cursor, INITIAL_HISTORY_TURN_LIMIT)
+            .await?;
         thread.turns = page.data.into_iter().rev().collect();
         let mut state = ThreadHistoryPagination {
             history_mode: ThreadHistoryMode::Paginated,

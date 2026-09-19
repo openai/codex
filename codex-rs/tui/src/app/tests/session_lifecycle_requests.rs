@@ -3120,7 +3120,11 @@ async fn cold_paginated_subagent_transcript_excludes_inherited_parent_history() 
         )
         .await?;
     let child_turn_page = app_server
-        .thread_turns_page(child_thread_id, /*cursor*/ None)
+        .thread_turns_page(
+            child_thread_id,
+            /*cursor*/ None,
+            crate::app_server_session::INITIAL_HISTORY_TURN_LIMIT,
+        )
         .await?;
     let child_item_page = app_server
         .thread_items_page(

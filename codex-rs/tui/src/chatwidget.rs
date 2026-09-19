@@ -316,6 +316,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod activity_groups;
 mod command_lifecycle;
 mod connector_mentions;
 mod connectors;
@@ -443,6 +444,7 @@ use self::status_surfaces::CachedProjectRootName;
 mod thread_title_status;
 mod thread_usage;
 pub(crate) use self::thread_usage::ThreadUsageOutcome;
+mod dynamic_activity;
 mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
@@ -1250,6 +1252,9 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        let Err(cell) = self.absorb_activity_detail(cell) else {
+            return;
+        };
         if let Some(active) = self.take_history_insertion_prefix(cell.as_ref()) {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
             self.request_pending_usage_output_insertion();

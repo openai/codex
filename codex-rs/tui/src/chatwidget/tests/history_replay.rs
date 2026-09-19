@@ -1278,26 +1278,27 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
 }
 
 #[tokio::test]
-async fn replayed_in_progress_mcp_tool_call_stays_active() {
+async fn replayed_mcp_tool_call_stays_active_until_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let _ = drain_insert_history(&mut rx);
 
+    let mut item = AppServerThreadItem::McpToolCall {
+        id: "mcp-1".to_string(),
+        server: "copilot-bridge".to_string(),
+        tool: "copilot".to_string(),
+        status: codex_app_server_protocol::McpToolCallStatus::InProgress,
+        arguments: json!({"action": "wait"}),
+        app_context: None,
+        mcp_app_resource_uri: None,
+        mcp_app_ui: None,
+        plugin_id: None,
+        read_only_hint: None,
+        result: None,
+        error: None,
+        duration_ms: None,
+    };
     chat.replay_thread_item(
-        AppServerThreadItem::McpToolCall {
-            id: "mcp-1".to_string(),
-            server: "copilot-bridge".to_string(),
-            tool: "copilot".to_string(),
-            status: codex_app_server_protocol::McpToolCallStatus::InProgress,
-            arguments: json!({"action": "wait"}),
-            app_context: None,
-            mcp_app_resource_uri: None,
-            mcp_app_ui: None,
-            plugin_id: None,
-            read_only_hint: None,
-            result: None,
-            error: None,
-            duration_ms: None,
-        },
+        item.clone(),
         "turn-1".to_string(),
         ReplayKind::ThreadSnapshot,
     );
@@ -1306,6 +1307,17 @@ async fn replayed_in_progress_mcp_tool_call_stays_active() {
     let active = active_blob(&chat);
     assert!(active.contains("Calling"));
     assert!(!active.contains("MCP tool call completed without a result"));
+
+    if let AppServerThreadItem::McpToolCall { status, .. } = &mut item {
+        *status = codex_app_server_protocol::McpToolCallStatus::Completed;
+    }
+    chat.on_mcp_tool_call_completed(item);
+    assert!(chat.transcript.active_cell.is_none());
+    let completed = drain_insert_history(&mut rx);
+    assert_eq!(completed.len(), 1);
+    assert!(
+        lines_to_single_string(&completed[0]).contains("MCP tool call completed without a result")
+    );
 }
 
 #[tokio::test]

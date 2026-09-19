@@ -221,7 +221,7 @@ impl McpHistory {
                     meta: None,
                 })
             }
-            (None, None) => return None,
+            (None, None) => Err("MCP tool call completed without a result".to_string()),
         };
         Some(Self {
             id,

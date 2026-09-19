@@ -5,7 +5,8 @@
 //! tail in the bottom pane. Once the answer finishes, the app replaces that
 //! trailing run with a single source-backed `AgentMarkdownCell`. This makes the
 //! transcript the canonical owner of the raw markdown source used for future
-//! resize re-renders.
+//! resize re-renders. The retained view remaps its reading position before that
+//! replacement, then repaints without replaying terminal scrollback.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,6 +40,7 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.insert_cell(cell.clone());
             }
+            self.native_history.defer(&cell);
             self.transcript_cells.push(cell);
         }
 
@@ -61,6 +63,8 @@ impl App {
                     inline_visualization_context,
                 ),
             );
+            self.native_history
+                .consolidate(&self.transcript_cells[start..end], &consolidated);
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
 
