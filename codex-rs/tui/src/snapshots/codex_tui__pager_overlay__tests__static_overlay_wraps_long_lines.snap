@@ -1,5 +1,6 @@
 ---
 source: tui/src/pager_overlay.rs
+assertion_line: 596
 expression: term.backend()
 ---
 "/ S T A T I C / / / / / "
@@ -7,6 +8,6 @@ expression: term.backend()
 "should wrap when        "
 "rendered within a narrow"
 "─────────────────── 0% ─"
-" ↑/↓ to scroll   pgup/pg"
+" ↑/↓ to scroll · pgup/pg"
 " q close                "
 "                        "

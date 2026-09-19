@@ -1,0 +1,20 @@
+---
+source: tui/src/transcript_view/text_tabs_tests.rs
+assertion_line: 48
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 3, y: 2, width: 32, height: 1 },
+    content: [
+        "›       tabs:   ]8;;https://example.com/oneo]8;;]8;;https://example.com/onen]8;;]8;;https://example.com/onee]8;;     ]8;;https://example.com/twot]8;;]8;;https://example.com/twow]8;;]8;;https://example.com/twoo]8;;     ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 0, fg: Green, bg: Reset, underline: Reset, modifier: NONE,
+        x: 13, y: 0, fg: Green, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 16, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 19, y: 0, fg: Magenta, bg: Reset, underline: Reset, modifier: UNDERLINED,
+        x: 24, y: 0, fg: Cyan, bg: Reset, underline: Reset, modifier: NONE,
+        x: 27, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

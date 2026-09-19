@@ -1,5 +1,6 @@
 ---
 source: tui/src/pager_overlay.rs
+assertion_line: 584
 expression: term.backend()
 ---
 "/ S T A T I C / / / / / / / / / / / / / "
@@ -9,6 +10,6 @@ expression: term.backend()
 "~                                       "
 "~                                       "
 "───────────────────────────────── 100% ─"
-" ↑/↓ to scroll   pgup/pgdn to page   hom"
+" ↑/↓ to scroll · pgup/pgdn to page · hom"
 " q close                                "
 "                                        "

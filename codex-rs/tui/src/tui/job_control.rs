@@ -1,3 +1,5 @@
+//! Restore terminal modes and screen placement across suspend/resume.
+
 use std::io::Result;
 use std::io::stdout;
 use std::sync::Arc;
@@ -10,16 +12,12 @@ use std::sync::atomic::Ordering;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
 use crossterm::event::KeyCode;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 use ratatui::layout::Size;
 
 use crate::key_hint;
 
-use super::DisableAlternateScroll;
-use super::EnableAlternateScroll;
 use super::Terminal;
 
 pub const SUSPEND_KEY: key_hint::KeyBinding = key_hint::ctrl(KeyCode::Char('z'));
@@ -64,8 +62,7 @@ impl SuspendContext {
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
         if alt_screen_active.load(Ordering::Relaxed) {
             // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
-            let _ = execute!(stdout(), DisableAlternateScroll);
-            let _ = execute!(stdout(), LeaveAlternateScreen);
+            let _ = super::ALTERNATE_SCREEN.leave(&mut stdout());
             self.set_resume_action(ResumeAction::RestoreAlt);
         } else {
             self.set_resume_action(ResumeAction::RealignInline);
@@ -179,15 +176,22 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
-    pub(crate) fn apply(self, terminal: &mut Terminal, screen_size: Size) -> Result<()> {
+    pub(crate) fn apply(
+        self,
+        terminal: &mut Terminal,
+        screen_size: Size,
+        owned: bool,
+        capture_mouse: bool,
+    ) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
             }
             PreparedResumeAction::RestoreAltScreen => {
-                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                super::ALTERNATE_SCREEN.enter(terminal.backend_mut(), capture_mouse)?;
+                if owned {
+                    terminal.hide_cursor()?;
+                }
                 terminal.set_viewport_area(Rect::from(screen_size));
                 terminal.clear()?;
             }

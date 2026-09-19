@@ -48,6 +48,9 @@ fn markdown_transcript_preserves_messages_and_formats_activity() {
         Arc::new(PlainHistoryCell::new(vec![
             "■ Export failed: missing parent".into(),
         ])),
+        Arc::new(PlainHistoryCell::new(vec![
+            "• Copy unconfirmed; /export saves chat".into(),
+        ])),
         user("", vec!["image.png".into()]),
         user("[Image #1] describe this", vec!["image.png".into()]),
     ];

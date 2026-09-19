@@ -1,31 +1,22 @@
-//! Overlay UIs rendered in an alternate screen.
+//! Static pager overlays and standalone transcript adapters.
 //!
-//! This module implements the pager-style overlays used by the TUI, including the transcript
-//! overlay (`Ctrl+T`) that renders a full history view separate from the main viewport.
-//!
-//! The transcript overlay renders committed transcript cells plus an optional render-only live tail
-//! derived from the current in-flight active cell. Because rebuilding wrapped `Line`s on every draw
-//! can be expensive, that live tail is cached and only recomputed when its cache key changes, which
-//! is derived from the terminal width (wrapping), an active-cell revision (in-place mutations), the
-//! stream-continuation flag (spacing), and an animation tick (time-based spinner/shimmer output).
-//!
-//! The transcript overlay live tail is kept in sync by `App` during draws: `App` supplies an
-//! `ActiveCellTranscriptKey` and a function to compute the active cell transcript lines, and
-//! `TranscriptOverlay::sync_live_tail` uses the key to decide when the cached tail must be
-//! recomputed. `ChatWidget` is responsible for producing a key that changes when the active cell
-//! mutates in place or when its transcript output is time-dependent.
+//! Static content retains its generic pager. Transcript previews share the main conversation
+//! viewport, including its scrolling, selection, search and bounded text layouts.
 
 mod scrolling;
 mod transcript;
 
 pub(crate) use transcript::TranscriptOverlay;
 
+#[cfg(test)]
+#[path = "pager_overlay/transcript_tests.rs"]
+mod transcript_tests;
+
 use std::io::Result;
 use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
-use crate::history_cell::SessionInfoCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
@@ -51,14 +42,14 @@ use ratatui::widgets::Wrap;
 use scrolling::render_offset_content;
 
 pub(crate) enum Overlay {
-    Transcript(Box<TranscriptOverlay>),
-    Static(Box<StaticOverlay>),
+    Transcript(TranscriptOverlay),
+    Static(StaticOverlay),
     Analytics(Box<crate::analytics::AnalyticsView>),
 }
 
 impl Overlay {
     pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
-        Self::Transcript(Box::new(TranscriptOverlay::new(cells, keymap)))
+        Self::Transcript(TranscriptOverlay::new(cells, keymap))
     }
 
     pub(crate) fn new_static_with_lines(
@@ -66,7 +57,7 @@ impl Overlay {
         title: String,
         keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(Box::new(StaticOverlay::with_title(lines, title, keymap)))
+        Self::Static(StaticOverlay::with_title(lines, title, keymap))
     }
 
     pub(crate) fn new_static_with_renderables(
@@ -74,19 +65,26 @@ impl Overlay {
         title: String,
         keymap: PagerKeymap,
     ) -> Self {
-        Self::Static(Box::new(StaticOverlay::with_renderables(
-            renderables,
-            title,
-            keymap,
-        )))
+        Self::Static(StaticOverlay::with_renderables(renderables, title, keymap))
     }
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        match self {
+        let input = match self {
+            Overlay::Transcript(_) => tui::OverlayInput::Transcript,
+            Overlay::Static(_) => tui::OverlayInput::StaticPager,
+            Overlay::Analytics(_) => tui::OverlayInput::Default,
+        };
+        tui.set_overlay_input(input)?;
+        let result = match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
             Overlay::Analytics(o) => o.handle_event(tui, event),
+        };
+        if result.is_err() || self.is_done() {
+            let restore = tui.set_overlay_input(tui::OverlayInput::Default);
+            return result.and(restore);
         }
+        result
     }
 
     pub(crate) fn is_done(&self) -> bool {
@@ -112,7 +110,7 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(Vec<ShortcutHint>, &
     let mut first = true;
     for (keys, desc) in pairs {
         if !first {
-            spans.push("   ".into());
+            spans.push(" · ".dim());
         }
         for (i, key) in keys.iter().enumerate() {
             if i > 0 {
@@ -251,7 +249,7 @@ impl PagerView {
         total_len: usize,
     ) {
         let sep_y = content_area.bottom();
-        let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
+        let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, /*height*/ 1);
 
         Span::from("─".repeat(sep_rect.width as usize))
             .dim()
@@ -272,7 +270,7 @@ impl PagerView {
         let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
         Span::from(pct_text)
             .dim()
-            .render(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
+            .render(Rect::new(pct_x, sep_rect.y, pct_w, /*height*/ 1), buf);
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
@@ -396,15 +394,6 @@ impl TranscriptHistoryState {
             Self::LoadingOlder | Self::LoadingBeginning | Self::Partial | Self::Failed
         )
     }
-
-    pub(crate) fn session_header_placeholder(self) -> Option<&'static str> {
-        match self {
-            Self::LoadingOlder | Self::LoadingBeginning => Some("Loading earlier messages..."),
-            Self::Partial => Some("Earlier messages are available — scroll up to load them"),
-            Self::Failed => Some("Earlier messages unavailable — scroll up to retry"),
-            Self::Idle | Self::Complete => None,
-        }
-    }
 }
 
 pub(crate) struct StaticOverlay {
@@ -413,6 +402,8 @@ pub(crate) struct StaticOverlay {
 }
 
 impl StaticOverlay {
+    const HINTS_HEIGHT: u16 = 3;
+
     pub(crate) fn with_title(
         lines: Vec<Line<'static>>,
         title: String,
@@ -449,9 +440,9 @@ impl StaticOverlay {
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        let top_h = area.height.saturating_sub(3);
+        let top_h = area.height.saturating_sub(Self::HINTS_HEIGHT);
         let top = Rect::new(area.x, area.y, area.width, top_h);
-        let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
+        let bottom = Rect::new(area.x, area.y + top_h, area.width, Self::HINTS_HEIGHT);
         self.view.render(top, buf);
         self.render_hints(bottom, buf);
     }
@@ -488,7 +479,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::text::Text;
 
     fn paragraph_block(label: &str, lines: usize) -> Box<dyn Renderable> {
         let text = Text::from(
@@ -542,19 +532,18 @@ mod tests {
     }
 
     #[test]
+
     fn static_overlay_snapshot_basic() {
         // Prepare a static overlay with a few lines and a title
         let mut overlay = static_overlay(
             vec!["one".into(), "two".into(), "three".into()],
             "S T A T I C",
         );
-        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        let mut term = Terminal::new(TestBackend::new(/*width*/ 40, /*height*/ 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
     }
-
-    /// Render transcript overlay and return visible line numbers (`line-NN`) in order.
 
     #[test]
     fn static_overlay_wraps_long_lines() {
@@ -562,7 +551,7 @@ mod tests {
             vec!["a very long line that should wrap when rendered within a narrow pager overlay width".into()],
             "S T A T I C",
         );
-        let mut term = Terminal::new(TestBackend::new(24, 8)).expect("term");
+        let mut term = Terminal::new(TestBackend::new(/*width*/ 24, /*height*/ 8)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());

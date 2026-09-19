@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/tests/patch_approval_tests.rs
+assertion_line: 184
 expression: "format!(\"{first:?}\")"
 ---
 Buffer {
@@ -13,7 +14,7 @@ Buffer {
         "                                                ",
         "m-updated.txt (+1 -1)                           ",
         "─────────────────────────────────────────── 0% ─",
-        " ↑/↓ to scroll   pgup/pgdn to page   home/end to",
+        " ↑/↓ to scroll · pgup/pgdn to page · home/end to",
         " q close                                        ",
         "                                                ",
     ],

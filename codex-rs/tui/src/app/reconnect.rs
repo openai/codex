@@ -122,6 +122,10 @@ pub(super) async fn reconnect(
 }
 
 impl App {
+    pub(crate) fn is_offline(&self) -> bool {
+        self.reconnect.offline
+    }
+
     // Preserve local choices for future input, without replaying failed settings writes or
     // changing the server's authorization for work that was already admitted.
     pub(super) fn restore_runtime_permissions(

@@ -148,6 +148,11 @@ impl HistoryCell for WebSearchCell {
         PrefixedWrappedHistoryCell::new(self.summary(), vec!["• ".dim()], "  ").display_lines(width)
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        PrefixedWrappedHistoryCell::new(self.summary(), vec!["• ".dim()], "  ")
+            .display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
         plain_lines(vec![self.summary()])
     }

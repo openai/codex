@@ -1,0 +1,15 @@
+---
+source: tui/src/transcript_view/source_cell_tests.rs
+assertion_line: 284
+expression: "frames.join(\"\\n---\\n\")"
+---
+The café
+review is
+paused at
+https://ex
+ample.com/
+review/42.
+---
+        ht
+tps://exam
+ple.com

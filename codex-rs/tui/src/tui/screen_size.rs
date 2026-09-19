@@ -47,7 +47,9 @@ impl Tui {
             TuiEvent::Draw | TuiEvent::FocusGained => {
                 self.screen_size.deferred_size.take().unwrap_or(cached)
             }
-            TuiEvent::Key(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost => cached,
+            TuiEvent::Key(_) | TuiEvent::Mouse(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost => {
+                cached
+            }
         };
         if matches!(event, TuiEvent::Resize(_) | TuiEvent::Resume)
             && let Some(monitor) = &self.event_broker.size_monitor
@@ -56,7 +58,7 @@ impl Tui {
         }
         self.screen_size.pending_draw_size = (!matches!(
             event,
-            TuiEvent::Key(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost
+            TuiEvent::Key(_) | TuiEvent::Mouse(_) | TuiEvent::Paste(_) | TuiEvent::FocusLost
         ))
         .then_some(size);
         Ok(size)
@@ -70,6 +72,13 @@ impl Tui {
 
     pub(crate) fn defer_screen_size(&mut self, size: Size) {
         self.screen_size.deferred_size = Some(size);
+    }
+
+    /// Reserve the next draw's geometry so live layouts use the same width as their frame.
+    pub(crate) fn prepare_draw_size(&mut self) -> io::Result<Size> {
+        let size = self.take_event_screen_size()?;
+        self.screen_size.pending_draw_size = Some(size);
+        Ok(size)
     }
 
     pub(super) fn take_event_screen_size(&mut self) -> io::Result<Size> {

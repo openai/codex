@@ -1,124 +1,195 @@
-//! Detailed transcript overlay with entry-based scrolling and the existing pager chrome.
+//! Standalone transcript chrome around the same viewport used by the main conversation.
 //!
-//! The overlay owns committed cells and input bindings. Its viewport displays current content
-//! and keeps readers on the same entry through pagination and stream consolidation.
+//! Inline Ctrl+T and the resume preview own their cells here. The viewport exclusively owns
+//! scrolling, wrapped layouts, selection, search and the live tail.
 
 use super::*;
+use crate::history_cell::HistoryRenderMode;
+use crate::history_cell::SessionHeaderHistoryCell;
+use crate::history_cell::SessionInfoCell;
+use crate::motion::MotionMode;
 use crate::transcript_view::TranscriptView;
+use crate::transcript_view::ViewAction;
+use crossterm::event::KeyEventKind;
+use crossterm::event::MouseEventKind;
 
 pub(crate) struct TranscriptOverlay {
-    view: TranscriptView,
-    cells: Vec<Arc<dyn HistoryCell>>,
+    pub(super) view: Box<TranscriptView>,
+    pub(crate) motion: MotionMode,
+    pub(super) cells: Vec<Arc<dyn HistoryCell>>,
     keymap: PagerKeymap,
-    highlight_cell: Option<usize>,
-    reveal_highlight: bool,
+    pub(super) highlight_cell: Option<usize>,
+    pending_highlight: Option<usize>,
     content_area: Rect,
+    cursor: Option<(u16, u16)>,
+    notice: Option<String>,
     is_done: bool,
 }
 
 impl TranscriptOverlay {
     pub(crate) fn new(cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
+        let mut view = TranscriptView::default();
+        view.set_presentation(/*detailed*/ true, HistoryRenderMode::Rich);
         Self {
-            view: TranscriptView::default(),
+            view: Box::new(view),
+            motion: MotionMode::Reduced,
             cells,
             keymap,
             highlight_cell: None,
-            reveal_highlight: false,
+            pending_highlight: None,
             content_area: Rect::default(),
+            cursor: None,
+            notice: None,
             is_done: false,
         }
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let top_height = area.height.saturating_sub(/*rhs*/ 3);
-        let top = Rect::new(area.x, area.y, area.width, top_height);
+        let chrome_height = 5;
+        let content_height = area.height.saturating_sub(chrome_height);
         self.content_area = Rect::new(
             area.x,
             area.y.saturating_add(/*rhs*/ 1),
             area.width,
-            top_height.saturating_sub(/*rhs*/ 2),
-        )
-        .intersection(area);
-        let mut rendered =
-            self.view
-                .render(self.content_area, buf, &self.cells, self.highlight_cell);
-        if std::mem::take(&mut self.reveal_highlight)
-            && let Some(index) = self.highlight_cell
-        {
+            content_height,
+        );
+        self.view.render(self.content_area, buf, &self.cells);
+        if let Some(index) = self.pending_highlight.take() {
             self.view.ensure_entry_visible(&self.cells, index);
-            rendered = self
-                .view
-                .render(self.content_area, buf, &self.cells, self.highlight_cell);
-        }
-        if self.view.history == TranscriptHistoryState::LoadingBeginning
-            && self.view.is_following()
-            && !self.content_area.is_empty()
-        {
-            // Home may arrive before the first draw; retain the first real viewport.
-            self.view.scroll(&self.cells, /*rows*/ 0);
-        }
-        if area.width > 0 {
-            for y in self.content_area.y + rendered..self.content_area.bottom() {
-                "~".render(Rect::new(area.x, y, /*width*/ 1, /*height*/ 1), buf);
-            }
+            self.view.render(self.content_area, buf, &self.cells);
         }
         let header = Rect::new(area.x, area.y, area.width, area.height.min(/*other*/ 1));
-        Span::from("/ ".repeat(usize::from(area.width) / 2))
+        Span::from("/ ".repeat(area.width as usize / 2))
             .dim()
             .render(header, buf);
         "/ T R A N S C R I P T".dim().render(header, buf);
-        self.render_history_state(top, buf);
-        let separator = Rect::new(
+        let status = Rect::new(
             area.x,
             self.content_area.bottom(),
             area.width,
             /*height*/ 1,
         )
         .intersection(area);
-        "─"
-            .repeat(usize::from(separator.width))
-            .dim()
-            .render(separator, buf);
-        // An exact intermediate percentage would require laying out every offscreen cell.
-        // Only the loaded tail has a known percentage without defeating bounded rendering.
-        if self.view.is_following()
-            && !self.view.history.has_unloaded_history()
-            && separator.width >= 7
+        self.cursor = None;
+
+        let hints = Rect::new(area.x, status.bottom(), area.width, /*height*/ 2).intersection(area);
+        let latest_navigation = self
+            .keymap
+            .primary_hint("jump_bottom", &self.keymap.jump_bottom)
+            .map_or_else(String::new, |hint| {
+                format!("{} latest", hint.display_label())
+            });
+        if let Some(mut footer) =
+            self.view
+                .footer_with_navigation(status.width, self.motion, &latest_navigation)
         {
-            " 100% ".dim().render(
-                Rect::new(
-                    separator.right() - 7,
-                    separator.y,
-                    /*width*/ 6,
-                    separator.height,
-                ),
+            self.cursor = footer
+                .cursor_column
+                .map(|column| (status.x + column, status.y));
+            if let Some(notice) = &self.notice {
+                let notice = Line::from(notice.clone()).dim();
+                footer.text = notice.into();
+            }
+            Paragraph::new(footer.text).render(
+                Rect::new(status.x, status.y, status.width, /*height*/ 3).intersection(area),
                 buf,
             );
+        } else {
+            if let Some(notice) = &self.notice {
+                Line::from(notice.as_str()).dim().render(status, buf);
+            } else {
+                self.view
+                    .status_line_with_navigation("Ctrl+Space select", self.motion)
+                    .render(status, buf);
+            }
+            self.render_hints(hints, buf);
         }
-        let footer =
-            Rect::new(area.x, area.y + top_height, area.width, /*height*/ 3).intersection(area);
-        self.render_hints(footer, buf);
+    }
+
+    pub(crate) fn draw(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        tui.draw(u16::MAX, |frame| {
+            self.render(frame.area(), frame.buffer);
+            if let Some(cursor) = self.cursor {
+                frame.set_cursor_position(cursor);
+            }
+        })?;
+        let loading = self.view.is_loading_history() && self.motion == MotionMode::Animated;
+        if loading {
+            tui.frame_requester()
+                .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+        }
+        Ok(())
     }
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        match event {
-            TuiEvent::Key(key) => {
-                if self.keymap.close.is_pressed(key) || self.keymap.close_transcript.is_pressed(key)
-                {
-                    self.is_done = true;
-                } else if self.navigate(key) {
+        if matches!(event, TuiEvent::Resume) {
+            self.view.end_drag();
+        }
+        // Apply a queued prompt jump before navigation can move away from it.
+        if self.pending_highlight.is_some()
+            && (matches!(&event, TuiEvent::Key(key) if key.kind != KeyEventKind::Release)
+                || matches!(&event, TuiEvent::Mouse(mouse) if mouse.kind != MouseEventKind::Moved))
+        {
+            self.draw(tui)?;
+        }
+        let action = match event {
+            TuiEvent::Key(key) => self.handle_key(key),
+            TuiEvent::Mouse(mut mouse) => {
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                ) {
+                    mouse.column = self.content_area.x;
+                    mouse.row = self.content_area.bottom().saturating_sub(1);
+                }
+                self.view.handle_mouse(mouse, &self.cells)
+            }
+            TuiEvent::Paste(_) => None,
+            TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::FocusGained | TuiEvent::Resume => {
+                let dragging =
+                    matches!(event, TuiEvent::Draw) && self.view.tick_selection(&self.cells);
+                if dragging {
                     tui.frame_requester()
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
                 }
-                Ok(())
+                self.draw(tui)?;
+                return Ok(());
             }
-            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {
-                tui.draw(u16::MAX, |frame| self.render(frame.area(), frame.buffer))?;
-                Ok(())
+            TuiEvent::FocusLost => {
+                self.view.end_drag();
+                None
             }
-            _ => Ok(()),
+        };
+        if let Some(action) = action {
+            self.apply_action(tui, action);
+            tui.frame_requester().schedule_frame();
         }
+        Ok(())
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        self.is_done
+    }
+
+    pub(crate) fn is_scrolled_to_bottom(&self) -> bool {
+        self.view.is_following()
+    }
+
+    pub(crate) fn owns_interaction_key(&self, key: KeyEvent) -> bool {
+        self.view.owns_interaction_key(key)
+    }
+
+    pub(crate) fn has_active_interaction(&self) -> bool {
+        self.view.has_active_interaction()
+    }
+
+    pub(crate) fn needs_history(&mut self) -> bool {
+        self.view.needs_history(&self.cells)
+    }
+
+    pub(crate) fn history_state(&self) -> TranscriptHistoryState {
+        self.view.history
     }
 
     pub(crate) fn set_history_state(
@@ -126,13 +197,6 @@ impl TranscriptOverlay {
         state: TranscriptHistoryState,
     ) -> TranscriptHistoryState {
         let previous = std::mem::replace(&mut self.view.history, state);
-        if state == TranscriptHistoryState::LoadingBeginning
-            && previous != TranscriptHistoryState::LoadingBeginning
-            && !self.content_area.is_empty()
-        {
-            // App marks loading before forwarding Home, so record the current position here.
-            self.view.scroll(&self.cells, /*rows*/ 0);
-        }
         if previous == TranscriptHistoryState::LoadingBeginning
             && state == TranscriptHistoryState::Complete
         {
@@ -143,7 +207,7 @@ impl TranscriptOverlay {
 
     pub(crate) fn should_load_older(&mut self, key: KeyEvent) -> bool {
         self.should_load_from_start(key)
-            || (self.view.near_start(&self.cells)
+            || (self.view.needs_history(&self.cells)
                 && [
                     &self.keymap.scroll_up,
                     &self.keymap.page_up,
@@ -158,13 +222,10 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
-        let index = self.cells.len();
-        self.view
-            .replace_range(&self.cells, index..index + 1, &cell);
         self.cells.push(cell);
     }
 
-    /// Prepends history and returns the insertion index for the canonical transcript.
+    /// Insert old history after the session header; stable viewport anchors keep their content.
     pub(crate) fn prepend(&mut self, cells: Vec<Arc<dyn HistoryCell>>) -> usize {
         if cells.is_empty() {
             return 0;
@@ -174,30 +235,49 @@ impl TranscriptOverlay {
             .iter()
             .rposition(|cell| {
                 cell.as_any().is::<SessionInfoCell>()
-                    || cell
-                        .as_any()
-                        .is::<crate::history_cell::SessionHeaderHistoryCell>()
+                    || cell.as_any().is::<SessionHeaderHistoryCell>()
             })
             .map_or(/*default*/ 0, |index| index + 1);
         let added = cells.len();
         self.cells.splice(index..index, cells);
-        if let Some(highlight) = self
-            .highlight_cell
-            .as_mut()
-            .filter(|highlight| **highlight >= index)
-        {
-            *highlight += added;
+        for highlight in [&mut self.highlight_cell, &mut self.pending_highlight] {
+            if let Some(highlight) = highlight.as_mut().filter(|highlight| **highlight >= index) {
+                *highlight += added;
+            }
         }
-        self.view.history_changed(&self.cells);
+        self.view.set_highlight(self.highlight_cell);
+        self.view.history_loaded(&self.cells, index..index + added);
         index
     }
 
     pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
         self.cells = cells;
-        self.view.history_changed(&self.cells);
+        self.view.history_loaded(&self.cells, 0..0);
         self.highlight_cell = self
             .highlight_cell
             .filter(|index| *index < self.cells.len());
+        self.pending_highlight = self
+            .pending_highlight
+            .filter(|index| *index < self.cells.len());
+        self.view.set_highlight(self.highlight_cell);
+    }
+
+    /// Grouping may change compact previews; retain the reader's revision before replacing cells.
+    pub(crate) fn regroup_cells(
+        &mut self,
+        range: std::ops::Range<usize>,
+        consolidated: Arc<dyn HistoryCell>,
+    ) {
+        self.view
+            .replace_group(&self.cells, range.clone(), &consolidated);
+        self.consolidate_cells(range, consolidated);
+    }
+
+    /// The removed tail's index continues to identify the live group that absorbed its calls.
+    pub(crate) fn absorb_tail_into_live(&mut self, previous_revision: u64, hydrated_revision: u64) {
+        self.view
+            .absorb_tail_into_live(&self.cells, previous_revision, hydrated_revision);
+        self.cells.pop();
     }
 
     pub(crate) fn consolidate_cells(
@@ -212,16 +292,19 @@ impl TranscriptOverlay {
         }
         self.view
             .replace_range(&self.cells, start..end, &consolidated);
-        self.highlight_cell = self.highlight_cell.map(|index| {
-            if index < start {
-                index
-            } else if index < end {
-                start
-            } else {
-                index - (end - start - 1)
-            }
-        });
+        for highlight in [&mut self.highlight_cell, &mut self.pending_highlight] {
+            *highlight = highlight.map(|index| {
+                if index < start {
+                    index
+                } else if index < end {
+                    start
+                } else {
+                    index - (end - start - 1)
+                }
+            });
+        }
         self.cells.splice(start..end, [consolidated]);
+        self.view.set_highlight(self.highlight_cell);
     }
 
     pub(crate) fn sync_live_tail(
@@ -229,36 +312,43 @@ impl TranscriptOverlay {
         width: u16,
         key: Option<ActiveCellTranscriptKey>,
         compute_lines: impl FnOnce(u16) -> Option<Vec<HyperlinkLine>>,
-    ) {
-        self.view.sync_live_tail(width, key, compute_lines);
-    }
-
-    /// Explicit prompt navigation supersedes Home; passive highlight restoration does not.
-    pub(crate) fn cancel_pending_jump(&mut self) {
-        self.view.cancel_beginning();
+    ) -> bool {
+        self.view.sync_live_tail(width, key, compute_lines)
     }
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell.filter(|index| *index < self.cells.len());
-        self.reveal_highlight = self.highlight_cell.is_some();
+        self.pending_highlight = self.highlight_cell;
+        self.view.set_highlight(self.highlight_cell);
     }
 
-    pub(crate) fn scroll(&mut self, rows: isize) {
-        if std::mem::take(&mut self.reveal_highlight)
-            && let Some(index) = self.highlight_cell
-        {
-            self.view.ensure_entry_visible(&self.cells, index);
+    fn handle_key(&mut self, key: KeyEvent) -> Option<ViewAction> {
+        if key.kind == KeyEventKind::Release {
+            return None;
         }
-        self.view.scroll(&self.cells, rows);
+        if self.view.has_active_interaction()
+            && let Some(action) = self.view.handle_key(key, &self.cells)
+        {
+            return Some(action);
+        }
+        if self.keymap.close.is_pressed(key) || self.keymap.close_transcript.is_pressed(key) {
+            self.is_done = true;
+            return Some(ViewAction::Changed);
+        }
+        if self.navigate(key) {
+            return Some(ViewAction::Changed);
+        }
+
+        self.view.handle_key(key, &self.cells)
+    }
+
+    pub(crate) fn cancel_pending_jump(&mut self) {
+        self.view.cancel_beginning();
     }
 
     fn navigate(&mut self, key: KeyEvent) -> bool {
         if self.keymap.jump_top.is_pressed(key) {
-            if self.content_area.is_empty() && self.view.history.has_unloaded_history() {
-                self.set_history_state(TranscriptHistoryState::LoadingBeginning);
-            } else {
-                self.view.jump_to_beginning(&self.cells);
-            }
+            self.view.jump_to_beginning(&self.cells);
             return true;
         }
         if self.keymap.jump_bottom.is_pressed(key) {
@@ -280,83 +370,55 @@ impl TranscriptOverlay {
         let Some(delta) = delta else {
             return false;
         };
-        self.view.cancel_beginning();
-        if !self.content_area.is_empty() {
-            self.scroll(delta);
-        }
+        self.view.scroll(&self.cells, delta);
         true
     }
 
-    pub(crate) fn live_tail_visible(&self) -> bool {
-        self.view.live_tail_visible()
-    }
-
-    pub(crate) fn is_done(&self) -> bool {
-        self.is_done
+    fn apply_action(&mut self, tui: &mut tui::Tui, action: ViewAction) {
+        self.notice = None;
+        let resume_following = matches!(action, ViewAction::CopyAndFollow(_));
+        match action {
+            ViewAction::Changed => {}
+            ViewAction::Copy(text) | ViewAction::CopyAndFollow(text) => {
+                let result = self
+                    .view
+                    .copy_selected_text_with(&self.cells, &text, |text| {
+                        tui.copy_transcript_selection(text)
+                    });
+                if resume_following
+                    && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Confirmed))
+                {
+                    self.view.jump_to_latest();
+                }
+                self.notice = Some(match result {
+                    Ok(status) => status.message("selection"),
+                    Err(error) => error,
+                });
+            }
+            ViewAction::OpenLink(url) => {
+                if let Err(error) = webbrowser::open(&url) {
+                    self.notice = Some(format!("Could not open link: {error}"));
+                }
+            }
+        }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
-        let line1 = Rect::new(area.x, area.y, area.width, /*height*/ 1).intersection(area);
-        let line2 = Rect::new(
-            area.x,
-            area.y.saturating_add(/*rhs*/ 1),
-            area.width,
-            /*height*/ 1,
-        )
-        .intersection(area);
-        render_navigation_hints(line1, buf, &self.keymap);
-
-        let mut pairs: Vec<(Vec<ShortcutHint>, &str)> = vec![(
+        let first = Rect::new(area.x, area.y, area.width, /*height*/ 1).intersection(area);
+        render_navigation_hints(first, buf, &self.keymap);
+        let second = Rect::new(area.x, first.bottom(), area.width, /*height*/ 1).intersection(area);
+        let mut pairs = vec![(
             first_or_empty(&self.keymap, "close", &self.keymap.close),
             "close",
         )];
+        pairs.push((vec![key_hint::plain(KeyCode::Esc).into()], "edit previous"));
         if self.highlight_cell.is_some() {
-            pairs.push((
-                vec![
-                    key_hint::plain(KeyCode::Esc).into(),
-                    key_hint::plain(KeyCode::Left).into(),
-                ],
-                "to edit prev",
-            ));
             pairs.push((vec![key_hint::plain(KeyCode::Right).into()], "to edit next"));
             pairs.push((
                 vec![key_hint::plain(KeyCode::Enter).into()],
                 "to edit message",
             ));
-        } else {
-            pairs.push((vec![key_hint::plain(KeyCode::Esc).into()], "to edit prev"));
         }
-        render_key_hints(line2, buf, &pairs);
-    }
-
-    fn render_history_state(&self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 {
-            return;
-        }
-        let label = match self.view.history {
-            TranscriptHistoryState::Idle => return,
-            TranscriptHistoryState::LoadingOlder | TranscriptHistoryState::LoadingBeginning => {
-                " loading older history... "
-            }
-            TranscriptHistoryState::Partial => " partial history | PgUp for earlier ",
-            TranscriptHistoryState::Failed => " history unavailable | PgUp to retry ",
-            TranscriptHistoryState::Complete => " start of history ",
-        };
-        let width = (label.chars().count() as u16).min(area.width);
-        let status_area = Rect::new(
-            area.right().saturating_sub(width),
-            area.y,
-            width,
-            /*height*/ 1,
-        );
-        Span::from(label).dim().render(status_area, buf);
+        render_key_hints(second, buf, &pairs);
     }
 }
-
-#[cfg(test)]
-#[path = "transcript_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "anchor_tests.rs"]
-mod anchor_tests;

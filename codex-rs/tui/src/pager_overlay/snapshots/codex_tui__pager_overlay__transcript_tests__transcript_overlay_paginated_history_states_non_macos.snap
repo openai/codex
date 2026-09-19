@@ -1,0 +1,48 @@
+---
+source: tui/src/pager_overlay/transcript_tests.rs
+assertion_line: 417
+expression: snapshots
+---
+--- loading ---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / /
+recent transcript
+
+
+
+
+↑ Loading earlier messages…
+
+
+
+--- partial ---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / /
+recent transcript
+
+
+
+
+Earlier messages available.  Ctrl+Space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · esc edit previous
+
+--- failed ---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / /
+recent transcript
+
+
+
+
+Retry history: ⌥+</ctrl+home.
+
+
+
+--- complete ---
+/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / /
+recent transcript
+
+
+
+
+Ctrl+Space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · esc edit previous

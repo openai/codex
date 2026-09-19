@@ -1,6 +1,7 @@
 //! Load bounded history pages into the transcript before updating its owned or inline viewport.
 
 use std::collections::HashSet;
+use std::ops::Range;
 
 use super::*;
 use crate::app_server_session::HISTORY_ITEM_PAGE_LIMIT;
@@ -118,7 +119,10 @@ impl App {
             &cwd,
             visibility,
         );
-        self.prepend_older_transcript_cells(cells, width);
+        let inserted = self.prepend_older_transcript_cells(cells, width);
+        if !inserted.is_empty() {
+            self.join_older_activity_group(inserted.end, &turns);
+        }
         merge_older_turns(&mut store.lock().await.turns, turns);
         self.scrollback_has_older_history = app_server.has_older_history(thread_id);
 
@@ -225,7 +229,11 @@ impl App {
     }
 
     /// Insert each page once, keeping session headers and any backtrack selection in place.
-    fn prepend_older_transcript_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>, width: u16) {
+    fn prepend_older_transcript_cells(
+        &mut self,
+        cells: Vec<Arc<dyn HistoryCell>>,
+        width: u16,
+    ) -> Range<usize> {
         if self.backtrack.overlay_preview_active {
             self.backtrack.nth_user_message = self.backtrack.nth_user_message.saturating_add(
                 cells
@@ -247,7 +255,9 @@ impl App {
                 })
                 .map_or(/*default*/ 0, |index| index.saturating_add(/*rhs*/ 1))
         };
+        let inserted = index..index + cells.len();
         self.transcript_cells.splice(index..index, cells);
+        inserted
     }
 
     /// Preserve the legacy overlay and inline scrollback refill behavior.

@@ -30,35 +30,15 @@ mod exploration_groups;
 mod other_items;
 pub(crate) mod tools;
 
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use activity_pages::fold_trailing_activity_details;
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use activity_pages::is_hidden_activity_detail;
 #[allow(
     unused_imports,
     reason = "Used by later layers of the TUI refresh stack."
 )]
 pub(crate) use computer_groups::join_computer_groups;
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use computer_groups::older_computer_group;
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use exploration_groups::join_exploration_groups;
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use exploration_groups::older_exploration_group;
 
 pub(crate) type TranscriptCells = Vec<Arc<dyn HistoryCell>>;

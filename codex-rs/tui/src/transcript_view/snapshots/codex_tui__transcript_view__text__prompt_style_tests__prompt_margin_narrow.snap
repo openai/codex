@@ -1,0 +1,22 @@
+---
+source: tui/src/transcript_view/prompt_style_tests.rs
+expression: "format!(\"{actual:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 20, height: 8 },
+    content: [
+        "                    ",
+        "› 12345678901234567 ",
+        "  89012345678901234 ",
+        "  56789012345678901 ",
+        "  2345678           ",
+        "                    ",
+        "    界é👩‍💻 trailing  ", // hidden by multi-width symbols: [(5, " "), (8, " ")]
+        "                    ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: DarkGray, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: DarkGray, underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 1, fg: Reset, bg: DarkGray, underline: Reset, modifier: NONE,
+    ]
+}

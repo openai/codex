@@ -992,6 +992,16 @@ See the Codex keymap documentation for supported actions and examples."
             Ok(exit_reason)
         } else {
             loop {
+                // Reconnect can dismiss an overlay from the server-event path.
+                if app.overlay.is_none() {
+                    if !tui.is_owned_screen() && tui.is_alt_screen_active() {
+                        app.close_transcript_overlay(tui);
+                    } else if let Err(err) =
+                        tui.set_overlay_input(crate::tui::OverlayInput::Default)
+                    {
+                        break Err(err.into());
+                    }
+                }
                 if app.pending_open_resume_picker {
                     app.pending_open_resume_picker = false;
                     match Box::pin(app.open_resume_picker(tui, &mut app_server)).await {

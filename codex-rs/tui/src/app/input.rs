@@ -54,6 +54,11 @@ impl App {
         tui: &mut tui::Tui,
         key_event: KeyEvent,
     ) -> Option<KeyEvent> {
+        if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key_event))
+        {
+            self.cancel_pending_key_chord();
+            return Some(key_event);
+        }
         let contexts = self.active_keymap_contexts();
         let was_pending = self.key_chord_matcher.is_pending();
         if !was_pending

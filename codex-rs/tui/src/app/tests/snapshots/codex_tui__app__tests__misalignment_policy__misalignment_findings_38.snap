@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/tests/misalignment_policy_tests.rs
-assertion_line: 75
+assertion_line: 89
 expression: terminal.backend()
 ---
 "/ What we detected/ / / / / / / / / / "
@@ -16,6 +16,6 @@ expression: terminal.backend()
 "                                      "
 "The proposed action exceeded the      "
 "───────────────────────────────── 0% ─"
-" ↑/↓ to scroll   pgup/pgdn to page   h"
+" ↑/↓ to scroll · pgup/pgdn to page · h"
 " q close                              "
 "                                      "

@@ -130,7 +130,6 @@ impl ExecCell {
     }
 
     /// Preserve live clocks and pending output when a validated older page extends exploration.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn prepend(&mut self, older: Self) {
         self.group.prepend(older.group);
     }

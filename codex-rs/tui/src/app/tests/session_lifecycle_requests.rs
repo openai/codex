@@ -2668,16 +2668,16 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
         };
         // Inspect the loaded start without Home, which now requests all older pages.
         render_overlay(overlay);
-        overlay.scroll(isize::MIN);
+        overlay.set_highlight_cell(Some(0));
         let partial = render_overlay(overlay);
-        assert!(partial.contains("Earlier messages are available — scroll up to load them"));
+        assert!(partial.contains("Earlier messages available."));
         assert!(!partial.contains("OpenAI Codex"));
         assert!(!partial.contains("This is a test announcement"));
         assert!(!partial.contains('%'));
 
         overlay.set_history_state(crate::pager_overlay::TranscriptHistoryState::LoadingOlder);
         let loading = render_overlay(overlay);
-        assert!(loading.contains("Loading earlier messages..."));
+        assert!(loading.contains("Loading earlier messages…"));
         assert!(!loading.contains("OpenAI Codex"));
         assert!(!loading.contains('%'));
     } else {

@@ -14,7 +14,6 @@ pub(super) fn append(group: &mut ComputerActivityCell, call: McpHistory) {
 }
 
 /// Rebuild only an adjacent computer group, using its persisted IDs to verify the turn boundary.
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn join_computer_groups(
     older: &Arc<dyn HistoryCell>,
     newer: &Arc<dyn HistoryCell>,
@@ -32,7 +31,6 @@ pub(crate) fn join_computer_groups(
 }
 
 /// Restore only the older half; the caller retains the live half and its pending calls/timers.
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn older_computer_group(
     older: &dyn HistoryCell,
     newer: &ComputerActivityCell,
@@ -51,7 +49,6 @@ pub(crate) fn older_computer_group(
     Some(group)
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 fn adjacent_items<'a>(
     older: &ComputerActivityCell,
     newer: &ComputerActivityCell,
@@ -62,7 +59,6 @@ fn adjacent_items<'a>(
 }
 
 /// Validate source adjacency without mistaking invisible reasoning for an activity boundary.
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(super) fn adjacent_activity_items<'a>(
     ids: &[&str],
     turns: &'a [Turn],
@@ -90,7 +86,6 @@ pub(super) fn adjacent_activity_items<'a>(
     None
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(super) fn completed_group(items: &[ThreadItem]) -> Option<ComputerActivityCell> {
     let mut group = None;
     for item in items {

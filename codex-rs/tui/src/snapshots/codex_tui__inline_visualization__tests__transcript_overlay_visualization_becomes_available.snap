@@ -1,19 +1,20 @@
 ---
 source: tui/src/inline_visualization_tests.rs
+assertion_line: 412
 expression: "format!(\"before:\\n{unavailable}\\n\\nafter:\\n{available}\")"
 ---
 before:
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
 • Visualization unavailable on this device.
-~
-~
-~
-~
-~
-~
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 100% ─
- ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
- q close   esc to edit prev
+
+
+
+
+
+
+Ctrl+Space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · esc edit previous
 
 
 after:
@@ -22,9 +23,9 @@ after:
   file://<viewer-path>
 
 • next message
-~
-~
-~
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 100% ─
- ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
- q close   esc to edit prev
+
+
+
+Ctrl+Space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · esc edit previous

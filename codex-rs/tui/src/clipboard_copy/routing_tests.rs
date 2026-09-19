@@ -3,6 +3,8 @@
 use super::ClipboardLease;
 use super::CopyEnvironment;
 use super::CopyFormat;
+use super::CopyOutcome;
+use super::CopyStatus;
 use super::OSC52_MAX_RAW_BYTES;
 use super::copy_to_clipboard_with;
 use pretty_assertions::assert_eq;
@@ -35,7 +37,7 @@ fn local_tmux_preserves_native_html_when_terminal_silently_rejects_copy() {
         },
         |_| panic!("native copy succeeded"),
     );
-    assert!(matches!(result, Ok(Some(_))));
+    assert!(matches!(result, Ok(CopyOutcome::Copied(Some(_)))));
     assert_eq!(calls.into_inner(), vec!["native", "tmux"]);
 }
 
@@ -65,7 +67,7 @@ fn copy_uses_osc52_when_tmux_fails_even_if_native_copy_succeeds() {
         },
         |_| panic!("native copy succeeded"),
     );
-    assert!(matches!(result, Ok(Some(_))));
+    assert!(matches!(result, Ok(CopyOutcome::Copied(Some(_)))));
     assert_eq!(calls.into_inner(), vec!["native", "tmux", "osc52"]);
 }
 
@@ -105,7 +107,7 @@ fn oversized_tmux_copy_preserves_native_copy() {
             },
             |_| panic!("PowerShell fallback should not be needed"),
         );
-        assert!(result.is_ok());
+        assert!(matches!(result, Ok(CopyOutcome::Copied(Some(_)))));
         assert_eq!(calls.into_inner(), expected_calls);
     }
 }
@@ -122,4 +124,15 @@ fn empty_copy_reports_failure_without_touching_clipboards() {
         |_| panic!("empty input must not reach PowerShell"),
     );
     insta::assert_snapshot!(result.err().expect("empty selection should fail"));
+}
+
+#[test]
+fn confirmed_copy_without_new_lease_preserves_native_ownership() {
+    let mut lease = Some(ClipboardLease::test());
+
+    assert_eq!(
+        CopyOutcome::Copied(None).store(&mut lease),
+        CopyStatus::Confirmed
+    );
+    assert!(lease.is_some());
 }

@@ -29,13 +29,11 @@ impl ComputerActivityCell {
         lines
     }
 
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn call_ids(&self) -> impl Iterator<Item = &str> {
         self.group.calls.iter().map(McpToolCallCell::call_id)
     }
 
     /// Prepend validated historical calls without recreating pending live calls or their clocks.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn prepend(&mut self, older: Self) {
         self.group.prepend(older.group);
     }

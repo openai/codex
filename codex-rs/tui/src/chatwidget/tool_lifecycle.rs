@@ -244,6 +244,23 @@ impl ChatWidget {
         self.flush_active_cell();
     }
 
+    /// Preserve pending calls and timers, returning the revisions before and after hydration.
+    pub(crate) fn prepend_active_computer_history(
+        &mut self,
+        older: &dyn HistoryCell,
+        turns: &[Turn],
+    ) -> Option<(u64, u64)> {
+        let previous_revision = self.transcript.active_cell_revision;
+        let active = self.transcript.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<history_cell::ComputerActivityCell>()
+        })?;
+        let older = crate::thread_transcript::older_computer_group(older, active, turns)?;
+        active.prepend(older);
+        self.bump_active_cell_revision();
+        Some((previous_revision, self.transcript.active_cell_revision))
+    }
+
     /// Reuse only adjacent computer calls; all other active cells form a transcript boundary.
     fn update_computer_activity(
         &mut self,

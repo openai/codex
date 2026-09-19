@@ -1,0 +1,17 @@
+---
+source: tui/src/transcript_view/footer_tests.rs
+assertion_line: 240
+expression: "snapshots.join(\"\\n\")"
+---
+26 columns, LoadingOlder: ↑ Loading… · esc latest
+26 columns, LoadingBeginning: ↑ Loading… · esc latest
+26 columns, Failed: Retry: ⌥+</ctrl+home
+26 columns, Complete: New activity · esc latest
+38 columns, LoadingOlder: ↑ Loading… · esc latest
+38 columns, LoadingBeginning: ↑ Loading… · esc latest
+38 columns, Failed: Retry: ⌥+</ctrl+home
+38 columns, Complete: New activity · esc latest
+78 columns, LoadingOlder: ↑ Loading earlier messages… · New activity · esc latest
+78 columns, LoadingBeginning: ↑ Loading earlier messages… · New activity · esc latest
+78 columns, Failed: New activity · Retry history: ⌥+</ctrl+home.  esc latest
+78 columns, Complete: New activity · esc latest

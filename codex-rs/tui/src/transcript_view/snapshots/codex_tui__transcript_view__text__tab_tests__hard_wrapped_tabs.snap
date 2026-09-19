@@ -1,0 +1,17 @@
+---
+source: tui/src/transcript_view/text_tabs_tests.rs
+assertion_line: 119
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 4, height: 4 },
+    content: [
+        "abcd",
+        "e   ",
+        "X   ",
+        "Y   ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

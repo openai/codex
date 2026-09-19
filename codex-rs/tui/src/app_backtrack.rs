@@ -311,24 +311,35 @@ impl App {
     /// source of truth for the active cell and its cache invalidation key, and because `App` owns
     /// overlay lifecycle and frame scheduling for animations.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if matches!(
-            &event,
-            TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
-        ) && let Some(Overlay::Transcript(t)) = &mut self.overlay
+        let input = matches!(&event, TuiEvent::Key(key) if key.kind != KeyEventKind::Release)
+            || matches!(&event, TuiEvent::Mouse(mouse) if mouse.kind != crossterm::event::MouseEventKind::Moved);
+        if (input
+            || matches!(
+                &event,
+                TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained
+            ))
+            && let Some(Overlay::Transcript(t)) = &mut self.overlay
         {
             let active_key = self.chat_widget.active_cell_transcript_key();
             let chat_widget = &self.chat_widget;
-            tui.draw(u16::MAX, |frame| {
-                let width = frame.area().width.max(1);
-                t.sync_live_tail(width, active_key, |w| {
-                    chat_widget.active_cell_transcript_hyperlink_lines(w)
-                });
-                t.render(frame.area(), frame.buffer);
-            })?;
+            tui.set_overlay_input(tui::OverlayInput::Transcript)?;
+            t.motion = crate::motion::MotionMode::from_animations_enabled(
+                self.local_settings.tui.animations,
+            );
+            let size = tui.prepare_draw_size()?;
+            t.sync_live_tail(size.width.max(/*other*/ 1), active_key, |width| {
+                chat_widget.active_cell_transcript_hyperlink_lines(width)
+            });
+            // Selection must capture the same committed cells and live tail that were painted.
+            let result = if input { t.draw(tui) } else { Ok(()) };
+            if let Err(error) = result.and_then(|()| t.handle_event(tui, event)) {
+                let _ = tui.set_overlay_input(tui::OverlayInput::Default);
+                return Err(error.into());
+            }
             let close_overlay = t.is_done();
             if !close_overlay
                 && active_key.is_some_and(|key| key.animation_tick.is_some())
-                && t.live_tail_visible()
+                && t.is_scrolled_to_bottom()
             {
                 tui.frame_requester()
                     .schedule_frame_in(std::time::Duration::from_millis(50));

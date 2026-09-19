@@ -15,7 +15,9 @@
 //!
 //! Empty selections fail without modifying a clipboard.
 //! Markdown copies also offer HTML on the native clipboard. Terminal and WSL
-//! fallbacks retain the original text. Image paste lives in `clipboard_paste`.
+//! fallbacks retain the original text. Terminal writes are unacknowledged requests,
+//! so callers must distinguish them from confirmed native clipboard writes.
+//! Image paste lives in `clipboard_paste`.
 
 mod tmux;
 
@@ -37,21 +39,55 @@ pub(crate) enum CopyFormat {
     Markdown,
 }
 
+/// A native clipboard write or an unacknowledged request to the user's terminal.
+pub(crate) enum CopyOutcome {
+    Copied(Option<ClipboardLease>),
+    Requested,
+}
+
+impl CopyOutcome {
+    /// Replace native ownership only when a backend supplies a new lease.
+    pub(crate) fn store(self, lease: &mut Option<ClipboardLease>) -> CopyStatus {
+        match self {
+            Self::Copied(next_lease) => {
+                if let Some(next_lease) = next_lease {
+                    *lease = Some(next_lease);
+                }
+                CopyStatus::Confirmed
+            }
+            Self::Requested => CopyStatus::Unconfirmed,
+        }
+    }
+}
+
+/// Whether a clipboard backend confirmed the write or only sent a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyStatus {
+    Confirmed,
+    Unconfirmed,
+}
+
+impl CopyStatus {
+    pub(crate) fn message(self, label: &str) -> String {
+        match self {
+            Self::Confirmed => format!("Copied {label} to clipboard"),
+            Self::Unconfirmed => "Copy unconfirmed; /export saves chat".to_string(),
+        }
+    }
+}
+
 /// Copy text to the system clipboard.
 ///
 /// Try native copying, then independently attempt terminal forwarding in tmux or
 /// SSH. A terminal send is best effort and does not confirm clipboard delivery.
 /// Terminal forwarding may replace native HTML with plain text.
 ///
-/// A returned lease replaces the previous native lease. `None` means no new
-/// lease is needed; callers must retain any existing lease so terminal copies
-/// do not release ownership of an earlier native clipboard value.
+/// Native or WSL success returns `Copied`, even if terminal forwarding fails.
+/// A terminal-only send returns `Requested`. Store the outcome to retain any
+/// existing native lease unless the backend supplies a replacement.
 ///
 /// OSC 52 is supported by kitty, WezTerm, iTerm2, Ghostty, and others.
-pub(crate) fn copy_to_clipboard(
-    text: &str,
-    format: CopyFormat,
-) -> Result<Option<ClipboardLease>, String> {
+pub(crate) fn copy_to_clipboard(text: &str, format: CopyFormat) -> Result<CopyOutcome, String> {
     copy_to_clipboard_with(
         text,
         format,
@@ -71,8 +107,8 @@ pub(crate) fn copy_to_clipboard(
 ///
 /// On Linux/X11 and some Wayland compositors, clipboard contents are served by the
 /// owning process. Dropping the `arboard::Clipboard` before the user pastes causes
-/// the content to vanish. Store this lease on the widget that triggered the copy so
-/// the handle lives as long as the TUI does. On non-Linux native paths and OSC 52
+/// the content to vanish. Store this lease on a session-lived owner so closing a
+/// transient overlay does not release the clipboard contents. On non-Linux native paths and OSC 52
 /// paths the lease is `None` — those backends do not require process-lifetime
 /// ownership.
 pub(crate) struct ClipboardLease {
@@ -114,7 +150,7 @@ fn copy_to_clipboard_with(
     osc52_copy_fn: impl Fn(&str) -> Result<(), String>,
     arboard_copy_fn: impl Fn(&str, Option<&str>) -> Result<Option<ClipboardLease>, String>,
     wsl_copy_fn: impl Fn(&str) -> Result<(), String>,
-) -> Result<Option<ClipboardLease>, String> {
+) -> Result<CopyOutcome, String> {
     if text.is_empty() {
         return Err("nothing to copy: the selected content is empty".to_string());
     }
@@ -157,10 +193,10 @@ fn copy_to_clipboard_with(
     // forward even when no SSH variables were inherited or native copying succeeded.
     let terminal_result = (environment.tmux_session || environment.ssh_session).then(terminal_copy);
     match native_result {
-        Ok(lease) => Ok(lease),
+        Ok(lease) => Ok(CopyOutcome::Copied(lease)),
         Err(native_error) => terminal_result
             .unwrap_or_else(terminal_copy)
-            .map(|()| None)
+            .map(|()| CopyOutcome::Requested)
             .map_err(|terminal_error| {
                 format!("{native_error}; terminal clipboard: {terminal_error}")
             }),
@@ -392,6 +428,7 @@ mod tests {
 
     use super::CopyEnvironment;
     use super::CopyFormat;
+    use super::CopyOutcome;
     use super::OSC52_MAX_RAW_BYTES;
     use super::copy_to_clipboard_with;
     use super::osc52_sequence;
@@ -498,7 +535,7 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(CopyOutcome::Copied(None))));
         assert_eq!(tmux_calls.get(), 0);
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 1);
@@ -574,7 +611,7 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(CopyOutcome::Copied(None))));
         assert_eq!(tmux_calls.get(), 1);
         assert_eq!(osc_calls.get(), 0);
         assert_eq!(native_calls.get(), 1);
@@ -609,7 +646,7 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(CopyOutcome::Copied(None))));
         assert_eq!(tmux_calls.get(), 1);
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 1);
@@ -662,7 +699,7 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(Some(_))));
+        assert!(matches!(result, Ok(CopyOutcome::Copied(Some(_)))));
         assert_eq!(osc_calls.get(), 0);
         assert_eq!(native_calls.get(), 1);
         assert_eq!(wsl_calls.get(), 0);
@@ -689,7 +726,7 @@ mod tests {
                 },
                 |_| panic!("native copy should succeed"),
             );
-            assert!(matches!(result, Ok(None)));
+            assert!(matches!(result, Ok(CopyOutcome::Copied(None))));
         }
     }
 
@@ -718,8 +755,46 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(CopyOutcome::Requested)));
         assert_eq!(osc_calls.get(), 1);
+        assert_eq!(native_calls.get(), 1);
+        assert_eq!(wsl_calls.get(), 0);
+    }
+
+    #[test]
+    fn local_tmux_fallback_prefers_tmux_when_native_fails() {
+        let tmux_calls = Cell::new(/*value*/ 0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
+        let result = copy_to_clipboard_with(
+            "hello",
+            CopyFormat::PlainText,
+            CopyEnvironment {
+                tmux_session: true,
+                ..local_environment()
+            },
+            |_| {
+                tmux_calls.set(tmux_calls.get() + 1);
+                Ok(())
+            },
+            |_| {
+                osc_calls.set(osc_calls.get() + 1);
+                Ok(())
+            },
+            |_, _| {
+                native_calls.set(native_calls.get() + 1);
+                Err("native unavailable".into())
+            },
+            |_| {
+                wsl_calls.set(wsl_calls.get() + 1);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Ok(CopyOutcome::Requested)));
+        assert_eq!(tmux_calls.get(), 1);
+        assert_eq!(osc_calls.get(), 0);
         assert_eq!(native_calls.get(), 1);
         assert_eq!(wsl_calls.get(), 0);
     }
@@ -748,7 +823,7 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(CopyOutcome::Copied(None))));
         assert_eq!(osc_calls.get(), 0);
         assert_eq!(native_calls.get(), 1);
         assert_eq!(wsl_calls.get(), 1);
@@ -778,7 +853,7 @@ mod tests {
             },
         );
 
-        assert!(matches!(result, Ok(None)));
+        assert!(matches!(result, Ok(CopyOutcome::Requested)));
         assert_eq!(osc_calls.get(), 1);
         assert_eq!(native_calls.get(), 1);
         assert_eq!(wsl_calls.get(), 1);

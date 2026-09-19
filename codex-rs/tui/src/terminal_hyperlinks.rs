@@ -130,7 +130,7 @@ impl TerminalHyperlink {
         }
     }
 
-    fn terminal_destination(&self) -> Option<String> {
+    pub(crate) fn terminal_destination(&self) -> Option<String> {
         match self.destination_kind {
             DestinationKind::Web => web_destination(&self.destination),
             DestinationKind::TrustedFile => trusted_file_destination(&self.destination),

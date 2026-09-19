@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/user_verification_tests.rs
+assertion_line: 200
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
@@ -14,7 +15,7 @@ Buffer {
         "Deployment details. Deployment details. ",
         "Final approval details.                 ",
         "───────────────────────────────── 100% ─",
-        " ↑/↓ to scroll   pgup/pgdn to page   hom",
+        " ↑/↓ to scroll · pgup/pgdn to page · hom",
         " q close                                ",
         "                                        ",
     ],

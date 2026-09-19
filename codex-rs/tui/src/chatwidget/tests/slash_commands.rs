@@ -1826,7 +1826,7 @@ async fn slash_copy_picker_copies_status_fields_and_preserves_source_after_copyi
         );
         chat.copy_selection_with(value, label, |text| {
             assert_eq!(text, value);
-            Ok(None)
+            Ok(crate::clipboard_copy::CopyOutcome::Copied(None))
         });
         drain_insert_history(&mut rx);
         assert!(chat.bottom_pane.no_modal_or_popup_active());
@@ -2371,7 +2371,9 @@ async fn slash_copy_preserves_native_lease_after_terminal_copy_or_failure() {
 
     chat.copy_last_agent_markdown_with(|markdown| {
         assert_eq!(markdown, "copy me");
-        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+        Ok(crate::clipboard_copy::CopyOutcome::Copied(Some(
+            crate::clipboard_copy::ClipboardLease::test(),
+        )))
     });
 
     assert!(chat.clipboard_lease.is_some());
@@ -2383,10 +2385,10 @@ async fn slash_copy_preserves_native_lease_after_terminal_copy_or_failure() {
         "expected success message, got {rendered:?}"
     );
 
-    chat.copy_last_agent_markdown_with(|_| Ok(None));
+    chat.copy_last_agent_markdown_with(|_| Ok(crate::clipboard_copy::CopyOutcome::Requested));
     assert!(chat.clipboard_lease.is_some());
     let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    assert!(rendered.contains("Copied last message to clipboard"));
+    insta::assert_snapshot!("unconfirmed_copy", rendered);
 
     chat.copy_last_agent_markdown_with(|markdown| {
         assert_eq!(markdown, "copy me");
@@ -2404,16 +2406,20 @@ async fn slash_copy_preserves_native_lease_after_terminal_copy_or_failure() {
 
     chat.copy_selection_with("print('ok')\n", "python code", |content| {
         assert_eq!(content, "print('ok')\n");
-        Ok(Some(crate::clipboard_copy::ClipboardLease::test()))
+        Ok(crate::clipboard_copy::CopyOutcome::Copied(Some(
+            crate::clipboard_copy::ClipboardLease::test(),
+        )))
     });
     assert!(chat.clipboard_lease.is_some());
     let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
     assert!(rendered.contains("Copied python code to clipboard"));
 
-    chat.copy_selection_with("terminal copy", "code", |_| Ok(None));
+    chat.copy_selection_with("terminal copy", "code", |_| {
+        Ok(crate::clipboard_copy::CopyOutcome::Requested)
+    });
     assert!(chat.clipboard_lease.is_some());
     let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    assert!(rendered.contains("Copied code to clipboard"));
+    assert!(rendered.contains("Copy unconfirmed; /export saves chat"));
 
     chat.copy_selection_with("print('blocked')\n", "python code", |content| {
         assert_eq!(content, "print('blocked')\n");

@@ -250,6 +250,7 @@ fn render_markdown_transcript(cells: &[Arc<dyn HistoryCell>]) -> Result<String, 
                     [
                         "• Saved conversation to ",
                         "• Copied conversation to clipboard",
+                        "• Copy unconfirmed; /export saves chat",
                         "■ Export failed: ",
                         "■ Copy failed: ",
                     ]

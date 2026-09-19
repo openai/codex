@@ -7,7 +7,6 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use std::sync::Arc;
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn join_exploration_groups(
     older: &Arc<dyn HistoryCell>,
     newer: &Arc<dyn HistoryCell>,
@@ -25,7 +24,6 @@ pub(crate) fn join_exploration_groups(
     Some(Arc::new(group))
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn older_exploration_group(
     older: &dyn HistoryCell,
     newer: &ExecCell,
@@ -44,7 +42,6 @@ pub(crate) fn older_exploration_group(
     Some(group)
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 fn adjacent_items<'a>(
     older: &ExecCell,
     newer: &ExecCell,
@@ -61,7 +58,6 @@ fn adjacent_items<'a>(
     super::computer_groups::adjacent_activity_items(&ids, turns)
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(super) fn completed_group(items: &[ThreadItem]) -> Option<ExecCell> {
     let mut group: Option<ExecCell> = None;
     for item in items {

@@ -1,0 +1,36 @@
+---
+source: tui/src/transcript_view/text_tests.rs
+assertion_line: 306
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 24, height: 8 },
+    content: [
+        "• Running printf 'alpha ",
+        "  │ beta gamma delta'   ",
+        "  └   output alpha beta ",
+        "    gamma delta         ",
+        "    next line           ",
+        "                        ",
+        "                        ",
+        "                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 9, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 10, y: 0, fg: Rgb(137, 180, 250), bg: Reset, underline: Reset, modifier: NONE,
+        x: 16, y: 0, fg: Rgb(205, 214, 244), bg: Reset, underline: Reset, modifier: NONE,
+        x: 17, y: 0, fg: Rgb(166, 227, 161), bg: Reset, underline: Reset, modifier: NONE,
+        x: 23, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 1, fg: Rgb(166, 227, 161), bg: Reset, underline: Reset, modifier: NONE,
+        x: 21, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 23, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 13, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

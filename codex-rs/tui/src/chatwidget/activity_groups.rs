@@ -39,4 +39,23 @@ impl ChatWidget {
         }
         Err(cell)
     }
+
+    /// Hydrate only the validated older portion, leaving current calls and their clocks intact.
+    pub(crate) fn prepend_active_exploration_history(
+        &mut self,
+        older: &dyn HistoryCell,
+        turns: &[Turn],
+    ) -> Option<(u64, u64)> {
+        let previous_revision = self.transcript.active_cell_revision;
+        let active = self
+            .transcript
+            .active_cell
+            .as_mut()?
+            .as_any_mut()
+            .downcast_mut::<ExecCell>()?;
+        let older = crate::thread_transcript::older_exploration_group(older, active, turns)?;
+        active.prepend(older);
+        self.bump_active_cell_revision();
+        Some((previous_revision, self.transcript.active_cell_revision))
+    }
 }

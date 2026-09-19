@@ -8,6 +8,7 @@ use super::start_config_write_test_app_server;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
+use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::keymap::KeymapContext;
 use crate::test_support::test_path_display;
 use crate::tui::Tui;
@@ -633,5 +634,86 @@ async fn command_center_chords_do_not_capture_search_text() -> Result<()> {
         None
     );
     assert!(app.key_chord_matcher.is_pending());
+    Ok(())
+}
+
+#[tokio::test]
+async fn transcript_fixed_keys_take_precedence_over_pager_chord_prefixes() -> Result<()> {
+    let (mut app, mut tui, app_server) = chord_app().await?;
+    app.keymap = RuntimeKeymap::from_config(&serde_json::from_value(serde_json::json!({
+        "pager": {"scroll_up": ["ctrl-space x", "ctrl-home x", "ctrl-end x"]}
+    }))?)
+    .expect("valid pager chords");
+    app.open_transcript_overlay(&mut tui);
+    for code in [KeyCode::Home, KeyCode::End, KeyCode::Char(' ')] {
+        let key = KeyEvent::new(code, KeyModifiers::CONTROL);
+        assert_eq!(app.route_key_chord_event(&mut tui, key), Some(key));
+        assert!(!app.key_chord_matcher.is_pending());
+    }
+    app.close_transcript_overlay(&mut tui);
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn selection_after_live_commit_uses_the_refreshed_frame() -> Result<()> {
+    let (mut app, mut tui, mut app_server) = chord_app().await?;
+    let area = ratatui::layout::Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 12,
+    );
+    let mut overlay =
+        crate::pager_overlay::TranscriptOverlay::new(Vec::new(), app.keymap.pager.clone());
+    overlay.sync_live_tail(
+        /*width*/ 40,
+        /*key*/ None,
+        |_| Some(vec!["committed output".into()]),
+    );
+    overlay.render(area, &mut ratatui::buffer::Buffer::empty(area));
+    overlay.insert_cell(std::sync::Arc::new(
+        crate::history_cell::PlainHistoryCell::new(vec!["committed output".into()]),
+    ));
+    app.overlay = Some(crate::pager_overlay::Overlay::Transcript(overlay));
+    // The active cell has completed, but no Draw has reached the overlay yet.
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+    )
+    .await?;
+    let Some(crate::pager_overlay::Overlay::Transcript(overlay)) = &mut app.overlay else {
+        panic!("overlay closed")
+    };
+    assert!(overlay.has_active_interaction());
+    let mut buffer = ratatui::buffer::Buffer::empty(area);
+    overlay.render(area, &mut buffer);
+    let text = buffer
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert_eq!(text.matches("committed output").count(), 1);
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )
+    .await?;
+    set_active_cell(
+        &mut app.chat_widget,
+        Box::new(crate::history_cell::StreamingAgentTailCell::new(
+            vec!["live continuation wraps at the resized width".into()],
+            /*is_first_line*/ false,
+        )),
+    );
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Resize(ratatui::layout::Size::new(
+            /*width*/ 20, /*height*/ 12,
+        )),
+    )
+    .await?;
+    app.close_transcript_overlay(&mut tui);
+    app_server.shutdown().await?;
     Ok(())
 }

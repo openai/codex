@@ -329,16 +329,14 @@ impl ChatWidget {
     /// Inner implementation with an injectable clipboard backend for testing.
     pub(super) fn copy_last_agent_markdown_with(
         &mut self,
-        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+        copy_fn: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyOutcome, String>,
     ) {
         match self.transcript.last_agent_markdown.clone() {
             Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
-                Ok(lease) => {
-                    if let Some(lease) = lease {
-                        self.clipboard_lease = Some(lease);
-                    }
+                Ok(outcome) => {
+                    let status = outcome.store(&mut self.clipboard_lease);
                     self.add_to_history(history_cell::new_info_event(
-                        "Copied last message to clipboard".into(),
+                        status.message("last message"),
                         /*hint*/ None,
                     ));
                 }
@@ -363,18 +361,21 @@ impl ChatWidget {
         &mut self,
         text: &str,
         label: &str,
-        copy_fn: impl FnOnce(&str) -> Result<Option<crate::clipboard_copy::ClipboardLease>, String>,
+        copy_fn: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyOutcome, String>,
     ) {
-        match copy_fn(text) {
-            Ok(lease) => {
-                if let Some(lease) = lease {
-                    self.clipboard_lease = Some(lease);
-                }
-                self.add_info_message(format!("Copied {label} to clipboard"), /*hint*/ None);
-            }
+        match self.write_clipboard(text, copy_fn) {
+            Ok(status) => self.add_info_message(status.message(label), /*hint*/ None),
             Err(error) => self.add_error_message(format!("Copy failed: {error}")),
         }
         self.request_redraw();
+    }
+
+    fn write_clipboard(
+        &mut self,
+        text: &str,
+        copy_fn: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyOutcome, String>,
+    ) -> Result<crate::clipboard_copy::CopyStatus, String> {
+        Ok(copy_fn(text)?.store(&mut self.clipboard_lease))
     }
 
     #[cfg(test)]

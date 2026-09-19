@@ -628,7 +628,7 @@ async fn run_session_picker_with_loader(
                             state.open_pending_transcript_if_ready();
                         }
                     }
-                    TuiEvent::FocusLost => {}
+                    TuiEvent::FocusLost | TuiEvent::Mouse(_) => {}
                 }
             }
             Some(event) = background_events.next() => {
@@ -1086,6 +1086,11 @@ impl PickerState {
     }
 
     fn route_key_chord(&mut self, key: KeyEvent) -> Option<KeyEvent> {
+        if matches!(&self.overlay, Some(Overlay::Transcript(overlay)) if overlay.owns_interaction_key(key))
+        {
+            self.chord_matcher.cancel();
+            return Some(key);
+        }
         let context = if self.overlay.is_some() {
             crate::keymap::KeymapContext::Pager
         } else {
@@ -5175,6 +5180,23 @@ mod tests {
 
         assert!(matches!(state.overlay, Some(Overlay::Transcript(_))));
         assert_eq!(state.pending_transcript_open, None);
+        let keymap = RuntimeKeymap::from_config(
+            &serde_json::from_value(serde_json::json!({
+                "pager": {"scroll_up": ["ctrl-space x", "ctrl-x ctrl-space"]}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        state.chord_keymap = keymap.chords;
+        let select = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL);
+        assert_eq!(state.route_key_chord(select), Some(select));
+        assert_eq!(
+            state.route_key_chord(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            None
+        );
+        assert!(state.chord_matcher.is_pending());
+        assert_eq!(state.route_key_chord(select), Some(select));
+        assert!(!state.chord_matcher.is_pending());
     }
 
     #[tokio::test]

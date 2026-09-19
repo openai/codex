@@ -1,5 +1,6 @@
 ---
 source: tui/src/status/tests.rs
+assertion_line: 1825
 expression: "format!(\"before:\\n{before}\\n\\nafter:\\n{after}\")"
 ---
 before:
@@ -20,18 +21,18 @@ before:
 │  Token usage:   0 total  (0 input + 0 output)                            │
 │  Limits:        refresh requested; run /status again shortly.            │
 ╰──────────────────────────────────────────────────────────────────────────╯
-~
-~
-~
-~
-~
-~
-~
-~
-~
-───────────────────────────────────────────────────────────────────────── 100% ─
- ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
- q close   esc to edit prev
+
+
+
+
+
+
+
+
+
+Ctrl+Space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · esc edit previous
 
 
 after:
@@ -56,11 +57,11 @@ after:
 ╰───────────────────────────────────────────────────────────────────────────╯
 
 next message
-~
-~
-~
-~
-~
-───────────────────────────────────────────────────────────────────────── 100% ─
- ↑/↓ to scroll   pgup/pgdn to page   home/end to jump
- q close   esc to edit prev
+
+
+
+
+
+Ctrl+Space select
+ ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
+ q close · esc edit previous
