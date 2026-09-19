@@ -1,4 +1,4 @@
-//! Render persisted thread turns into history-cell building blocks.
+//! Project individual persisted items into rich history cells without changing live state.
 
 use std::sync::Arc;
 
@@ -14,7 +14,6 @@ use crate::history_cell::UserHistoryCell;
 use crate::history_cell::split_reasoning_summary_parts;
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::legacy_core::config::Config;
-use crate::multi_agents::sub_agent_activity_summary;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::UserInput;
@@ -22,7 +21,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::items::UserMessageItem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize as _;
-use ratatui::text::Line;
+
+mod other_items;
+pub(crate) mod tools;
 
 pub(crate) type TranscriptCells = Vec<Arc<dyn HistoryCell>>;
 
@@ -94,235 +95,137 @@ pub(crate) fn thread_items_to_transcript_cells(
     });
     let mut cells: TranscriptCells = Vec::new();
     for item in items {
-        match item {
-            ThreadItem::UserMessage {
-                id,
-                client_id,
-                content,
-            } => {
-                if content.iter().any(|input| {
-                    matches!(
-                        input,
-                        UserInput::Audio { .. } | UserInput::LocalAudio { .. }
-                    )
-                }) {
-                    tracing::warn!(
-                        user_message_id = id,
-                        "audio user inputs are not supported by the TUI and will be omitted"
-                    );
-                }
-                let item = UserMessageItem {
-                    id,
-                    client_id,
-                    content: content
-                        .into_iter()
-                        .map(codex_app_server_protocol::UserInput::into_core)
-                        .collect(),
-                };
-                let message = item.message();
-                let reply_text = crate::async_question_reply::display_text(&message);
-                let text_elements = if reply_text.is_some() {
-                    Vec::new()
-                } else {
-                    item.text_elements()
-                };
-                cells.push(Arc::new(UserHistoryCell {
-                    spoken: false,
-                    message: reply_text.unwrap_or(message),
-                    text_elements,
-                    local_image_paths: item.local_image_paths(),
-                    remote_image_urls: item.image_urls(),
-                }));
-            }
-            ThreadItem::AgentMessage { text, .. } => {
-                let parsed = parse_assistant_markdown(&text, cwd.as_path());
-                if !parsed.visible_markdown.trim().is_empty() {
-                    cells.push(Arc::new(AgentMarkdownCell::new_with_inline_visualizations(
-                        parsed.visible_markdown,
-                        cwd.as_path(),
-                        inline_visualization_context.clone(),
-                    )));
-                }
-            }
-            ThreadItem::FunctionCallOutput {
-                name,
-                namespace,
-                output,
-                ..
-            } => {
-                if let Some((source_thread_id, prompt)) =
-                    crate::dynamic_tools::parse_delegated_tool_output(
-                        &name,
-                        namespace.as_deref(),
-                        &output,
-                    )
-                {
-                    cells.push(Arc::new(PrefixedWrappedHistoryCell::new(
-                        format!("Sent by Codex from task {source_thread_id}\n{prompt}"),
-                        "• ".dim(),
-                        "  ",
-                    )));
-                }
-            }
-            ThreadItem::Plan { text, .. } => {
-                if !text.trim().is_empty() {
-                    cells.push(Arc::new(crate::history_cell::new_proposed_plan(
-                        text,
-                        cwd.as_path(),
-                    )));
-                }
-            }
-            ThreadItem::Reasoning {
-                summary, content, ..
-            } => {
-                let (header, text) =
-                    if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
-                        && !content.is_empty()
-                    {
-                        ("Reasoning".to_string(), content.join("\n\n"))
-                    } else {
-                        split_reasoning_summary_parts(&summary)
-                    };
-                if !text.trim().is_empty() {
-                    cells.push(Arc::new(ReasoningSummaryCell::new(
-                        header,
-                        text,
-                        cwd.as_path(),
-                        /*transcript_only*/ false,
-                    )));
-                }
-            }
-            ThreadItem::WebSearch(item) => {
-                cells.push(Arc::new(crate::history_cell::new_web_search_call(
-                    item.id,
-                    item.query,
-                    item.action
-                        .unwrap_or(codex_app_server_protocol::WebSearchAction::Other),
-                )));
-            }
-            ThreadItem::ImageView { path, .. } => {
-                cells.push(Arc::new(crate::history_cell::new_view_image_tool_call(
-                    path,
-                )));
-            }
-            other => {
-                if let Some(cell) = fallback_transcript_cell(&other) {
-                    cells.push(Arc::new(cell));
-                }
-            }
+        if let Some(cell) = tools::historical_tool_fallback(&item) {
+            cells.push(Arc::new(cell));
+        } else {
+            cells.extend(item_to_cells(
+                item,
+                cwd,
+                raw_reasoning_visibility,
+                inline_visualization_context.clone(),
+            ));
         }
     }
     cells
 }
 
-fn fallback_transcript_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
-    let lines = match item {
-        ThreadItem::HookPrompt { fragments, .. } => fragments
-            .iter()
-            .map(|fragment| {
-                vec![
-                    "hook prompt: ".dim(),
-                    fragment.text.trim().to_string().into(),
-                ]
-                .into()
-            })
-            .collect::<Vec<_>>(),
-        ThreadItem::CommandExecution {
-            command,
-            status,
-            aggregated_output,
-            exit_code,
-            ..
+/// Project one item without changing the active widget or its turn lifecycle.
+fn item_to_cells(
+    item: ThreadItem,
+    cwd: &AbsolutePathBuf,
+    raw_reasoning_visibility: RawReasoningVisibility,
+    inline_visualization_context: Option<InlineVisualizationContext>,
+) -> TranscriptCells {
+    let mut cells: TranscriptCells = Vec::new();
+    match item {
+        ThreadItem::UserMessage {
+            id,
+            client_id,
+            content,
         } => {
-            let mut lines: Vec<Line<'static>> =
-                vec![vec!["$ ".dim(), command.clone().into()].into()];
-            lines.push(
-                format!(
-                    "status: {status:?}{}",
-                    exit_code
-                        .map(|code| format!(" · exit {code}"))
-                        .unwrap_or_default()
+            if content.iter().any(|input| {
+                matches!(
+                    input,
+                    UserInput::Audio { .. } | UserInput::LocalAudio { .. }
                 )
-                .dim()
-                .into(),
-            );
-            if let Some(output) = aggregated_output.as_deref()
-                && !output.trim().is_empty()
-            {
-                lines.extend(
-                    output
-                        .lines()
-                        .map(|line| vec!["  ".dim(), line.trim_end().to_string().dim()].into()),
+            }) {
+                tracing::warn!(
+                    user_message_id = id,
+                    "audio user inputs are not supported by the TUI and will be omitted"
                 );
             }
-            lines
+            let item = UserMessageItem {
+                id,
+                client_id,
+                content: content
+                    .into_iter()
+                    .map(codex_app_server_protocol::UserInput::into_core)
+                    .collect(),
+            };
+            let message = item.message();
+            let reply_text = crate::async_question_reply::display_text(&message);
+            let text_elements = if reply_text.is_some() {
+                Vec::new()
+            } else {
+                item.text_elements()
+            };
+            cells.push(Arc::new(UserHistoryCell {
+                spoken: false,
+                message: reply_text.unwrap_or(message),
+                text_elements,
+                local_image_paths: item.local_image_paths(),
+                remote_image_urls: item.image_urls(),
+            }));
         }
-        ThreadItem::FileChange {
-            changes, status, ..
-        } => vec![
-            format!("file changes: {status:?} · {} changes", changes.len())
-                .dim()
-                .into(),
-        ],
-        ThreadItem::McpToolCall {
-            server,
-            tool,
-            status,
-            ..
-        } => vec![
-            format!("mcp tool: {server}/{tool} · {status:?}")
-                .dim()
-                .into(),
-        ],
-        ThreadItem::DynamicToolCall {
+        ThreadItem::AgentMessage { text, .. } => {
+            let parsed = parse_assistant_markdown(&text, cwd.as_path());
+            if !parsed.visible_markdown.trim().is_empty() {
+                cells.push(Arc::new(AgentMarkdownCell::new_with_inline_visualizations(
+                    parsed.visible_markdown,
+                    cwd.as_path(),
+                    inline_visualization_context,
+                )));
+            }
+        }
+        ThreadItem::FunctionCallOutput {
+            name,
             namespace,
-            tool,
-            status,
+            output,
             ..
         } => {
-            let name = namespace
-                .as_ref()
-                .map(|namespace| format!("{namespace}/{tool}"))
-                .unwrap_or_else(|| tool.clone());
-            vec![format!("tool: {name} · {status:?}").dim().into()]
+            if let Some((source_thread_id, prompt)) =
+                crate::dynamic_tools::parse_delegated_tool_output(
+                    &name,
+                    namespace.as_deref(),
+                    &output,
+                )
+            {
+                cells.push(Arc::new(PrefixedWrappedHistoryCell::new(
+                    format!("Sent by Codex from task {source_thread_id}\n{prompt}"),
+                    "• ".dim(),
+                    "  ",
+                )));
+            }
         }
-        ThreadItem::CollabAgentToolCall { tool, status, .. } => {
-            vec![format!("agent tool: {tool:?} · {status:?}").dim().into()]
+        ThreadItem::Plan { text, .. } => {
+            if !text.trim().is_empty() {
+                cells.push(Arc::new(crate::history_cell::new_proposed_plan(
+                    text,
+                    cwd.as_path(),
+                )));
+            }
         }
-        ThreadItem::SubAgentActivity {
-            kind, agent_path, ..
+        ThreadItem::Reasoning {
+            summary, content, ..
         } => {
-            vec![sub_agent_activity_summary(*kind, agent_path).dim().into()]
+            let (header, text) =
+                if matches!(raw_reasoning_visibility, RawReasoningVisibility::Visible)
+                    && !content.is_empty()
+                {
+                    ("Reasoning".to_string(), content.join("\n\n"))
+                } else {
+                    split_reasoning_summary_parts(&summary)
+                };
+            if !text.trim().is_empty() {
+                cells.push(Arc::new(ReasoningSummaryCell::new(
+                    header,
+                    text,
+                    cwd.as_path(),
+                    /*transcript_only*/ false,
+                )));
+            }
         }
-        ThreadItem::ImageGeneration(item) => {
-            let saved = item
-                .saved_path
-                .as_ref()
-                .map(|path| format!(" · {}", path.as_path().display()))
-                .unwrap_or_default();
-            vec![
-                format!("image generation: {}{saved}", item.status)
-                    .dim()
-                    .into(),
-            ]
+        item @ ThreadItem::CommandExecution { .. } => {
+            if let Some(command) = tools::CommandHistory::from_item(item) {
+                cells.push(Arc::new(command.into_cell()));
+            }
         }
-        ThreadItem::EnteredReviewMode { review, .. } => {
-            vec![vec!["review started: ".dim(), review.clone().into()].into()]
+        item @ ThreadItem::McpToolCall { .. } => {
+            if let Some(call) = tools::McpHistory::from_item(item) {
+                cells.push(Arc::new(call.into_cell()));
+            }
         }
-        ThreadItem::ExitedReviewMode { review, .. } => {
-            vec![vec!["review finished: ".dim(), review.clone().into()].into()]
-        }
-        ThreadItem::ContextCompaction { .. } => {
-            vec!["context compacted".dim().into()]
-        }
-        ThreadItem::UserMessage { .. }
-        | ThreadItem::AgentMessage { .. }
-        | ThreadItem::FunctionCallOutput { .. }
-        | ThreadItem::Plan { .. }
-        | ThreadItem::Reasoning { .. }
-        | ThreadItem::WebSearch(_)
-        | ThreadItem::ImageView { .. }
-        | ThreadItem::Sleep(_) => return None,
-    };
-    (!lines.is_empty()).then(|| PlainHistoryCell::new(lines))
+        other => cells.extend(other_items::cells(other, cwd)),
+    }
+    cells
 }

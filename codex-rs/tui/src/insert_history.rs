@@ -1,7 +1,8 @@
 //! Inserts finalized history rows into terminal scrollback.
 //!
 //! Codex uses the terminal scrollback itself for finalized chat history, so inserting a history
-//! cell is an escape-sequence operation rather than a normal ratatui render.
+//! cell is an escape-sequence operation rather than a normal ratatui render. Untrusted content
+//! follows ratatui’s control-character filtering before semantic hyperlinks add trusted escapes.
 
 use std::fmt;
 use std::io;
@@ -528,16 +529,38 @@ mod tests {
     }
 
     #[test]
-    fn writes_semantic_web_link_without_changing_visible_text() {
+    fn writes_semantic_web_link_without_emitting_untrusted_controls() {
+        use pretty_assertions::assert_eq;
+
         let destination = "https://example.com/long/path";
-        let line = crate::terminal_hyperlinks::annotate_web_urls_in_line(Line::from(destination));
-        let mut actual = Vec::new();
-
-        write_history_line(&mut actual, &line, /*wrap_width*/ 80).expect("write history line");
-
-        let output = String::from_utf8(actual).expect("UTF-8 terminal output");
-        assert!(output.contains("\x1b]8;;https://example.com/long/path\x07"));
-        assert_eq!(line.line.spans[0].content, destination);
+        for linked in [false, true] {
+            let mut line = crate::terminal_hyperlinks::annotate_web_urls_in_line(Line::from(vec![
+                "\x1b[2J\x1b]52;c;Y2xpcA==\x07\u{009d}hidden\u{009c}\r\n\t ".into(),
+                destination.into(),
+            ]));
+            let mut safe = crate::terminal_hyperlinks::annotate_web_urls_in_line(Line::from(vec![
+                "[2J]52;c;Y2xpcA==hidden ".into(),
+                destination.into(),
+            ]));
+            if !linked {
+                line.hyperlinks.clear();
+                safe.hyperlinks.clear();
+            }
+            let original = line.clone();
+            let mut actual = Vec::new();
+            let mut expected = Vec::new();
+            write_history_line(&mut actual, &line, /*wrap_width*/ 80).unwrap();
+            write_history_line(&mut expected, &safe, /*wrap_width*/ 80).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(line, original);
+            let output = String::from_utf8(actual).unwrap();
+            assert_eq!(
+                output.contains(&format!(
+                    "\x1b]8;;{destination}\x07{destination}\x1b]8;;\x07"
+                )),
+                linked,
+            );
+        }
     }
 
     #[test]

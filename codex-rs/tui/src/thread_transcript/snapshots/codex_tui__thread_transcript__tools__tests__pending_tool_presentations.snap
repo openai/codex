@@ -1,0 +1,21 @@
+---
+source: tui/src/thread_transcript/tools_tests.rs
+assertion_line: 135
+expression: rendered
+---
+$ cargo check
+In progress at last update
+  output line 1
+  output line 2
+  output line 3
+  output line 4
+  output line 5
+  output line 6
+  output line 7
+  output line 8
+  output line 9
+  output line 10
+  output line 11
+  output line 12
+mcp tool: example/js · In progress at last update
+mcp tool: example/js · Completed · result unavailable

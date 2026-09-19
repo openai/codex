@@ -649,7 +649,23 @@ pub(crate) fn strip_osc8(text: &str) -> String {
 
 pub(crate) fn decorate_spans(line: &HyperlinkLine) -> Vec<Span<'static>> {
     if line.hyperlinks.is_empty() {
-        return line.line.spans.clone();
+        return line
+            .line
+            .spans
+            .iter()
+            .map(|span| Span {
+                style: span.style,
+                content: if span.content.contains(char::is_control) {
+                    span.content
+                        .graphemes(/*is_extended*/ true)
+                        .filter(|grapheme| !grapheme.contains(char::is_control))
+                        .collect::<String>()
+                        .into()
+                } else {
+                    span.content.clone()
+                },
+            })
+            .collect();
     }
 
     let mut out = Vec::new();
@@ -660,6 +676,12 @@ pub(crate) fn decorate_spans(line: &HyperlinkLine) -> Vec<Span<'static>> {
     for span in &line.line.spans {
         for grapheme in span.content.graphemes(/*is_extended*/ true) {
             let width = display_width(grapheme);
+            // Match ratatui's filtering, retaining source columns for semantic links.
+            // Only the hyperlink metadata below may introduce terminal escapes.
+            if grapheme.contains(char::is_control) {
+                column += width;
+                continue;
+            }
             while line
                 .hyperlinks
                 .get(link_index)

@@ -1,0 +1,34 @@
+---
+source: tui/src/thread_transcript/tools_tests.rs
+expression: rendered
+---
+Command: compact
+• Ran cargo check
+  └ output line 1
+    output line 2
+    output line 3
+    +9 lines (ctrl+t to view transcript)
+
+Command: detailed
+$ cargo check
+output line 1
+output line 2
+output line 3
+output line 4
+output line 5
+output line 6
+output line 7
+output line 8
+output line 9
+output line 10
+output line 11
+output line 12
+✓ • 0ms
+
+MCP: compact
+• Called example.js({"title":"Inspect page mcp","code":"await cua.getState()"})
+  └ Full result for mcp
+
+MCP: detailed
+• Called example.js({"title":"Inspect page mcp","code":"await cua.getState()"})
+  └ Full result for mcp

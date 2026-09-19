@@ -1,0 +1,30 @@
+---
+source: tui/src/history_cell/dynamic_tests.rs
+assertion_line: 95
+expression: "snapshots.join(\"\\n\\n\")"
+---
+lines=3, width=20
+• Called example.in…
+  └ Result line 1: …
+    Result line 2: …
+    Result line 3: …
+
+lines=3, width=80
+• Called example.inspect
+  └ Result line 1: retained content
+    Result line 2: retained content
+    Result line 3: retained content
+
+lines=4, width=20
+• Called example.in…
+  … 1 earlier lines…
+  └ Result line 2: …
+    Result line 3: …
+    Result line 4: …
+
+lines=4, width=80
+• Called example.inspect
+  … 1 earlier lines hidden
+  └ Result line 2: retained content
+    Result line 3: retained content
+    Result line 4: retained content

@@ -1,0 +1,52 @@
+---
+source: tui/src/thread_transcript/tools_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+declined
+$ cargo check
+Declined
+  first line
+    indented output
+  last line
+
+opaque command
+$ C:\Program Files\Git\bin\bash.exe -lc "echo hi"
+Completed · exit 0
+  first line
+    indented output
+  last line
+
+UNC command
+$ \\server\share\tool.exe -arg
+Completed · exit 0
+  first line
+    indented output
+  last line
+
+completed interaction
+$ cargo check
+Terminal interaction · Completed · exit 0
+  first line
+    indented output
+  last line
+
+failed interaction
+$ cargo check
+Terminal interaction · Failed · exit 7
+  first line
+    indented output
+  last line
+
+failed interaction without exit code
+$ cargo check
+Terminal interaction · Failed
+  first line
+    indented output
+  last line
+
+pending interaction
+$ cargo check
+Terminal interaction · In progress at last update
+  first line
+    indented output
+  last line

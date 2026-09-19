@@ -1,0 +1,9 @@
+---
+source: tui/src/thread_transcript/tools_tests.rs
+expression: "snapshots.join(\"\\n\")"
+---
+agent tool: SpawnAgent · In progress at last update
+agent tool: SendInput · Failed
+agent tool: CloseAgent · Interrupted
+agent tool: ResumeAgent · Failed
+agent tool: Wait · Interrupted

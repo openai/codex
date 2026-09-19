@@ -30,7 +30,7 @@ pub(crate) fn file_update_changes_to_display(
 ) -> HashMap<PathBuf, FileChange> {
     changes
         .into_iter()
-        .map(|change| {
+        .map(|mut change| {
             let path = PathBuf::from(change.path);
             let file_change = match change.kind {
                 PatchChangeKind::Add => FileChange::Add {
@@ -39,10 +39,19 @@ pub(crate) fn file_update_changes_to_display(
                 PatchChangeKind::Delete => FileChange::Delete {
                     content: change.diff,
                 },
-                PatchChangeKind::Update { move_path } => FileChange::Update {
-                    unified_diff: change.diff,
-                    move_path,
-                },
+                PatchChangeKind::Update { move_path } => {
+                    if let Some(path) = &move_path
+                        && let Some(diff) = change
+                            .diff
+                            .strip_suffix(&format!("\n\nMoved to: {}", path.display()))
+                    {
+                        change.diff.truncate(diff.len());
+                    }
+                    FileChange::Update {
+                        unified_diff: change.diff,
+                        move_path,
+                    }
+                }
             };
             (path, file_change)
         })

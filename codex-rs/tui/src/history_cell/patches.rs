@@ -17,6 +17,13 @@ pub(crate) struct PatchHistoryCell {
     cwd: PathBuf,
 }
 
+impl PatchHistoryCell {
+    pub(crate) fn with_activity_id(mut self, id: String) -> Self {
+        self.activity_id = format!("patch:{id}");
+        self
+    }
+}
+
 impl HistoryCell for PatchHistoryCell {
     fn activity_ids(&self) -> Vec<String> {
         vec![self.activity_id.clone()]
