@@ -20,8 +20,8 @@ mod startup_replay;
 #[path = "terminal_probe/windows_replay.rs"]
 mod windows_replay;
 
-/// Default wall-clock budget for each startup probe group.
-pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(100);
+/// Default wall-clock budget for each terminal probe or startup probe group.
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 250);
 
 /// Default terminal foreground and background colors reported by OSC 10 and OSC 11.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
