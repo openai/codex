@@ -76,21 +76,168 @@ fn contains_text(buffer: &Buffer, text: &str) -> bool {
 }
 
 #[tokio::test]
+async fn owned_bottom_pane_preserves_draft_cursor_and_read_only_notice() {
+    let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
+    widget.handle_paste("draft stays here".to_string());
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 8, /*width*/ 60, /*height*/ 8,
+    );
+    let render_bottom = |widget: &ChatWidget| {
+        let bottom = widget.bottom_pane_renderable(
+            /*footer*/ None,
+            crate::bottom_pane::CommandPopupPlacement::Overlay,
+        );
+        let mut buffer = Buffer::empty(area);
+        bottom.render(area, &mut buffer);
+        (buffer, bottom.cursor_pos(area), bottom.cursor_style(area))
+    };
+    let before = render_bottom(&widget);
+    assert!(contains_text(&before.0, "draft stays here"));
+    assert!(before.1.is_some());
+
+    widget.transcript.active_cell = Some(Box::new(history_cell::PlainHistoryCell::new(vec![
+        "live output belongs in the transcript".into(),
+    ])));
+    assert_eq!(render_bottom(&widget), before);
+
+    widget.show_external_writer_thread();
+    let (notice, cursor, _) = render_bottom(&widget);
+    assert!(contains_text(
+        &notice,
+        "This conversation is open in another app"
+    ));
+    assert_eq!(cursor, None);
+}
+
+#[derive(Debug)]
+struct PresentationCell(&'static str);
+
+impl HistoryCell for PresentationCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![format!("compact {}", self.0).into()]
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        vec![format!("raw {}", self.0).into()]
+    }
+
+    fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![format!("detailed {}", self.0).into()]
+    }
+}
+
+#[tokio::test]
+async fn owned_live_history_keeps_all_sources_in_each_presentation() {
+    let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
+    widget.transcript.active_cell = Some(Box::new(PresentationCell("active")));
+    widget.realtime_conversation.live_transcript_cell = Some(Box::new(PresentationCell("voice")));
+    widget.pending_rate_limit_reset_hint = Some(history_cell::PlainHistoryCell::new(vec![
+        "rate limit hint".into(),
+    ]));
+    let text = |lines: Option<Vec<HyperlinkLine>>| {
+        lines
+            .unwrap_or_default()
+            .into_iter()
+            .map(|line| line.line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let compact = text(widget.active_cell_display_hyperlink_lines(/*width*/ 80));
+    widget.set_raw_output_mode(/*enabled*/ true);
+    let raw = text(widget.active_cell_display_hyperlink_lines(/*width*/ 80));
+    let detailed = text(widget.active_cell_transcript_hyperlink_lines(/*width*/ 80));
+
+    insta::assert_snapshot!(format!("{compact}\n---\n{raw}\n---\n{detailed}"), @"
+    compact active
+
+    compact voice
+
+    rate limit hint
+    ---
+    raw active
+
+    raw voice
+
+    rate limit hint
+    ---
+    detailed active
+
+    detailed voice
+
+    rate limit hint
+    ");
+
+    widget.local_settings.tui.animations = false;
+    widget.realtime_conversation = Default::default();
+    crate::chatwidget::realtime::tests::activate_voice_for_thread(&mut widget, ThreadId::new());
+    widget.realtime_conversation.pending_history_cells.extend([
+        Box::new(PresentationCell("deferred first")) as Box<dyn HistoryCell>,
+        Box::new(PresentationCell("deferred second")) as Box<dyn HistoryCell>,
+    ]);
+    widget.on_realtime_transcript_delta("assistant".into(), "assistant ".into());
+    widget.on_realtime_transcript_delta("user".into(), "user caption".into());
+    widget.on_realtime_transcript_delta("assistant".into(), "caption".into());
+    let expected = [
+        "active",
+        "deferred first",
+        "deferred second",
+        "user caption",
+        "assistant caption",
+        "rate limit hint",
+    ];
+
+    for latest_speaker in ["assistant", "user"] {
+        widget.on_realtime_transcript_delta(latest_speaker.into(), String::new());
+        widget.set_raw_output_mode(/*enabled*/ false);
+        let compact = text(widget.active_cell_display_hyperlink_lines(/*width*/ 80));
+        let frame = render_frame(&widget, /*width*/ 80);
+        let inline = frame
+            .content
+            .chunks(usize::from(frame.area.width))
+            .map(|row| {
+                row.iter()
+                    .map(ratatui::buffer::Cell::symbol)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        widget.set_raw_output_mode(/*enabled*/ true);
+        let raw = text(widget.active_cell_display_hyperlink_lines(/*width*/ 80));
+        let detailed = text(widget.active_cell_transcript_hyperlink_lines(/*width*/ 80));
+        for (presentation, rendered) in [
+            ("compact", compact),
+            ("inline", inline),
+            ("raw", raw),
+            ("detailed", detailed),
+        ] {
+            let actual = rendered
+                .lines()
+                .filter_map(|line| {
+                    expected
+                        .iter()
+                        .find(|source| line.contains(**source))
+                        .copied()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual, expected,
+                "{presentation}; latest speaker {latest_speaker}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn external_writer_view_shows_notice_instead_of_composer() {
     let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
     widget.show_external_writer_thread();
 
-    let (frame, label_style) = crate::terminal_palette::with_test_default_colors(
+    let frame = crate::terminal_palette::with_test_default_colors(
         crate::terminal_probe::DefaultColors {
             fg: (230, 230, 230),
             bg: (20, 20, 20),
         },
-        || {
-            (
-                render_frame(&widget, /*width*/ 60),
-                crate::style::footer_hint_label_style(),
-            )
-        },
+        || render_frame(&widget, /*width*/ 60),
     );
     let rows: Vec<String> = frame
         .content
@@ -105,14 +252,14 @@ async fn external_writer_view_shows_notice_instead_of_composer() {
     );
     assert_ne!(frame[(0, 1)].bg, ratatui::style::Color::Reset);
     assert_eq!(frame[(0, 1)].bg, frame[(59, 4)].bg);
-    assert_eq!(frame[(3, 5)].modifier, ratatui::style::Modifier::BOLD);
     assert_eq!(
-        (frame[(5, 5)].fg, frame[(5, 5)].modifier),
+        (frame[(3, 5)].fg, frame[(3, 5)].modifier),
         (
-            label_style.fg.unwrap_or(ratatui::style::Color::Reset),
-            ratatui::style::Modifier::empty(),
+            crate::terminal_palette::rgb_color((230, 230, 230)),
+            ratatui::style::Modifier::BOLD
         ),
     );
+    assert_eq!(frame[(5, 5)].modifier, ratatui::style::Modifier::empty());
     assert!(!widget.bottom_pane.composer_input_enabled());
 }
 
@@ -390,33 +537,4 @@ async fn external_writer_notice_offers_command_center_on_shared_servers() {
             insta::assert_snapshot!(format!("external_writer_command_center_{width}"), rendered);
         }
     }
-}
-
-#[tokio::test]
-async fn externally_mutable_active_cells_refresh_the_transcript_without_a_revision_change() {
-    let (widget, _height_calls, display_calls) = widget_with_counting_cell(
-        /*desired_height*/ 2, /*line_count*/ 2, /*stable_height*/ false,
-    )
-    .await;
-    let mut overlay = crate::pager_overlay::TranscriptOverlay::new(
-        Vec::new(),
-        crate::keymap::RuntimeKeymap::defaults().pager,
-    );
-    let area = Rect::new(
-        /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 10,
-    );
-    let key = widget.active_cell_transcript_key();
-    let mut frames = Vec::new();
-    for _ in 0..2 {
-        assert_eq!(widget.active_cell_transcript_key(), key);
-        overlay.sync_live_tail(area.width, key, |width| {
-            widget.active_cell_transcript_hyperlink_lines(width)
-        });
-        let mut buffer = Buffer::empty(area);
-        overlay.render(area, &mut buffer);
-        frames.push(buffer);
-    }
-    assert_eq!(display_calls.load(Ordering::Relaxed), 2);
-    assert!(contains_text(&frames[0], "frame 1 row 0"));
-    assert!(contains_text(&frames[1], "frame 2 row 0"));
 }

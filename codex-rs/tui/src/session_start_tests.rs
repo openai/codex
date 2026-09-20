@@ -1,5 +1,3 @@
-//! Archived-session confirmation retries retain the first request settings.
-
 use super::*;
 use crate::legacy_core::config::ConfigBuilder;
 use app_test_support::create_fake_rollout;

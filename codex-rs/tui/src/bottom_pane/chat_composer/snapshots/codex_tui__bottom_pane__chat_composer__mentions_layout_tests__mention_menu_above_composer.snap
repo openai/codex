@@ -1,0 +1,25 @@
+---
+source: tui/src/bottom_pane/chat_composer/mentions_layout_tests.rs
+expression: buffer_text(&buffer)
+---
+  Mentions
+  Files, directories, plugins, skills and tasks
+
+   All Results   Filesystem Only   Plugins
+
+  Type to search mentions
+
+› Plugin00  Plugin description 00                                         Plugin
+  Plugin01  Plugin description 01                                         Plugin
+  Plugin02  Plugin description 02                                         Plugin
+  Plugin03  Plugin description 03                                         Plugin
+  Plugin04  Plugin description 04                                         Plugin
+  Plugin05  Plugin description 05                                         Plugin
+  Plugin06  Plugin description 06                                         Plugin
+  Plugin07  Plugin description 07                                         Plugin
+↓
+  enter/tab insert · esc close · ↑/↓ select · ←/→ filter
+
+› @
+
+  MODEL STATUS

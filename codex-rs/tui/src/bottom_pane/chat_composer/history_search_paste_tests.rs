@@ -2,6 +2,7 @@
 
 use super::super::super::chat_composer_history::HistoryEntry;
 use super::super::ChatComposer;
+use super::super::ComposerRenderOptions;
 use super::super::InputResult;
 use super::super::LARGE_PASTE_CHAR_THRESHOLD;
 use crate::app_event_sender::AppEventSender;
@@ -71,7 +72,10 @@ fn history_search_large_paste_clamps_cursor() {
     composer.handle_paste("x".repeat(usize::from(u16::MAX) + 1));
 
     let terminal = render_composer(&composer, /*width*/ 80);
-    let cursor = composer.history_search_cursor_pos(terminal.size().unwrap().into());
+    let cursor = composer.cursor_pos_with_options(
+        terminal.size().unwrap().into(),
+        ComposerRenderOptions::default(),
+    );
     assert_eq!(cursor, Some((79, 4)));
     insta::assert_snapshot!(
         "history_search_large_paste_cursor",
@@ -115,7 +119,10 @@ fn history_search_paste_shows_separators_and_matches_original_query() {
     assert_eq!(composer.draft.textarea.text(), "draft");
 
     let terminal = render_composer(&composer, /*width*/ 70);
-    let cursor = composer.history_search_cursor_pos(terminal.size().unwrap().into());
+    let cursor = composer.cursor_pos_with_options(
+        terminal.size().unwrap().into(),
+        ComposerRenderOptions::default(),
+    );
     assert_eq!(cursor, Some((31, 4)));
     insta::assert_snapshot!(
         "history_search_pasted_separators",

@@ -456,7 +456,7 @@ mod tests {
         let mut rendered = Vec::new();
         while let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() {
             rendered.extend(
-                cell.display_lines(/*width*/ 120)
+                cell.transcript_lines(/*width*/ 120)
                     .iter()
                     .map(render_line_text),
             );

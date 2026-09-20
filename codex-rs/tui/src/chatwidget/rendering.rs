@@ -1,4 +1,4 @@
-//! Render composition for the main chat widget surface.
+//! Shared composer and live-history composition for inline and owned transcript surfaces.
 
 use super::transcript::ActiveCellLayoutCache;
 use super::transcript::ActiveCellLayoutCacheKey;
@@ -122,9 +122,10 @@ impl ChatWidget {
             .selected_index_for_active_view(crate::app::AGENTS_OVERVIEW_VIEW_ID)
             .is_some()
         {
-            return self
-                .bottom_pane
-                .as_renderable_with_composer_right_reserve(/*composer_right_reserve*/ 0);
+            return self.bottom_pane_renderable(
+                /*footer*/ None,
+                crate::bottom_pane::CommandPopupPlacement::AboveComposer,
+            );
         }
 
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
@@ -183,20 +184,27 @@ impl ChatWidget {
                 })),
             );
         }
-        let bottom = self.bottom_pane_renderable(/*footer*/ None);
         flex.push(
             /*flex*/ 0,
-            bottom.inset(Insets::tlbr(
+            self.bottom_pane_renderable(
+                /*footer*/ None,
+                crate::bottom_pane::CommandPopupPlacement::AboveComposer,
+            )
+            .inset(Insets::tlbr(
                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
             )),
         );
         RenderableItem::Owned(Box::new(flex))
     }
 
-    /// Render only the composer and its local surfaces beneath an owned transcript.
+    /// Returns the composer, footer, and active modal without the live transcript above it.
+    ///
+    /// Both transcript surfaces use this composition so read-only notices and cursor placement
+    /// remain consistent. The caller owns any spacing between the transcript and this surface.
     pub(crate) fn bottom_pane_renderable<'a>(
         &'a self,
         footer: Option<&'a crate::bottom_pane::TranscriptFooter>,
+        command_popup_placement: crate::bottom_pane::CommandPopupPlacement,
     ) -> RenderableItem<'a> {
         if self.external_writer_view && !self.bottom_pane.has_active_view() {
             RenderableItem::Owned(Box::new(ExternalWriterNotice {
@@ -204,12 +212,68 @@ impl ChatWidget {
                 transcript_hint: self.bottom_pane.transcript_shortcut_hint(),
             }))
         } else {
+            let right_reserve = if self
+                .bottom_pane
+                .selected_index_for_active_view(crate::app::AGENTS_OVERVIEW_VIEW_ID)
+                .is_some()
+            {
+                0
+            } else {
+                self.ambient_pet_wrap_reserved_cols()
+            };
             self.bottom_pane
                 .as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions {
-                    textarea_right_reserve: self.ambient_pet_wrap_reserved_cols(),
+                    textarea_right_reserve: right_reserve,
+                    separate_status_line: command_popup_placement
+                        != crate::bottom_pane::CommandPopupPlacement::AboveComposer,
+                    command_popup_placement,
                     footer,
                 })
         }
+    }
+
+    /// Returns compact live-history lines using the current rich or raw presentation.
+    #[cfg(test)]
+    pub(crate) fn active_cell_display_hyperlink_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<HyperlinkLine>> {
+        self.active_cell_hyperlink_lines_with(width, |cell, width| {
+            cell.display_hyperlink_lines_for_mode(width, self.history_render_mode())
+        })
+    }
+
+    /// Combines the same live cells for compact and detailed transcript rendering.
+    pub(super) fn active_cell_hyperlink_lines_with(
+        &self,
+        width: u16,
+        render_cell: impl Fn(&dyn HistoryCell, u16) -> Vec<HyperlinkLine>,
+    ) -> Option<Vec<HyperlinkLine>> {
+        let cells = self
+            .transcript
+            .active_cell
+            .as_deref()
+            .into_iter()
+            .chain(
+                self.realtime_conversation
+                    .pending_history_cells
+                    .iter()
+                    .chain(self.realtime_conversation.live_transcript_cells())
+                    .map(AsRef::as_ref),
+            )
+            .chain(
+                self.pending_rate_limit_reset_hint()
+                    .map(|cell| cell as &dyn HistoryCell),
+            );
+        let mut lines = Vec::new();
+        for cell in cells {
+            let cell_lines = render_cell(cell, width);
+            if !cell_lines.is_empty() && !lines.is_empty() {
+                lines.push(HyperlinkLine::from(""));
+            }
+            lines.extend(cell_lines);
+        }
+        (!lines.is_empty()).then_some(lines)
     }
 
     pub(crate) fn note_rendered_width(&self, width: u16) {

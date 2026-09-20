@@ -1,0 +1,21 @@
+---
+source: tui/src/app/tests.rs
+assertion_line: 8342
+expression: transcript
+---
+  /permissions - choose what Codex is allowed to do
+  /model - choose what model and reasoning effort to use
+  /review - review any changes and find issues
+
+
+› retained prompt
+
+
+
+  [Image #1]
+  [Image #2]
+
+› selected prompt [Image #1]
+
+
+• Conversation reverted to this point. File changes are unchanged.

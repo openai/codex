@@ -3,6 +3,8 @@
 use super::*;
 use crate::app::reconnect::ReconnectPresentation;
 use crate::app::reconnect::reconnect;
+use codex_config::types::KeybindingSpec;
+use codex_config::types::KeybindingsSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tokio::net::TcpListener;
@@ -24,6 +26,9 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
         let pending_profile = !recovered_queue && resume_error_code == -32600;
         let (mut app, mut events, mut ops) = make_test_app_with_channels().await;
         app.local_settings.tui.show_server_version_notice = notice_enabled;
+        // Reconstructed widgets should use the same hint on every test terminal.
+        app.local_settings.tui.keymap.chat.edit_queued_message =
+            Some(KeybindingsSpec::One(KeybindingSpec("alt-up".into())));
         let id = ThreadId::new();
         let cwd = app.config.cwd.clone();
         app.config.model = Some("gpt-test".into());
@@ -732,7 +737,7 @@ pub(super) async fn drain_history(
     Ok(lines_to_single_string(
         &app.transcript_cells
             .iter()
-            .flat_map(|cell| cell.display_lines(/*width*/ 80))
+            .flat_map(|cell| cell.transcript_lines(/*width*/ 80))
             .collect::<Vec<_>>(),
     ))
 }

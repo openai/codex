@@ -13,9 +13,8 @@ impl ChatComposer {
         canceled
     }
 
-    pub(super) fn vim_search_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+    pub(super) fn vim_search_cursor_pos(&self, mut footer: Rect) -> Option<(u16, u16)> {
         let query = self.draft.textarea.vim_query()?;
-        let [_, _, _, mut footer] = self.layout_areas(area);
         footer.y = footer.bottom().saturating_sub(1);
         footer.height = footer.height.min(1);
         query.cursor_pos(inset_footer_hint_area(footer))

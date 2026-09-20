@@ -68,7 +68,14 @@ impl App {
             /*height*/ 1,
         ));
         let footer = view.footer_with_navigation(footer_area.width, motion, latest_navigation);
-        let bottom = chat_widget.bottom_pane_renderable(prompt_footer.as_ref().or(footer.as_ref()));
+        let bottom = chat_widget.bottom_pane_renderable(
+            prompt_footer.as_ref().or(footer.as_ref()),
+            if view.has_active_interaction() {
+                crate::bottom_pane::CommandPopupPlacement::Hidden
+            } else {
+                crate::bottom_pane::CommandPopupPlacement::Overlay
+            },
+        );
         let dashboard_visible = chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_some();
@@ -131,8 +138,14 @@ impl App {
             {
                 *progress = crate::bottom_pane::footer_hint_items_line(&items);
             }
-            let bottom =
-                chat_widget.bottom_pane_renderable(prompt_footer.as_ref().or(footer.as_ref()));
+            let bottom = chat_widget.bottom_pane_renderable(
+                prompt_footer.as_ref().or(footer.as_ref()),
+                if view.has_active_interaction() {
+                    crate::bottom_pane::CommandPopupPlacement::Hidden
+                } else {
+                    crate::bottom_pane::CommandPopupPlacement::Overlay
+                },
+            );
             footer_height_changed = !dashboard_visible
                 && bottom
                     .desired_height(screen_size.width)
@@ -207,9 +220,12 @@ impl App {
             let size = tui.prepare_draw_size()?;
             self.render_owned_transcript(tui, size)?;
         }
-        if !self.transcript_view.has_active_interaction()
+        // Visible shortcut help owns Escape before returning a paused viewport to latest.
+        // A transcript search or selection still owns Escape while it replaces the help footer.
+        if let TuiEvent::Key(key) = event
+            && !self.transcript_view.has_active_interaction()
             && self.chat_widget.shortcut_overlay_visible()
-            && matches!(event, TuiEvent::Key(key) if key.code == KeyCode::Esc)
+            && crate::key_hint::plain(KeyCode::Esc).is_press(*key)
         {
             return Ok(false);
         }

@@ -1,9 +1,9 @@
 ---
 source: tui/src/app/composer_hints_tests.rs
+assertion_line: 37
 expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
 ---
 80 columns
-
 › question
 
                                             Tip: f12 searches this conversation
@@ -11,9 +11,9 @@ expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapsho
 › Ask Codex to do anything
 
   GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts
 
 32 columns
-
 › question
 
 
@@ -21,3 +21,4 @@ expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapsho
 › Ask Codex to do anything
 
   GPT-5.6-Sol default · /tmp/pr…
+  ? for shortcuts

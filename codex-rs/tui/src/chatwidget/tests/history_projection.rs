@@ -1,4 +1,4 @@
-//! Persisted tool cells must match initial replay in legacy and detailed presentations.
+//! Persisted tool cells must match initial replay in compact and detailed presentations.
 
 use super::*;
 use crate::thread_transcript::RawReasoningVisibility;
@@ -57,7 +57,7 @@ async fn older_tool_projection_matches_initial_replay() {
             duration_ms: Some(5),
         });
     }
-    // Four adjacent CUA calls legacy together; a regular MCP call is a group boundary.
+    // Four adjacent CUA calls compact together; a regular MCP call is a group boundary.
     for (server, id) in [
         ("cua_repl", "1"),
         ("cua_repl", "2"),
@@ -166,7 +166,7 @@ async fn older_tool_projection_matches_initial_replay() {
     insta::assert_snapshot!(
         "completion_only_replay_exploration_group",
         format!(
-            "legacy:\n{}\ndetailed:\n{}",
+            "compact:\n{}\ndetailed:\n{}",
             lines_to_single_string(&exploration.display_lines(/*width*/ 40)),
             lines_to_single_string(&exploration.transcript_lines(/*width*/ 40)),
         )
@@ -174,7 +174,7 @@ async fn older_tool_projection_matches_initial_replay() {
 }
 
 #[tokio::test]
-async fn snapshot_formatter_reasoning_matches_legacy_and_detailed_replay() {
+async fn snapshot_formatter_reasoning_matches_compact_and_detailed_replay() {
     let mut snapshots = Vec::new();
     for visibility in [
         RawReasoningVisibility::Hidden,
@@ -214,7 +214,7 @@ async fn snapshot_formatter_reasoning_matches_legacy_and_detailed_replay() {
             );
         }
         snapshots.push(format!(
-            "{visibility:?}\nlegacy: {:?}\ndetailed:\n{}",
+            "{visibility:?}\ncompact: {:?}\ndetailed:\n{}",
             projected[0].display_lines(/*width*/ 80),
             lines_to_single_string(&projected[0].transcript_lines(/*width*/ 80)),
         ));
@@ -260,6 +260,117 @@ fn raw_reasoning_keeps_its_own_heading() {
     • Raw investigation
       Keep this heading and its details.
     ");
+}
+
+#[tokio::test]
+async fn snapshot_formatter_completed_patch_needs_no_started_notification() {
+    for replay_kind in [
+        ReplayKind::ResumeInitialMessages,
+        ReplayKind::ThreadSnapshot,
+    ] {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        drain_insert_history(&mut rx);
+        let item = patch_item(AppServerPatchApplyStatus::Completed);
+        let projected = thread_items_to_transcript_cells(
+            chat.thread_id,
+            &chat.config.cwd,
+            [item.clone()],
+            RawReasoningVisibility::Hidden,
+            Some(&chat.config),
+        );
+        chat.replay_thread_item(item, "turn".to_string(), replay_kind);
+        let replayed = take_history_cells(&mut rx);
+        assert_eq!((projected.len(), replayed.len()), (1, 1));
+        for width in [28, 80] {
+            assert_eq!(
+                (
+                    replayed[0].display_hyperlink_lines(width),
+                    replayed[0].transcript_hyperlink_lines(width),
+                ),
+                (
+                    projected[0].display_hyperlink_lines(width),
+                    projected[0].transcript_hyperlink_lines(width),
+                )
+            );
+        }
+        insta::assert_snapshot!(
+            "snapshot_formatter_completed_patch",
+            lines_to_single_string(&replayed[0].display_lines(/*width*/ 80))
+        );
+    }
+}
+
+#[tokio::test]
+async fn snapshot_formatter_live_and_buffered_patch_notifications_render_once() {
+    for replay_kind in [
+        None,
+        Some(ReplayKind::ThreadSnapshot),
+        Some(ReplayKind::ResumeInitialMessages),
+    ] {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        drain_insert_history(&mut rx);
+        chat.handle_server_notification(
+            ServerNotification::ItemStarted(ItemStartedNotification {
+                thread_id: "thread".to_string(),
+                turn_id: "turn".to_string(),
+                item: patch_item(AppServerPatchApplyStatus::InProgress),
+                started_at_ms: 0,
+            }),
+            replay_kind,
+        );
+        chat.handle_server_notification(
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                thread_id: "thread".to_string(),
+                turn_id: "turn".to_string(),
+                item: patch_item(AppServerPatchApplyStatus::Completed),
+                completed_at_ms: 0,
+            }),
+            replay_kind,
+        );
+        let replayed = take_history_cells(&mut rx);
+        assert_eq!(replayed.len(), 1);
+        insta::assert_snapshot!(
+            "snapshot_formatter_completed_patch",
+            lines_to_single_string(&replayed[0].display_lines(/*width*/ 80))
+        );
+    }
+}
+
+#[tokio::test]
+async fn snapshot_formatter_empty_success_and_failed_patch_keep_their_outcomes() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    drain_insert_history(&mut rx);
+    chat.replay_thread_item(
+        AppServerThreadItem::FileChange {
+            id: "empty".to_string(),
+            changes: Vec::new(),
+            status: AppServerPatchApplyStatus::Completed,
+        },
+        "turn".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    chat.replay_thread_item(
+        patch_item(AppServerPatchApplyStatus::Failed),
+        "turn".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+    let replayed = take_history_cells(&mut rx);
+    assert_eq!(replayed.len(), 1);
+    insta::assert_snapshot!(lines_to_single_string(&replayed[0].display_lines(/*width*/ 80)), @"
+    ✘ Failed to apply patch
+    ");
+}
+
+fn patch_item(status: AppServerPatchApplyStatus) -> AppServerThreadItem {
+    AppServerThreadItem::FileChange {
+        id: "patch".to_string(),
+        changes: vec![FileUpdateChange {
+            path: "sample.txt".to_string(),
+            kind: PatchChangeKind::Update { move_path: None },
+            diff: "@@ -1 +1 @@\n-old sample\n+new sample\n".to_string(),
+        }],
+        status,
+    }
 }
 
 fn take_history_cells(

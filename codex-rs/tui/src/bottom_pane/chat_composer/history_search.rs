@@ -25,8 +25,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use ratatui::layout::Constraint;
-use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -34,7 +32,6 @@ use ratatui::text::Span;
 
 use super::super::chat_composer_history::HistorySearchDirection;
 use super::super::chat_composer_history::HistorySearchResult;
-use super::super::footer::footer_height;
 use super::super::footer::reset_mode_after_activity;
 use super::super::textarea::VimPersistentState;
 use super::ActivePopup;
@@ -476,28 +473,8 @@ impl ChatComposer {
     /// The cursor tracks the end of the footer query rather than the textarea preview. If the
     /// footer area is collapsed or too narrow, the x coordinate is clamped inside the hint rect so
     /// terminal backends do not receive an off-screen cursor position.
-    pub(super) fn history_search_cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+    pub(super) fn history_search_cursor_pos(&self, hint_rect: Rect) -> Option<(u16, u16)> {
         self.history_search.as_ref()?;
-        let [_, _, _, popup_rect] = self.layout_areas(area);
-        if popup_rect.is_empty() {
-            return None;
-        }
-
-        let footer_props = self.footer_props();
-        let footer_hint_height = self
-            .custom_footer_height()
-            .unwrap_or_else(|| footer_height(&footer_props));
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
-            let [_, hint_rect] = Layout::vertical([
-                Constraint::Length(footer_spacing),
-                Constraint::Length(footer_hint_height),
-            ])
-            .areas(popup_rect);
-            hint_rect
-        } else {
-            popup_rect
-        };
         if hint_rect.is_empty() {
             return None;
         }
@@ -999,7 +976,9 @@ mod tests {
         }
 
         let area = Rect::new(0, 0, 60, 8);
-        let [_, _, textarea_rect, _] = composer.layout_areas(area);
+        let textarea_rect = composer
+            .layout_with_options(area, Default::default())
+            .textarea;
         let mut buf = Buffer::empty(area);
         composer.render(area, &mut buf);
         let x = textarea_rect.x;
@@ -1018,7 +997,9 @@ mod tests {
         );
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let [_, _, accepted_textarea_rect, _] = composer.layout_areas(area);
+        let accepted_textarea_rect = composer
+            .layout_with_options(area, Default::default())
+            .textarea;
         let mut accepted_buf = Buffer::empty(area);
         composer.render(area, &mut accepted_buf);
         for offset in 0..3 {

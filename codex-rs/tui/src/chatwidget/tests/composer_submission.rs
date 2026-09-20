@@ -13,6 +13,34 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::collections::VecDeque;
 
+#[tokio::test]
+async fn composer_submission_sends_once_and_requests_latest() {
+    let (mut chat, mut events, mut operations) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.apply_external_edit("send once".to_string());
+    while events.try_recv().is_ok() {}
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert_eq!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| matches!(event, AppEvent::FollowTranscript))
+            .count(),
+        1
+    );
+    let Op::UserTurn { items, .. } = next_submit_op(&mut operations) else {
+        panic!("expected submitted user turn");
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "send once".into(),
+            text_elements: Vec::new(),
+        }]
+    );
+    assert!(operations.try_recv().is_err());
+    assert_eq!(chat.composer_text_with_pending(), "");
+}
+
 fn paste_hidden_shell_payload(chat: &mut ChatWidget) -> String {
     let payload = format!("!echo {}", "x".repeat(1000));
     chat.handle_paste(payload.clone());

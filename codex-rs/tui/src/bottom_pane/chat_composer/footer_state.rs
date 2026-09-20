@@ -1,122 +1,155 @@
 //! Footer and status-row presentation state for the chat composer.
 //! Owners schedule flash expiry redraws; replacing a draft clears its flash.
-//! Borrowed transcript feedback uses one resolved presentation for height, paint, and cursor.
+//! One resolved layout supplies the status, input, popup, and hint rectangles to each consumer.
+//! Slash-command and unified mention suggestions preserve passive footer content while keeping input.
+//! Interactive transcript footers keep focus over nonempty composer hints. Their owner projects
+//! actual pending chord hints; unrelated hints resume when the transcript interaction closes.
+//! While the transcript owns input, the composer is dimmed and yields its cursor to the footer.
+//! Hidden suggestions retain their query and selection until their input owner returns.
+//! A pending quit contributes a derived release hint without changing stored footer state.
+//! Shortcut help occupies the space above the composer and keeps its close hint on the final row.
+//! Passive transcript hints retain the shortcuts entry when it fits beside the complete hint.
 
 use std::time::Instant;
 
+use super::super::footer::footer_height;
+use super::super::footer::shows_passive_footer_line;
+use super::ActivePopup;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Text;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 use crate::bottom_pane::footer::CollaborationModeIndicator;
 use crate::bottom_pane::footer::FooterMode;
 use crate::bottom_pane::footer::GoalStatusIndicator;
-use crate::bottom_pane::footer::inset_footer_hint_area;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::ShortcutHint;
 use std::time::Duration;
 
-/// Per-frame transcript feedback rendered by the composer footer owner.
+/// Resolved rectangles shared by painting and cursor placement, without retained layout state.
+pub(super) struct ComposerLayout {
+    pub(super) status: Rect,
+    pub(super) composer: Rect,
+    pub(super) remote_images: Rect,
+    pub(super) textarea: Rect,
+    pub(super) popup: Rect,
+    pub(super) footer: Rect,
+}
+
+/// Per-frame transcript content; the composer remains the only footer layout owner.
 pub(crate) struct TranscriptFooter {
-    pub(crate) text: ratatui::text::Text<'static>,
-    /// Caret in the first footer row, measured from its inset content area.
+    pub(crate) text: Text<'static>,
     pub(crate) cursor_column: Option<u16>,
     pub(crate) is_interactive: bool,
 }
 
-/// Borrowed presentation shared by composer measurement, painting, and cursor placement.
+/// Whether composer suggestions reserve space, cover transcript rows, or stay hidden.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum CommandPopupPlacement {
+    #[default]
+    AboveComposer,
+    Overlay,
+    /// Retain suggestions while another surface owns input above the draft.
+    Hidden,
+}
+
+/// A borrowed presentation shared by measurement, painting, and cursor placement.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ComposerRenderOptions<'a> {
     pub(crate) textarea_right_reserve: u16,
+    /// Keep configured status below the composer while hints occupy the final row.
+    pub(crate) separate_status_line: bool,
+    pub(crate) command_popup_placement: CommandPopupPlacement,
     pub(crate) footer: Option<&'a TranscriptFooter>,
 }
 
 impl super::ChatComposer {
-    pub(crate) fn cursor_pos_with_options(
-        &self,
-        area: Rect,
-        options: ComposerRenderOptions<'_>,
-    ) -> Option<(u16, u16)> {
-        let options = self.resolve_render_options(options);
-        if let Some(footer) = options.footer.filter(|footer| footer.is_interactive) {
-            let [_, _, _, popup_rect] = self.layout_areas_with_options(area, options);
-            let area = inset_footer_hint_area(self.footer_hint_area(popup_rect, options));
-            return footer
-                .cursor_column
-                .filter(|column| *column < area.width && area.height > 0)
-                .map(|column| (area.x + column, area.y));
-        }
-        if !self.draft.input_enabled || self.attachments.selected_remote_image_index.is_some() {
-            return None;
-        }
-
-        if let Some(pos) = self
-            .vim_search_cursor_pos(area)
-            .or_else(|| self.history_search_cursor_pos(area))
-        {
-            return Some(pos);
-        }
-
-        let [_, _, textarea_rect, _] = self.layout_areas_with_options(area, options);
-        let state = *self.draft.textarea_state.borrow();
-        self.draft
-            .textarea
-            .cursor_pos_with_state(textarea_rect, state)
-    }
-
-    pub(super) fn resolve_render_options<'a>(
+    pub(crate) fn resolve_render_options<'a>(
         &self,
         mut options: ComposerRenderOptions<'a>,
     ) -> ComposerRenderOptions<'a> {
         options.footer = options.footer.filter(|footer| {
-            matches!(self.popups.active, super::ActivePopup::None)
-                && self.history_search.is_none()
-                && self.draft.textarea.vim_query().is_none()
-                && !self.quit_shortcut_hint_visible()
-                && (footer.is_interactive
-                    || (!self.footer.flash_visible()
-                        && self.footer.hint_override.is_none()
-                        && matches!(
-                            self.footer_mode(),
-                            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                        )))
+            if (self.popups.active.is_above_composer()
+                && options.command_popup_placement != CommandPopupPlacement::Hidden
+                && footer.is_interactive)
+                || self
+                    .footer
+                    .hint_override
+                    .as_ref()
+                    .is_some_and(|items| items.is_empty() || !footer.is_interactive)
+                || self.history_search.is_some()
+                || self.draft.textarea.vim_query().is_some()
+                || self.quit_shortcut_hint_visible()
+            {
+                return false;
+            }
+            footer.is_interactive || shows_passive_footer_line(&self.footer_props())
         });
         options
     }
 
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn shortcut_overlay_visible(&self) -> bool {
         self.footer_mode() == FooterMode::ShortcutOverlay
-            && matches!(self.popups.active, super::ActivePopup::None)
+            && matches!(self.popups.active, ActivePopup::None)
             && self.custom_footer_height().is_none()
     }
 
-    pub(super) fn footer_hint_height(&self, options: ComposerRenderOptions<'_>) -> u16 {
-        options.footer.map_or_else(
-            || {
-                self.custom_footer_height()
-                    .unwrap_or_else(|| super::super::footer::footer_height(&self.footer_props()))
-            },
-            |footer| footer.text.height().try_into().unwrap_or(u16::MAX),
-        )
+    pub(super) fn shortcuts_above_composer(&self, options: ComposerRenderOptions<'_>) -> bool {
+        self.shortcut_overlay_visible() && options.footer.is_none()
     }
 
-    pub(super) fn footer_hint_area(
-        &self,
-        popup_rect: ratatui::layout::Rect,
-        options: ComposerRenderOptions<'_>,
-    ) -> ratatui::layout::Rect {
-        let footer_hint_height = self.footer_hint_height(options);
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        if footer_spacing > 0 && footer_hint_height > 0 {
-            let [_, hint_rect] = ratatui::layout::Layout::vertical([
-                ratatui::layout::Constraint::Length(footer_spacing),
-                ratatui::layout::Constraint::Length(footer_hint_height),
-            ])
-            .areas(popup_rect);
-            hint_rect
-        } else {
-            popup_rect
+    pub(super) fn footer_hint_height(&self, width: u16, options: ComposerRenderOptions<'_>) -> u16 {
+        if self.shortcuts_above_composer(options) {
+            return 1;
         }
+        options
+            .footer
+            .map_or_else(
+                || {
+                    self.custom_footer_height()
+                        .unwrap_or_else(|| footer_height(&self.hint_footer_props(options), width))
+                },
+                |footer| footer.text.height().try_into().unwrap_or(u16::MAX),
+            )
+            .max(u16::from(options.separate_status_line))
+    }
+
+    pub(super) fn render_transcript_footer(
+        &self,
+        hint_area: Rect,
+        buf: &mut Buffer,
+        footer: &TranscriptFooter,
+    ) {
+        let mut text = footer.text.clone();
+        if footer.cursor_column.is_none()
+            && self.footer.flash_visible()
+            && let Some(flash) = &self.footer.flash
+            && let Some(line) = text.lines.last_mut()
+        {
+            *line = flash.line.clone();
+        }
+        if !footer.is_interactive
+            && !self.footer.flash_visible()
+            && self.footer_mode() == FooterMode::ComposerEmpty
+            && !self.is_in_paste_burst()
+            && let Some(key) = self.footer.toggle_shortcuts_key
+            && let Some(line) = text.lines.last_mut()
+        {
+            let mut shortcuts = Line::default();
+            if line.width() > 0 {
+                shortcuts.push_span(" · ".dim());
+            }
+            shortcuts.extend(key.spans());
+            shortcuts.push_span(" shortcuts".dim());
+            if line.width() + shortcuts.width() <= usize::from(hint_area.width) {
+                line.extend(shortcuts.spans);
+            }
+        }
+        Paragraph::new(text).render(hint_area, buf);
     }
 
     pub(crate) fn footer_flash_delay(&self) -> Option<Duration> {
@@ -152,6 +185,7 @@ pub(super) struct FooterState {
     pub(super) active_agent_label: Option<String>,
     pub(super) external_editor_key: Option<ShortcutHint>,
     pub(super) show_transcript_key: Option<ShortcutHint>,
+    pub(super) find_transcript_key: Option<ShortcutHint>,
     pub(super) insert_newline_key: Option<ShortcutHint>,
     pub(super) queue_key: Option<ShortcutHint>,
     pub(super) toggle_shortcuts_key: Option<ShortcutHint>,
@@ -190,3 +224,7 @@ impl FooterState {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "footer_state_tests.rs"]
+mod tests;

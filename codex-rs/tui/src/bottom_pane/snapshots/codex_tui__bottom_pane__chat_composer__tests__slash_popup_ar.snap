@@ -2,8 +2,8 @@
 source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
+"› /archive  archive this session                            "
 "                                                            "
 "› /ar                                                       "
 "                                                            "
-"                                                            "
-"› /archive  archive this session                            "
+"                                         100% context left  "

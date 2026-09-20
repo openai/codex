@@ -283,7 +283,7 @@ async fn run_verification_rpc_scenario(scenario: RpcScenario) -> color_eyre::Res
             panic!("expected warning history cell");
         };
         let rendered = cell
-            .display_lines(/*width*/ 80)
+            .transcript_lines(/*width*/ 80)
             .iter()
             .map(|line| {
                 line.spans

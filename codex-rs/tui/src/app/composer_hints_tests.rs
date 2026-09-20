@@ -97,12 +97,14 @@ async fn escape_closes_shortcut_help_before_transcript_backtracking() -> Result<
         if search {
             app.transcript_view.begin_search();
         } else {
-            app.handle_tui_event(
+            tui.screen_size_for_event(&TuiEvent::Resize(Size::new(
+                /*width*/ 80, /*height*/ 40,
+            )))?;
+            app.handle_owned_transcript_event(
                 &mut tui,
                 &mut server,
-                TuiEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
-            )
-            .await?;
+                &TuiEvent::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL)),
+            )?;
         }
         assert!(app.transcript_view.has_active_interaction());
         app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(escape))

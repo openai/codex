@@ -133,6 +133,7 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
     let event = rx.try_recv().expect("expected AppEvent");
     let AppEvent::SubmitUserMessageWithMode {
         text,

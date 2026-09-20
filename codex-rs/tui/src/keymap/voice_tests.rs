@@ -65,7 +65,7 @@ fn voice_mute_chord_dispatches_only_in_its_active_context() {
         matcher.advance(
             prefix,
             &runtime.chords,
-            KeymapContextSet::new(KeymapContext::Pager),
+            KeymapContextSet::new(KeymapContext::Pager)
         ),
         KeyChordMatch::PassThrough
     );
@@ -142,7 +142,7 @@ fn voice_toggle_chord_dispatches_in_chat_without_an_active_voice_session() {
         matcher.advance(
             prefix,
             &runtime.chords,
-            KeymapContextSet::new(KeymapContext::Pager),
+            KeymapContextSet::new(KeymapContext::Pager)
         ),
         KeyChordMatch::PassThrough
     );

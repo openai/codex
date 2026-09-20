@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
-"› $1p                                                                                               "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
 "› 1password  [Skill] Example skill used in tests.                                                   "
 "                                                                                                    "
 "  enter insert · esc close                                                                          "
+"                                                                                                    "
+"› $1p                                                                                               "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                 100% context left  "

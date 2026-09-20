@@ -1927,6 +1927,9 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
 #[tokio::test]
 async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> Result<()> {
     let (mut app, codex_home) = make_history_test_app().await?;
+    // The inline scrollback row cap fixes the page boundary around the review marker.
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
+    app.local_settings.tui.alternate_screen = codex_config::types::AltScreenMode::Never;
     app.local_settings.tui.terminal_resize_reflow_max_rows = Some(100);
     let thread_id = create_fake_paginated_rollout(
         codex_home.path(),
@@ -2123,7 +2126,7 @@ async fn older_pagination_reconciles_review_prompts_across_page_boundaries() -> 
 }
 
 #[tokio::test]
-async fn transcript_home_loads_every_older_history_page() -> Result<()> {
+async fn transcript_alt_beginning_loads_every_older_history_page() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
@@ -2260,7 +2263,7 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
     app.handle_backtrack_overlay_event(
         &mut tui,
         &mut app_server,
-        TuiEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('<'), KeyModifiers::ALT)),
     )
     .await?;
     while app_server.has_older_history(thread_id) {
@@ -2279,7 +2282,7 @@ async fn transcript_home_loads_every_older_history_page() -> Result<()> {
             .any(|line| line.to_string().contains("history output 0"))
     }));
     let Some(Overlay::Transcript(overlay)) = app.overlay.as_mut() else {
-        panic!("expected transcript overlay after Home navigation");
+        panic!("expected transcript overlay after beginning navigation");
     };
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 12,
@@ -2542,6 +2545,9 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     app.config.sqlite = SqliteConfig::new_for_testing(codex_home.path().abs());
+    // Keep initial hydration within the inline scrollback budget so refill has work to do.
+    app.local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
+    app.local_settings.tui.alternate_screen = codex_config::types::AltScreenMode::Never;
     app.local_settings.tui.terminal_resize_reflow_max_rows = Some(8);
     let thread_id = create_history_rollout(
         &app.config,
@@ -2675,7 +2681,10 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
         assert!(!partial.contains("This is a test announcement"));
         assert!(!partial.contains('%'));
 
-        overlay.set_history_state(crate::pager_overlay::TranscriptHistoryState::LoadingOlder);
+        overlay.handle_event(
+            &mut tui,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+        )?;
         let loading = render_overlay(overlay);
         assert!(loading.contains("Loading earlier messages…"));
         assert!(!loading.contains("OpenAI Codex"));
@@ -3810,7 +3819,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
                 AppEvent::InsertHistoryCell(cell) => Some(cell),
                 _ => None,
             })
-            .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 200)))
+            .map(|cell| lines_to_single_string(&cell.transcript_lines(/*width*/ 200)))
             .collect::<Vec<_>>()
     };
     let change = |thread_id, path: &str| AppEvent::ChangeWorkingDirectory {
@@ -4334,16 +4343,16 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     render_bottom_popup(&app.chat_widget, /*width*/ 80)
                         .replace(&root_thread_id.to_string(), "[root]")
                         .replace(&child_thread_id.to_string(), "[child]"),
-                    @"
-                  Subagents
-                  Select an agent to watch. ⌥+← previous, ⌥+→ next.
+                    @r###"
+                      Subagents
+                      Select an agent to watch. ⌥+← previous, ⌥+→ next.
 
 
-                › 1. • Main [default] (current)  [root]
-                  2. • /root/worker              [child]
+                    › 1. • Main [default] (current)  [root]
+                      2. • /root/worker              [child]
 
-                  enter select · esc back
-                "
+                      enter select · esc back
+                    "###
                 );
                 assert_eq!(take_backfill_counts(&requests), (0, 0));
                 tokio::time::timeout(Duration::from_secs(5), started_rx).await??;
@@ -4631,9 +4640,11 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
         let current_id = current.session.thread_id;
         app.enqueue_primary_thread_session(current.session, current.turns)
             .await?;
-        let thread = owner
+        let mut thread = owner
             .thread_read(thread_id, /*include_turns*/ false)
             .await?;
+        // Keep the age label stable while the server exercises failure recovery.
+        thread.updated_at = chrono::Utc::now().timestamp() - 7 * 24 * 60 * 60;
         let mut view = app.agents_overview_view(vec![thread], Some(thread_id));
         view.handle_paste("Keep this draft".into());
         app.chat_widget.show_bottom_pane_view(Box::new(view));

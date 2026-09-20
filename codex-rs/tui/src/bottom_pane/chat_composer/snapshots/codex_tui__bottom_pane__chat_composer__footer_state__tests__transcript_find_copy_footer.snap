@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/chat_composer/footer_state_tests.rs
+expression: text(&buffer)
+---
+
+› Ask Codex
+
+  Find: needle
+  Copied selection to clipboard

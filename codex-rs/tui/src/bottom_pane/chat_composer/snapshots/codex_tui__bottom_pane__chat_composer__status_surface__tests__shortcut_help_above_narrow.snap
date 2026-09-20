@@ -1,0 +1,44 @@
+---
+source: tui/src/bottom_pane/chat_composer/status_surface_tests.rs
+expression: text
+---
+
+
+
+
+
+
+
+
+  Keyboard shortcuts
+
+  Compose
+  /        Commands
+  @        Mention files
+  !        Shell command
+  ctrl+j   New line
+  ctrl+v   Paste image
+  ctrl+g   External editor
+  ctrl+r   Search history
+  esc esc  Edit last message
+
+  Session
+  tab     Send message
+  ⌥+,     Less reasoning
+  ⌥+.     More reasoning
+  ctrl+c  Quit
+
+  Transcript (open first)
+  ctrl+t                 Open transcript
+  f3                     Find text
+  pgup / pgdn            Scroll
+  ctrl+space             Start selection
+  ctrl+home / ctrl+end   Top / latest
+  shift+⌥+, / shift+⌥+.  Top / latest
+
+  /keymap customize
+
+› Ask Codex
+
+  MODEL · ~/project · Context 20% used
+  ? / esc close

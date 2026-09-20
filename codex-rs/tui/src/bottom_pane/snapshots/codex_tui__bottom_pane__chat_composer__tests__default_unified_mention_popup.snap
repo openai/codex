@@ -1,14 +1,14 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 5348
+assertion_line: 5328
 expression: terminal.backend()
 ---
-"                                                                                                    "
-"› @sa                                                                                               "
-"                                                                                                    "
 "  Mentions                                                                                          "
-"  Files, directories, plugins, skills and tasks                                                     "
 "   All Results   Filesystem Only   Plugins                                                          "
 "  sa                                                                                                "
 "› Sample Plugin   Plugin with skills and an MCP server                                        Plugin"
 "  enter/tab insert · esc close · ↑/↓ select · ←/→ filter                                            "
+"                                                                                                    "
+"› @sa                                                                                               "
+"                                                                                                    "
+"                                                                                 100% context left  "

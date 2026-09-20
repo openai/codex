@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
+"  loading...                                                                                        "
+"                                                                                                    "
+"                                                                                                    "
 "› @src  $1_suffix                                                                                   "
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"  loading...                                                                                        "
-"                                                                                                    "
+"                                                                                 100% context left  "

@@ -58,6 +58,7 @@ async fn goal_slash_command_accepts_objective_at_limit() {
     let command = format!("/goal {objective}");
 
     submit_composer_text(&mut chat, &command);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
 
     let event = rx.try_recv().expect("expected goal objective event");
     let AppEvent::SetThreadGoalDraft {
@@ -82,6 +83,7 @@ async fn goal_slash_command_accepts_multiline_objective_after_blank_first_line()
     let objective = "follow these instructions\npreserve this detail";
 
     submit_composer_text(&mut chat, &format!("/goal \n\n{objective}"));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
 
     let event = rx.try_recv().expect("expected goal objective event");
     let AppEvent::SetThreadGoalDraft {

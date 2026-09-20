@@ -206,7 +206,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("pager", "Pager", "jump_bottom", "Jump to the end."),
     action("pager", "Pager", "close", "Close the pager overlay."),
     action("pager", "Pager", "close_transcript", "Close the transcript overlay."),
-    action("pager", "Pager", "find", "Find text in the transcript overlay."),
+    action("pager", "Pager", "find", "Find text in a transcript pager."),
     action("list", "List", "move_up", "Move list selection up."),
     action("list", "List", "move_down", "Move list selection down."),
     action("list", "List", "move_left", "Move horizontally left in list pickers."),

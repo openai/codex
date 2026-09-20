@@ -1,14 +1,15 @@
 ---
-source: tui/src/chatwidget/tests/group_projection_tests.rs
+source: tui/src/chatwidget/tests/history_projection.rs
+assertion_line: 176
 expression: "snapshots.join(\"\\n\")"
 ---
 Hidden
-legacy: []
+compact: []
 detailed:
 • Read src/main.rs (src/main.rs:3).
 
 Visible
-legacy: []
+compact: []
 detailed:
 • Read src/main.rs (src/main.rs:3).
   

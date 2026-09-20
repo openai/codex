@@ -113,13 +113,18 @@ pub(super) enum ActivePopup {
 }
 
 impl ActivePopup {
+    /// Shared suggestion menus render above the draft and retain its status footer.
+    pub(super) fn is_above_composer(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
     pub(super) fn required_height(&self, width: u16, footer_total_height: u16) -> u16 {
         match self {
             Self::None => footer_total_height,
-            Self::Command(popup) => popup.calculate_required_height(width),
-            Self::File(popup) => popup.calculate_required_height(),
-            Self::Skill(popup) => popup.calculate_required_height(width),
-            Self::MentionV2(popup) => popup.calculate_required_height(width),
+            Self::Command(popup) => popup.calculate_required_height(width) + footer_total_height,
+            Self::File(popup) => popup.calculate_required_height() + footer_total_height,
+            Self::Skill(popup) => popup.calculate_required_height(width) + footer_total_height,
+            Self::MentionV2(popup) => popup.calculate_required_height(width) + footer_total_height,
         }
     }
 }

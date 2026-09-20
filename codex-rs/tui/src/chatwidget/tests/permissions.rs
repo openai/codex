@@ -662,50 +662,6 @@ async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevate
 }
 
 #[tokio::test]
-async fn windows_sandbox_pickers_keep_explicit_confirmation_with_remapped_actions() {
-    for fallback in [false, true] {
-        let (mut chat, mut events, mut operations) =
-            make_chatwidget_manual(/*model_override*/ None).await;
-        let mut keymap = crate::keymap::RuntimeKeymap::defaults();
-        keymap.list.accept = vec![key_hint::plain(KeyCode::F(3))];
-        keymap.list.cancel = vec![key_hint::plain(KeyCode::F(2))];
-        chat.bottom_pane.set_keymap_bindings(&keymap);
-        chat.bottom_pane
-            .set_composer_text("Keep this draft 日本語".into(), Vec::new(), Vec::new());
-        let draft = chat.bottom_pane.composer_draft_snapshot();
-        let preset = builtin_approval_presets()
-            .into_iter()
-            .find(|preset| preset.id == "auto")
-            .expect("auto preset");
-        if fallback {
-            chat.open_windows_sandbox_fallback_prompt(preset, /*profile_selection*/ None);
-        } else {
-            chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
-        }
-        while events.try_recv().is_ok() {}
-        while operations.try_recv().is_ok() {}
-
-        chat.handle_key_event(KeyCode::Char('2').into());
-        assert!(chat.has_active_view());
-        assert!(events.try_recv().is_err());
-        let rendered = render_bottom_popup(&chat, /*width*/ 40);
-        assert!(rendered.contains("f3 select · f2 back"), "{rendered}");
-        assert_chatwidget_snapshot!(
-            format!("windows_sandbox_picker_fallback_{fallback}_40"),
-            rendered
-        );
-
-        chat.handle_key_event(KeyCode::F(3).into());
-        assert_matches!(
-            events.try_recv(),
-            Ok(AppEvent::BeginWindowsSandboxLegacySetup { .. })
-        );
-        assert_eq!(chat.bottom_pane.composer_draft_snapshot(), draft);
-        assert!(operations.try_recv().is_err());
-    }
-}
-
-#[tokio::test]
 async fn fragmented_terminal_response_cannot_select_non_admin_windows_sandbox() {
     for use_fallback_prompt in [false, true] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

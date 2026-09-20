@@ -143,6 +143,48 @@ async fn empty_enter_returns_to_latest_with_contextual_hints() -> Result<()> {
 }
 
 #[tokio::test]
+async fn submitting_a_draft_from_history_queues_once_and_follows_immediately() -> Result<()> {
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 12);
+    app.transcript_cells = vec![Arc::new(PlainHistoryCell::new(
+        (0..30).map(|row| format!("row {row}").into()).collect(),
+    ))];
+    app.render_owned_transcript(&mut tui, size)?;
+    app.transcript_view
+        .scroll(&app.transcript_cells, /*rows*/ -10);
+    app.chat_widget
+        .apply_external_edit("send this once".to_string());
+    while events.try_recv().is_ok() {}
+
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        TuiEvent::Key(KeyEvent::from(KeyCode::Enter)),
+    )
+    .await?;
+    let mut follows = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, AppEvent::FollowTranscript) {
+            follows += 1;
+            app.handle_event(&mut tui, &mut server, event).await?;
+        }
+    }
+    assert_eq!(follows, 1);
+    assert!(app.transcript_view.is_following());
+    assert_eq!(
+        app.chat_widget.queued_user_message_texts(),
+        vec!["send this once"]
+    );
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "");
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn enter_preserves_search_backtrack_and_modal_ownership_while_scrolled() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;

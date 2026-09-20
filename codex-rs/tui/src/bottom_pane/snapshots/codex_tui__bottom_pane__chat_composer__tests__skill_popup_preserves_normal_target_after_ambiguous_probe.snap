@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
-"› $1x  $plugin:d                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
 "› deploy (plugin)  [Skill] Example skill used in tests.                                             "
 "                                                                                                    "
 "  enter insert · esc close                                                                          "
+"                                                                                                    "
+"› $1x  $plugin:d                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                 100% context left  "

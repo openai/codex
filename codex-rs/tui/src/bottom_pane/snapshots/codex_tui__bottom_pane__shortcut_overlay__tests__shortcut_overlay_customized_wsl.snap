@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/shortcut_overlay_tests.rs
+expression: terminal.backend()
+---
+"  Keyboard shortcuts                                                            "
+"                                                                                "
+"  Compose                             Session                                   "
+"  /              Commands             tab        Send message                   "
+"  @              Mention files        shift+tab  Change mode                    "
+"  !              Shell command        ⌥+.        More reasoning                 "
+"  shift+enter    New line             ←          Agents (empty prompt)          "
+"  ctrl+⌥+v       Paste image          ctrl+c     Quit                           "
+"  ctrl+x ctrl+e  External editor                                                "
+"  esc            Edit last message    Transcript (open first)                   "
+"                                      ctrl+t                 Open transcript    "
+"                                      f3                     Find text          "
+"                                      pgup / pgdn            Scroll             "
+"                                      ctrl+space             Start selection    "
+"                                      ctrl+home / ctrl+end   Top / latest       "
+"                                      shift+⌥+, / shift+⌥+.  Top / latest       "
+"                                                                                "
+"  /keymap customize                                                             "

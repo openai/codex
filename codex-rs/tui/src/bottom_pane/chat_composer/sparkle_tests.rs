@@ -55,19 +55,19 @@ fn draw(composer: &ChatComposer, width: u16, now: Instant) -> (Buffer, Rect) {
         width,
         composer.desired_height(width),
     );
-    let [padding, _, textarea, _] = composer.layout_areas(area);
+    let layout = composer.layout_with_options(area, Default::default());
     let phase = composer.sparkle.phase.replace(Phase::Unarmed);
     let mut buffer = Buffer::empty(area);
     composer.render(area, &mut buffer);
     composer.sparkle.phase.set(phase);
     composer.render_sparkle_at(
-        padding,
-        textarea,
+        layout.composer,
+        layout.textarea,
         composer.cursor_pos(area),
         now,
         &mut buffer,
     );
-    (buffer, textarea)
+    (buffer, layout.textarea)
 }
 
 fn text(buffer: &Buffer) -> String {

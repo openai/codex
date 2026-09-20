@@ -508,10 +508,10 @@ mod tests {
 
     #[test]
     fn ssh_attempts_both_native_and_osc52() {
-        let tmux_calls = Cell::new(0_u8);
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let tmux_calls = Cell::new(/*value*/ 0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "**hello**",
             CopyFormat::Markdown,
@@ -544,10 +544,10 @@ mod tests {
 
     #[test]
     fn ssh_reports_failure_when_all_backends_fail() {
-        let tmux_calls = Cell::new(0_u8);
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let tmux_calls = Cell::new(/*value*/ 0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -585,10 +585,10 @@ mod tests {
 
     #[test]
     fn ssh_inside_tmux_attempts_both_native_and_tmux() {
-        let tmux_calls = Cell::new(0_u8);
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let tmux_calls = Cell::new(/*value*/ 0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -620,10 +620,10 @@ mod tests {
 
     #[test]
     fn ssh_inside_tmux_falls_back_to_osc52_when_tmux_copy_fails() {
-        let tmux_calls = Cell::new(0_u8);
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let tmux_calls = Cell::new(/*value*/ 0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -677,9 +677,9 @@ mod tests {
 
     #[test]
     fn local_uses_native_clipboard_first() {
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -732,9 +732,9 @@ mod tests {
 
     #[test]
     fn local_non_wsl_falls_back_to_osc52_when_native_fails() {
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "**hello**",
             CopyFormat::Markdown,
@@ -801,9 +801,9 @@ mod tests {
 
     #[test]
     fn local_wsl_native_failure_uses_powershell_and_skips_osc52_on_success() {
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -831,9 +831,9 @@ mod tests {
 
     #[test]
     fn local_wsl_falls_back_to_osc52_when_native_and_powershell_fail() {
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -861,9 +861,9 @@ mod tests {
 
     #[test]
     fn local_reports_both_errors_when_native_and_osc52_fail() {
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,
@@ -897,9 +897,9 @@ mod tests {
 
     #[test]
     fn local_wsl_reports_native_powershell_and_osc52_errors_when_all_fail() {
-        let osc_calls = Cell::new(0_u8);
-        let native_calls = Cell::new(0_u8);
-        let wsl_calls = Cell::new(0_u8);
+        let osc_calls = Cell::new(/*value*/ 0_u8);
+        let native_calls = Cell::new(/*value*/ 0_u8);
+        let wsl_calls = Cell::new(/*value*/ 0_u8);
         let result = copy_to_clipboard_with(
             "hello",
             CopyFormat::PlainText,

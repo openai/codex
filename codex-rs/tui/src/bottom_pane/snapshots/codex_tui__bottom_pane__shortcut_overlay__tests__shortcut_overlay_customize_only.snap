@@ -1,0 +1,6 @@
+---
+source: tui/src/bottom_pane/shortcut_overlay_tests.rs
+assertion_line: 67
+expression: terminal.backend()
+---
+"  /keymap customize         "

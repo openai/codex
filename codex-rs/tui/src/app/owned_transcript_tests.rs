@@ -317,7 +317,10 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
         app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
     let expected_cursor = app
         .chat_widget
-        .bottom_pane_renderable(/*footer*/ None)
+        .bottom_pane_renderable(
+            /*footer*/ None,
+            crate::bottom_pane::CommandPopupPlacement::Overlay,
+        )
         .cursor_pos(bottom_area)
         .expect("composer cursor");
     assert_eq!(
@@ -918,6 +921,98 @@ async fn offline_backtrack_keeps_the_preview_and_draft_without_reverting() -> Re
         tui.set_owned_screen(/*owned*/ false)?;
         app_server.shutdown().await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.chat_widget
+        .set_status_line(Some("gpt-test default · /tmp/project".into()));
+    app.local_settings.tui.animations = false;
+    app.chat_widget
+        .set_footer_hint_override(Some(vec![("model".to_string(), "high · fast".to_string())]));
+    app.transcript_cells = vec![Arc::new(crate::history_cell::PlainHistoryCell::new(
+        (1..=40)
+            .map(|row| format!("Transcript row {row:02}: content behind the menu").into())
+            .collect(),
+    ))];
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    for (width, height) in [(80, 14), (32, 14), (80, 7), (80, 5)] {
+        let size = Size::new(width, height);
+        tui.terminal.resize(size)?;
+        app.chat_widget.apply_external_edit("/m".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        app.render_owned_transcript(&mut tui, size)?;
+        app.transcript_view
+            .scroll(&app.transcript_cells, /*rows*/ -3);
+        let bottom = app.render_owned_transcript(&mut tui, size)?;
+        let cursor = tui.terminal.last_known_cursor_pos;
+        let before =
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
+
+        // Changing the token reopens the menu dismissed above.
+        app.chat_widget.apply_external_edit("/mo".to_string());
+        app.chat_widget.apply_external_edit("/m".to_string());
+        assert_eq!(app.render_owned_transcript(&mut tui, size)?, bottom);
+        assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
+        let open =
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
+        let open_text = buffer_text(&open);
+        if bottom.y > 0 {
+            let menu_y = open_text
+                .lines()
+                .position(|line| line.contains("› /model"))
+                .expect("available rows show command matches");
+            let prefix_len = menu_y * usize::from(width);
+            assert_eq!(
+                &open.content()[..prefix_len],
+                &before.content()[..prefix_len]
+            );
+            assert_ne!(open, before);
+        }
+        let composer_start = open.index_of(bottom.x, bottom.y);
+        assert_eq!(
+            &open.content()[composer_start..],
+            &before.content()[composer_start..]
+        );
+        if (width, height) == (80, 14) {
+            insta::assert_snapshot!("slash_picker_overlays_history", open_text);
+        }
+
+        app.chat_widget.apply_external_edit("/mo".to_string());
+        assert_eq!(app.render_owned_transcript(&mut tui, size)?, bottom);
+        let filtered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+            &tui.terminal,
+        ));
+        assert_eq!(
+            filtered
+                .lines()
+                .take(usize::from(bottom.y))
+                .any(|line| line.contains("› /model")),
+            bottom.y > 0,
+            "a single command remains visible when the menu has room",
+        );
+        app.chat_widget.apply_external_edit("/m".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.render_owned_transcript(&mut tui, size)?, bottom);
+        assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.render_owned_transcript(&mut tui, size)?, bottom);
+        assert_eq!(
+            (
+                crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+                tui.terminal.last_known_cursor_pos
+            ),
+            (&before, cursor),
+        );
+    }
+    tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }
 

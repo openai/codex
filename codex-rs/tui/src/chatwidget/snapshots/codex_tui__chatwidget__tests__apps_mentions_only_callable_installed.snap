@@ -1,13 +1,15 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
+assertion_line: 2316
 expression: snapshot
 ---
-› $
-
-
 › Google Drive  [App] Connected files
 
   enter insert · esc close
+
+› $
+
+  GPT-5.6-Sol default · /tmp/project
 
 --- plugin authentication ---
   Plugins

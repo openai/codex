@@ -4,6 +4,7 @@
 //! exec-cell grouping and unified exec wait state.
 
 use super::*;
+use crate::exec_cell::CommandOutput;
 
 impl ChatWidget {
     pub(super) fn flush_unified_exec_wait_streak(&mut self) {

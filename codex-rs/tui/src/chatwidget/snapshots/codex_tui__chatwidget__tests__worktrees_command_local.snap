@@ -2,6 +2,8 @@
 source: tui/src/chatwidget/tests/worktree_picker_tests.rs
 expression: popup
 ---
+› /worktree  start or continue a conversation in a new worktree
+
 › /work
 
-› /worktree  start or continue a conversation in a new worktree
+  GPT-5.6-Sol default · /tmp/project

@@ -227,6 +227,7 @@ impl BottomPane {
     pub(super) fn handle_inline_banner_key(&mut self, key: KeyEvent) -> bool {
         // Draft input, completion menus, and paste bursts retain all of their normal keys.
         if !self.composer_is_empty()
+            || (key.code == KeyCode::Esc && self.composer.shortcut_overlay_visible())
             || self.composer.popup_active()
             || self.composer.is_in_paste_burst()
             || self.composer_should_handle_vim_insert_escape(key)

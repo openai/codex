@@ -39,11 +39,13 @@ async fn slash_new_and_fork_offer_checkout_choices_inside_local_git_repository()
     chat.bottom_pane
         .set_composer_text("/new named".into(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
     assert_matches!(rx.try_recv(), Ok(AppEvent::NewSession { name: Some(name) }) if name == "named");
     chat.bottom_pane
         .set_composer_text("/fork named".into(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
     assert_matches!(rx.try_recv(), Ok(AppEvent::StartManagedWorktree {
         mode: crate::app_event::ManagedWorktreeMode::Fork,

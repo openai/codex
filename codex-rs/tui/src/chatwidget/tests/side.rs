@@ -258,6 +258,8 @@ async fn slash_side_without_args_starts_empty_side_conversation() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
+
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::StartSide {
@@ -282,6 +284,8 @@ async fn slash_btw_without_args_starts_empty_side_conversation() {
         .set_composer_text("/btw".to_string(), Vec::new(), Vec::new());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
 
     assert_matches!(
         rx.try_recv(),
@@ -313,6 +317,8 @@ async fn slash_side_requests_forked_side_question_while_task_running() {
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
 
     assert_matches!(
         rx.try_recv(),
@@ -359,6 +365,8 @@ async fn slash_btw_requests_forked_side_question_while_task_running() {
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
 
     assert_matches!(
         rx.try_recv(),

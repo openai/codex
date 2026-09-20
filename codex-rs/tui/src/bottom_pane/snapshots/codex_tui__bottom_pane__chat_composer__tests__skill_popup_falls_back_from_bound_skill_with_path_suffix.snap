@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
-"› $left  $bound/path                                                                                "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
 "› left  [Skill] Example skill used in tests.                                                        "
 "                                                                                                    "
 "  enter insert · esc close                                                                          "
+"                                                                                                    "
+"› $left  $bound/path                                                                                "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                 100% context left  "

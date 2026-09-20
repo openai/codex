@@ -226,7 +226,7 @@ async fn commands_can_precede_the_sparkle_but_inserted_or_typed_drafts_cannot() 
                     .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT));
                 assert!(
                     render_bottom_popup(&app.chat_widget, /*width*/ 80)
-                        .contains("customize shortcuts with /keymap")
+                        .contains("Keyboard shortcuts")
                 );
             }
             "commands" => {

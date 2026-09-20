@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/command_popup.rs
-assertion_line: 523
 expression: commands
 ---
 /model - choose what model and reasoning effort to use
@@ -25,7 +24,7 @@ expression: commands
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
 /recap - summarize the current conversation now
-/agents - view and switch between all active agent sessions
+/agents - open the agent command center
 /side - start a side conversation in an ephemeral fork
 /copy - copy the last response or part of it
 /export - export the conversation as markdown

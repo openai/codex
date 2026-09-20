@@ -29,7 +29,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
 • Ran for d in ansi-escape apply-patch arg0 cli common core exec execpolicy
   │ file-search linux-sandbox login mcp-client mcp-server ollama
   │ tui; do echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo;
-  │ … +1 lines
+  │ … +1 line
   └ --- ansi-escape/Cargo.toml
     [package]
     … +243 lines

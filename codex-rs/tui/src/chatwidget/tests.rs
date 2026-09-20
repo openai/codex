@@ -249,14 +249,15 @@ mod computer_activity_tests;
 mod config_errors;
 #[path = "tests/copy_export_picker_tests.rs"]
 mod copy_export_picker_tests;
+#[path = "tests/dynamic_activity_tests.rs"]
 mod dynamic_activity_tests;
 mod exec_flow;
 mod goal_menu;
 mod goal_validation;
-#[path = "tests/group_projection_tests.rs"]
-mod group_projection_tests;
 mod guardian;
 pub(crate) mod helpers;
+#[path = "tests/history_projection.rs"]
+mod history_projection;
 mod history_replay;
 #[path = "tests/luna_reserve_usage_tests.rs"]
 mod luna_reserve_usage_tests;
@@ -297,8 +298,6 @@ mod status_surface_previews;
 mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;
-#[path = "tests/tool_details_tests.rs"]
-mod tool_details_tests;
 mod usage;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;

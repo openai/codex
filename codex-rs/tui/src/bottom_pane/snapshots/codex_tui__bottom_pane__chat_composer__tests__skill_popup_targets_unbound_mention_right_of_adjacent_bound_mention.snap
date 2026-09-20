@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                                                    "
-"› $bound-skill$unbound-skill                                                                        "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
-"                                                                                                    "
 "› unbound-skill  [Skill] Example skill used in tests.                                               "
 "                                                                                                    "
 "  enter insert · esc close                                                                          "
+"                                                                                                    "
+"› $bound-skill$unbound-skill                                                                        "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                 100% context left  "

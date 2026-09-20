@@ -1,0 +1,36 @@
+---
+source: tui/src/bottom_pane/chat_composer/mentions_layout_tests.rs
+expression: buffer_text(&open)
+---
+Transcript row 00: behind the menu
+Transcript row 01: behind the menu
+Transcript row 02: behind the menu
+Transcript row 03: behind the menu
+Transcript row 04: behind the menu
+Transcript row 05: behind the menu
+Transcript row 06: behind the menu
+Transcript row 07: behind the menu
+Transcript row 08: behind the menu
+Transcript row 09: behind the menu
+Transcript row 10: behind the menu
+  Mentions
+  Files, directories, plugins, skills and tasks
+
+   All Results   Filesystem Only   Plugins
+
+  Type to search mentions
+
+› Plugin00  Plugin description 00                                         Plugin
+  Plugin01  Plugin description 01                                         Plugin
+  Plugin02  Plugin description 02                                         Plugin
+  Plugin03  Plugin description 03                                         Plugin
+  Plugin04  Plugin description 04                                         Plugin
+  Plugin05  Plugin description 05                                         Plugin
+  Plugin06  Plugin description 06                                         Plugin
+  Plugin07  Plugin description 07                                         Plugin
+↓
+  enter/tab insert · esc close · ↑/↓ select · ←/→ filter
+
+› @
+
+  TRANSCRIPT STATUS

@@ -1,7 +1,9 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5328
 expression: terminal.backend()
 ---
+"› /diff  show git diff (including untracked files)                                                  "
 "                                                                                                    "
 "› /dide tail                                                                                        "
 "                                                                                                    "
@@ -9,5 +11,4 @@ expression: terminal.backend()
 "                                                                                                    "
 "                                                                                                    "
 "                                                                                                    "
-"                                                                                                    "
-"› /diff  show git diff (including untracked files)                                                  "
+"                                                                  100% context left | Vim: Replace  "

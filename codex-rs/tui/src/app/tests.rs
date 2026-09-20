@@ -21,6 +21,8 @@ mod backend_banner_startup_tests;
 mod background_exit_tests;
 #[path = "tests/background_task_defaults_tests.rs"]
 mod background_task_defaults_tests;
+#[path = "tests/browsing_pagination_tests.rs"]
+mod browsing_pagination_tests;
 #[path = "tests/buffered_replay.rs"]
 mod buffered_replay;
 #[path = "tests/connector_policy.rs"]
@@ -33,6 +35,8 @@ mod fork_workspace_roots_tests;
 mod fresh_sparkle_tests;
 #[path = "tests/key_chords.rs"]
 mod key_chords;
+#[path = "tests/local_command_scroll_tests.rs"]
+mod local_command_scroll_tests;
 #[path = "tests/luna_reserve_recovery_tests.rs"]
 mod luna_reserve_recovery_tests;
 #[path = "tests/mcp_startup.rs"]
@@ -80,7 +84,6 @@ mod stream_animation_tests;
 mod thread_usage;
 #[path = "tests/transcript_composer.rs"]
 mod transcript_composer;
-
 #[path = "tests/transcript_selection.rs"]
 mod transcript_selection;
 #[path = "tests/turn_submission.rs"]
@@ -457,7 +460,7 @@ fn bypass_hook_trust_startup_warning_snapshot() {
             "`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."
                 .to_string(),
         )
-        .display_lines(/*width*/ 80),
+        .transcript_lines(/*width*/ 80),
     );
 
     assert_app_snapshot!("bypass_hook_trust_startup_warning", rendered);
@@ -481,7 +484,7 @@ async fn cyber_model_auto_review_notice_snapshot() -> Result<()> {
         Ok(AppEvent::InsertHistoryCell(cell)) => cell,
         other => panic!("expected InsertHistoryCell event, got {other:?}"),
     };
-    let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+    let rendered = lines_to_single_string(&cell.transcript_lines(/*width*/ 80));
     assert_app_snapshot!("cyber_model_auto_review_notice", rendered);
     Ok(())
 }
@@ -5096,11 +5099,11 @@ async fn side_parent_status_prioritizes_input_over_approval() -> Result<()> {
     );
     assert_snapshot!(
         format!("{input_footer}\n{approval_footer}\n{cleared_footer}"),
-        @"
-    Side from main thread · main needs input · ctrl+/ to switch · ctrl+c to close
-    Side from main thread · main needs approval · ctrl+/ to switch · ctrl+c to close
-    Side from main thread · ctrl+/ to switch · ctrl+c to close
-    "
+        @r"
+        Side from main thread · main needs input · ctrl+/ to switch · ctrl+c to close
+        Side from main thread · main needs approval · ctrl+/ to switch · ctrl+c to close
+        Side from main thread · ctrl+/ to switch · ctrl+c to close
+        "
     );
 
     Ok(())
@@ -5975,8 +5978,8 @@ async fn make_test_app() -> App {
         runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
-        transcript_view: crate::transcript_view::TranscriptView::default(),
         native_history: Default::default(),
+        transcript_view: Default::default(),
         last_rendered_history_tail: None,
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,
@@ -6078,8 +6081,8 @@ pub(super) async fn make_test_app_with_channels() -> (
             runtime_permission_profile_override: None,
             file_search,
             transcript_cells: Vec::new(),
-            transcript_view: crate::transcript_view::TranscriptView::default(),
             native_history: Default::default(),
+            transcript_view: Default::default(),
             last_rendered_history_tail: None,
             last_thread_usage_status_cell: None,
             pending_thread_usage_history_refresh: false,
@@ -8147,8 +8150,11 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
 
     let source_thread_id = ThreadId::from_string(&source_thread_id)?;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
-    // Leave the oldest prompt on an unloaded page.
+    // Bound fixture hydration independently from the owned viewport exercised below.
+    // Inline hydration's row cap leaves the oldest prompt on an unloaded page.
     let mut local_settings = crate::local_settings::LocalSettings::from(&config);
+    local_settings.transcript_mode = crate::transcript_mode::TranscriptMode::Terminal;
+    local_settings.tui.alternate_screen = codex_config::types::AltScreenMode::Never;
     local_settings.tui.terminal_resize_reflow_max_rows = Some(2);
     let started = app_server
         .resume_thread(
@@ -8211,6 +8217,48 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
         .await?
         .goal;
     let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 24);
+    app.render_owned_transcript(&mut tui, size)?;
+    app.transcript_view
+        .scroll(&app.transcript_cells, /*rows*/ -1);
+    app.render_owned_transcript(&mut tui, size)?;
+    // Freeze a visible selection before the same thread's authoritative history changes.
+    let selected_row = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)
+        .content()
+        .chunks(usize::from(size.width))
+        .position(|row| {
+            row.iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .contains("selected prompt")
+        })
+        .expect("selected prompt should be visible") as u16;
+    for (kind, column) in [
+        (
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            2,
+        ),
+        (
+            crossterm::event::MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            8,
+        ),
+    ] {
+        app.transcript_view.handle_mouse(
+            crossterm::event::MouseEvent {
+                kind,
+                column,
+                row: selected_row,
+                modifiers: KeyModifiers::NONE,
+            },
+            &app.transcript_cells,
+        );
+    }
+    assert!(
+        app.transcript_view
+            .selected_text(&app.transcript_cells)
+            .is_some()
+    );
     let prompt = crate::chatwidget::UserMessage {
         text: "selected prompt [Image #1]".to_string(),
         local_images: vec![crate::bottom_pane::LocalImageAttachment {
@@ -8260,8 +8308,9 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
         assert_eq!(
             app_server
                 .thread_read(source_thread_id, /*include_turns*/ true)
-                .await?,
-            before
+                .await?
+                .turns,
+            before.turns
         );
     }
     app.app_server_target = crate::AppServerTarget::Embedded;
@@ -8303,6 +8352,32 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
             _ => {}
         }
     }
+    assert_eq!(
+        (
+            app.transcript_view.is_following(),
+            app.transcript_view.selected_text(&app.transcript_cells)
+        ),
+        (true, None),
+    );
+    let bottom = app.render_owned_transcript(&mut tui, size)?;
+    let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    let transcript = buffer
+        .content()
+        .chunks(usize::from(size.width))
+        .take(usize::from(bottom.y.saturating_sub(/*rhs*/ 1)))
+        .map(|row| {
+            row.iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stable_cwd = "/tmp/project";
+    let cwd = test_path_buf(stable_cwd).display().to_string();
+    let transcript = transcript.replace(&cwd, &format!("{stable_cwd:<width$}", width = cwd.len()));
+    insta::assert_snapshot!("owned_prompt_revert_retained_history", transcript);
     assert!(Arc::ptr_eq(
         &child,
         &app.thread_event_channels[&child_id].store
@@ -8352,7 +8427,9 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
             .iter()
             .any(|line| line.contains("Thread forked from"))
     );
-    // Editing the first visible prompt leaves the unloaded prefix intact.
+    // Editing the first visible prompt also discards search state from the removed window.
+    app.transcript_view.begin_search();
+    assert!(app.transcript_view.is_search_active());
     app.chat_widget.restore_thread_input_state(
         /*input_state*/ None,
         crate::chatwidget::ThreadInputStateRestoreMode {
@@ -8376,6 +8453,8 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
             Box::pin(app.handle_event(&mut tui, &mut app_server, event)).await?;
         }
     }
+    assert!(!app.transcript_view.is_search_active());
+    assert!(app.transcript_view.is_following());
     assert_eq!(app.chat_widget.thread_id(), Some(source_thread_id));
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
@@ -8422,6 +8501,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
         app_server.thread_goal_get(source_thread_id).await?.goal,
         Some(goal)
     );
+    tui.set_owned_screen(/*owned*/ false)?;
     app_server.shutdown().await?;
 
     Ok(())

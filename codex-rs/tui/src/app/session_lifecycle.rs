@@ -771,7 +771,7 @@ impl App {
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
         if tui.is_owned_screen() {
-            tui.terminal.clear_visible_screen()?;
+            tui.terminal.clear()?;
         } else {
             Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
         }

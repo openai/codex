@@ -74,8 +74,13 @@ async fn terminal_dynamic_activity_retains_calls_across_both_fallbacks() {
     }
     assert_eq!(outputs[0], outputs[1]);
     insta::assert_snapshot!(
-        "terminal_dynamic_activity",
-        lines_to_single_string(&outputs[0])
+        lines_to_single_string(&outputs[0]),
+        @"
+        • Failed test.lookup · 25ms
+          └ Result for call-1
+        • Called test.lookup · 25ms
+          └ Result for call-2
+        "
     );
 }
 

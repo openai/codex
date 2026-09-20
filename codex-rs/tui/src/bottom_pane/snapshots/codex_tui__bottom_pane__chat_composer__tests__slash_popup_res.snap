@@ -1,10 +1,11 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 9511
 expression: terminal.backend()
 ---
+"› /resume  resume a saved chat                              "
 "                                                            "
 "› /res                                                      "
 "                                                            "
 "                                                            "
-"                                                            "
-"› /resume  resume a saved chat                              "
+"                                         100% context left  "

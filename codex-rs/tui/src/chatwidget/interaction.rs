@@ -43,6 +43,11 @@ impl ChatWidget {
             return;
         }
 
+        if self.shortcut_overlay_visible() && key_hint::plain(KeyCode::Esc).is_press(key_event) {
+            self.bottom_pane.handle_key_event(key_event);
+            return;
+        }
+
         if (self.chat_keymap.interrupt_turn.is_pressed(key_event)
             || key_hint::ctrl(KeyCode::Char('c')).is_press(key_event))
             && self.bottom_pane.no_modal_or_popup_active()
@@ -303,7 +308,6 @@ impl ChatWidget {
             .replace_selection_view_if_present(view_id, params)
     }
 
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn shortcut_overlay_visible(&self) -> bool {
         self.bottom_pane.shortcut_overlay_visible()
     }
@@ -341,19 +345,22 @@ impl ChatWidget {
         &mut self,
         copy_fn: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyOutcome, String>,
     ) {
+        // The shortcut bypasses composer submission, which normally reveals local feedback.
+        self.app_event_tx.send(AppEvent::FollowTranscript);
         match self.transcript.last_agent_markdown.clone() {
-            Some(markdown) if !markdown.is_empty() => match copy_fn(&markdown) {
-                Ok(outcome) => {
-                    let status = outcome.store(&mut self.clipboard_lease);
-                    self.add_to_history(history_cell::new_info_event(
-                        status.message("last message"),
-                        /*hint*/ None,
-                    ));
+            Some(markdown) if !markdown.is_empty() => {
+                match self.write_clipboard(&markdown, copy_fn) {
+                    Ok(status) => {
+                        self.add_to_history(history_cell::new_info_event(
+                            status.message("last message"),
+                            /*hint*/ None,
+                        ));
+                    }
+                    Err(error) => self.add_to_history(history_cell::new_error_event(format!(
+                        "Copy failed: {error}"
+                    ))),
                 }
-                Err(error) => self.add_to_history(history_cell::new_error_event(format!(
-                    "Copy failed: {error}"
-                ))),
-            },
+            }
             _ => self.add_to_history(history_cell::new_error_event(
                 "No agent response to copy".into(),
             )),
@@ -373,7 +380,6 @@ impl ChatWidget {
     }
 
     /// The owned viewport renders its own copy feedback above the composer.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(super) fn copy_transcript_selection_with(
         &mut self,
         text: &str,

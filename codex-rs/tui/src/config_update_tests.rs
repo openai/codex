@@ -139,7 +139,7 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
     );
     insta::assert_snapshot!(
         warning
-            .display_lines(/*width*/ 80)
+            .transcript_lines(/*width*/ 80)
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()

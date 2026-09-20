@@ -1,20 +1,30 @@
 ---
 source: tui/src/bottom_pane/chat_composer/sparkle_tests.rs
+assertion_line: 365
 expression: "snapshots.join(\"\\n\\n\")"
 ---
 shortcut help:
+  Keyboard shortcuts
+
+  Compose                       Session
+  /        Commands             tab     Send message
+  @        Mention files        ⌥+,     Less reasoning
+  !        Shell command        ⌥+.     More reasoning
+  ctrl+j   New line             ctrl+c  Quit
+  ctrl+v   Paste image
+  ctrl+g   External editor      Transcript (open first)
+  ctrl+r   Search history       ctrl+t                 Open transcript
+  esc esc  Edit last message    f3                     Find text
+                                pgup / pgdn            Scroll
+                                ctrl+space             Start selection
+                                ctrl+home / ctrl+end   Top / latest
+                                shift+⌥+, / shift+⌥+.  Top / latest
+
+  /keymap customize
 
 › Ask Codex to do anything
 
-  / for commands                           ! for shell commands
-  ctrl+j for newline                       tab to submit message
-  @ for file paths                         ctrl+v to paste images
-  ctrl+g to edit in external editor        esc esc to edit previous message
-  ctrl+r search history                    ctrl+c to exit
-  ⌥+, reasoning down                       ⌥+. reasoning up
-  ctrl+t to view transcript
-
-  customize shortcuts with /keymap
+  ? / esc close
 
 after /model selects Astra:
                             ⠈     ⢀     ⠁                 ⠂

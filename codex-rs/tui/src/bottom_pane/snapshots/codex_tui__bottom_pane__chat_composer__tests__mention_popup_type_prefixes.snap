@@ -3,11 +3,11 @@ source: tui/src/bottom_pane/chat_composer.rs
 expression: terminal.backend()
 ---
 "                                                                        "
-"› $goog                                                                 "
-"                                                                        "
-"                                                                        "
-"                                                                        "
 "› Google Calendar  [Skill] Find availability and plan event changes     "
 "  Google Calendar  [App] Look up events and availability                "
 "                                                                        "
 "  enter insert · esc close                                              "
+"                                                                        "
+"› $goog                                                                 "
+"                                                                        "
+"                                                     100% context left  "
