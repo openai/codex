@@ -282,14 +282,6 @@ impl TextLayout {
         }
     }
 
-    pub(super) fn word_range(&self, offset: usize) -> Range<usize> {
-        self.text
-            .split_word_bound_indices()
-            .map(|(start, word)| start..start + word.len())
-            .find(|range| range.contains(&offset))
-            .unwrap_or(self.text.len()..self.text.len())
-    }
-
     /// Resolve the displayed link using the same destination policy as terminal OSC-8 output.
     pub(super) fn link_at(&self, row: usize, column: u16) -> Option<String> {
         let row = self.rows.get(row)?;
@@ -299,18 +291,6 @@ impl TextLayout {
             .iter()
             .find(|link| link.columns.contains(&column))?
             .terminal_destination()
-    }
-
-    /// Select a logical line, including its terminating hard newline when present.
-    pub(super) fn line_range(&self, offset: usize) -> Range<usize> {
-        let offset = self.text.floor_char_boundary(offset.min(self.text.len()));
-        let start = self.text[..offset]
-            .rfind('\n')
-            .map_or(/*default*/ 0, |newline| newline + 1);
-        let end = self.text[offset..]
-            .find('\n')
-            .map_or(self.text.len(), |newline| offset + newline + 1);
-        start..end
     }
 
     fn visible_rows(&self, area: Rect, start_row: usize) -> impl Iterator<Item = (u16, &TextRow)> {

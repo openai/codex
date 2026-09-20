@@ -4,6 +4,7 @@ use super::TextLayout;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines;
 use crate::terminal_hyperlinks::prefix_hyperlink_lines;
+use crate::text_selection::SelectionUnit;
 use crate::wrapping::RtOptions;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
@@ -28,7 +29,7 @@ fn copying_wrapped_text_preserves_only_hard_newlines() {
         (11, 1),
     );
     assert_eq!(
-        &layout.text()[layout.line_range(/*offset*/ 12)],
+        &layout.text()[SelectionUnit::Line.range(layout.text(), /*offset*/ 12)],
         "alpha beta gamma\n"
     );
 
@@ -69,7 +70,10 @@ fn hit_testing_uses_graphemes_and_does_not_select_padding() {
             .collect::<Vec<_>>(),
         vec![0, 1, 1, 4, 7, 7, 18, 18, 18, 18, 18, 18],
     );
-    assert_eq!(&layout.text()[layout.word_range(/*offset*/ 4)], "e\u{301}");
+    assert_eq!(
+        &layout.text()[SelectionUnit::Word.range(layout.text(), /*offset*/ 4)],
+        "e\u{301}"
+    );
 }
 
 #[test]
@@ -151,8 +155,8 @@ fn empty_logical_lines_keep_their_hard_breaks() {
         (
             layout.text(),
             layout.row_count(),
-            layout.line_range(/*offset*/ 0),
-            layout.line_range(/*offset*/ 5)
+            SelectionUnit::Line.range(layout.text(), /*offset*/ 0),
+            SelectionUnit::Line.range(layout.text(), /*offset*/ 5)
         ),
         ("\ntext\n", 3, 0..1, 1..6),
     );

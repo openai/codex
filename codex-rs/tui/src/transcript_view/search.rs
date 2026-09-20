@@ -215,7 +215,7 @@ impl TranscriptView {
     }
 
     /// Restore the pre-search presentation before an explicit return or cancellation.
-    pub(super) fn cancel_search(&mut self) {
+    pub(crate) fn cancel_search(&mut self) {
         if !self.search.active {
             return;
         }

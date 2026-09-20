@@ -9,8 +9,6 @@ use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 use ratatui::layout::Position as ScreenPosition;
-use std::time::Duration;
-use std::time::Instant;
 
 use super::*;
 
@@ -230,14 +228,7 @@ impl TranscriptView {
         key: KeyEvent,
         cells: &[Arc<dyn HistoryCell>],
     ) -> Option<ViewAction> {
-        // Kitty keyboard reporting delivers macOS Cmd+C as Super+C, including over SSH to
-        // non-macOS hosts. Ghostty forwards it when there is no terminal-native selection.
-        // Crossterm can encode Ctrl+Shift+C as uppercase C with only Control set.
-        let (code, modifiers) = crate::key_hint::normalize_key_parts(key.code, key.modifiers);
-        if (matches!(modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
-            && code == KeyCode::Char('c'))
-            || (modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
-                && code == KeyCode::Char('c'))
+        if crate::text_selection::is_copy_key(key)
             || (key.modifiers == KeyModifiers::NONE && key.code == KeyCode::Enter)
         {
             return Some(
@@ -316,16 +307,8 @@ impl TranscriptView {
                 .link_at(visible.row, event.column.saturating_sub(self.area.x))
                 .map(ViewAction::OpenLink);
         }
-        let now = Instant::now();
-        let clicks = self
-            .last_click
-            .filter(|(at, column, row, _)| {
-                now.duration_since(*at) < Duration::from_millis(/*millis*/ 400)
-                    && *column == event.column
-                    && *row == event.row
-            })
-            .map_or(/*default*/ 1, |(_, _, _, clicks)| clicks % 3 + 1);
-        self.last_click = Some((now, event.column, event.row, clicks));
+        let clicks =
+            crate::text_selection::click_count(&mut self.last_click, event.column, event.row);
         if clicks >= 2
             && visible
                 .layout

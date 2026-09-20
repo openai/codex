@@ -216,6 +216,7 @@ mod terminal_probe;
 mod terminal_title;
 mod terminal_visualization_instructions;
 mod text_formatting;
+mod text_selection;
 mod theme_picker;
 mod thread_color;
 mod thread_transcript;
