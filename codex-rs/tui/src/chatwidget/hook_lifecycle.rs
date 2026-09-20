@@ -128,6 +128,7 @@ impl ChatWidget {
 
     pub(super) fn schedule_hook_timer_if_needed(&self) {
         if self.local_settings.tui.animations
+            && self.local_settings.tui.effects.shimmer
             && self
                 .active_hook_cell
                 .as_ref()

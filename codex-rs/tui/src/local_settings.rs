@@ -63,7 +63,7 @@ impl LocalSettings {
                 notification_settings: config.tui_notifications.clone(),
                 animations: animations && system_motion == crate::motion::MotionMode::Animated,
                 screen_reader_detection_done: None,
-                whimsy: config.tui_whimsy,
+                effects: config.tui_effects,
                 show_tooltips: config.show_tooltips,
                 show_server_version_notice: config.tui_show_server_version_notice,
                 auto_recap: config.tui_auto_recap,

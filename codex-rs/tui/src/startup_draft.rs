@@ -505,6 +505,7 @@ fn startup_draft_bottom_pane(
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: crate::system_motion::mode() == crate::motion::MotionMode::Animated,
+            effects: Default::default(),
             skills: None,
         },
         ChatComposerConfig::plain_text(),

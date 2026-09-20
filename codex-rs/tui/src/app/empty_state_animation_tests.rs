@@ -261,6 +261,14 @@ async fn empty_state_animation_preserves_header_draft_cursor_and_footer() -> Res
     let disabled = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
     assert_eq!(disabled, &before);
     app.local_settings.tui.animations = true;
+    app.local_settings.tui.effects.welcome = false;
+    draw(&mut app, &mut tui, size)?;
+    assert_eq!(
+        crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+        &before
+    );
+    app.local_settings.tui.effects.welcome = true;
+    app.local_settings.tui.effects.shimmer = false;
     draw(&mut app, &mut tui, size)?;
     assert!(has_logo(
         crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)

@@ -789,6 +789,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
             animations_enabled: false,
+            effects: Default::default(),
             skills: Some(Vec::new()),
         });
         (pane, tx, rx)

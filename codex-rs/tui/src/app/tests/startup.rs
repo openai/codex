@@ -197,6 +197,7 @@ fn startup_bottom_pane() -> (BottomPane, UnboundedReceiver<AppEvent>) {
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: true,
             animations_enabled: true,
+            effects: Default::default(),
             skills: None,
         }),
         app_event_rx,

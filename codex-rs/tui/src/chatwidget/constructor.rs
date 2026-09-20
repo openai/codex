@@ -110,6 +110,7 @@ impl ChatWidget {
                 placeholder_text: placeholder.clone(),
                 disable_paste_burst: local_settings.tui.disable_paste_burst.unwrap_or(false),
                 animations_enabled: local_settings.tui.animations,
+                effects: local_settings.tui.effects,
                 skills: None,
             }),
             transcript: TranscriptState::new(active_cell),

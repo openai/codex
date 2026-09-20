@@ -72,7 +72,7 @@ impl ChatWidget {
         self.transcript.active_cell = Some(Box::new(history_cell::new_active_web_search_call(
             call_id,
             String::new(),
-            self.local_settings.tui.animations,
+            self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -180,7 +180,7 @@ impl ChatWidget {
             let call = history_cell::new_active_mcp_tool_call(
                 id,
                 invocation,
-                self.local_settings.tui.animations,
+                self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
             );
             self.update_computer_activity(|cell| cell.start(call));
             self.bump_active_cell_revision();
@@ -191,7 +191,7 @@ impl ChatWidget {
         self.transcript.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             id,
             invocation,
-            self.local_settings.tui.animations,
+            self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
         )));
         self.bump_active_cell_revision();
         self.request_redraw();
@@ -214,7 +214,7 @@ impl ChatWidget {
             let call = history_cell::new_active_mcp_tool_call(
                 id,
                 invocation,
-                self.local_settings.tui.animations,
+                self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
             );
             self.update_computer_activity(|cell| cell.complete(call, duration, result));
             self.bump_active_cell_revision();
@@ -234,7 +234,7 @@ impl ChatWidget {
                 let mut cell = history_cell::new_active_mcp_tool_call(
                     id,
                     invocation,
-                    self.local_settings.tui.animations,
+                    self.local_settings.tui.animations && self.local_settings.tui.effects.progress,
                 );
                 cell.complete(duration, result);
                 self.transcript.active_cell = Some(Box::new(cell));

@@ -182,7 +182,7 @@
 //! focus loss hide the field without restarting that deadline. Rendering runs after the textarea,
 //! placeholder, effort ignition, and voice strip, and draws only in eligible blank cells without
 //! overwriting the placeholder or normal cursor. Hidden frames do not schedule animation redraws;
-//! motion settings, whimsy settings, and true-color support also gate the effect.
+//! motion settings, the starfield preference, and true-color support also gate the effect.
 //!
 //! # Large Paste Placeholders
 //!

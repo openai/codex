@@ -30,6 +30,7 @@ fn draft_and_voice_composer_snapshots() {
                             speaker_history: vec![255, 146, 110, 73, 37, 0],
                             activity: "listening",
                             animations: false,
+                            progress: true,
                         }),
                         FrameRequester::test_dummy(),
                     );

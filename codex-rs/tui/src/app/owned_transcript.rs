@@ -43,9 +43,16 @@ impl App {
         screen_size: Size,
     ) -> Result<Rect> {
         self.chat_widget.sync_warnings(&self.transcript_cells);
-        let motion = MotionMode::from_animations_enabled(self.local_settings.tui.animations);
+        let motion = MotionMode::from_animations_enabled(
+            self.local_settings.tui.animations && self.local_settings.tui.effects.shimmer,
+        );
         let focused = tui.is_terminal_focused();
-        let logo = self.empty_state_presentation(motion, focused);
+        let logo = self.empty_state_presentation(
+            MotionMode::from_animations_enabled(
+                self.local_settings.tui.animations && self.local_settings.tui.effects.welcome,
+            ),
+            focused,
+        );
         let latest_navigation = if self.enter_returns_to_latest() {
             "enter/esc latest"
         } else {

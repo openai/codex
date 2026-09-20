@@ -363,7 +363,7 @@ impl App {
         {
             tui.set_overlay_input(tui::OverlayInput::Transcript)?;
             t.motion = crate::motion::MotionMode::from_animations_enabled(
-                self.local_settings.tui.animations,
+                self.local_settings.tui.animations && self.local_settings.tui.effects.shimmer,
             );
             let active_key = self.chat_widget.active_cell_transcript_key();
             let chat_widget = &self.chat_widget;

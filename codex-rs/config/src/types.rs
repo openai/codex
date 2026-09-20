@@ -31,6 +31,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+pub use crate::tui_effects::TuiEffects;
 pub use crate::tui_keymap::KeybindingSpec;
 pub use crate::tui_keymap::KeybindingsSpec;
 pub use crate::tui_keymap::MAX_FUNCTION_KEY;
@@ -753,10 +754,9 @@ pub struct Tui {
     /// Records the one-time screen-reader detection attempt. Either value skips detection.
     pub screen_reader_detection_done: Option<bool>,
 
-    /// Enable decorative effects such as Astra composer stars. Also requires animations.
-    /// Defaults to `true`.
-    #[serde(default = "default_true")]
-    pub whimsy: bool,
+    /// Individual visual effects. Each also requires animations to be enabled.
+    #[serde(default)]
+    pub effects: TuiEffects,
 
     /// Show startup tooltips in the TUI welcome screen.
     /// Defaults to `true`.

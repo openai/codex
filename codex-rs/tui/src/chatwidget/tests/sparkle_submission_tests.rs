@@ -34,7 +34,7 @@ async fn ordinary_and_prepared_image_submissions_consume_the_sparkle_before_rend
         let (mut chat, _events, mut ops) = make_chatwidget_manual(Some("gpt-6-astra")).await;
         chat.thread_id = Some(ThreadId::new());
         chat.local_settings.tui.animations = true;
-        chat.local_settings.tui.whimsy = true;
+        chat.local_settings.tui.effects.starfield = true;
         chat.bottom_pane
             .mark_fresh_task_for_sparkle("gpt-6-astra", &chat.local_settings.tui);
         let untouched = chat.bottom_pane.composer_draft_snapshot().sparkle_draft;

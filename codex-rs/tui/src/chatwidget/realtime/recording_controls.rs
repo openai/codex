@@ -293,6 +293,7 @@ impl ChatWidget {
                 .collect(),
             activity,
             animations: self.local_settings.tui.animations,
+            progress: self.local_settings.tui.effects.progress,
         }));
     }
 }

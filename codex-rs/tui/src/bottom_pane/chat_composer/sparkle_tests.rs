@@ -26,6 +26,7 @@ fn pane() -> BottomPane {
         placeholder_text: "Ask Codex to do anything".into(),
         disable_paste_burst: true,
         animations_enabled: true,
+        effects: Default::default(),
         skills: None,
     })
 }
@@ -43,7 +44,7 @@ fn palette<T>(render: impl FnOnce() -> T) -> T {
 fn enabled() -> Tui {
     Tui {
         animations: true,
-        whimsy: true,
+        effects: Default::default(),
         ..Tui::default()
     }
 }
@@ -1055,7 +1056,10 @@ fn focus_startup_work_and_configuration_do_not_extend_a_started_deadline() {
 
         for settings in [
             Tui {
-                whimsy: false,
+                effects: codex_config::types::TuiEffects {
+                    starfield: false,
+                    ..Default::default()
+                },
                 ..enabled()
             },
             Tui {

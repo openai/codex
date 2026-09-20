@@ -34,6 +34,7 @@ pub(crate) struct VoiceStripState {
     pub(crate) speaker_history: Vec<u8>,
     pub(crate) activity: &'static str,
     pub(crate) animations: bool,
+    pub(crate) progress: bool,
 }
 
 pub(super) struct VoiceStrip {
@@ -84,7 +85,8 @@ impl Renderable for VoiceStrip {
             return;
         }
         let connecting = self.state.phase == VoiceStripPhase::Connecting;
-        let mode = MotionMode::from_animations_enabled(self.state.animations);
+        let mode =
+            MotionMode::from_animations_enabled(self.state.animations && self.state.progress);
         if connecting && mode == MotionMode::Animated {
             self.frame_requester
                 .schedule_frame_in(Duration::from_millis(100));

@@ -136,7 +136,7 @@ impl OnboardingScreen {
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
             tui.frame_requester(),
-            local_settings.tui.animations,
+            local_settings.tui.animations && local_settings.tui.effects.welcome,
         )));
         #[cfg(target_os = "windows")]
         let show_windows_create_sandbox_hint = if show_trust_screen
@@ -171,7 +171,8 @@ impl OnboardingScreen {
                     app_server_request_handle,
                     auth_config,
                     bedrock_setup_enabled,
-                    animations_enabled: local_settings.tui.animations,
+                    animations_enabled: local_settings.tui.animations
+                        && local_settings.tui.effects.shimmer,
                     animations_suppressed: std::cell::Cell::new(false),
                 }));
             } else {

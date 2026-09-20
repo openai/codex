@@ -20,6 +20,7 @@ fn active_strip() -> VoiceStrip {
             speaker_history: vec![0, 37, 73, 110, 146, 219],
             activity: "listening",
             animations: true,
+            progress: true,
         },
         FrameRequester::test_dummy(),
     )

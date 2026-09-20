@@ -129,8 +129,12 @@ async fn persisted_default_loads_and_renders_without_animation() -> anyhow::Resu
     assert!(!config.animations);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let (frame_requester, mut frames) = FrameRequester::test_channel();
-    let mut status =
-        StatusIndicatorWidget::new(AppEventSender::new(tx), frame_requester, config.animations);
+    let mut status = StatusIndicatorWidget::new(
+        AppEventSender::new(tx),
+        frame_requester,
+        config.animations,
+        Default::default(),
+    );
     status.update_header("Reading the terminal output".into());
     let mut timer = StatusTimer::default();
     timer.pause_at(std::time::Instant::now());

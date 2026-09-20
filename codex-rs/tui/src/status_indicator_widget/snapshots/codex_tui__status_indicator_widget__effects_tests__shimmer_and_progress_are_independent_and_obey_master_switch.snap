@@ -1,0 +1,19 @@
+---
+source: tui/src/status_indicator_widget/effects_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+animations=true, shimmer=false, progress=false
+Working (0s • esc to interrupt)
+[Span::from("Working"), Span::from(" "), Span::from("(0s • ").dim(), Span::from("esc").fg(Color::Rgb(240, 240, 240)).bold().not_dim(), Span::from(" to interrupt)").dim()]
+
+animations=true, shimmer=false, progress=true
+• Working (0s • esc to interrupt)
+[Span::from("Working"), Span::from(" "), Span::from("(0s • ").dim(), Span::from("esc").fg(Color::Rgb(240, 240, 240)).bold().not_dim(), Span::from(" to interrupt)").dim()]
+
+animations=true, shimmer=true, progress=false
+Working (0s • esc to interrupt)
+[Span::from("W").fg(Color::Rgb(128, 128, 128)), Span::from("o").fg(Color::Rgb(128, 128, 128)), Span::from("r").fg(Color::Rgb(128, 128, 128)), Span::from("k").fg(Color::Rgb(128, 128, 128)), Span::from("i").fg(Color::Rgb(128, 128, 128)), Span::from("n").fg(Color::Rgb(128, 128, 128)), Span::from("g").fg(Color::Rgb(128, 128, 128)), Span::from(" "), Span::from("(0s • ").dim(), Span::from("esc").fg(Color::Rgb(240, 240, 240)).bold().not_dim(), Span::from(" to interrupt)").dim()]
+
+animations=false, shimmer=true, progress=true
+Working (0s • esc to interrupt)
+[Span::from("Working"), Span::from(" "), Span::from("(0s • ").dim(), Span::from("esc").fg(Color::Rgb(240, 240, 240)).bold().not_dim(), Span::from(" to interrupt)").dim()]

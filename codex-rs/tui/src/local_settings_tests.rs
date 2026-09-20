@@ -54,7 +54,7 @@ async fn system_motion_suppresses_animations_without_changing_saved_preferences(
 
     for configured in [true, false] {
         let home = tempfile::tempdir()?;
-        let config_text = format!("[tui]\nanimations = {configured}\nwhimsy = true\n");
+        let config_text = format!("[tui]\nanimations = {configured}\n");
         std::fs::write(home.path().join("config.toml"), &config_text)?;
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
@@ -94,13 +94,15 @@ async fn local_load_preserves_defaults_and_resolved_overrides() -> anyhow::Resul
         r#"
 [tui]
 animations = false
-whimsy = false
+whimsy = false # Retired: must not override effects or prevent strict loading.
 show_tooltips = false
 show_server_version_notice = false
 auto_recap = false
 vim_mode_default = true
 terminal_resize_reflow_max_rows = 0
 session_picker_view = "comfortable"
+[tui.effects]
+shimmer = false
 [history]
 persistence = "none"
 max_bytes = 4096
@@ -112,6 +114,7 @@ fast_default_opt_out = true
         std::fs::write(home.path().join("config.toml"), config_text)?;
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
+            .strict_config(true)
             .loader_overrides(LoaderOverrides {
                 ignore_project_config: true,
                 ..LoaderOverrides::without_managed_config_for_tests()
@@ -119,13 +122,14 @@ fast_default_opt_out = true
             .cli_overrides(vec![("tui.disable_paste_burst".into(), true.into())])
             .build()
             .await?;
+        assert_eq!(config.startup_warnings, Vec::<String>::new());
         let local = LocalSettings::from(&config);
         let mut expected: Tui = toml::from_str("")?;
         expected.disable_paste_burst = Some(true);
         expected.session_picker_view = Some(SessionPickerViewMode::Dense);
         if !config_text.is_empty() {
             expected.animations = false;
-            expected.whimsy = false;
+            expected.effects.shimmer = false;
             expected.show_tooltips = false;
             expected.show_server_version_notice = false;
             expected.auto_recap = false;
