@@ -857,6 +857,9 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if self.handle_composer_copy_event(tui, &event, tui::Tui::copy_transcript_selection) {
+            return Ok(AppRunControl::Continue);
+        }
         // Resume arrives after suspension; retain the last painted phase across hidden owners.
         if matches!(&event, TuiEvent::Resume) || !tui.is_owned_screen() || self.overlay.is_some() {
             self.chat_widget

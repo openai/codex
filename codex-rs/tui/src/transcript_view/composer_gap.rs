@@ -89,8 +89,8 @@ impl CopyFeedback {
                 "Copy unconfirmed".into(),
             ],
             Err(()) => [
-                "Copy failed · /export saves chat".into(),
-                "Copy failed · /export".into(),
+                "Copy failed · try again".into(),
+                "Copy failed".into(),
                 "Copy failed".into(),
             ],
         };

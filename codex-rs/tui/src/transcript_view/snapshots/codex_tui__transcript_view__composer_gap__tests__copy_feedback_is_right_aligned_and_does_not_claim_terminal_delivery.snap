@@ -22,10 +22,10 @@ Ok(Unconfirmed), 18 columns
  Copy unconfirmed
 
 Err("unavailable"), 80 columns
-                                               Copy failed · /export saves chat
+                                                        Copy failed · try again
 
 Err("unavailable"), 32 columns
-          Copy failed · /export
+        Copy failed · try again
 
 Err("unavailable"), 18 columns
       Copy failed

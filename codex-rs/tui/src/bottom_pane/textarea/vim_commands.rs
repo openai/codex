@@ -224,16 +224,6 @@ impl TextArea {
     }
 
     pub(super) fn apply_vim_insert_action(&mut self, action: VimAction) -> bool {
-        let recording = self.vim_enabled
-            && matches!(self.vim_mode, VimMode::Insert | VimMode::Replace)
-            && !self.vim_commands.replaying
-            && !self.vim_commands.pending_change.is_empty();
-        let prior_len = self.text.len();
-        if !self.apply_vim_editor_action(action.clone()) {
-            return false;
-        }
-        let changed =
-            self.text.len() != prior_len || matches!(action, VimAction::RestoreReplacedCharacter);
         let deletion = matches!(
             action,
             VimAction::DeleteBackward
@@ -244,6 +234,26 @@ impl TextArea {
                 | VimAction::KillLine
                 | VimAction::KillLineEnd
         );
+        if deletion && let Some(range) = self.mouse_selection_range() {
+            self.vim_commands = VimCommandState::default();
+            if matches!(action, VimAction::DeleteBackward | VimAction::DeleteForward) {
+                self.replace_range(range, "");
+            } else {
+                self.kill_range(range);
+            }
+            return true;
+        }
+        self.mouse_selection = None;
+        let recording = self.vim_enabled
+            && matches!(self.vim_mode, VimMode::Insert | VimMode::Replace)
+            && !self.vim_commands.replaying
+            && !self.vim_commands.pending_change.is_empty();
+        let prior_len = self.text.len();
+        if !self.apply_vim_editor_action(action.clone()) {
+            return false;
+        }
+        let changed =
+            self.text.len() != prior_len || matches!(action, VimAction::RestoreReplacedCharacter);
         if recording && (changed || !deletion) {
             self.vim_commands
                 .pending_change
