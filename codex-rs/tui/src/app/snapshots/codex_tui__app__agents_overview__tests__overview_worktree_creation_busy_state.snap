@@ -1,10 +1,11 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 80)"
+expression: "normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, 80,))"
 ---
-  Agent command center
-  Creating worktree…
+  Agent command center  Group: Project  g
+  0 need input   0 working   0 ready
   ────────────────────────────────────────────────────────────────────────────
+  Search tasks · f
   No tasks yet
 
 
@@ -24,5 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
 
 
 
-
-  Creating worktree…  ctrl+c quit
+  Creating worktree…

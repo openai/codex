@@ -2,13 +2,10 @@
 source: tui/src/app/agents_overview_tests.rs
 expression: "render_bottom_popup(&app.chat_widget, 12)"
 ---
-  Service
-  v0.152.1
-  < Codex
-  CLI
-  v0.153.0
-  0 need i
+  Agent c…
+  0 need …
   ────────
+  Search …
   No tas…
 
 
@@ -20,9 +17,7 @@ expression: "render_bottom_popup(&app.chat_widget, 12)"
 
 
 
-  n new
-  w new
-  worktree
-  f search
-  ctrl+c
-  quit
+
+
+
+  Service…

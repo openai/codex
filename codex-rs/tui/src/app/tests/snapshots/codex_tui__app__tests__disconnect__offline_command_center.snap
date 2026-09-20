@@ -1,10 +1,11 @@
 ---
 source: tui/src/app/tests/disconnect_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 100)"
+expression: searching
 ---
-  Agent command center
-  Reconnecting — agent list is stale
+  Agent command center  Group: Project  g
+  0 need input   0 working   0 ready
   ────────────────────────────────────────────────────────────────────────────────────────────────
+  Search › search query!                                  │
   Reconnecting…                                           │
                                                           │
                                                           │
@@ -24,5 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
                                                           │
                                                           │
                                                           │
-                                                          │
-  ctrl+c quit · actions paused until the list is refreshed
+  Reconnecting — agent list is stale

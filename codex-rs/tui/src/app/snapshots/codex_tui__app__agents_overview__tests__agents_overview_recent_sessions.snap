@@ -2,9 +2,10 @@
 source: tui/src/app/agents_overview_tests.rs
 expression: "age.replace_all(&rendered, \" [age]\")"
 ---
-  Agent command center
+  Agent command center  Group: Project  g
   0 need input   0 working   0 ready
   ────────────────────────────────────────────────────────────────────────────
+  Search tasks · f
       Tasks                                            Status         Updated
   /  10
   › ○ Task 12                                          Inactive [age]
@@ -17,7 +18,6 @@ expression: "age.replace_all(&rendered, \" [age]\")"
     ○ Task 5                                           Inactive [age]
     ○ Task 4                                           Inactive [age]
     ○ Task 3                                           Inactive [age]
-
 
 
 

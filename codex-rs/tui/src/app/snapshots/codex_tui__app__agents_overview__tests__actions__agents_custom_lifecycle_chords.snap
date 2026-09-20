@@ -2,13 +2,13 @@
 source: tui/src/app/agents_overview_actions_tests.rs
 expression: "render_bottom_popup(&app.chat_widget,\n48).replace(&test_path_display(\"/tmp/project\"), \"/tmp/project\")"
 ---
-  Agent command center
+  Agent command center  Group: Project  g
   0 need input   0 working   1 ready
   ────────────────────────────────────────────
+  Search tasks · f
       Tasks
   /tmp/project  1
   › ○ Task
-
 
 
 

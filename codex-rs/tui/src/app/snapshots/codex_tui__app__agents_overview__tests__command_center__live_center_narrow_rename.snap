@@ -1,0 +1,22 @@
+---
+source: tui/src/app/agent_center_tests.rs
+expression: rendered
+---
+  Agent command center  Group: Projec…
+  0 need input   0 working   1 ready
+  ────────────────────────────────────
+  Rename › 界 界 界 界 界 界 界 日 本 語  é 👩‍💻
+      Tasks
+  /tmp/project  1
+  › ○ Retained task
+
+
+
+
+
+
+
+
+
+
+  enter rename  esc cancel

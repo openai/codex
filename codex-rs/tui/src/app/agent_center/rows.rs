@@ -35,11 +35,7 @@ fn columns(area: Rect) -> (Rect, Rect, Rect) {
 }
 
 impl AgentsOverviewView {
-    pub(in crate::app::agents_overview_view) fn render_center_rows(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-    ) {
+    pub(super) fn render_center_rows(&self, area: Rect, buf: &mut Buffer) {
         let row_width = area.width;
         let area = Rect {
             width: row_width.saturating_sub(/*rhs*/ 1),
@@ -54,6 +50,8 @@ impl AgentsOverviewView {
             line(
                 if state.connection_notice.is_some() {
                     "Reconnecting…"
+                } else if state.loading && self.rows.is_empty() {
+                    "Loading tasks…"
                 } else if state.refresh_failed {
                     "Could not load tasks"
                 } else if self.rows.is_empty() {

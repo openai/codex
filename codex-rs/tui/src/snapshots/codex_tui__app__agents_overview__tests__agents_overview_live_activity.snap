@@ -2,13 +2,13 @@
 source: tui/src/app/agents_overview_tests.rs
 expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  1\"),\n&normalized_group).replace(&project, \"/tmp/project\")"
 ---
-  Agent command center
+  Agent command center  Group: Project  g
   0 need input   1 working   0 ready
   ────────────────────────────────────────────────────────────────────────────────────────────
-      Tasks                                           │ Task details
-  /tmp/project  1                                     │
-  › ● Check startup performance                       │ Check startup performance
-                                                      │ ● Working
+  Search tasks · f                                    │ Task details
+      Tasks                                           │
+  /tmp/project  1                                     │ Check startup performance
+  › ● Check startup performance                       │ ● Working
                                                       │
                                                       │ Latest activity
                                                       │ Checking cold-start regressions

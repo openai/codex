@@ -1,5 +1,0 @@
----
-source: tui/src/app/agents_overview_tests.rs
-expression: rendered.lines().last().unwrap()
----
-  x stop h hide a archive del delete ctrl+c quit

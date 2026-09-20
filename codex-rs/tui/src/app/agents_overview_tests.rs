@@ -15,13 +15,20 @@ async fn overview_worktree_creation_busy_state() {
         .lock()
         .unwrap()
         .creating_worktree = true;
+    {
+        let mut state = app.agents_overview.view_state.lock().unwrap();
+        state.server_version_notice = Some("Older server".into());
+    }
     let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     for key in ['n', 'w', 'o', 'r', 'x', 'h', 'a'] {
         view.handle_key_event(KeyCode::Char(key).into());
     }
     assert!(rx.try_recv().is_err());
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    insta::assert_snapshot!(render_bottom_popup(&app.chat_widget, /*width*/ 80));
+    insta::assert_snapshot!(normalize_agent_center_snapshot(render_bottom_popup(
+        &app.chat_widget,
+        /*width*/ 80,
+    )));
 }
 
 #[tokio::test]
@@ -56,7 +63,7 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
                 let x = text[..x].chars().count();
                 snapshot.push(format!(
                     "{} | title style: {:?}",
-                    crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(&text),
+                    normalize_agent_center_snapshot(&text),
                     row[x].style()
                 ));
             }
@@ -75,9 +82,8 @@ async fn older_server_notice_is_visible_in_agents_overview() {
     insta::assert_snapshot!(
         rendered
             .lines()
-            .take(/*n*/ 2)
-            .collect::<Vec<_>>()
-            .join("\n")
+            .find(|line| line.contains("Service v0.153.0") || line.contains("Service v0.152.1"))
+            .unwrap()
     );
 }
 
@@ -89,8 +95,7 @@ async fn server_version_overview_notice_updates_and_clears() {
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-    insta::assert_snapshot!(rendered.lines().take(/*n*/ 2).collect::<Vec<_>>().join("\n"), @"  Service v0.151.0 < Codex CLI v0.153.0
-  0 need input   0 working   0 ready");
+    insta::assert_snapshot!(rendered.lines().find(|line| line.contains("Service v0.151.0")).unwrap(), @"  Service v0.151.0 < Codex CLI v0.153.0");
 
     app.update_server_version_overview_notice("0.153.0", /*server_version*/ None);
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
@@ -100,7 +105,7 @@ async fn server_version_overview_notice_updates_and_clears() {
 }
 
 #[tokio::test]
-async fn older_server_notice_wraps_in_narrow_overview() {
+async fn older_server_notice_truncates_in_narrow_overview() {
     let mut app = make_test_app().await;
     app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
@@ -111,24 +116,6 @@ async fn older_server_notice_wraps_in_narrow_overview() {
     );
 }
 
-#[tokio::test]
-async fn older_server_notice_falls_back_in_short_overview() {
-    let mut app = make_test_app().await;
-    app.update_server_version_overview_notice("0.153.0", Some("0.152.1"));
-    let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
-    let area = ratatui::layout::Rect::new(
-        /*x*/ 0, /*y*/ 0, /*width*/ 12, /*height*/ 8,
-    );
-    let mut buffer = ratatui::buffer::Buffer::empty(area);
-    view.render(area, &mut buffer);
-    let header = buffer
-        .content()
-        .iter()
-        .take(usize::from(area.width))
-        .map(ratatui::buffer::Cell::symbol)
-        .collect::<String>();
-    insta::assert_snapshot!(header.trim_end(), @"  Old srv");
-}
 use crate::app::test_support::make_test_app;
 use crate::app_event::AgentsOverviewThreadRefresh;
 use crate::bottom_pane::BottomPaneView;
@@ -194,11 +181,6 @@ async fn overview_right_opens_current_or_highlighted_task() {
 
     let view = app.agents_overview_view(threads.clone(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 96);
-    insta::assert_snapshot!(
-        "overview_empty_prompt_right_hint",
-        rendered.lines().last().unwrap()
-    );
     app.chat_widget.handle_key_event(KeyCode::Right.into());
     assert!(
         matches!(rx.try_recv(), Ok(AppEvent::SelectAgentsOverviewThread { thread_id }) if thread_id == current)
@@ -206,14 +188,8 @@ async fn overview_right_opens_current_or_highlighted_task() {
     assert!(!app.chat_widget.no_modal_or_popup_active());
 
     let mut view = app.agents_overview_view(threads, /*selected_thread_id*/ None);
-    view.handle_key_event(KeyCode::Esc.into());
     view.handle_key_event(KeyCode::Down.into());
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 96);
-    insta::assert_snapshot!(
-        "overview_right_open_hint",
-        rendered.lines().find(|line| line.contains("open")).unwrap()
-    );
     app.chat_widget.handle_key_event(KeyCode::Right.into());
     assert!(
         matches!(rx.try_recv(), Ok(AppEvent::SelectAgentsOverviewThread { thread_id }) if thread_id == other)
@@ -237,7 +213,6 @@ async fn overview_right_preserves_editors_and_offline_state() {
         )],
         Some(thread_id),
     );
-    view.handle_key_event(KeyCode::Esc.into());
     view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     view.handle_key_event(KeyCode::Right.into());
     assert!(app.agents_overview.view_state.lock().unwrap().renaming);
@@ -1429,8 +1404,6 @@ async fn filtered_dashboard_actions_use_configured_shortcuts() {
 
     view.handle_key_event(KeyEvent::new(KeyCode::F(10), KeyModifiers::NONE));
     assert!(event_rx.try_recv().is_err());
-    view.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
-    view.handle_key_event(KeyCode::Esc.into());
     for (key, expected) in [('v', second), ('k', first), ('j', first)] {
         view.handle_key_event(KeyCode::Char(key).into());
         let selected = &view.rows[view.selected_index().unwrap()];
@@ -1456,7 +1429,6 @@ async fn filtered_dashboard_actions_use_configured_shortcuts() {
         Ok(AppEvent::SelectAgentsOverviewThread { thread_id }) if thread_id == second
     ));
     assert!(event_rx.try_recv().is_err());
-    view.handle_key_event(KeyCode::Esc.into());
     for offline in [false, true] {
         app.agents_overview
             .view_state
@@ -2002,7 +1974,6 @@ async fn cancelling_resume_picker_preserves_command_center_state() -> Result<()>
         let view = app.agents_overview_view(threads.into(), Some(selected));
         app.chat_widget.show_bottom_pane_view(Box::new(view));
         for key in [
-            KeyCode::Esc.into(),
             KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
@@ -2044,7 +2015,7 @@ async fn cancelling_resume_picker_preserves_command_center_state() -> Result<()>
 }
 
 #[tokio::test]
-async fn command_center_cursor_tracks_wrapped_footer() {
+async fn command_center_cursor_tracks_fixed_footer() {
     let app = make_test_app().await;
     let mut view = app.agents_overview_view(
         vec![overview_thread(
@@ -2089,7 +2060,6 @@ async fn empty_command_center_can_open_resume_picker() {
     app.app_event_tx = crate::app_event_sender::AppEventSender::new(event_tx);
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    app.chat_widget.handle_key_event(KeyCode::Esc.into());
     while event_rx.try_recv().is_ok() {}
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
@@ -2098,7 +2068,9 @@ async fn empty_command_center_can_open_resume_picker() {
         Ok(AppEvent::OpenResumePicker)
     ));
     // Crossterm labels forward Delete as "fwd del" on macOS and "del" elsewhere.
-    let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 48).replace("fwd del", "del");
+    let rendered =
+        normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 48))
+            .replace("fwd del", "del");
     insta::with_settings!({snapshot_path => "../snapshots"}, {
         insta::assert_snapshot!("agents_overview_empty_narrow", rendered);
     });
@@ -2540,12 +2512,11 @@ async fn command_center_refresh_failure_is_inline_and_clears_on_success() -> Res
     }
     let notice = render_bottom_popup(&app.chat_widget, /*width*/ 32)
         .lines()
-        .take(2)
-        .collect::<Vec<_>>()
-        .join("\n");
+        .last()
+        .unwrap()
+        .to_owned();
     insta::assert_snapshot!(notice, @r"
-      Agent command center
-      Error loading tasks
+  Error loading tasks
     ");
     let request_id = Uuid::new_v4();
     app.agents_overview.request_id = Some(request_id);

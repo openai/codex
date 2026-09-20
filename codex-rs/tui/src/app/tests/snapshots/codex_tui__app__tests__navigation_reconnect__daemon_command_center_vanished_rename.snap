@@ -2,14 +2,14 @@
 source: tui/src/app/tests/navigation_reconnect_tests.rs
 expression: "render_bottom_popup(&app.chat_widget, 100)"
 ---
-  Service v2.0.0 ≠ Codex CLI v0.0.0 · /daemon
+  Agent command center  Group: Project  g
   0 need input   1 working   1 ready
   ────────────────────────────────────────────────────────────────────────────────────────────────
-      Tasks                                               │ Task details
-  /tmp/project  2                                         │
-  › ● New task                                            │ New task
-    ○ Selected task                                       │ ● Working
-                                                          │
+  Search tasks · f                                        │ Task details
+      Tasks                                               │
+  /tmp/project  2                                         │ New task
+  › ● New task                                            │ ● Working
+    ○ Selected task                                       │
                                                           │ Project
                                                           │ /tmp/project
                                                           │ Model: Unknown
@@ -24,5 +24,4 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
                                                           │
                                                           │
                                                           │
-  ↑↓ navigate o resume enter open n new w new worktree f search g group: project r rename x stop
-  h hide a archive del delete ctrl+c quit
+  Service v2.0.0 ≠ Codex CLI v0.0.0 · /daemon

@@ -298,7 +298,6 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let view = app.agents_overview_view(vec![thread.clone()], Some(id));
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    app.chat_widget.handle_key_event(KeyCode::Esc.into());
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
     let hide = std::iter::from_fn(|| rx.try_recv().ok())

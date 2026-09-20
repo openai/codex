@@ -677,6 +677,11 @@ async fn physical_chords_route_list_and_mixed_request_input_modals() -> Result<(
 #[tokio::test]
 async fn dashboard_chord_hint_survives_refresh_and_clears_on_cancel() -> Result<()> {
     let mut app = make_test_app().await;
+    app.agents_overview
+        .view_state
+        .lock()
+        .unwrap()
+        .server_version_notice = Some("Older server".into());
     app.keymap =
         RuntimeKeymap::from_config(&toml::from_str("[agents]\nnew_task = [\"ctrl-x n\"]")?)
             .unwrap();

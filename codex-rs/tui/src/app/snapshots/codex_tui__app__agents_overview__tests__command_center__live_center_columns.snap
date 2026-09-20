@@ -2,18 +2,18 @@
 source: tui/src/app/agent_center_tests.rs
 expression: "screen(&view, 160, 22)"
 ---
-  Agent command center
+  Agent command center  Group: Project  g
   2 need input   1 working   2 ready
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-      Tasks                                                                                   Status         Updated  │ Task details
-  /tmp/project  6                                                                                                     │
-  › ○ Current task                                                                  current   Ready              now  │ Current task
-    ○ A longer task title that uses the available column                                      Ready           5m ago  │ ○ Ready
-    ! Failed task                                                                             Error           1h ago  │
-    ● Needs an answer                                                                         Needs input     2h ago  │ Project
-    ● Working task                                                                            Working         1d ago  │ /tmp/project
-    ○ Unloaded task                                                                           Inactive        2d ago  │ Model: Unknown
-                                                                                                                      │
+  Search tasks · f                                                                                                    │ Task details
+      Tasks                                                                                   Status         Updated  │
+  /tmp/project  6                                                                                                     │ Current task
+  › ○ Current task                                                                  current   Ready              now  │ ○ Ready
+    ○ A longer task title that uses the available column                                      Ready           5m ago  │
+    ! Failed task                                                                             Error           1h ago  │ Project
+    ● Needs an answer                                                                         Needs input     2h ago  │ /tmp/project
+    ● Working task                                                                            Working         1d ago  │ Model: Unknown
+    ○ Unloaded task                                                                           Inactive        2d ago  │
                                                                                                                       │ Prompt
                                                                                                                       │ Current task
                                                                                                                       │

@@ -2,5 +2,5 @@
 source: tui/src/app/agents_overview_tests.rs
 expression: "snapshot.join(\"\\n\")"
 ---
-    ○ Named task                                          │ Selected task | title style: Style::new().fg(Color::Rgb(242, 205, 205)).bg(Color::Reset).underline_color(Color::Reset)
-    ○ Named task                                          │ Selected task | title style: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+    ○ Named task                                          │ ○ Ready | title style: Style::new().fg(Color::Rgb(242, 205, 205)).bg(Color::Reset).underline_color(Color::Reset)
+    ○ Named task                                          │ ○ Ready | title style: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)

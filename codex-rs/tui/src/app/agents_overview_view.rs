@@ -6,8 +6,6 @@ pub(super) mod command_center;
 
 #[path = "agents_overview_grouping.rs"]
 mod grouping;
-#[path = "agents_overview_input.rs"]
-mod input;
 #[path = "agents_overview_render.rs"]
 mod render;
 
@@ -55,7 +53,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::PoisonError;
-use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -141,6 +138,7 @@ pub(super) struct AgentsOverviewViewState {
     pub(super) key_chord_hint: Option<Vec<(String, String)>>,
     pub(super) creating_worktree: bool,
     pub(super) refresh_failed: bool,
+    pub(super) loading: bool,
     pub(super) connection_notice: Option<&'static str>,
     pub(super) server_version_notice: Option<String>,
     search: String,

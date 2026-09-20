@@ -131,3 +131,36 @@ async fn live_center_pages_visible_rows_without_wrapping() {
         );
     }
 }
+
+#[tokio::test]
+async fn live_center_metadata_clips_at_grapheme_boundaries() {
+    let app = make_test_app().await;
+    let mut view = app.agents_overview_view(
+        vec![overview_thread(
+            ThreadId::new(),
+            /*parent_thread_id*/ None,
+            "Retained task",
+            ThreadStatus::Idle,
+        )],
+        /*selected_thread_id*/ None,
+    );
+    let input = format!("{}日本語 e\u{301} 👩\u{200d}💻", "界".repeat(/*n*/ 100_000));
+    for (key, label) in [('r', "Rename › "), ('f', "Search › ")] {
+        view.handle_key_event(KeyCode::Char(key).into());
+        view.handle_paste(input.clone());
+        let rendered = screen(&view, /*width*/ 40, /*height*/ 18);
+        let prompt = rendered.lines().find(|line| line.contains(label)).unwrap();
+        assert!(prompt.contains("e\u{301}"));
+        assert!(prompt.ends_with("👩\u{200d}💻"));
+        assert_eq!(
+            view.cursor_pos(Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 18
+            )),
+            Some((36, 3))
+        );
+        if key == 'r' {
+            insta::assert_snapshot!("live_center_narrow_rename", rendered);
+        }
+        view.handle_key_event(KeyCode::Esc.into());
+    }
+}

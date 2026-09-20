@@ -149,7 +149,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         let mut terminal = PtyCodex::start(
             &repo_root,
             codex_home,
-            &["do not submit this launch prompt"],
+            &["--no-alt-screen", "do not submit this launch prompt"],
         )?;
         let prompt = if trust_level.is_some() {
             "Open restricted"
@@ -158,17 +158,16 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
         };
         for (expected, input) in [
             (prompt, b"\x1b".as_slice()),
-            ("n new", b"\x1b"),
             ("Launch-folder task", b"\x1b[Bn"),
             (prompt, b"\x1b"),
             ("n new", b"n"),
             ("Folder access", b"\x1b"),
-            ("o resume", b"o"),
+            ("Search tasks", b"o"),
             ("Resume a previous session", b"\x1b[C"),
             ("Untrusted saved task", b"\r"),
             ("Open existing task", b"\r"),
             ("moved-folder", b"\x1b"),
-            ("o resume", b"n"),
+            ("Search tasks", b"n"),
             (prompt, b"\r"),
         ] {
             let is_consent = expected == prompt
@@ -182,10 +181,11 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                     terminal
                         .screen_contents()
                         .lines()
-                        .skip_while(|line| line.trim() != "Folder access")
-                        .nth(/*n*/ 1)
-                        .map(str::trim),
-                    Some(repo_root.display().to_string().as_str())
+                        .map(str::trim)
+                        .skip_while(|line| *line != "Folder access")
+                        .skip(/*n*/ 1)
+                        .find(|line| !line.is_empty()),
+                    Some(repo_root.to_string_lossy().as_ref())
                 );
             }
             if is_consent {

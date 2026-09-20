@@ -31,7 +31,14 @@ async fn daemon_version_notice_preserves_manual_update_guidance() {
             ))
         );
         let overview = render_bottom_popup(&app.chat_widget, /*width*/ 100);
-        notices.push(overview.lines().next().unwrap().trim().to_string());
+        notices.push(
+            overview
+                .lines()
+                .find(|line| line.contains("Service v"))
+                .unwrap()
+                .trim()
+                .to_string(),
+        );
         assert_eq!(app.pending_update_action, None);
 
         app.local_settings.tui.show_server_version_notice = false;
@@ -80,7 +87,7 @@ async fn daemon_menu_is_read_only_and_confirmation_can_cancel_or_handoff() {
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let overview = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-    insta::assert_snapshot!(overview.lines().next().unwrap().trim(), @"Service v0.153.0 < Codex CLI v0.154.0 · /daemon");
+    insta::assert_snapshot!(overview.lines().find(|line| line.contains("Service v")).unwrap().trim(), @"Service v0.153.0 < Codex CLI v0.154.0 · /daemon");
     let executable = app.daemon_cli_executable.clone();
     for (width, source, snapshot) in [
         (
