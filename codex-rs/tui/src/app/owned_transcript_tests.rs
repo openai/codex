@@ -1,6 +1,8 @@
 //! Owned transcript integration preserves composer spacing/input, prompt editing, and gestures.
 
 use super::*;
+use crate::app::tests::make_test_app_with_channels;
+use crate::app_command::AppCommand;
 use crate::chatwidget::tests::helpers::normalize_snapshot_paths;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
@@ -235,7 +237,11 @@ async fn owned_drag_stops_when_focus_or_input_ownership_is_lost() -> Result<()> 
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
     let size = Size::new(/*width*/ 40, /*height*/ 12);
-    for owner in ["focus", "overlay", "popup"] {
+    app.chat_widget
+        .apply_external_edit("retained draft 界".into());
+    app.chat_widget.handle_key_event(KeyCode::Left.into());
+    let draft = app.chat_widget.capture_thread_input_state();
+    for owner in ["focus", "resume", "overlay", "popup"] {
         app.transcript_view = Default::default();
         app.overlay = None;
         app.render_owned_transcript(&mut tui, size)?;
@@ -261,6 +267,7 @@ async fn owned_drag_stops_when_focus_or_input_ownership_is_lost() -> Result<()> 
         let selected = app.transcript_view.selected_text(&app.transcript_cells);
         let event = match owner {
             "focus" => TuiEvent::FocusLost,
+            "resume" => TuiEvent::Resume,
             "overlay" => {
                 app.overlay = Some(Overlay::new_static_with_lines(
                     vec!["overlay".into()],
@@ -275,7 +282,13 @@ async fn owned_drag_stops_when_focus_or_input_ownership_is_lost() -> Result<()> 
             }
             _ => unreachable!(),
         };
-        app.handle_owned_transcript_event(&mut tui, &mut app_server, &event)?;
+        if matches!(event, TuiEvent::Resume) {
+            app.handle_tui_event(&mut tui, &mut app_server, event)
+                .await?;
+        } else {
+            app.handle_owned_transcript_event(&mut tui, &mut app_server, &event)?;
+        }
+        assert_eq!(app.chat_widget.capture_thread_input_state(), draft);
         assert!(
             !app.transcript_view.tick_selection(&app.transcript_cells),
             "{owner}"
@@ -287,6 +300,55 @@ async fn owned_drag_stops_when_focus_or_input_ownership_is_lost() -> Result<()> 
     }
     tui.set_owned_screen(/*owned*/ false)?;
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.transcript_cells = vec![user_cell("First prompt"), user_cell("Second prompt")];
+    app.chat_widget
+        .apply_external_edit("preserved draft".to_string());
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.open_transcript_overlay(&mut tui);
+    let bottom_area =
+        app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
+    let expected_cursor = app
+        .chat_widget
+        .bottom_pane_renderable(/*footer*/ None)
+        .cursor_pos(bottom_area)
+        .expect("composer cursor");
+    assert_eq!(
+        (
+            app.overlay.is_none(),
+            app.transcript_view.is_detailed(),
+            tui.is_owned_screen(),
+            tui.is_alt_screen_active()
+        ),
+        (true, true, true, true),
+    );
+    assert_eq!(tui.terminal.last_known_cursor_pos, expected_cursor.into());
+    let rendered = normalize_snapshot_paths(buffer_text(
+        crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
+    ));
+    assert!(rendered.contains("First prompt"));
+    assert!(rendered.contains("Second prompt"));
+    assert!(rendered.contains("preserved draft"));
+    assert!(app.handle_owned_backtrack_event(
+        &mut tui,
+        &TuiEvent::Key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL)),
+    )?);
+    assert_eq!(
+        (
+            app.transcript_view.is_detailed(),
+            tui.is_owned_screen(),
+            app.chat_widget.composer_text_with_pending()
+        ),
+        (false, true, "preserved draft".to_string()),
+    );
+    tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }
 
@@ -317,6 +379,293 @@ async fn owned_transcript_keeps_text_out_of_the_pet_columns() -> Result<()> {
         }
     }
     tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_details_escape_interrupts_work_without_starting_backtrack() -> Result<()> {
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    attach_thread(&mut app, thread_id);
+    app.transcript_cells = vec![user_cell("historical prompt")];
+    app.chat_widget
+        .apply_external_edit("draft survives interrupt".to_string());
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.open_transcript_overlay(&mut tui);
+    app.chat_widget.handle_server_notification(
+        ServerNotification::TurnStarted(codex_app_server_protocol::TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "active-turn".to_string(),
+                items_view: codex_app_server_protocol::TurnItemsView::Full,
+                items: Vec::new(),
+                status: codex_app_server_protocol::TurnStatus::InProgress,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        }),
+        /*replay_kind*/ None,
+    );
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )
+    .await?;
+    let interrupts = std::iter::from_fn(|| events.try_recv().ok())
+        .filter(|event| matches!(event, AppEvent::CodexOp(AppCommand::Interrupt)))
+        .count();
+    assert_eq!(
+        (
+            interrupts,
+            app.backtrack.overlay_preview_active,
+            app.transcript_view.is_detailed(),
+            app.chat_widget.composer_text_with_pending(),
+        ),
+        (1, false, true, "draft survives interrupt".to_string()),
+    );
+    tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_backtrack_keys_edit_the_selected_prompt_and_restore_compact_view() -> Result<()> {
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    attach_thread(&mut app, thread_id);
+    app.transcript_cells = vec![user_cell("first"), user_cell("second")];
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.open_transcript_overlay(&mut tui);
+    for (code, selected) in [(KeyCode::Esc, 1), (KeyCode::Left, 0), (KeyCode::Right, 1)] {
+        assert!(app.handle_owned_backtrack_event(
+            &mut tui,
+            &TuiEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+        )?);
+        assert_eq!(
+            (
+                app.backtrack.overlay_preview_active,
+                app.backtrack.nth_user_message
+            ),
+            (true, selected)
+        );
+    }
+    assert!(app.handle_owned_backtrack_event(
+        &mut tui,
+        &TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+    )?);
+    let selection = std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+        AppEvent::RevertSessionForPromptEdit {
+            thread_id,
+            selected_cell,
+            prompt,
+        } => Some((
+            thread_id,
+            Arc::ptr_eq(&selected_cell, &app.transcript_cells[1]),
+            prompt,
+        )),
+        _ => None,
+    });
+    assert_eq!(
+        selection,
+        Some((
+            thread_id,
+            true,
+            crate::chatwidget::UserMessage::from("second")
+        ))
+    );
+    assert_eq!(
+        (
+            app.overlay.is_none(),
+            app.transcript_view.is_detailed(),
+            app.backtrack.overlay_preview_active,
+            app.backtrack.base_id,
+            tui.is_owned_screen()
+        ),
+        (true, false, false, None, true),
+    );
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_owned_backtrack_returns_arrow_keys_to_the_composer() -> Result<()> {
+    for input in [
+        vec![TuiEvent::Paste("abc".to_string())],
+        ['a', 'b', 'c']
+            .map(|c| TuiEvent::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)))
+            .into(),
+    ] {
+        let mut app = crate::app::test_support::make_test_app().await;
+        attach_thread(&mut app, ThreadId::new());
+        app.transcript_cells = vec![user_cell("First prompt"), user_cell("Second prompt")];
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(/*owned*/ true)?;
+        app.open_transcript_overlay(&mut tui);
+        let size = Size::new(/*width*/ 80, /*height*/ 12);
+        app.render_owned_transcript(&mut tui, size)?;
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyCode::Esc.into()),
+        )
+        .await?;
+        for event in input {
+            app.handle_tui_event(&mut tui, &mut app_server, event)
+                .await?;
+        }
+        // An ordinary key cancels preview before reaching the composer. Its arrow-key owner must end
+        // with the highlight, without requiring the user to toggle out of detailed presentation.
+        // Moving the caret also flushes buffered typing without depending on platform paste timers.
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        )
+        .await?;
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "abc");
+        for event in [
+            TuiEvent::Paste("X".to_string()),
+            TuiEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            TuiEvent::Paste("Y".to_string()),
+        ] {
+            app.handle_tui_event(&mut tui, &mut app_server, event)
+                .await?;
+        }
+        assert_eq!(app.chat_widget.composer_text_with_pending(), "abXcY");
+        assert_eq!(
+            (
+                app.transcript_view.is_detailed(),
+                app.backtrack.primed,
+                app.backtrack.overlay_preview_active,
+                app.backtrack.base_id,
+            ),
+            (true, false, false, None),
+        );
+        assert!(!app.handle_owned_backtrack_event(
+            &mut tui,
+            &TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        )?);
+        app.render_owned_transcript(&mut tui, size)?;
+        tui.set_owned_screen(/*owned*/ false)?;
+        app_server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_search_and_selection_consume_input_before_composer_and_backtrack() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.transcript_cells = vec![user_cell("needle in history")];
+    app.chat_widget
+        .apply_external_edit("composer draft".to_string());
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    app.open_transcript_overlay(&mut tui);
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
+    for event in [
+        TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+        TuiEvent::Paste("needle".to_string()),
+    ] {
+        assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &event)?);
+    }
+    app.handle_owned_transcript_event(&mut tui, &mut app_server, &TuiEvent::Draw)?;
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 24))?;
+    assert!(
+        app.transcript_view
+            .search_footer(/*width*/ 80)
+            .expect("query footer")
+            .0
+            .to_string()
+            .starts_with("Find: needle")
+    );
+    let escape = TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
+    assert!(!app.backtrack.overlay_preview_active);
+    // Start and extend a selection through the app, then inspect its copy action without touching
+    // the host clipboard. The app's existing clipboard handler is tested with an injected writer.
+    for key in [
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+    ] {
+        assert!(app.handle_owned_transcript_event(
+            &mut tui,
+            &mut app_server,
+            &TuiEvent::Key(key)
+        )?);
+    }
+    let copy = app.transcript_view.handle_key(
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        &app.transcript_cells,
+    );
+    assert!(matches!(copy, Some(ViewAction::Copy(text)) if !text.is_empty()));
+    assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
+    assert!(!app.backtrack.overlay_preview_active);
+    assert!(app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
+    assert!(app.transcript_view.is_following());
+    assert!(!app.backtrack.overlay_preview_active);
+    assert!(!app.handle_owned_transcript_event(&mut tui, &mut app_server, &escape)?);
+    assert!(!app.backtrack.overlay_preview_active);
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "composer draft"
+    );
+    tui.set_owned_screen(/*owned*/ false)?;
+    app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn inline_transcript_search_draws_and_escape_precedes_backtrack() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    attach_thread(&mut app, ThreadId::new());
+    app.transcript_cells = vec![user_cell("needle in history")];
+    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.open_transcript_overlay(&mut tui);
+    for event in [
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        TuiEvent::Paste("needle".to_string()),
+        TuiEvent::Draw,
+    ] {
+        app.handle_backtrack_overlay_event(&mut tui, &mut app_server, event)
+            .await?;
+    }
+    let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
+        &tui.terminal,
+    ));
+    assert!(
+        rendered.contains("enter next"),
+        "search advances on the inline overlay draw path"
+    );
+    app.handle_backtrack_overlay_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )
+    .await?;
+    assert!(
+        matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if !overlay.has_active_interaction())
+    );
+    assert!(!app.backtrack.overlay_preview_active);
+    app.handle_backtrack_overlay_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+    )
+    .await?;
+    assert!(app.backtrack.overlay_preview_active);
+    app.close_transcript_overlay(&mut tui);
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -481,41 +830,167 @@ async fn offline_find_closes_before_the_next_ctrl_c_quits() -> Result<()> {
 }
 
 #[tokio::test]
-async fn inline_transcript_search_draws_and_escape_closes_find() -> Result<()> {
-    let mut app = crate::app::test_support::make_test_app().await;
-    attach_thread(&mut app, ThreadId::new());
-    app.transcript_cells = vec![user_cell("needle in history")];
-    let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.open_transcript_overlay(&mut tui);
-    for event in [
-        TuiEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
-        TuiEvent::Paste("needle".to_string()),
-        TuiEvent::Draw,
-    ] {
-        app.handle_backtrack_overlay_event(&mut tui, &mut app_server, event)
-            .await?;
+async fn offline_backtrack_keeps_the_preview_and_draft_without_reverting() -> Result<()> {
+    for owned in [true, false] {
+        let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+        attach_thread(&mut app, ThreadId::new());
+        app.transcript_cells = vec![user_cell("earlier prompt"), user_cell("historical prompt")];
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(owned)?;
+        app.open_transcript_overlay(&mut tui);
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        )
+        .await?;
+        app.chat_widget
+            .apply_external_edit("offline draft".to_string());
+        app.reconnect.offline = true;
+        for key in [
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
+        ] {
+            app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key))
+                .await?;
+        }
+        assert_eq!(app.backtrack.nth_user_message, 0);
+        assert!(if owned {
+            app.transcript_view.is_detailed()
+        } else {
+            matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_detailed())
+        });
+        assert!(matches!(
+            app.handle_tui_event(
+                &mut tui,
+                &mut app_server,
+                TuiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            )
+            .await?,
+            AppRunControl::Continue
+        ));
+        assert_eq!(
+            (
+                app.backtrack.overlay_preview_active,
+                app.chat_widget.composer_text_with_pending()
+            ),
+            (true, "offline draft".to_string())
+        );
+        assert!(
+            !std::iter::from_fn(|| events.try_recv().ok())
+                .any(|event| matches!(event, AppEvent::RevertSessionForPromptEdit { .. }))
+        );
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+        )
+        .await?;
+        assert!(if owned {
+            app.transcript_view.is_search_active()
+        } else {
+            matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if overlay.is_search_active())
+        });
+        for (key, preview_active, draft) in [
+            (KeyCode::Esc, true, "offline draft"),
+            (
+                if owned {
+                    KeyCode::Backspace
+                } else {
+                    KeyCode::Esc
+                },
+                false,
+                if owned {
+                    "offline draf"
+                } else {
+                    "offline draft"
+                },
+            ),
+        ] {
+            app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(key.into()))
+                .await?;
+            assert_eq!(app.backtrack.overlay_preview_active, preview_active);
+            assert_eq!(app.chat_widget.composer_text_with_pending(), draft);
+        }
+        tui.set_owned_screen(/*owned*/ false)?;
+        app_server.shutdown().await?;
     }
-    let rendered = buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(
-        &tui.terminal,
-    ));
-    assert!(
-        rendered.contains("enter next"),
-        "search advances on the inline overlay draw path"
-    );
-    app.handle_backtrack_overlay_event(
-        &mut tui,
-        &mut app_server,
-        TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-    )
-    .await?;
-    assert!(
-        matches!(&app.overlay, Some(Overlay::Transcript(overlay)) if !overlay.has_active_interaction())
-    );
-    app.close_transcript_overlay(&mut tui);
-    app_server.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn double_escape_browses_prompts_without_reverting_and_explains_editing() -> Result<()> {
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    app.keymap = RuntimeKeymap::from_config(&toml::from_str(
+        "[editor]\nmove_left=[]\nmove_line_start='left h'\n[global]\nopen_transcript='ctrl-x h'\n",
+    )?)
+    .unwrap();
+    attach_thread(&mut app, ThreadId::new());
+    app.transcript_cells = vec![
+        user_cell("first question"),
+        user_cell("second question"),
+        user_cell("third question"),
+    ];
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let size = Size::new(/*width*/ 80, /*height*/ 16);
+    app.render_owned_transcript(&mut tui, size)?;
+    for code in [KeyCode::Esc, KeyCode::Esc] {
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyEvent::from(code)))
+            .await?;
+    }
+    assert!(app.backtrack.overlay_preview_active);
+    assert_eq!(app.backtrack.nth_user_message, 2);
+    for key in [
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        KeyCode::Char('h').into(),
+    ] {
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))
+            .await?;
+    }
+    assert!(app.transcript_view.is_detailed());
+    assert_eq!(app.backtrack.nth_user_message, 2);
+    for key in [
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        KeyCode::Char('h').into(),
+    ] {
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key))
+            .await?;
+    }
+    assert!(!app.transcript_view.is_detailed());
+
+    for (code, index) in [(KeyCode::Left, 1), (KeyCode::Left, 0), (KeyCode::Right, 1)] {
+        app.render_owned_transcript(&mut tui, size)?;
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(code.into()))
+            .await?;
+        assert!(!app.key_chord_matcher.is_pending());
+        assert_eq!(app.backtrack.nth_user_message, index);
+    }
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, AppEvent::RevertSessionForPromptEdit { .. }))
+    );
+    app.keymap = RuntimeKeymap::defaults();
+    app.render_owned_transcript(&mut tui, size)?;
+    insta::assert_snapshot!(
+        "prompt_navigation",
+        normalize_snapshot_paths(buffer_text(
+            crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)
+        ))
+    );
+    app.close_transcript_overlay(&mut tui);
+    assert!(!app.backtrack.overlay_preview_active);
+    server.shutdown().await?;
+    tui.set_owned_screen(/*owned*/ false)?;
+    Ok(())
+}
+
+#[path = "owned_transcript_browsing_tests.rs"]
+mod browsing;
 
 #[tokio::test]
 async fn find_refreshes_live_details_before_searching_the_first_query() -> Result<()> {

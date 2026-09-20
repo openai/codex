@@ -105,14 +105,7 @@ impl App {
             RawReasoningVisibility::Hidden
         };
         let width = tui.terminal.last_known_screen_size.width;
-        self.remove_hidden_review_cells(
-            &turns,
-            &hidden_item_ids,
-            thread_id,
-            &cwd,
-            visibility,
-            width,
-        );
+        self.remove_hidden_review_cells(tui, &turns, &hidden_item_ids, thread_id, &cwd, visibility);
         let cells = self.project_older_history_cells(
             items,
             &turns,
@@ -121,7 +114,7 @@ impl App {
             &cwd,
             visibility,
         );
-        let inserted = self.prepend_older_transcript_cells(cells, width);
+        let inserted = self.prepend_older_transcript_cells(cells);
         self.transcript_view
             .history_loaded(&self.transcript_cells, inserted.clone());
         if !inserted.is_empty() {
@@ -129,6 +122,16 @@ impl App {
         }
         merge_older_turns(&mut store.lock().await.turns, turns);
         self.scrollback_has_older_history = app_server.has_older_history(thread_id);
+        if self.backtrack.overlay_preview_active
+            && self.backtrack.nth_user_message == usize::MAX
+            && !self.scrollback_has_older_history
+        {
+            self.cancel_transcript_browsing(tui);
+            self.chat_widget.add_info_message(
+                "No previous message to edit.".to_string(),
+                /*hint*/ None,
+            );
+        }
 
         if tui.is_owned_screen() {
             self.finish_owned_history_page(tui, app_server, thread_id);
@@ -141,12 +144,12 @@ impl App {
     /// Remove prompts revealed as internal review input by an older page's review marker.
     fn remove_hidden_review_cells(
         &mut self,
+        tui: &mut tui::Tui,
         turns: &[Turn],
         hidden_item_ids: &HashSet<&str>,
         thread_id: ThreadId,
         cwd: &AbsolutePathBuf,
         visibility: RawReasoningVisibility,
-        width: u16,
     ) {
         if hidden_item_ids.is_empty() {
             return;
@@ -182,17 +185,23 @@ impl App {
                 &self.transcript_cells,
                 self.backtrack.nth_user_message,
             );
-            let removed_visible_users = indices
-                .iter()
-                .filter(|&&index| {
-                    selected_index.is_some_and(|selected| index < selected)
-                        && self.transcript_cells[index].desired_height(width) != 0
-                })
-                .count();
-            self.backtrack.nth_user_message = self
-                .backtrack
-                .nth_user_message
-                .saturating_sub(removed_visible_users);
+            if selected_index.is_some_and(|selected| indices.contains(&selected)) {
+                self.cancel_transcript_browsing(tui);
+            } else {
+                let removed_visible_users = indices
+                    .iter()
+                    .filter(|&&index| {
+                        selected_index.is_some_and(|selected| index < selected)
+                            && crate::app_backtrack::user_count(std::slice::from_ref(
+                                &self.transcript_cells[index],
+                            )) != 0
+                    })
+                    .count();
+                self.backtrack.nth_user_message = self
+                    .backtrack
+                    .nth_user_message
+                    .saturating_sub(removed_visible_users);
+            }
         }
         for index in indices {
             self.transcript_cells.remove(index);
@@ -240,20 +249,16 @@ impl App {
     }
 
     /// Insert each page once, keeping session headers and any backtrack selection in place.
-    fn prepend_older_transcript_cells(
-        &mut self,
-        cells: Vec<Arc<dyn HistoryCell>>,
-        width: u16,
-    ) -> Range<usize> {
+    fn prepend_older_transcript_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) -> Range<usize> {
         if self.backtrack.overlay_preview_active {
-            self.backtrack.nth_user_message = self.backtrack.nth_user_message.saturating_add(
-                cells
-                    .iter()
-                    .filter(|cell| {
-                        cell.as_any().is::<UserHistoryCell>() && cell.desired_height(width) != 0
-                    })
-                    .count(),
-            );
+            let added_prompts = crate::app_backtrack::user_count(&cells);
+            self.backtrack.nth_user_message = if self.backtrack.nth_user_message == usize::MAX {
+                added_prompts.checked_sub(1).unwrap_or(usize::MAX)
+            } else {
+                self.backtrack
+                    .nth_user_message
+                    .saturating_add(added_prompts)
+            };
         }
         let index = if let Some(Overlay::Transcript(overlay)) = self.overlay.as_mut() {
             overlay.prepend(cells.clone())
@@ -290,7 +295,9 @@ impl App {
                 .jump_to_entry(&self.transcript_cells, /*index*/ 0);
         }
         if self.scrollback_has_older_history
-            && (continue_to_start || self.transcript_view.needs_history(&self.transcript_cells))
+            && (continue_to_start
+                || self.browsing_needs_history()
+                || self.transcript_view.needs_history(&self.transcript_cells))
             && self.request_older_history_page(app_server, thread_id)
         {
             self.transcript_view.history = if continue_to_start {

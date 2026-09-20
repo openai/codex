@@ -11,7 +11,6 @@ mod tests;
 
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     activity_id: String,
     changes: HashMap<PathBuf, FileChange>,
     cwd: PathBuf,
@@ -86,7 +85,6 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PatchFailureCell {
 /// Failed patch attempts retain available diagnostics for local disclosure and full transcript.
 #[derive(Debug)]
 pub(crate) struct PatchFailureCell {
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     activity_id: String,
     stderr: String,
 }

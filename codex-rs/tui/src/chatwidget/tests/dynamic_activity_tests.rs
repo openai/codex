@@ -1,8 +1,11 @@
 //! Dynamic calls must finish visibly whether transcript rows are retained or terminal-owned.
 
 use super::*;
+use crate::local_settings::LocalSettings;
+use crate::transcript_mode::TranscriptMode;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallStatus;
+use codex_config::types::AltScreenMode;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -28,31 +31,84 @@ fn dynamic_item(id: &str, status: DynamicToolCallStatus) -> AppServerThreadItem 
 }
 
 #[tokio::test]
-async fn dynamic_activity_retains_out_of_order_completions() {
-    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-    drain_insert_history(&mut rx);
+async fn terminal_dynamic_activity_retains_calls_across_both_fallbacks() {
+    let mut outputs = Vec::new();
+    for (owned_enabled, alternate_screen) in
+        [(false, AltScreenMode::Always), (true, AltScreenMode::Never)]
+    {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.config
+            .features
+            .set_enabled(Feature::TranscriptV2, owned_enabled)
+            .expect("configure transcript feature");
+        chat.config.tui_alternate_screen = alternate_screen;
+        chat.local_settings = LocalSettings::from(&chat.config);
+        assert_eq!(
+            chat.local_settings.transcript_mode,
+            TranscriptMode::Terminal
+        );
+        drain_insert_history(&mut rx);
 
-    for id in ["call-1", "call-2"] {
-        chat.on_dynamic_tool_item(dynamic_item(id, DynamicToolCallStatus::InProgress));
+        for id in ["call-1", "call-2"] {
+            chat.on_dynamic_tool_item(dynamic_item(id, DynamicToolCallStatus::InProgress));
+        }
+        let cells = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => Some(cell),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(chat.transcript.dynamic_calls.len(), 2);
+
+        chat.on_dynamic_tool_item(dynamic_item("call-2", DynamicToolCallStatus::Completed));
+        chat.on_dynamic_tool_item(dynamic_item("call-1", DynamicToolCallStatus::Failed));
+        assert!(drain_insert_history(&mut rx).is_empty());
+        outputs.push(
+            cells
+                .iter()
+                .flat_map(|cell| cell.display_lines(/*width*/ 80))
+                .collect::<Vec<_>>(),
+        );
+        assert!(chat.transcript.dynamic_calls.is_empty());
     }
-    let cells = std::iter::from_fn(|| rx.try_recv().ok())
+    assert_eq!(outputs[0], outputs[1]);
+    insta::assert_snapshot!(
+        "terminal_dynamic_activity",
+        lines_to_single_string(&outputs[0])
+    );
+}
+
+#[tokio::test]
+async fn owned_dynamic_activity_updates_the_retained_row_after_config_refresh() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_settings.transcript_mode = TranscriptMode::Owned;
+    // A thread/config refresh cannot change ownership after the terminal starts.
+    chat.config
+        .features
+        .disable(Feature::TranscriptV2)
+        .expect("disable transcript feature in refreshed config");
+    drain_insert_history(&mut rx);
+    chat.on_dynamic_tool_item(dynamic_item("call-1", DynamicToolCallStatus::InProgress));
+    let retained = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell) => Some(cell),
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(cells.len(), 2);
-    assert_eq!(chat.transcript.dynamic_calls.len(), 2);
+    assert_eq!(retained.len(), 1);
+    assert_eq!(
+        lines_to_single_string(&retained[0].display_lines(/*width*/ 80)),
+        "• Calling test.lookup\n",
+    );
 
-    chat.on_dynamic_tool_item(dynamic_item("call-2", DynamicToolCallStatus::Completed));
-    chat.on_dynamic_tool_item(dynamic_item("call-1", DynamicToolCallStatus::Failed));
+    chat.on_dynamic_tool_item(dynamic_item("call-1", DynamicToolCallStatus::Completed));
     assert!(drain_insert_history(&mut rx).is_empty());
-    let output = cells
-        .iter()
-        .flat_map(|cell| cell.display_lines(/*width*/ 80))
-        .collect::<Vec<_>>();
     assert!(chat.transcript.dynamic_calls.is_empty());
-    insta::assert_snapshot!("terminal_dynamic_activity", lines_to_single_string(&output));
+    assert_eq!(
+        lines_to_single_string(&retained[0].display_lines(/*width*/ 80)),
+        "• Called test.lookup · 25ms\n  └ Result for call-1\n",
+    );
 }
 
 #[tokio::test]

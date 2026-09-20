@@ -215,6 +215,7 @@ mod app_server_events;
 pub(crate) mod app_server_requests;
 mod backend_banner_fallback;
 mod background_requests;
+mod composer_hints;
 mod config_persistence;
 mod connector_mentions;
 mod daemon_menu;
@@ -889,7 +890,7 @@ impl App {
             self.cancel_pending_key_chord();
         }
 
-        let event = if let TuiEvent::Key(mut key_event) = event {
+        let mut event = if let TuiEvent::Key(mut key_event) = event {
             let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
             if self.should_recover_vim_insert_escape(key_event)
                 && !(tui.is_owned_screen()
@@ -910,8 +911,28 @@ impl App {
             event
         };
 
+        self.cancel_primed_browsing_for_event(&event);
         if self.handle_owned_transcript_event(tui, app_server, &event)? {
             return Ok(AppRunControl::Continue);
+        }
+        // Leave browsing before unhandled editing input reaches shortcuts or offline input.
+        // Offline Enter cannot confirm a rewind and leaves the preview available to read.
+        if tui.is_owned_screen()
+            && self.overlay.is_none()
+            && self.backtrack.overlay_preview_active
+            && (matches!(&event, TuiEvent::Key(key)
+                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                    && !(self.reconnect.offline && key.code == KeyCode::Enter))
+                || matches!(&event, TuiEvent::Paste(text) if !text.is_empty()))
+        {
+            self.cancel_transcript_browsing(tui);
+            // The first lookup used browsing contexts; retry after restoring composer contexts.
+            if let TuiEvent::Key(key) = event {
+                let Some(key) = self.route_key_chord_event(tui, key) else {
+                    return Ok(AppRunControl::Continue);
+                };
+                event = TuiEvent::Key(key);
+            }
         }
         if self.reconnect.offline
             && !matches!(&self.overlay, Some(Overlay::Transcript(_)))
@@ -961,6 +982,13 @@ impl App {
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                     let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+                    if self.backtrack.primed && !pasted.is_empty() {
+                        if self.backtrack.overlay_preview_active {
+                            self.cancel_transcript_browsing(tui);
+                        } else {
+                            self.reset_backtrack_state();
+                        }
+                    }
                     self.chat_widget.handle_paste(pasted);
                     if self.reconnect.offline
                         && self.reconnect.presentation

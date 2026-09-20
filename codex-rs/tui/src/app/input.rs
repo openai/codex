@@ -179,7 +179,12 @@ impl App {
             } else {
                 KeymapContext::Pager
             };
-            return KeymapContextSet::new(context);
+            let contexts = KeymapContextSet::new(context);
+            return if self.backtrack.overlay_preview_active && context == KeymapContext::Pager {
+                KeymapContextSet::browsing()
+            } else {
+                contexts
+            };
         }
         if self.transcript_view.is_search_active() && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::new(KeymapContext::Editor);
@@ -187,6 +192,9 @@ impl App {
         if self.transcript_view.is_activity_focused() && self.chat_widget.no_modal_or_popup_active()
         {
             return KeymapContextSet::activity();
+        }
+        if self.backtrack.overlay_preview_active && self.chat_widget.no_modal_or_popup_active() {
+            return KeymapContextSet::browsing();
         }
         let voice_available = self.chat_widget.realtime_microphone_shortcut_available();
         let contexts = self.chat_widget.keymap_contexts();
@@ -538,7 +546,7 @@ impl App {
             // with the composer focused and empty. In any other state, forward
             // Esc so the active UI (e.g. status indicator, modals, popups)
             // handles it.
-            if !tui.is_owned_screen() && self.should_handle_backtrack_esc(key_event) {
+            if self.should_handle_backtrack_esc(key_event) {
                 self.chat_widget.prepare_composer_sparkle_key(key_event);
                 if key_event.kind == KeyEventKind::Press {
                     self.handle_backtrack_esc_key(tui);
@@ -575,7 +583,7 @@ impl App {
                 // (even if they later backspace to empty).
                 if key_event.code != KeyCode::Esc && self.backtrack.primed {
                     if self.backtrack.overlay_preview_active {
-                        self.close_transcript_overlay(tui);
+                        self.cancel_transcript_browsing(tui);
                     } else {
                         self.reset_backtrack_state();
                     }
@@ -671,7 +679,7 @@ impl App {
                 && matches!(key_event.code, KeyCode::Char('c' | 'd')))
     }
 
-    pub(super) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
+    pub(crate) fn should_handle_backtrack_esc(&self, key_event: KeyEvent) -> bool {
         !self.chat_widget.side_conversation_active()
             && !self.chat_widget.shortcut_overlay_visible()
             && self.chat_widget.is_normal_backtrack_mode()

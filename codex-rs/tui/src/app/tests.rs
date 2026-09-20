@@ -51,6 +51,8 @@ mod permission_selection_tests;
 #[path = "tests/unavailable_commands_tests.rs"]
 mod unavailable_commands;
 
+#[path = "tests/history_hydration_tests.rs"]
+mod history_hydration_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod plugin_catalog;
@@ -78,6 +80,9 @@ mod stream_animation_tests;
 mod thread_usage;
 #[path = "tests/transcript_composer.rs"]
 mod transcript_composer;
+
+#[path = "tests/transcript_selection.rs"]
+mod transcript_selection;
 #[path = "tests/turn_submission.rs"]
 mod turn_submission;
 #[path = "tests/user_verification_routes_tests.rs"]
@@ -88,6 +93,7 @@ mod worktree_background_terminals_tests;
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
+use crate::app_backtrack::nth_user_position;
 use crate::app_backtrack::user_count;
 use crate::app_event::HistoryBatchEntryResponse;
 
@@ -5969,8 +5975,8 @@ async fn make_test_app() -> App {
         runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
+        transcript_view: crate::transcript_view::TranscriptView::default(),
         native_history: Default::default(),
-        transcript_view: Default::default(),
         last_rendered_history_tail: None,
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,
@@ -6072,8 +6078,8 @@ pub(super) async fn make_test_app_with_channels() -> (
             runtime_permission_profile_override: None,
             file_search,
             transcript_cells: Vec::new(),
+            transcript_view: crate::transcript_view::TranscriptView::default(),
             native_history: Default::default(),
-            transcript_view: Default::default(),
             last_rendered_history_tail: None,
             last_thread_usage_status_cell: None,
             pending_thread_usage_history_refresh: false,
@@ -7512,10 +7518,10 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
         event,
         AppEvent::RevertSessionForPromptEdit {
             thread_id,
-            nth_user_message,
+            selected_cell,
             prompt,
         } if thread_id == expected.thread_id
-            && nth_user_message == expected.nth_user_message
+            && Arc::ptr_eq(&selected_cell, &app.transcript_cells[nth_user_position(&app.transcript_cells, expected.nth_user_message).unwrap()])
             && prompt == expected.prompt
     );
 
@@ -8143,7 +8149,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(&config)).await?;
     // Leave the oldest prompt on an unloaded page.
     let mut local_settings = crate::local_settings::LocalSettings::from(&config);
-    local_settings.tui.terminal_resize_reflow_max_rows = Some(3);
+    local_settings.tui.terminal_resize_reflow_max_rows = Some(2);
     let started = app_server
         .resume_thread(
             &local_settings,
@@ -8192,7 +8198,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
             app.transcript_cells.push(Arc::from(cell));
         }
     }
-    assert_eq!(crate::app_backtrack::user_count(&app.transcript_cells), 3);
+    assert_eq!(crate::app_backtrack::user_count(&app.transcript_cells), 2);
     let child_id = ThreadId::new();
     let child = Arc::clone(&app.ensure_thread_channel(child_id).store);
     let goal = app_server
@@ -8222,16 +8228,71 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
         AppEvent::UpdateModel("gpt-5.4".into()),
     ))
     .await?;
-    let control = Box::pin(app.handle_event(
+    app.app_server_target = crate::AppServerTarget::Remote {
+        endpoint: crate::RemoteAppServerEndpoint::WebSocket {
+            websocket_url: "ws://127.0.0.1:4500".to_string(),
+            auth_token: None,
+        },
+    };
+    let before = app_server
+        .thread_read(source_thread_id, /*include_turns*/ true)
+        .await?;
+    for text in [None, Some("/help"), Some(" \t!")] {
+        let mut remote_prompt = prompt.clone();
+        if let Some(text) = text {
+            remote_prompt.text = text.into();
+            remote_prompt.local_images.clear();
+        }
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::RevertSessionForPromptEdit {
+                thread_id: source_thread_id,
+                selected_cell: Arc::clone(
+                    &app.transcript_cells
+                        [nth_user_position(&app.transcript_cells, /*nth*/ 1).unwrap()],
+                ),
+                prompt: remote_prompt,
+            },
+        ))
+        .await?;
+        assert!(app.chat_widget.composer_is_empty());
+        assert_eq!(
+            app_server
+                .thread_read(source_thread_id, /*include_turns*/ true)
+                .await?,
+            before
+        );
+    }
+    app.app_server_target = crate::AppServerTarget::Embedded;
+    let selection = AppEvent::RevertSessionForPromptEdit {
+        thread_id: source_thread_id,
+        selected_cell: Arc::clone(
+            &app.transcript_cells[nth_user_position(&app.transcript_cells, /*nth*/ 1).unwrap()],
+        ),
+        prompt: prompt.clone(),
+    };
+    // A queued page shifts both identical prompts before confirmation is dispatched.
+    let cursor = app_server
+        .begin_older_history_page(source_thread_id)
+        .expect("older page");
+    let page = app_server
+        .thread_items_page(
+            source_thread_id,
+            /*turn_id*/ None,
+            Some(cursor.clone()),
+            /*limit*/ 1,
+        )
+        .await?;
+    app.handle_older_history_page(
         &mut tui,
         &mut app_server,
-        AppEvent::RevertSessionForPromptEdit {
-            thread_id: source_thread_id,
-            nth_user_message: 1,
-            prompt: prompt.clone(),
-        },
-    ))
+        source_thread_id,
+        &cursor,
+        Ok(page),
+    )
     .await?;
+    let control = Box::pin(app.handle_event(&mut tui, &mut app_server, selection)).await?;
 
     while let Ok(event) = app_event_rx.try_recv() {
         match event {
@@ -8267,7 +8328,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
             .iter()
             .map(|turn| turn.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["turn-0", "turn-1"]
+        vec!["turn-0", "turn-1", "turn-2"]
     );
 
     let history = app
@@ -8303,7 +8364,9 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
         &mut app_server,
         AppEvent::RevertSessionForPromptEdit {
             thread_id: source_thread_id,
-            nth_user_message: 0,
+            selected_cell: Arc::clone(
+                &app.transcript_cells[nth_user_position(&app.transcript_cells, /*nth*/ 0).unwrap()],
+            ),
             prompt: "retained prompt".into(),
         },
     ))

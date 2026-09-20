@@ -1,5 +1,6 @@
 //! Transcript gestures leave ordinary typing and composer editing with the existing input path.
 
+use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -76,6 +77,39 @@ impl JumpTarget {
 }
 
 impl TranscriptView {
+    pub(crate) fn navigate_pager(
+        &mut self,
+        key: KeyEvent,
+        cells: &[Arc<dyn HistoryCell>],
+        keymap: &crate::keymap::PagerKeymap,
+    ) -> bool {
+        if keymap.jump_top.is_pressed(key) {
+            self.jump_to_beginning(cells);
+            return true;
+        }
+        if keymap.jump_bottom.is_pressed(key) {
+            self.jump_to_latest();
+            return true;
+        }
+        let page = self.area.height.max(/*other*/ 1) as isize;
+        let half = (page + 1) / 2;
+        let delta = [
+            (&keymap.scroll_up, -1),
+            (&keymap.scroll_down, 1),
+            (&keymap.page_up, -page),
+            (&keymap.page_down, page),
+            (&keymap.half_page_up, -half),
+            (&keymap.half_page_down, half),
+        ]
+        .into_iter()
+        .find_map(|(bindings, delta)| bindings.is_pressed(key).then_some(delta));
+        let Some(delta) = delta else {
+            return false;
+        };
+        self.scroll(cells, delta);
+        true
+    }
+
     /// Keep selection and Find control keys ahead of configurable chord prefixes.
     pub(crate) fn owns_interaction_key(&self, key: KeyEvent) -> bool {
         if key.kind == KeyEventKind::Release {

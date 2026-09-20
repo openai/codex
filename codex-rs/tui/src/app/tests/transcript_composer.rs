@@ -268,7 +268,7 @@ async fn transcript_flag_off_preserves_viewer_and_backtracking() -> Result<()> {
     insta::assert_snapshot!("transcript_flag_off_viewer", buffer_text(&buffer));
     for (key, selected) in [
         (KeyCode::Esc, 1),
-        (KeyCode::Esc, 0),
+        (KeyCode::Left, 0),
         (KeyCode::Right, 1),
         (KeyCode::Right, 1),
     ] {
@@ -296,9 +296,9 @@ async fn transcript_flag_off_preserves_viewer_and_backtracking() -> Result<()> {
         std::iter::from_fn(|| app_event_rx.try_recv().ok()).any(|event| matches!(
             event,
             AppEvent::RevertSessionForPromptEdit {
-                nth_user_message: 1,
+                selected_cell,
                 ..
-            }
+            } if Arc::ptr_eq(&selected_cell, &app.transcript_cells[crate::app_backtrack::nth_user_position(&app.transcript_cells, /*nth*/ 1).unwrap()])
         ))
     );
     Ok(())

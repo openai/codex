@@ -107,6 +107,15 @@ async fn older_page_hydration_keeps_pending_computer_and_exploration_completion(
             .extend(project(&app, &current.items[1..2]));
         app.join_older_activity_group(/*boundary*/ 1, std::slice::from_ref(&current));
         assert!(app.transcript_cells.is_empty());
+        if matches!(kind, ActivityKind::Computer) {
+            assert!(
+                crate::chatwidget::tests::helpers::render_bottom_popup(
+                    &app.chat_widget,
+                    /*width*/ 80
+                )
+                .contains("Using computer · 3 actions")
+            );
+        }
         match kind {
             ActivityKind::Computer => app.chat_widget.handle_mcp_tool_call_completed_now(call(
                 "pending",

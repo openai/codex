@@ -181,7 +181,6 @@ impl HistoryCell for ProposedPlanStreamCell {
 
 #[derive(Debug)]
 pub(crate) struct PlanUpdateCell {
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     activity_id: String,
     explanation: Option<String>,
     plan: Vec<PlanItemArg>,

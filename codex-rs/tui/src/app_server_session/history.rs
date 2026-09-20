@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use super::AppServerSession;
 use crate::history_cell::HistoryRenderMode;
 use crate::legacy_core::config::Config;
+use crate::local_settings::LocalSettings;
 use crate::resize_reflow_cap::resize_reflow_max_rows;
 use crate::thread_transcript::RawReasoningVisibility;
 use crate::thread_transcript::thread_items_to_transcript_cells;
@@ -34,6 +35,67 @@ pub(crate) enum HistoryHydrationScope<'a> {
     Initial,
     Complete,
     ThroughTurn(&'a str),
+}
+
+/// Limits initial hydration independently from the number of items retained by later paging.
+struct HistoryLoadBudget {
+    rows: Option<usize>,
+    items: Option<usize>,
+}
+
+impl HistoryLoadBudget {
+    fn new(
+        scope: HistoryHydrationScope<'_>,
+        config: Option<&Config>,
+        local_settings: Option<&crate::local_settings::LocalSettings>,
+        terminal_height: u16,
+    ) -> Self {
+        let transcript_mode = local_settings
+            .map(|settings| settings.transcript_mode)
+            .or_else(|| config.map(|config| LocalSettings::from(config).transcript_mode));
+        if scope == HistoryHydrationScope::Initial
+            && transcript_mode.is_some_and(crate::transcript_mode::TranscriptMode::is_owned)
+        {
+            // A few screenfuls cover the first viewport and nearby reading without coupling
+            // owned history to terminal scrollback settings, including unlimited scrollback.
+            return Self {
+                rows: Some(usize::from(terminal_height.max(/*other*/ 1)) * 3),
+                items: Some(HISTORY_ITEM_SCAN_LIMIT),
+            };
+        }
+        let rows = local_settings
+            .and_then(|settings| resize_reflow_max_rows(settings.terminal_resize_reflow()));
+        let items = match (scope, config, rows) {
+            (HistoryHydrationScope::Complete, _, _)
+            | (HistoryHydrationScope::ThroughTurn(_), _, _)
+            | (HistoryHydrationScope::Initial, Some(_), None) => None,
+            (HistoryHydrationScope::Initial, Some(_), Some(max_rows)) => {
+                Some(max_rows.saturating_add(HISTORY_ITEM_SCAN_LIMIT))
+            }
+            (HistoryHydrationScope::Initial, None, _) => Some(HISTORY_ITEM_PAGE_LIMIT as usize),
+        };
+        Self { rows, items }
+    }
+
+    fn next_page_size(&self, rendered_rows: usize, scanned_items: usize) -> Option<u32> {
+        let remaining_rows = self.rows.map(|budget| budget.saturating_sub(rendered_rows));
+        let remaining_items = self
+            .items
+            .map(|budget| budget.saturating_sub(scanned_items));
+        if remaining_rows == Some(0) || remaining_items == Some(0) {
+            return None;
+        }
+        let limit = remaining_items
+            .unwrap_or(HISTORY_ITEM_PAGE_LIMIT as usize)
+            .min(HISTORY_ITEM_PAGE_LIMIT as usize);
+        // After the first page, hidden items must not reduce requests to one item.
+        let limit = if scanned_items != 0 {
+            limit
+        } else {
+            limit.min(remaining_rows.unwrap_or(limit))
+        };
+        Some(limit as u32)
+    }
 }
 
 pub(crate) fn thread_items_page_params(
@@ -286,36 +348,12 @@ impl AppServerSession {
             next_item_cursor: item_cursor,
             ..ThreadHistoryPagination::default()
         };
-        let width = crossterm::terminal::size()
-            .map(|(width, _)| width.max(/*other*/ 1))
-            .unwrap_or(/*default*/ 80);
-        let row_budget = local_settings
-            .and_then(|settings| resize_reflow_max_rows(settings.terminal_resize_reflow()));
-        let item_budget = match (scope, config, row_budget) {
-            (HistoryHydrationScope::Complete, _, _)
-            | (HistoryHydrationScope::ThroughTurn(_), _, _)
-            | (HistoryHydrationScope::Initial, Some(_), None) => None,
-            (HistoryHydrationScope::Initial, Some(_), Some(max_rows)) => {
-                Some(max_rows.saturating_add(HISTORY_ITEM_SCAN_LIMIT))
-            }
-            (HistoryHydrationScope::Initial, None, _) => Some(HISTORY_ITEM_PAGE_LIMIT as usize),
-        };
+        let (width, height) = crossterm::terminal::size().unwrap_or(/*default*/ (80, 24));
+        let width = width.max(/*other*/ 1);
+        let budget = HistoryLoadBudget::new(scope, config, local_settings, height);
         let mut scanned_items = 0;
         let mut rendered_rows = 0;
-        loop {
-            let remaining_rows = row_budget.map(|budget| budget.saturating_sub(rendered_rows));
-            let remaining_items = item_budget.map(|budget| budget.saturating_sub(scanned_items));
-            if remaining_rows == Some(0) || remaining_items == Some(0) {
-                break;
-            }
-            let limit = remaining_items
-                .unwrap_or(HISTORY_ITEM_PAGE_LIMIT as usize)
-                .min(HISTORY_ITEM_PAGE_LIMIT as usize);
-            let limit = if rendered_rows == 0 && scanned_items != 0 {
-                limit
-            } else {
-                limit.min(remaining_rows.unwrap_or(limit))
-            } as u32;
+        while let Some(limit) = budget.next_page_size(rendered_rows, scanned_items) {
             let page = self
                 .thread_items_page(
                     thread_id,

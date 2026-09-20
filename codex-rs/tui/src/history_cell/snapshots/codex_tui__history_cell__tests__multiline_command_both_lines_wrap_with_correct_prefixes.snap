@@ -1,5 +1,5 @@
 ---
-source: tui/src/history_cell.rs
+source: tui/src/history_cell/tests.rs
 expression: rendered
 ---
 • Ran first_token_is_long_en

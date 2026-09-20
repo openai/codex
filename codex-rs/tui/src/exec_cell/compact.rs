@@ -16,7 +16,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 impl ExecCell {
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(super) fn command_has_hidden_details(&self, width: u16) -> bool {
         let [call] = self.group.calls.as_slice() else {
             return false;

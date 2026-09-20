@@ -1,0 +1,21 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+assertion_line: 1077
+expression: "normalize_snapshot_paths(buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)))"
+---
+
+› first question
+
+
+
+› second question
+
+
+
+› third question
+
+
+
+› Ask Codex to do anything
+
+  Browsing · ↑↓/jk scroll · ←→/hl prompts · ctrl+t details · ↵ rewind · esc back

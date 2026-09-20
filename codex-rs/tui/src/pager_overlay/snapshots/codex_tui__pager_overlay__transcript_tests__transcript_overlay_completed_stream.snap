@@ -1,6 +1,6 @@
 ---
 source: tui/src/pager_overlay/transcript_tests.rs
-assertion_line: 614
+assertion_line: 664
 expression: "buffer_to_text(&actual, area)"
 ---
 / T R A N S C R I P T / / / / / / / / /
@@ -11,4 +11,4 @@ last
 
 Ctrl+Space select
  ↑/↓ to scroll · pgup/pgdn to page · hom
- q close · f3 find · esc edit previous
+ q close · f3 find · esc browse prompts

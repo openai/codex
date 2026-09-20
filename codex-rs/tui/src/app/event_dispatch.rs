@@ -547,10 +547,20 @@ impl App {
             }
             AppEvent::RevertSessionForPromptEdit {
                 thread_id,
-                nth_user_message,
+                selected_cell,
                 mut prompt,
             } => {
                 if self.chat_widget.thread_id() != Some(thread_id) {
+                    return Ok(AppRunControl::Continue);
+                }
+                if self.app_server_target.uses_remote_workspace()
+                    && (!prompt.local_images.is_empty()
+                        || prompt.text.trim_start().starts_with(['/', '!']))
+                {
+                    self.chat_widget.add_error_message(
+                        "This remote prompt contains local image paths or command syntax that cannot be restored safely. Write a new message and reattach any images.".into(),
+                    );
+                    tui.frame_requester().schedule_frame();
                     return Ok(AppRunControl::Continue);
                 }
                 if self.pending_server_profiles.contains_key(&thread_id) {
@@ -561,6 +571,12 @@ impl App {
                     tui.frame_requester().schedule_frame();
                     return Ok(AppRunControl::Continue);
                 }
+                let Some(index) = self.transcript_cells.iter().position(|cell| Arc::ptr_eq(cell, &selected_cell)) else {
+                    self.restore_backtrack_prompt_after_revert_error(prompt, "the selected prompt is no longer visible");
+                    tui.frame_requester().schedule_frame();
+                    return Ok(AppRunControl::Continue);
+                };
+                let nth_user_message = crate::app_backtrack::user_count(&self.transcript_cells[..index]);
                 let selection: Result<(String, Vec<Turn>)> = async {
                     let channel = self.thread_event_channels.get(&thread_id)
                         .ok_or_else(|| color_eyre::eyre::eyre!("the selected thread is no longer available"))?;

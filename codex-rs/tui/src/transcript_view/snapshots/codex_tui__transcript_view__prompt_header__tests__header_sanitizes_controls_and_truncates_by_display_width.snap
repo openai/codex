@@ -1,0 +1,6 @@
+---
+source: tui/src/transcript_view/prompt_header_tests.rs
+assertion_line: 76
+expression: line.to_string()
+---
+界 café next ques…

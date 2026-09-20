@@ -247,20 +247,17 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
     /// Stable, namespaced member identities used to retain disclosure across grouping and replay.
     /// Empty identities indicate ordinary content without a local disclosure control.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     fn activity_ids(&self) -> Vec<String> {
         Vec::new()
     }
 
     /// Available activity details, preserving source order and any upstream truncation notices.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     fn expanded_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         self.transcript_hyperlink_lines(width)
     }
 
     /// Whether an activity offers details beyond its compact presentation.
     /// Prefer source metadata so collapsed rendering does not materialize hidden content.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     fn has_hidden_activity_details(&self, _width: u16) -> bool {
         true
     }

@@ -1,6 +1,6 @@
 ---
 source: tui/src/pager_overlay/transcript_tests.rs
-assertion_line: 373
+assertion_line: 417
 expression: snapshots
 ---
 --- loading ---
@@ -23,7 +23,7 @@ recent transcript
 
 Earlier messages available.  Ctrl+Space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
- q close · f3 find · esc edit previous
+ q close · f3 find · esc browse prompts
 
 --- failed ---
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / /
@@ -45,4 +45,4 @@ recent transcript
 
 Ctrl+Space select
  ↑/↓ to scroll · pgup/pgdn to page · home/end to jump
- q close · f3 find · esc edit previous
+ q close · f3 find · esc browse prompts

@@ -75,3 +75,18 @@ fn viewed_image_narrow_summary() {
     ));
     insta::assert_snapshot!(cell.display_lines(/*width*/ 32)[0].to_string());
 }
+
+#[test]
+fn failed_patch_keeps_diagnostics_beyond_the_legacy_preview() {
+    let diagnostics = (1..=12)
+        .map(|line| format!("diagnostic line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cell = new_patch_apply_failure(diagnostics.clone());
+    assert_eq!(
+        cell.raw_lines(),
+        std::iter::once(Line::from("Failed to apply patch"))
+            .chain(diagnostics.lines().map(|line| Line::from(line.to_owned())))
+            .collect::<Vec<_>>()
+    );
+}

@@ -116,7 +116,7 @@ impl NativeHistory {
 
 impl App {
     pub(super) fn flush_native_history(&mut self, tui: &mut tui::Tui) {
-        if self.overlay.is_some() {
+        if tui.is_owned_screen() || self.overlay.is_some() {
             return;
         }
         let mut ready = Vec::new();

@@ -297,6 +297,8 @@ mod status_surface_previews;
 mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;
+#[path = "tests/tool_details_tests.rs"]
+mod tool_details_tests;
 mod usage;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;

@@ -152,6 +152,15 @@ fn build_user_message_lines_with_elements(
 }
 
 impl UserHistoryCell {
+    pub(crate) fn has_visible_content(&self) -> bool {
+        !sanitize_user_text(Cow::Borrowed(&self.message))
+            .trim()
+            .is_empty()
+            || !self.text_elements.is_empty()
+            || !self.local_image_paths.is_empty()
+            || !self.remote_image_urls.is_empty()
+    }
+
     fn image_labels_not_in_message(&self) -> impl Iterator<Item = String> + '_ {
         // Composer images already have placeholders; command-line images may not.
         // Both kinds must keep an image-only user turn visible after submission.

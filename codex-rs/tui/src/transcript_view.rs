@@ -5,6 +5,7 @@
 //! them and rewrapping does not turn a reading position into an unrelated screen row.
 
 mod activity;
+mod bookmark;
 mod composer_gap;
 mod disclosure;
 mod follow_control;
@@ -12,6 +13,7 @@ mod footer;
 mod input;
 mod layout;
 mod mutations;
+mod prompt_header;
 mod search;
 mod selection;
 mod snapshot;
@@ -37,6 +39,7 @@ use selection::Selection;
 use snapshot::ViewSnapshot;
 use text::TextLayout;
 
+pub(crate) use bookmark::TranscriptBookmark;
 pub(crate) use input::JumpTarget;
 pub(crate) use input::ViewAction;
 pub(crate) use layout::ActivityTranscriptLines;
@@ -89,6 +92,7 @@ pub(crate) struct TranscriptView {
     live_key: Option<(u16, ActiveCellTranscriptKey)>,
     live_continuation: bool,
     area: Rect,
+    suppressed_prompt_header: Option<prompt_header::SuppressedHeader>,
     visible: Vec<VisibleRow>,
     selection: Option<Selection>,
     held_reading: Option<ViewSnapshot>,
@@ -117,6 +121,7 @@ impl Default for TranscriptView {
             live_key: None,
             live_continuation: false,
             area: Rect::default(),
+            suppressed_prompt_header: None,
             visible: Vec::new(),
             selection: None,
             held_reading: None,
@@ -142,6 +147,7 @@ impl TranscriptView {
         let current_cells = cells;
         let snapshot = self.snapshot_cells();
         let cells = snapshot.as_deref().unwrap_or(cells);
+        let suppressed_prompt_header = self.suppressed_prompt_header.take();
         Clear.render(area, buf);
         self.prepare_width(area.width);
         self.area = area;
@@ -151,7 +157,34 @@ impl TranscriptView {
             self.tail_visible = false;
             return;
         }
-        let start = self.start(cells);
+        let initial_start = self.start(cells);
+        let mut start = initial_start;
+        let mut body = area;
+        let header_position = prompt_header::SuppressedHeader {
+            viewport: area,
+            key: self.entry_key(cells, start.0),
+            row: start.1,
+        };
+        if matches!(self.position, Position::Reading(_))
+            && suppressed_prompt_header.as_ref() == Some(&header_position)
+        {
+            // Freezing follow must preserve a header that yielded to the next visible prompt.
+            self.suppressed_prompt_header = Some(header_position);
+        } else if area.height >= 4 && prompt_header::line(cells, start.0, area.width).is_some() {
+            body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+            self.area = body;
+            // Following may advance into the next turn after reserving the header row.
+            start = self.start(cells);
+            if let Some(header) = prompt_header::line(cells, start.0, area.width) {
+                header.render(Rect::new(area.x, area.y, area.width, /*height*/ 1), buf);
+            } else {
+                body = area;
+                self.area = area;
+                start = initial_start;
+                self.suppressed_prompt_header = Some(header_position);
+            }
+        }
+        let area = body;
         let (mut index, mut row) = start;
         let mut entry_activity_ids: Option<(usize, Arc<[String]>)> = None;
         for y in area.top()..area.bottom() {
@@ -273,6 +306,7 @@ impl TranscriptView {
         self.selection = None;
         self.release_live_reading();
         self.cache.clear();
+        self.suppressed_prompt_header = None;
         self.live_key = None;
         // Search temporarily expands content without changing either presentation's position.
         if self.detailed != detailed && !self.search.is_active() {

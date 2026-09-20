@@ -9,6 +9,7 @@ use crate::history_cell::SessionHeaderHistoryCell;
 use crate::history_cell::SessionInfoCell;
 use crate::keymap::RuntimeKeymap;
 use crate::motion::MotionMode;
+use crate::transcript_view::TranscriptBookmark;
 use crate::transcript_view::TranscriptView;
 use crate::transcript_view::ViewAction;
 use crossterm::event::KeyEventKind;
@@ -25,10 +26,29 @@ pub(crate) struct TranscriptOverlay {
     cursor: Option<(u16, u16)>,
     notice: Option<String>,
     pub(crate) key_chord_hint: Option<Vec<(String, String)>>,
+    pub(crate) browsing_footer: Option<Line<'static>>,
     is_done: bool,
 }
 
 impl TranscriptOverlay {
+    pub(crate) fn bookmark(&mut self) -> TranscriptBookmark {
+        self.view.bookmark(&self.cells)
+    }
+
+    pub(crate) fn restore_bookmark(&mut self, bookmark: TranscriptBookmark) {
+        self.browsing_footer = None;
+        self.set_highlight_cell(/*cell*/ None);
+        self.view.restore_bookmark(bookmark);
+    }
+
+    pub(crate) fn set_presentation(&mut self, detailed: bool, mode: HistoryRenderMode) {
+        self.view.set_presentation(detailed, mode);
+    }
+
+    pub(crate) fn is_detailed(&self) -> bool {
+        self.view.is_detailed()
+    }
+
     pub(crate) fn new(cells: Vec<Arc<dyn HistoryCell>>, keymap: PagerKeymap) -> Self {
         let mut view = TranscriptView::default();
         view.set_presentation(/*detailed*/ true, HistoryRenderMode::Rich);
@@ -43,13 +63,17 @@ impl TranscriptOverlay {
             cursor: None,
             notice: None,
             key_chord_hint: None,
+            browsing_footer: None,
             is_done: false,
         }
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
-        let chrome_height = 5;
+        let browsing = self.browsing_footer.is_some()
+            && !self.view.has_active_interaction()
+            && self.view.history != TranscriptHistoryState::Failed;
+        let chrome_height = if browsing { 2 } else { 5 };
         let content_height = area.height.saturating_sub(chrome_height);
         self.content_area = Rect::new(
             area.x,
@@ -75,7 +99,14 @@ impl TranscriptOverlay {
         )
         .intersection(area);
         self.cursor = None;
-
+        if browsing && let Some(footer) = &self.browsing_footer {
+            if let Some(items) = &self.key_chord_hint {
+                crate::bottom_pane::footer_hint_items_line(items).render(status, buf);
+            } else {
+                Widget::render(footer, status, buf);
+            }
+            return;
+        }
         let hints = Rect::new(area.x, status.bottom(), area.width, /*height*/ 2).intersection(area);
         let latest_navigation = self
             .keymap
@@ -354,6 +385,14 @@ impl TranscriptOverlay {
         self.view.set_highlight(self.highlight_cell);
     }
 
+    /// Apply prompt navigation before scrolling, even when both keys precede the next draw.
+    pub(crate) fn scroll(&mut self, rows: isize) {
+        if let Some(index) = self.pending_highlight.take() {
+            self.view.ensure_entry_visible(&self.cells, index);
+        }
+        self.view.scroll(&self.cells, rows);
+    }
+
     fn handle_key(&mut self, key: KeyEvent) -> Option<ViewAction> {
         if key.kind == KeyEventKind::Release {
             return None;
@@ -374,7 +413,7 @@ impl TranscriptOverlay {
             self.is_done = true;
             return Some(ViewAction::Changed);
         }
-        if self.navigate(key) {
+        if self.view.navigate_pager(key, &self.cells, &self.keymap) {
             return Some(ViewAction::Changed);
         }
         self.view.handle_key(key, &self.cells)
@@ -382,34 +421,6 @@ impl TranscriptOverlay {
 
     pub(crate) fn cancel_pending_jump(&mut self) {
         self.view.cancel_beginning();
-    }
-
-    fn navigate(&mut self, key: KeyEvent) -> bool {
-        if self.keymap.jump_top.is_pressed(key) {
-            self.view.jump_to_beginning(&self.cells);
-            return true;
-        }
-        if self.keymap.jump_bottom.is_pressed(key) {
-            self.view.jump_to_latest();
-            return true;
-        }
-        let page = self.content_area.height.max(/*other*/ 1) as isize;
-        let half = (page + 1) / 2;
-        let delta = [
-            (&self.keymap.scroll_up, -1),
-            (&self.keymap.scroll_down, 1),
-            (&self.keymap.page_up, -page),
-            (&self.keymap.page_down, page),
-            (&self.keymap.half_page_up, -half),
-            (&self.keymap.half_page_down, half),
-        ]
-        .into_iter()
-        .find_map(|(bindings, delta)| bindings.is_pressed(key).then_some(delta));
-        let Some(delta) = delta else {
-            return false;
-        };
-        self.view.scroll(&self.cells, delta);
-        true
     }
 
     fn apply_action(&mut self, tui: &mut tui::Tui, action: ViewAction) {
@@ -427,6 +438,7 @@ impl TranscriptOverlay {
                     && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Confirmed))
                 {
                     self.view.jump_to_latest();
+                    self.is_done = self.browsing_footer.is_some();
                 }
                 self.notice = Some(match result {
                     Ok(status) => status.message("selection"),
@@ -455,7 +467,7 @@ impl TranscriptOverlay {
                 "find",
             ));
         }
-        pairs.push((vec![key_hint::plain(KeyCode::Esc).into()], "edit previous"));
+        pairs.push((vec![key_hint::plain(KeyCode::Esc).into()], "browse prompts"));
         if self.highlight_cell.is_some() {
             pairs.push((vec![key_hint::plain(KeyCode::Right).into()], "to edit next"));
             pairs.push((

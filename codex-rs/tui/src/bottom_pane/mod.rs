@@ -131,7 +131,6 @@ mod effort_status_line;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
-pub(crate) use footer::footer_hint_items_line;
 mod list_selection_view;
 mod memories_settings_view;
 mod mentions_v2;
@@ -165,6 +164,7 @@ pub(crate) use feedback_view::feedback_disabled_params;
 pub(crate) use feedback_view::feedback_selection_params;
 pub(crate) use feedback_view::feedback_success_cell;
 pub(crate) use feedback_view::feedback_upload_consent_params;
+pub(crate) use footer::footer_hint_items_line;
 pub(crate) use footer::inset_footer_hint_area;
 pub(crate) use picker_style::selection_style;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
@@ -319,11 +319,6 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
-    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
-        self.composer.show_footer_flash(line, duration);
-        self.request_redraw();
-    }
-
     pub fn new(params: BottomPaneParams) -> Self {
         Self::new_with_composer_config(params, ChatComposerConfig::default())
     }
@@ -1113,6 +1108,11 @@ impl BottomPane {
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.composer.set_footer_hint_override(items);
+        self.request_redraw();
+    }
+
+    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_footer_flash(line, duration);
         self.request_redraw();
     }
 

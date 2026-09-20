@@ -1,0 +1,23 @@
+---
+source: tui/src/app/composer_hints_tests.rs
+expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
+---
+80 columns
+
+› question
+
+                                            Tip: f12 searches this conversation
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
+
+32 columns
+
+› question
+
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/pr…

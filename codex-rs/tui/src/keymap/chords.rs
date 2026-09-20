@@ -44,6 +44,8 @@ pub(crate) struct KeymapContextSet(u32);
 const ACTIVITY_FOCUS: u32 = 1 << 13;
 const TRANSCRIPT_CLOSE: u32 = 1 << 15;
 
+const TRANSCRIPT_BROWSING: u32 = 1 << 14;
+
 impl KeymapContextSet {
     pub(crate) const fn new(context: KeymapContext) -> Self {
         Self(context_bit(context))
@@ -60,6 +62,16 @@ impl KeymapContextSet {
         Self(self.0 | context_bit(KeymapContext::Pager) | TRANSCRIPT_CLOSE)
     }
 
+    /// Native browsing keeps pager actions and the configured detail toggle active.
+    /// Other global actions must not steal keys from the pager.
+    pub(crate) const fn browsing() -> Self {
+        Self(
+            context_bit(KeymapContext::Pager)
+                | context_bit(KeymapContext::Global)
+                | TRANSCRIPT_BROWSING,
+        )
+    }
+
     /// Whether this input path can dispatch the action, including focus-specific exclusions.
     pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
         self.contains(action.context)
@@ -69,6 +81,9 @@ impl KeymapContextSet {
             && (self.0 & TRANSCRIPT_CLOSE == 0
                 || action.context != KeymapContext::Pager
                 || action.action == "close_transcript")
+            && (self.0 & TRANSCRIPT_BROWSING == 0
+                || action.context != KeymapContext::Global
+                || action.action == "open_transcript")
     }
 
     pub(crate) const fn with(self, context: KeymapContext) -> Self {

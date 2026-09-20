@@ -49,6 +49,9 @@ impl App {
             "esc latest"
         };
         self.sync_owned_transcript(screen_size.width);
+        let composer_tip = self.composer_tip();
+        let mut prompt_footer =
+            self.prompt_navigation_footer(screen_size.width.saturating_sub(/*rhs*/ 2));
         let chat_widget = &self.chat_widget;
         let transcript_width = chat_widget.history_wrap_width(screen_size.width);
         let view = &mut self.transcript_view;
@@ -65,7 +68,7 @@ impl App {
             /*height*/ 1,
         ));
         let footer = view.footer_with_navigation(footer_area.width, motion, latest_navigation);
-        let bottom = chat_widget.bottom_pane_renderable(footer.as_ref());
+        let bottom = chat_widget.bottom_pane_renderable(prompt_footer.as_ref().or(footer.as_ref()));
         let dashboard_visible = chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
             .is_some();
@@ -76,6 +79,7 @@ impl App {
                 .desired_height(screen_size.width)
                 .min(screen_size.height)
         };
+        drop(bottom);
         let available = screen_size.height.saturating_sub(bottom_height);
         let bottom_area = Rect::new(
             /*x*/ 0,
@@ -110,12 +114,16 @@ impl App {
                         /*height*/ 1,
                     )
                 });
-            feedback_tick = view.render_composer_gap(follow_area, /*hint*/ None, frame.buffer);
+            feedback_tick =
+                view.render_composer_gap(follow_area, composer_tip.as_ref(), frame.buffer);
             // Rendering resolves whether new activity is still hidden. Paint that result in
             // this frame so a revision change cannot flash a stale activity hint.
             let mut footer =
                 view.footer_with_navigation(footer_area.width, motion, latest_navigation);
-            if let Some(footer) = footer.as_mut().filter(|footer| footer.is_interactive)
+            if let Some(footer) = prompt_footer
+                .as_mut()
+                .or(footer.as_mut())
+                .filter(|footer| footer.is_interactive)
                 && let Some(items) = self
                     .key_chord_matcher
                     .pending_hint_items(&self.keymap.chords, footer_area.width)
@@ -123,7 +131,8 @@ impl App {
             {
                 *progress = crate::bottom_pane::footer_hint_items_line(&items);
             }
-            let bottom = chat_widget.bottom_pane_renderable(footer.as_ref());
+            let bottom =
+                chat_widget.bottom_pane_renderable(prompt_footer.as_ref().or(footer.as_ref()));
             footer_height_changed = !dashboard_visible
                 && bottom
                     .desired_height(screen_size.width)
@@ -210,6 +219,34 @@ impl App {
         {
             return Ok(false);
         }
+        // Prompt preview owns its navigation before ordinary Escape-to-latest scrolling.
+        // Selection and search retain their existing priority and keep the prompt untouched.
+        if self.backtrack.overlay_preview_active
+            && !self.transcript_view.has_active_interaction()
+            && self.handle_owned_backtrack_event(tui, event)?
+        {
+            self.request_owned_history(tui, app_server);
+            return Ok(true);
+        }
+        // Capture the origin before the first Escape returns a paused viewport to latest.
+        if !self.backtrack.overlay_preview_active
+            && !self.transcript_view.has_active_interaction()
+            && !self.reconnect.offline
+            && let TuiEvent::Key(key) = event
+            && key.code == KeyCode::Esc
+            && key.modifiers.is_empty()
+            && key.kind == KeyEventKind::Press
+            && self.should_handle_backtrack_esc(*key)
+        {
+            if !self.handle_owned_backtrack_event(tui, event)? {
+                self.handle_backtrack_esc_key(tui);
+                if !self.backtrack.overlay_preview_active {
+                    self.transcript_view.jump_to_latest();
+                }
+            }
+            tui.frame_requester().schedule_frame();
+            return Ok(true);
+        }
         if let TuiEvent::Key(key) = event
             && !self.transcript_view.has_active_interaction()
             && !self.backtrack.overlay_preview_active
@@ -283,7 +320,17 @@ impl App {
                 tui.frame_requester().schedule_frame();
                 return Ok(true);
             }
-            return Ok(false);
+            if self.reconnect.offline {
+                if let TuiEvent::Key(key) = event
+                    && self.transcript_view.is_detailed()
+                    && self.keymap.pager.close_transcript.is_pressed(*key)
+                {
+                    self.close_transcript_overlay(tui);
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+            return self.handle_owned_backtrack_event(tui, event);
         };
         let resume_following = matches!(action, ViewAction::CopyAndFollow(_));
         match action {
@@ -328,8 +375,10 @@ impl App {
         if !self.scrollback_has_older_history {
             return;
         }
+        let browsing_needs_history = self.browsing_needs_history();
         let view = &mut self.transcript_view;
-        if !view.needs_history(&self.transcript_cells)
+        if !browsing_needs_history
+            && !view.needs_history(&self.transcript_cells)
             && view.history != TranscriptHistoryState::LoadingBeginning
         {
             return;
