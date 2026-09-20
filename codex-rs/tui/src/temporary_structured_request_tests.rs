@@ -2,15 +2,22 @@ use super::STRUCTURED_RESPONSE_MAX_BYTES;
 use super::TemporaryStructuredThreadOptions;
 use super::collect_structured_response;
 use super::start_temporary_thread;
+use crate::legacy_core::config::ConfigBuilder;
 use crate::test_support::PathBufExt;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::SandboxPolicy;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_config::LoaderOverrides;
+use codex_exec_server::EnvironmentManager;
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -44,6 +51,85 @@ fn turn_completed_notification(turn_id: &str, status: TurnStatus) -> ServerNotif
             duration_ms: None,
         },
     })
+}
+
+#[tokio::test]
+async fn managed_workspace_default_respects_read_only_availability() -> color_eyre::Result<()> {
+    for read_only_allowed in [true, false] {
+        let codex_home = tempdir()?;
+        let requirements_path = codex_home.path().join("requirements.toml");
+        std::fs::write(
+            &requirements_path,
+            format!(
+                "default_permissions = \":workspace\"\n\n\
+                 [allowed_permission_profiles]\n\
+                 \":read-only\" = {read_only_allowed}\n\
+                 \":workspace\" = true\n"
+            ),
+        )?;
+        let loader_overrides = LoaderOverrides {
+            system_requirements_path: Some(requirements_path),
+            ignore_project_config: true,
+            ..LoaderOverrides::without_managed_config_for_tests()
+        };
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .loader_overrides(loader_overrides.clone())
+            .build()
+            .await?;
+        let options = TemporaryStructuredThreadOptions {
+            thread_source: ThreadSource::Feature("thread_title".to_string()),
+            model: "gpt-5.2".to_string(),
+            model_provider: config.model_provider_id.clone(),
+            cwd: config.cwd.to_string_lossy().into_owned(),
+            active_permission_profile: config
+                .permissions
+                .active_permission_profile()
+                .map(|profile| profile.id),
+            mcp_server_names: Vec::new(),
+        };
+        let client = crate::start_embedded_app_server(
+            Default::default(),
+            config,
+            Vec::new(),
+            loader_overrides,
+            /*strict_config*/ false,
+            Default::default(),
+            codex_feedback::CodexFeedback::new(),
+            /*log_db*/ None,
+            /*state_db*/ None,
+            Arc::new(EnvironmentManager::default_for_tests()),
+        )
+        .await?;
+        let app_server = AppServerClient::InProcess(client);
+        let result = start_temporary_thread(&app_server.request_handle(), options).await;
+        app_server.shutdown().await?;
+
+        if read_only_allowed {
+            let response = result?;
+            assert_eq!(
+                (
+                    response.active_permission_profile.map(|profile| profile.id),
+                    response.approval_policy,
+                    response.sandbox,
+                ),
+                (
+                    Some(":read-only".to_string()),
+                    AskForApproval::Never,
+                    SandboxPolicy::ReadOnly {
+                        network_access: false,
+                    },
+                ),
+            );
+        } else {
+            assert_eq!(
+                result.expect_err("read-only must be allowed").to_string(),
+                "temporary structured thread did not start with read-only permissions",
+            );
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test]
