@@ -5,6 +5,37 @@ use pretty_assertions::assert_eq;
 use unicode_width::UnicodeWidthStr;
 
 #[test]
+fn stadium_declarations_and_references() {
+    let graph =
+        super::parse::parse("flowchart TD", &["A", "A([Ready?])", "A", "A([Ready?])"]).unwrap();
+    assert_eq!(
+        graph.nodes,
+        vec![super::Node {
+            id: "A".to_owned(),
+            label: "Ready?".to_owned(),
+            shape: super::Shape::Stadium,
+            declared: true,
+            members: Vec::new(),
+        }]
+    );
+}
+
+#[test]
+fn stadiums_with_other_shapes_in_every_direction() {
+    let mut cases = Vec::new();
+    for direction in ["TD", "BT", "LR", "RL"] {
+        let source =
+            format!("flowchart {direction}; A([请求]) --> B[Work] --> C{{Done?}}; C --> A");
+        let output = render(&source, /*max_width*/ 100).unwrap();
+        let width = output.lines().map(UnicodeWidthStr::width).max().unwrap();
+        assert_eq!(render(&source, width), Ok(output.clone()));
+        assert_eq!(render(&source, width - 1), Err(RenderError::TooWide));
+        cases.push(format!("{direction}\n{output}"));
+    }
+    assert_snapshot!(cases.join("\n\n"));
+}
+
+#[test]
 fn branches_merges_and_retry_loop() {
     let source = "flowchart TD\nA[Checkout] --> B{In stock?}\nB -->|yes| C[Reserve]\nB -->|no| D[Waitlist]\nC --> E{Paid?}\nE -->|yes| F[Ship]\nE -->|no| G[Retry payment]\nG --> E\nD --> H[Notify buyer]\nF --> H";
     assert_snapshot!(render(source, /*max_width*/ 100).unwrap());
@@ -31,6 +62,15 @@ fn rejects_partial_or_unsupported_input() {
         "flowchart TD; A[unclosed",
         "flowchart TD; click A",
         "flowchart TD; A((circle))",
+        "flowchart TD; A(rounded)",
+        "flowchart TD; A([unclosed]",
+        "flowchart TD; A([unclosed)",
+        "flowchart TD; A([label]) trailing",
+        "flowchart TD; A([])",
+        "flowchart TD; A([nested[label]])",
+        "flowchart TD; A([one]); A([two])",
+        "flowchart TD; A([same]); A[same]",
+        "flowchart TD; A{same}; A([same])",
         "flowchart TD; A -->|unclosed B",
         "flowchart TD; A[\"quoted\"]",
         "flowchart TD; A[foo;bar]",
@@ -50,6 +90,7 @@ fn source_graph_and_width_limits() {
     for source in [
         " ".repeat(16 * 1024 + 1),
         format!("graph TD; A[{}]", "x".repeat(41)),
+        format!("graph TD; A([{}])", "x".repeat(41)),
         format!(
             "graph TD; {}",
             (0..17).map(|n| format!("N{n};")).collect::<String>()

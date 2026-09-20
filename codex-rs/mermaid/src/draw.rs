@@ -6,6 +6,7 @@ use super::Direction;
 use super::Graph;
 use super::RenderError;
 use super::Role;
+use super::Shape;
 use super::Span;
 use super::output::Cell;
 use super::output::finish;
@@ -18,7 +19,7 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
         .nodes
         .iter()
         .map(|node| {
-            let mut lines = vec![if node.decision {
+            let mut lines = vec![if node.shape == Shape::Decision {
                 format!("◇ {}", node.label)
             } else {
                 node.label.clone()
@@ -105,10 +106,14 @@ pub(super) fn render(graph: &Graph, max_width: usize) -> Result<Vec<Vec<Span>>, 
     for (i, lines) in labels.iter().enumerate() {
         let start = starts[i];
         let end = start + sizes[i] - 1;
-        canvas.set(/*across*/ 0, start, Cell::node('┌'));
-        canvas.set(box_cross - 1, start, Cell::node('┐'));
-        canvas.set(/*across*/ 0, end, Cell::node('└'));
-        canvas.set(box_cross - 1, end, Cell::node('┘'));
+        let [top_left, top_right, bottom_left, bottom_right] = match graph.nodes[i].shape {
+            Shape::Stadium => ['╭', '╮', '╰', '╯'],
+            Shape::Rectangle | Shape::Decision => ['┌', '┐', '└', '┘'],
+        };
+        canvas.set(/*across*/ 0, start, Cell::node(top_left));
+        canvas.set(box_cross - 1, start, Cell::node(top_right));
+        canvas.set(/*across*/ 0, end, Cell::node(bottom_left));
+        canvas.set(box_cross - 1, end, Cell::node(bottom_right));
         for x in 1..box_cross - 1 {
             canvas.set(x, start, Cell::node('─'));
             canvas.set(x, end, Cell::node('─'));
@@ -226,6 +231,8 @@ fn transpose(ch: char) -> char {
         '┆' => '┄',
         '┐' => '└',
         '└' => '┐',
+        '╮' => '╰',
+        '╰' => '╮',
         '├' => '┬',
         '┬' => '├',
         '◄' => '▲',

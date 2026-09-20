@@ -107,11 +107,22 @@ impl Direction {
     }
 }
 
+/// Node shapes supported by the terminal renderer.
+#[derive(Debug, PartialEq, Eq)]
+enum Shape {
+    /// A rectangular node, such as `A[Work]`.
+    Rectangle,
+    /// A decision node (`A{Done?}`), rendered with a `◇` marker inside a box.
+    Decision,
+    /// A stadium node (`A([Start])`), rendered as a box with rounded corners.
+    Stadium,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct Node {
     id: String,
     label: String,
-    decision: bool,
+    shape: Shape,
     declared: bool,
     members: Vec<String>,
 }
@@ -159,7 +170,7 @@ impl Graph {
         self.nodes.push(Node {
             id: id.to_owned(),
             label: id.to_owned(),
-            decision: false,
+            shape: Shape::Rectangle,
             declared: false,
             members: Vec::new(),
         });

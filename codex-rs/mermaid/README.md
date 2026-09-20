@@ -8,7 +8,7 @@ production dependency is needed.
 
 | Family | Supported syntax |
 | --- | --- |
-| `flowchart`, `graph` | TD/TB, BT, LR, RL; rectangle and decision labels; directed and labeled `-->` edges; chains, branches, merges, loops |
+| `flowchart`, `graph` | TD/TB, BT, LR, RL; rectangle `[label]`, decision `{label}`, and stadium `([label])` nodes; directed and labeled `-->` edges; chains, branches, merges, loops |
 | `sequenceDiagram` | Implicit participants, `participant`/`actor`, aliases, `->`, `->>`, `-->`, `-->>`, `-x`, `--x`, self-messages, `Note over A[,B]`, nested `loop`/`alt`/`opt`/`critical`/`break`, one labeled `else` per `alt` |
 | `stateDiagram-v2`, `stateDiagram` | Flat states, `state "label" as ID`, descriptions, directed transitions with optional labels, initial/final `[*]`, direction declarations |
 | `classDiagram` | `class ID`, multiline member bodies, `ID : member`, solid/dashed links, association, inheritance, composition, aggregation, dependency, realization, quoted endpoint cardinalities, relationship labels, direction declarations |
@@ -32,7 +32,7 @@ on any error; the library never returns a partial diagram.
 
 Graph nodes appear in declaration/first-reference order, in the requested direction.
 Each edge gets its own lane and endpoint positions. Crossings use `╪` and never
-join routes. Decisions use `◇` inside a box. Horizontal layouts
+join routes. Decisions use `◇` inside a box; stadiums use rounded box corners. Horizontal layouts
 reserve a text gutter for every endpoint, which can make connected graphs wide;
 the caller receives `TooWide` if the complete output does not fit.
 
