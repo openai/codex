@@ -56,12 +56,25 @@ fn analytics_sections_adapt_to_terminal_colors() {
                     );
                     let mut buffer = Buffer::empty(area);
                     view.render(area, &mut buffer);
-                    let heading = buffer
+                    let label = view.tab_label(section);
+                    let tab = buffer
                         .content
-                        .iter()
-                        .find(|cell| cell.symbol() == "▎")
-                        .unwrap();
-                    assert_eq!(heading.fg, accent_style().fg.unwrap());
+                        .chunks(usize::from(area.width))
+                        .nth(/*n*/ 1)
+                        .unwrap()
+                        .windows(label.len())
+                        .find(|cells| {
+                            cells
+                                .iter()
+                                .map(ratatui::buffer::Cell::symbol)
+                                .collect::<String>()
+                                == label
+                        })
+                        .expect("the report tab is visible");
+                    let heading = &tab[0];
+                    let active = crate::bottom_pane::active_tab_style();
+                    assert_eq!(heading.fg, active.fg.unwrap());
+                    assert_eq!(heading.bg, active.bg.unwrap());
                     assert!(heading.modifier.contains(Modifier::BOLD));
                     for marker in buffer.content.iter().filter(|cell| cell.symbol() == "▲") {
                         assert_eq!(marker.fg, accent_style().fg.unwrap());
@@ -69,11 +82,20 @@ fn analytics_sections_adapt_to_terminal_colors() {
                         assert!(marker.modifier.contains(Modifier::BOLD));
                     }
                     if theme == "light" {
-                        for cell in buffer
+                        for (index, cell) in buffer
                             .content
                             .iter()
-                            .filter(|cell| !cell.symbol().trim().is_empty())
+                            .enumerate()
+                            .filter(|(_, cell)| !cell.symbol().trim().is_empty())
                         {
+                            // Keyboard hints deliberately keep the requested white key style.
+                            // Report text and chart colors still adapt to light backgrounds.
+                            if cell.fg == Color::White {
+                                let y = area.y + (index / usize::from(area.width)) as u16;
+                                assert!(y >= area.bottom() - 2 || (3..5).contains(&y));
+                                assert_eq!(cell.modifier, Modifier::BOLD);
+                                continue;
+                            }
                             let foreground = match cell.fg {
                                 Color::Rgb(r, g, b) => (r, g, b),
                                 Color::White => (255, 255, 255),
@@ -81,8 +103,16 @@ fn analytics_sections_adapt_to_terminal_colors() {
                                 Color::Reset => colors.fg,
                                 _ => continue,
                             };
-                            let contrast =
-                                (luminance(colors.bg) + 0.05) / (luminance(foreground) + 0.05);
+                            let background = match cell.bg {
+                                Color::Rgb(r, g, b) => (r, g, b),
+                                Color::White => (255, 255, 255),
+                                Color::Black => (0, 0, 0),
+                                Color::Reset => colors.bg,
+                                _ => continue,
+                            };
+                            let fg = luminance(foreground);
+                            let bg = luminance(background);
+                            let contrast = (fg.max(bg) + 0.05) / (fg.min(bg) + 0.05);
                             assert!(
                                 contrast >= 4.5,
                                 "{}: {:?} has contrast {contrast}",

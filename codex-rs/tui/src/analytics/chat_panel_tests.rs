@@ -49,7 +49,8 @@ fn chats_range_controls_and_visible_rows() {
     press(&mut view, KeyCode::Char('2'));
     press(&mut view, KeyCode::Char('r'));
     press(&mut view, KeyCode::Char('z'));
-    assert!(screen(&mut view, /*width*/ 110, /*height*/ 24).contains("[30d]"));
+    assert_eq!(view.ranges[view.range_group(Section::Credits) as usize], 1);
+    assert!(screen(&mut view, /*width*/ 110, /*height*/ 24).contains("r 7d/30d"));
 }
 
 #[test]
@@ -202,5 +203,33 @@ fn moving_chat_selection_collapses_details_before_they_leave_the_viewport() {
         assert_eq!(view.sections[Section::Chats].detail, None);
         press(&mut view, KeyCode::Esc);
         assert!(view.is_done);
+    }
+}
+
+#[test]
+fn chat_help_and_zero_credit_action_follow_account_and_detail_state() {
+    for kind in [models::AccountKind::Consumer, models::AccountKind::Business] {
+        let mut view = fixture::view(kind);
+        fixture::seed_reports(&mut view);
+        view.section = Section::Chats;
+        view.sections[Section::Chats].detail = Some(0);
+        let help = view
+            .help_lines(/*width*/ 100)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let business = kind == models::AccountKind::Business;
+        assert_eq!(help.contains("a · show zero-credit"), business);
+        assert_eq!(help.contains("s · change chat sort metric"), !business);
+        press(&mut view, KeyCode::Char('a'));
+        assert_eq!(view.show_zero_credit_groups, business);
+        view.sections[Section::Chats].detail = None;
+        assert!(
+            !view
+                .help_lines(/*width*/ 100)
+                .iter()
+                .any(|line| line.to_string().contains("a · show zero-credit"))
+        );
     }
 }

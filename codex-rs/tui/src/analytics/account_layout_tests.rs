@@ -427,7 +427,7 @@ fn navigation_keeps_its_row_when_sections_change() {
             positions.push(
                 rendered
                     .lines()
-                    .position(|line| line.contains("Summary") && line.contains("usage history"))
+                    .position(|line| line.contains("Overview") && line.contains("Usage"))
                     .unwrap(),
             );
         }
@@ -436,7 +436,7 @@ fn navigation_keeps_its_row_when_sections_change() {
 }
 
 #[test]
-fn taller_report_reveals_more_legend_rows_and_keeps_timestamp_in_footer() {
+fn taller_report_reveals_more_legend_rows_and_keeps_timestamp_in_controls() {
     let mut view = fixture::view(models::AccountKind::Consumer);
     view.section = Section::Usage;
     let mut history = fixture::history(/*report*/ 0, /*range*/ 0, /*group*/ 1);
@@ -457,14 +457,9 @@ fn taller_report_reveals_more_legend_rows_and_keeps_timestamp_in_footer() {
         tall.lines().filter(|line| line.contains('●')).count()
             > short.lines().filter(|line| line.contains('●')).count()
     );
-    assert!(
-        tall.lines()
-            .rev()
-            .take(3)
-            .any(|line| line.contains("Updated"))
-    );
+    assert!(tall.lines().take(6).any(|line| line.contains("Updated")));
     for width in [24, 40, 64] {
         let narrow = screen(&mut view, width, /*height*/ 60);
-        assert!(narrow.lines().last().unwrap().contains("UTC"));
+        assert!(narrow.lines().nth(/*n*/ 3).unwrap().contains("7d/30d"));
     }
 }

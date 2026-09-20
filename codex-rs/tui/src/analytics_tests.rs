@@ -3,8 +3,10 @@
 use crate::analytics::sections::Section;
 #[path = "analytics/compact_tests.rs"]
 mod compact;
-#[path = "analytics/dashboard_tests.rs"]
-mod dashboard;
+#[path = "analytics/recovery_tests.rs"]
+mod recovery;
+#[path = "analytics/redesign_tests.rs"]
+mod redesign;
 #[path = "analytics/summary_tests.rs"]
 mod summary;
 
@@ -335,7 +337,7 @@ fn analytics_model_labels_and_tool_remainders_are_unambiguous() {
     press(&mut view, KeyCode::Char('3'));
     let overview = screen(&mut view, /*width*/ 140, /*height*/ 64);
     assert!(overview.contains("Friendly model"));
-    assert!(overview.contains("Skills used"));
+    assert!(overview.contains("Skills"));
     press(&mut view, KeyCode::Char('5'));
     press(&mut view, KeyCode::Enter);
     let skills = screen(&mut view, /*width*/ 100, /*height*/ 32);
@@ -663,3 +665,6 @@ fn analytics_details_reflow_and_keep_focus() {
     press(&mut view, KeyCode::Esc);
     assert!(view.is_done);
 }
+
+#[path = "analytics/dashboard_tests.rs"]
+mod dashboard;

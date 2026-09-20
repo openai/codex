@@ -1,0 +1,20 @@
+---
+source: tui/src/analytics/redesign_tests.rs
+expression: help
+---
+" Usage · Business                       "
+"  Overview   Credits   Tokens         › "
+" ────────────────────────────────────── "
+" Usage shortcuts                        "
+"                                        "
+"                                        "
+" Tab / Shift+Tab · next / previous      "
+" report                                 "
+" 1–5 · open a report directly           "
+" ← / → · select chart day or plan       "
+" window                                 "
+" ↑ / ↓ · select chat or plan period;    "
+" scroll Overview                        "
+" enter · expand or collapse details     "
+" esc back · pgup/pgdn scroll            "
+" ? close help                           "

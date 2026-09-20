@@ -1,5 +1,5 @@
 //! Authenticated account analytics dashboard.
-//! A maximized section and an overview share bounded report loads, selection, and inline details.
+//! Stable report tabs share bounded account loads, selection, and inline details.
 
 mod activity_chart;
 mod chart;
@@ -8,12 +8,15 @@ mod summary_panel;
 pub(crate) use activity_chart::TokenActivityView;
 mod chat_panel;
 mod chats;
+mod chrome;
 mod client;
+mod controls;
 mod dashboard;
 mod data;
 #[cfg(test)]
 #[path = "analytics/test_fixtures.rs"]
 mod fixture;
+mod hints;
 mod models;
 mod normalize;
 mod panels;
@@ -70,8 +73,10 @@ pub(crate) struct AnalyticsView {
     live: Option<std::sync::Arc<client::Live>>,
     pub(crate) keymap: ListKeymap,
     section: Section,
+    show_help: bool,
     zoomed: bool,
     scroll_offset: usize,
+    help_scroll: usize,
     follow_selection: bool,
     viewport_height: usize,
     ranges: [usize; 3],
@@ -97,8 +102,10 @@ impl AnalyticsView {
             live: None,
             keymap,
             section: Section::Summary,
+            show_help: false,
             zoomed: true,
             scroll_offset: 0,
+            help_scroll: 0,
             follow_selection: true,
             viewport_height: 1,
             ranges: [0; 3],
@@ -130,6 +137,7 @@ impl AnalyticsView {
             .enabled(codex_features::Feature::AnalyticsPlanHistory);
         self.connection = Some((config, handle, frame));
         self.is_done = false;
+        self.show_help = false;
         self.refresh();
     }
 
@@ -241,25 +249,6 @@ impl AnalyticsView {
                 .is_none_or(|live| live.attributed_usage())
     }
 
-    fn section_title(&self, section: Section) -> &str {
-        match section {
-            Section::Usage if self.business() => "Token usage history",
-            Section::Usage if self.consumer_attribution() => "Total usage history",
-            Section::Usage => "Usage history",
-            Section::Plugins => "Plugins called",
-            Section::Credits => "Credits usage history",
-            Section::Activity => "Messages",
-            Section::Skills => "Skills used",
-            Section::Chats => "Top chats",
-            Section::Plan => "Plan usage history",
-            Section::Summary => "Summary",
-        }
-    }
-
-    fn date_range(&self) -> std::ops::RangeInclusive<chrono::NaiveDate> {
-        self.section_date_range(self.section)
-    }
-
     fn model_name<'a>(&'a self, model: &'a str) -> &'a str {
         self.model_names
             .get(model)
@@ -311,65 +300,73 @@ impl AnalyticsView {
             })
         };
 
-        self.follow_selection = true;
-        if key_hint::plain(KeyCode::Char('z')).is_press(key) {
-            self.zoomed = !self.zoomed;
-            self.scroll_offset = 0;
+        self.follow_selection = matches!(
+            action,
+            Some(
+                ListAction::Accept
+                    | ListAction::Cancel
+                    | ListAction::MoveLeft
+                    | ListAction::MoveRight
+                    | ListAction::MoveUp
+                    | ListAction::MoveDown
+                    | ListAction::JumpTop
+                    | ListAction::JumpBottom
+            )
+        );
+        if self.help_shortcut_available()
+            && (key_hint::plain(KeyCode::Char('?')).is_press(key)
+                || key_hint::shift(KeyCode::Char('?')).is_press(key))
+        {
+            self.show_help = !self.show_help;
+            self.help_scroll = 0;
+            self.follow_selection = false;
+            return;
+        }
+        if self.show_help && action == Some(ListAction::Cancel) {
+            self.show_help = false;
+            self.follow_selection = false;
+            return;
+        }
+        if self.show_help {
+            self.summary_action(action);
+            return;
+        }
+        if key_hint::plain(KeyCode::Char('z')).is_press(key)
+            && self.control_available(controls::Control::Dashboard)
+        {
+            self.activate_control(controls::Control::Dashboard);
             return;
         }
         if !self.zoomed && action == Some(ListAction::Accept) {
-            self.zoomed = true;
-            self.scroll_offset = 0;
+            self.toggle_dashboard();
             return;
         }
         if key_hint::plain(KeyCode::Char('R')).is_press(key) {
             self.refresh();
             return;
         }
-        if self.section == Section::Chats
-            && self.sections[Section::Chats].detail.is_some()
+        if self.control_available(controls::Control::ZeroCreditGroups)
             && key_hint::plain(KeyCode::Char('a')).is_press(key)
         {
-            self.show_zero_credit_groups = !self.show_zero_credit_groups;
+            self.activate_control(controls::Control::ZeroCreditGroups);
             return;
         }
-        if self.section == Section::Usage
-            && self.business()
+        if self.control_available(controls::Control::Model)
             && key_hint::plain(KeyCode::Char('m')).is_press(key)
         {
-            let models = self
-                .live
-                .as_ref()
-                .map_or_else(Vec::new, |live| live.token_models());
-            self.token_model = match self
-                .token_model
-                .as_ref()
-                .and_then(|model| models.iter().position(|candidate| candidate == model))
-            {
-                Some(index) => models.get(index + 1).cloned(),
-                None => models.first().cloned(),
-            };
-            self.load_report(Section::Usage);
+            self.activate_control(controls::Control::Model);
             return;
         }
         if key_hint::plain(KeyCode::Char('r')).is_press(key)
-            && !matches!(
-                self.section,
-                Section::Chats | Section::Plan | Section::Summary
-            )
-            && !self.visible_sections().is_empty()
+            && self.control_available(controls::Control::Range)
         {
-            self.change_range();
+            self.activate_control(controls::Control::Range);
             return;
         }
-        if key_hint::plain(KeyCode::Char('g')).is_press(key) && self.group_options().len() > 1 {
-            let options = self.group_options();
-            let next = options
-                .iter()
-                .position(|group| *group == self.sections[self.section].group)
-                .map_or(/*default*/ 0, |index| (index + 1) % options.len());
-            self.sections[self.section].group = options[next];
-            self.load_report(self.section);
+        if key_hint::plain(KeyCode::Char('g')).is_press(key)
+            && self.control_available(controls::Control::Group)
+        {
+            self.activate_control(controls::Control::Group);
             return;
         }
         let visible = self.visible_sections();
@@ -390,10 +387,11 @@ impl AnalyticsView {
             _ => None,
         };
         if let Some(section) = target {
-            if self.zoomed && section != self.section {
-                self.scroll_offset = 0;
-            }
-            self.section = section;
+            self.select_section(section);
+            return;
+        }
+        if !self.zoomed && action == Some(ListAction::Cancel) {
+            self.is_done = true;
             return;
         }
         if self.section == Section::Summary {
@@ -404,17 +402,10 @@ impl AnalyticsView {
             self.plan_action(action);
             return;
         }
-        if self.section == Section::Chats
-            && !self.business()
+        if self.control_available(controls::Control::TaskMetric)
             && key_hint::plain(KeyCode::Char('s')).is_press(key)
         {
-            let metrics = self.task_metrics();
-            let index = metrics
-                .iter()
-                .position(|metric| *metric == self.task_metric())
-                .unwrap_or_default();
-            self.chat_metric = metrics[(index + 1) % metrics.len()];
-            self.sections[Section::Chats].detail = None;
+            self.activate_control(controls::Control::TaskMetric);
             return;
         }
         if matches!(
@@ -427,23 +418,13 @@ impl AnalyticsView {
         }
         if self.section == Section::Chats
             && matches!(action, Some(ListAction::Accept | ListAction::MoveRight))
-            && if self.business() {
-                self.chats
-                    .ready()
-                    .and_then(|chats| chats.rows.get(self.sections[Section::Chats].cursor))
-                    .and_then(|chat| chat.usage.as_ref())
-                    .is_none()
-            } else {
-                self.task_rows()
-                    .get(self.sections[Section::Chats].cursor)
-                    .and_then(|chat| task_panel::available(chat))
-                    .is_none()
-            }
+            && !self.chat_has_details()
         {
             return;
         }
         let chart = self.section != Section::Chats;
         let count = self.row_count().max(/*other*/ 1);
+        let mut scroll_offset = self.scroll_offset();
         let SectionState { cursor, detail, .. } = &mut self.sections[self.section];
         let previous_cursor = *cursor;
         match action {
@@ -462,14 +443,14 @@ impl AnalyticsView {
             }
             Some(ListAction::MoveLeft) => *detail = None,
             Some(ListAction::Cancel) => {
-                self.is_done |= !self.zoomed || detail.take().is_none();
+                self.is_done |= detail.take().is_none();
             }
             Some(ListAction::PageDown) => {
-                self.scroll_offset += self.viewport_height;
+                scroll_offset += self.viewport_height;
                 self.follow_selection = false;
             }
             Some(ListAction::PageUp) => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(self.viewport_height);
+                scroll_offset = scroll_offset.saturating_sub(self.viewport_height);
                 self.follow_selection = false;
             }
             None => {}
@@ -479,6 +460,7 @@ impl AnalyticsView {
         } else if !chart && *cursor != previous_cursor {
             *detail = None;
         }
+        *self.scroll_offset_mut() = scroll_offset;
     }
 
     pub(crate) fn handle_event(
@@ -505,7 +487,7 @@ impl AnalyticsView {
                 tui.frame_requester().schedule_frame();
             }
             TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {
-                if matches!(event, TuiEvent::Resize(_)) {
+                if matches!(event, TuiEvent::Resize(_)) && !self.show_help {
                     self.follow_selection = true;
                 }
                 tui.draw(u16::MAX, |frame| self.render(frame.area(), frame.buffer))?;

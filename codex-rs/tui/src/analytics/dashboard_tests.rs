@@ -21,7 +21,7 @@ fn dashboard_focus_uses_marker_and_default_foreground_title() {
         let focused_title = title
             .spans
             .iter()
-            .find(|span| span.content.contains(view.section_title(section)))
+            .find(|span| span.content.contains(view.tab_label(section)))
             .unwrap();
         assert_eq!(focused_title.style.fg, None);
         assert!(focused_title.style.add_modifier.contains(Modifier::BOLD));
@@ -35,9 +35,9 @@ fn dashboard_cards_align_and_keep_stable_summary_heights() {
     press(&mut view, KeyCode::Char('z'));
     let wide = screen(&mut view, /*width*/ 144, /*height*/ 64);
     for (left, right) in [
-        ("1 Summary", "2 Total usage history"),
-        ("3 Messages", "4 Plugins called"),
-        ("5 Skills used", "6 Top chats"),
+        ("1 Overview", "2 Usage"),
+        ("3 Messages", "4 Plugins"),
+        ("5 Skills", "6 Chats"),
     ] {
         assert!(
             wide.lines()
@@ -68,7 +68,7 @@ fn dashboard_cards_align_and_keep_stable_summary_heights() {
         );
     }
     let narrow = screen(&mut view, /*width*/ 72, /*height*/ 48);
-    assert!(narrow.contains("1 Summary"));
+    assert!(narrow.contains("1 Overview"));
     let context = (
         view.section,
         view.sections.0.each_ref().map(|state| state.cursor),

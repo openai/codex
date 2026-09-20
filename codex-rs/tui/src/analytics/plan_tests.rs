@@ -217,10 +217,12 @@ fn plan_overview_escape_closes_with_retained_expansion() {
 fn moving_period_selection_collapses_its_previous_details() {
     let mut history = response();
     let mut older = history.periods[0].clone();
-    older.id = "older-five".into();
     older.starts_at = "2026-09-02T05:00:00Z".into();
     older.ends_at = "2026-09-02T10:00:00Z".into();
-    history.periods.push(older);
+    for index in 0..13 {
+        older.id = format!("older-five-{index}");
+        history.periods.push(older.clone());
+    }
     let mut view = fixture::view(AccountKind::Consumer);
     view.plan.enabled = true;
     view.plan.report = Load::Ready(Report::parse(history).unwrap().unwrap());
@@ -229,9 +231,27 @@ fn moving_period_selection_collapses_its_previous_details() {
     view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     view.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(
-        (view.plan.cursor, view.plan.expanded),
-        ([1, 0], [None, None])
+        (&view.plan.cursor, &view.plan.expanded),
+        (&[1, 0], &[None, None])
     );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        /*width*/ 80, /*height*/ 24,
+    ))
+    .unwrap();
+    for code in [KeyCode::Right, KeyCode::Tab, KeyCode::BackTab] {
+        view.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        terminal
+            .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+            .unwrap();
+        if view.section == Section::Plan {
+            assert!(
+                terminal
+                    .backend()
+                    .to_string()
+                    .contains("Sep 1 00:00 – Sep 8 00:00")
+            );
+        }
+    }
 }
 
 #[test]

@@ -152,11 +152,7 @@ impl AnalyticsView {
                         "… z to maximize".set_style(secondary_style()).into();
                 }
                 content.resize(inner_height, Line::default());
-                let label = format!(
-                    " {} {} ",
-                    row * count + column + 1,
-                    self.section_title(section)
-                );
+                let label = format!(" {} {} ", row * count + column + 1, self.tab_label(section));
                 let title = truncate(
                     Line::from(vec![
                         " ".into(),

@@ -205,12 +205,6 @@ pub(super) fn credits(micros: i64) -> String {
     )
 }
 
-pub(super) fn date(date: &str) -> String {
-    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
-        .map(|date| date.format("%b %-d").to_string())
-        .unwrap_or_else(|_| date.to_string())
-}
-
 #[cfg(test)]
 #[path = "data_tests.rs"]
 mod tests;

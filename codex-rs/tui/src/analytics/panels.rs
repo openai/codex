@@ -1,14 +1,9 @@
 //! Responsive panels with consistent category colors and signed daily amounts.
 
 use super::AnalyticsView;
-use super::render::columns;
-use super::styles::secondary_style;
 use crate::analytics::sections::Section;
-use crate::style::accent_style;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
-use ratatui::style::Styled;
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::ops::Range;
 
@@ -21,43 +16,7 @@ pub(super) struct Panel {
 
 impl AnalyticsView {
     pub(super) fn panel(&self, section: Section, width: usize, chart_height: usize) -> Panel {
-        let focused = section == self.section;
-        let title = format!(
-            "{} {}",
-            if focused { "▎" } else { " " },
-            self.section_title(section)
-        );
-        let heading = if focused {
-            title.set_style(accent_style()).into()
-        } else {
-            title.bold().into()
-        };
-        let group = self.sections[section].group;
-        let heading = if matches!(
-            section,
-            Section::Usage | Section::Credits | Section::Activity | Section::Plan
-        ) {
-            columns(
-                heading,
-                format!("By {}", self.group_label(section, group).to_lowercase())
-                    .set_style(secondary_style())
-                    .into(),
-                width,
-            )
-        } else {
-            heading
-        };
-        let mut lines = vec![heading, "─".repeat(width).dim().into()];
-        if section == Section::Usage && self.business() {
-            lines.push(
-                format!(
-                    "{} · m change model",
-                    self.token_model.as_deref().unwrap_or("All models")
-                )
-                .set_style(secondary_style())
-                .into(),
-            );
-        }
+        let mut lines = Vec::new();
         let selection;
         let mut chart_bands = 0;
 

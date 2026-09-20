@@ -201,6 +201,63 @@ fn vim_chat_navigation_expands_collapses_and_moves_like_arrows() {
 }
 
 #[test]
+fn configured_dashboard_accept_precedes_report_shortcuts() {
+    for binding in ["r", "g", "m", "R", "tab", "1"] {
+        let mut config = TuiKeymap::default();
+        config.list.accept = Some(KeybindingsSpec::One(KeybindingSpec(binding.into())));
+        let mut view = fixture::view(AccountKind::Business);
+        view.keymap = RuntimeKeymap::from_config(&config).unwrap().list;
+        view.section = Section::Usage;
+        view.zoomed = false;
+        let previous = (
+            view.section,
+            view.ranges,
+            view.sections[Section::Usage].group,
+        );
+        let key = if binding == "tab" {
+            KeyCode::Tab
+        } else {
+            KeyCode::Char(binding.chars().next().unwrap())
+        };
+        press(&mut view, key);
+        assert_eq!(
+            (
+                view.zoomed,
+                view.section,
+                view.ranges,
+                view.sections[Section::Usage].group
+            ),
+            (true, previous.0, previous.1, previous.2),
+            "{binding}"
+        );
+    }
+}
+
+#[test]
+fn configured_question_mark_keeps_its_action_and_hides_help_hint() {
+    for (binding, modifiers) in [("?", KeyModifiers::NONE), ("shift-?", KeyModifiers::SHIFT)] {
+        let mut config = TuiKeymap::default();
+        config.list.cancel = Some(KeybindingsSpec::One(KeybindingSpec(binding.into())));
+        let mut view = fixture::view(AccountKind::Consumer);
+        view.keymap = RuntimeKeymap::from_config(&config).unwrap().list;
+        let footer = view.footer_lines(/*width*/ 120, /*scrollable*/ false);
+        assert!(
+            !footer
+                .iter()
+                .any(|line| line.to_string().contains("? help"))
+        );
+        assert!(
+            !view
+                .help_lines(/*width*/ 120)
+                .iter()
+                .any(|line| line.to_string().contains("toggle this help"))
+        );
+        view.handle_key(KeyEvent::new(KeyCode::Char('?'), modifiers));
+        assert_eq!((view.is_done, view.show_help), (true, false));
+    }
+}
+
+#[test]
 fn configured_vim_keys_win_over_horizontal_aliases() {
     let mut config = TuiKeymap::default();
     config.list.jump_top = Some(KeybindingsSpec::Many(vec![

@@ -1,16 +1,10 @@
-//! Maximized sections and a responsive overview share the same panels and scrolling behavior.
-//! Zoom, section changes, and reflow preserve report selections and inline details.
+//! Fixed analytics navigation and keyboard help around existing report panels.
+//! Tabs and hints never wrap or move when a report loads, changes range, or becomes empty.
 
 use super::AnalyticsView;
-use super::data;
 use super::styles::secondary_style;
 use crate::analytics::models::AccountAnalyticsHistory;
 use crate::analytics::models::AccountAnalyticsValue;
-use crate::analytics::sections::Section;
-use crate::keymap::ListAction;
-use crate::style::accent_style;
-use crate::wrapping::RtOptions;
-use crate::wrapping::word_wrap_lines;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -91,216 +85,96 @@ pub(super) fn parts(
 impl AnalyticsView {
     pub(super) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.poll_reports();
-        let width = usize::from(area.width.saturating_sub(/*rhs*/ 4)).max(/*other*/ 1);
-        let show_range = !matches!(
-            self.section,
-            Section::Chats | Section::Plan | Section::Summary
-        ) && !self.visible_sections().is_empty();
-        let hint = |action| {
-            self.keymap
-                .primary_hint(action)
-                .map(crate::key_hint::ShortcutHint::display_label)
-                .unwrap_or_default()
-        };
-        let mut controls = if self.visible_sections().is_empty() {
-            format!("R refresh · {} back · q close", hint(ListAction::Cancel))
-        } else {
-            let navigation = if !self.zoomed {
-                format!("{}/z maximize", hint(ListAction::Accept))
-            } else if self.section == Section::Summary {
-                format!(
-                    "{}/{} scroll",
-                    hint(ListAction::MoveUp),
-                    hint(ListAction::MoveDown)
-                )
-            } else if self.section == Section::Plan {
-                format!(
-                    "{}/{} window · {}/{} period · {} details",
-                    hint(ListAction::MoveLeft),
-                    hint(ListAction::MoveRight),
-                    hint(ListAction::MoveUp),
-                    hint(ListAction::MoveDown),
-                    hint(ListAction::Accept)
-                )
-            } else if self.section != Section::Chats {
-                format!(
-                    "{}/{} day · {} details",
-                    hint(ListAction::MoveLeft),
-                    hint(ListAction::MoveRight),
-                    hint(ListAction::Accept)
-                )
-            } else {
-                format!(
-                    "{}/{} row · {} details",
-                    hint(ListAction::MoveUp),
-                    hint(ListAction::MoveDown),
-                    hint(ListAction::Accept)
-                )
-            };
-            format!(
-                "tab/1–{} section · {}{navigation}\n{}{}R refresh · {}/{} scroll · {} back · q close",
-                self.visible_sections().len(),
-                if self.section == Section::Chats && !self.business() && !self.zoomed {
-                    "s sort · "
-                } else if self.section == Section::Chats && !self.business() {
-                    "s sort · z dashboard · "
-                } else if self.zoomed {
-                    "z dashboard · "
-                } else {
-                    ""
-                },
-                if show_range { "r 7/30d · " } else { "" },
-                if self.group_options().len() < 2 {
-                    ""
-                } else if self.section == Section::Summary {
-                    "g view · "
-                } else {
-                    "g group · "
-                },
-                hint(ListAction::PageUp),
-                hint(ListAction::PageDown),
-                hint(ListAction::Cancel)
-            )
-        };
-        let control_line = |line: &str| {
-            let mut spans = Vec::new();
-            for (index, control) in line.split(" · ").enumerate() {
-                if index > 0 {
-                    spans.push(" · ".into());
-                }
-                let (keys, description) = control.rsplit_once(' ').unwrap_or((control, ""));
-                spans.extend(crate::key_hint::key_label_spans(keys));
-                if !description.is_empty() {
-                    spans.push(format!(" {description}").into());
-                }
-            }
-            Line::from(spans)
-        };
-        let updated = self
-            .zoomed
-            .then(|| self.sections[self.section].history.ready())
-            .flatten()
-            .and_then(|history| history.updated_at)
-            .and_then(|value| chrono::DateTime::from_timestamp(value, /*nsecs*/ 0))
-            .map(|updated| format!("Updated {} UTC", updated.format("%b %-d %H:%M")));
-        let add_updated = |footer: &mut Vec<Line<'static>>| {
-            if let Some(updated) = &updated {
-                let timestamp = Line::from(updated.clone().set_style(secondary_style()));
-                if let Some(line) = footer
-                    .last_mut()
-                    .filter(|line| line.width() + timestamp.width() + 3 <= width)
-                {
-                    *line = columns(line.clone(), timestamp, width);
-                } else {
-                    footer.extend(word_wrap_lines(
-                        [columns(Line::default(), timestamp, width)],
-                        RtOptions::new(width),
-                    ));
-                }
-            }
-        };
-        let mut footer = word_wrap_lines(controls.lines().map(control_line), RtOptions::new(width));
-        if matches!(
-            self.section,
-            Section::Plugins | Section::Activity | Section::Skills
-        ) && !self.day_has_details(self.section, self.sections[self.section].cursor)
-        {
-            let height = footer.len();
-            controls = controls.replace(&format!(" · {} details", hint(ListAction::Accept)), "");
-            footer = word_wrap_lines(controls.lines().map(control_line), RtOptions::new(width));
-            // Removing a contextual hint must not resize the chart on narrow terminals.
-            footer.resize(height, Line::default());
-        }
-        add_updated(&mut footer);
-        let sections = if self.zoomed {
-            let line = Line::from(
-                self.visible_sections()
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .map(|(index, section)| {
-                        let label = self.section_title(section);
-                        let label = if width >= 64 {
-                            format!("{} {label}", index + 1)
-                        } else {
-                            label.to_string()
-                        };
-                        if section == self.section {
-                            format!("[{label}]  ").set_style(accent_style())
-                        } else {
-                            format!("{label}  ").set_style(secondary_style())
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            word_wrap_lines([line], RtOptions::new(width))
-        } else {
-            Vec::new()
-        };
-        let [title, range, tabs, body, hints] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Length(if sections.is_empty() {
-                0
-            } else {
-                sections.len() as u16 + 1
-            }),
-            Constraint::Min(0),
-            Constraint::Length(footer.len() as u16),
-        ])
-        .areas(Rect {
-            x: area.x + area.width.min(/*other*/ 2),
-            width: area.width.saturating_sub(/*rhs*/ 4),
+        let inset = u16::from(area.width > 2);
+        let inner = Rect {
+            x: area.x + inset,
+            width: area.width.saturating_sub(inset * 2),
             ..area
-        });
-        Line::from(vec![
-            "Analytics".bold(),
-            self.live
-                .as_ref()
-                .and_then(|live| live.account_label())
-                .map(|account| format!("  ·  Live account · {account}"))
-                .unwrap_or_else(|| "  ·  Live account".into())
-                .set_style(secondary_style()),
+        };
+        let width = usize::from(inner.width).max(/*other*/ 1);
+        let [title, tabs, rule, controls, body, hints] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(if width >= 100 { 2 } else { 3 }),
+            Constraint::Min(1),
+            Constraint::Length(2),
         ])
-        .render(title, buf);
-        if show_range {
-            let dates = self.date_range();
-            let (start, end) = (dates.start(), dates.end());
-            Line::from(vec![
-                if self.ranges[self.range_group(self.section) as usize] == 0 {
-                    "[7d]".set_style(accent_style())
-                } else {
-                    "7d".into()
-                },
-                "  ".into(),
-                if self.ranges[self.range_group(self.section) as usize] == 1 {
-                    "[30d]".set_style(accent_style())
-                } else {
-                    "30d".into()
-                },
-                format!(
-                    "  ·  {}–{}",
-                    data::date(&start.to_string()),
-                    end.format("%b %-d, %Y")
-                )
+        .areas(inner);
+        let account = self.live.as_ref().and_then(|live| live.account_label());
+        let plan = self.account.ready().map(|plan| {
+            use codex_protocol::account::PlanType;
+            match plan {
+                PlanType::Free => "Free",
+                PlanType::Go => "Go",
+                PlanType::Plus => "Plus",
+                PlanType::Pro => "Pro",
+                PlanType::ProLite => "Pro Lite",
+                PlanType::Team
+                | PlanType::Business
+                | PlanType::SelfServeBusinessProLite
+                | PlanType::SelfServeBusinessUsageBased => "Business",
+                PlanType::Enterprise
+                | PlanType::Ent26
+                | PlanType::EnterpriseCbpAutomation
+                | PlanType::EnterpriseCbpUsageBased => "Enterprise",
+                PlanType::Edu | PlanType::EduPlus | PlanType::EduPro => "Education",
+                PlanType::Unknown => "Account",
+            }
+        });
+        let heading = Line::from(vec![
+            plan.map(|plan| format!("Usage · {plan}"))
+                .unwrap_or_else(|| "Usage".into())
+                .bold(),
+            account
+                .map(|account| format!(" · {account}"))
+                .unwrap_or_default()
                 .set_style(secondary_style()),
-            ])
-            .render(range, buf);
-        }
-        Paragraph::new(sections).render(tabs, buf);
+        ]);
+        crate::line_truncation::truncate_line_with_ellipsis_if_overflow(heading, width)
+            .render(title, buf);
+        let visible = self.visible_sections();
+        let labels = visible
+            .iter()
+            .enumerate()
+            .map(|(index, section)| {
+                if width >= 80 {
+                    format!("{} {}", index + 1, self.tab_label(*section))
+                } else {
+                    self.tab_label(*section).to_owned()
+                }
+            })
+            .collect::<Vec<_>>();
+        let selected = visible
+            .iter()
+            .position(|section| *section == self.section)
+            .unwrap_or_default();
+        crate::bottom_pane::render_filled_tab_bar(
+            &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+            selected,
+            tabs,
+            buf,
+        );
+        Line::from("─".repeat(width)).dim().render(rule, buf);
+        self.render_controls(controls, buf);
         self.viewport_height = usize::from(body.height).max(/*other*/ 1);
-        let (lines, selection) = if self.visible_sections().is_empty() {
+        let (lines, selection) = if self.show_help {
+            (self.help_lines(width), 0..1)
+        } else if visible.is_empty() {
             let message = self
                 .account
                 .message()
                 .unwrap_or("Analytics is not available for this account type.");
-            let lines = textwrap::wrap(message, width)
-                .into_iter()
-                .map(|line| Line::from(line.into_owned()))
-                .collect::<Vec<_>>();
-            let selection = 0..lines.len();
-            (lines, selection)
-        } else if self.zoomed {
+            (
+                textwrap::wrap(message, width)
+                    .into_iter()
+                    .map(|line| Line::from(line.into_owned()))
+                    .collect(),
+                0..1,
+            )
+        } else if !self.zoomed {
+            self.dashboard_lines(width, self.viewport_height)
+        } else {
             let chart_height =
                 (usize::from(body.height) / 5).clamp(/*min*/ 4, /*max*/ 10);
             let mut panel = self.panel(self.section, width, chart_height);
@@ -313,13 +187,13 @@ impl AnalyticsView {
                     panel = self.panel(self.section, width, height);
                 }
             }
-            let center_summary = self.section == Section::Summary && self.profile.ready().is_some();
+            let center_summary =
+                self.section == super::sections::Section::Summary && self.profile.ready().is_some();
             if center_summary {
-                // Keep the section heading and rule fixed; center the profile below them.
                 let padding = usize::from(body.height).saturating_sub(panel.lines.len()) / 2;
                 panel
                     .lines
-                    .splice(2..2, std::iter::repeat_n(Line::default(), padding));
+                    .splice(0..0, std::iter::repeat_n(Line::default(), padding));
             }
             let selection = if panel.lines.len() <= usize::from(body.height) {
                 0..panel.lines.len()
@@ -330,56 +204,29 @@ impl AnalyticsView {
                 panel.lines.push(Line::default());
             }
             (panel.lines, selection)
-        } else {
-            self.dashboard_lines(width, usize::from(body.height))
         };
-        if lines.len() <= self.viewport_height {
-            let height = footer.len();
-            let controls = controls
-                .replace(
-                    &format!(
-                        " · {}/{} scroll",
-                        hint(ListAction::PageUp),
-                        hint(ListAction::PageDown)
-                    ),
-                    "",
-                )
-                .replace(
-                    &format!(
-                        " · {}/{} scroll",
-                        hint(ListAction::MoveUp),
-                        hint(ListAction::MoveDown)
-                    ),
-                    "",
-                );
-            footer = word_wrap_lines(controls.lines().map(control_line), RtOptions::new(width));
-            add_updated(&mut footer);
-            if updated.is_some() {
-                let padding = height.saturating_sub(footer.len());
-                footer.splice(0..0, std::iter::repeat_n(Line::default(), padding));
-            } else {
-                footer.resize(height, Line::default());
-            }
-        }
+        let mut scroll_offset = self.scroll_offset();
         if self.follow_selection {
-            if selection.start < self.scroll_offset {
-                self.scroll_offset = selection.start;
+            if selection.start < scroll_offset {
+                scroll_offset = selection.start;
             } else {
                 let end = selection.start + selection.len().min(self.viewport_height);
-                if end > self.scroll_offset + self.viewport_height {
-                    self.scroll_offset = end - self.viewport_height;
+                if end > scroll_offset + self.viewport_height {
+                    scroll_offset = end - self.viewport_height;
                 }
             }
         }
-        self.scroll_offset = self
-            .scroll_offset
-            .min(lines.len().saturating_sub(self.viewport_height));
+        let scrollable = lines.len() > self.viewport_height;
+        scroll_offset = scroll_offset.min(lines.len().saturating_sub(self.viewport_height));
+        *self.scroll_offset_mut() = scroll_offset;
         self.follow_selection = false;
         Paragraph::new(lines)
-            .scroll(/*offset*/ (self.scroll_offset as u16, 0))
+            .scroll(
+                /*offset*/ (scroll_offset.min(usize::from(u16::MAX)) as u16, 0),
+            )
             .render(body, buf);
-        Paragraph::new(footer)
-            .set_style(secondary_style())
+        Paragraph::new(self.footer_lines(width, scrollable))
+            .style(secondary_style())
             .render(hints, buf);
     }
 }
