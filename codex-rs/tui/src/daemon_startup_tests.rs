@@ -27,6 +27,12 @@ fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
         ("features={worktrees=true,shell_tool=false}", false),
         ("features.shell_tool=false", false),
         ("features.worktrees.enabled=true", false),
+        ("tui.fullscreen_transcript=true", true),
+        ("tui.fullscreen_transcript=false", true),
+        ("tui.fullscreen_transcript=\"true\"", false),
+        ("tui={fullscreen_transcript=true}", true),
+        ("tui={fullscreen_transcript='true'}", false),
+        ("tui={fullscreen_transcript=true,animations=false}", false),
         ("features={}", false),
         ("model='test'", false),
     ] {

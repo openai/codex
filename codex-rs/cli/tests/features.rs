@@ -133,7 +133,7 @@ fn strict_config_is_not_supported_for_cloud_command() -> Result<()> {
 async fn features_enable_writes_feature_flag_to_config() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    for feature in ["unified_exec", "transcript_v2"] {
+    for feature in ["unified_exec", "shell_tool"] {
         let mut cmd = codex_command(codex_home.path())?;
         cmd.args(["features", "enable", feature])
             .assert()

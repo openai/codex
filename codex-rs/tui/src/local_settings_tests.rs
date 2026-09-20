@@ -16,7 +16,7 @@ async fn launch_screen_mode_survives_configuration_reload() -> anyhow::Result<()
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .build()
         .await?;
-    config.features.enable(Feature::TranscriptV2)?;
+    config.tui_fullscreen_transcript = true;
     config.tui_alternate_screen = AltScreenMode::Auto;
 
     for (alternate_screen, owned, expected_mode, expected_alt) in [
@@ -34,7 +34,7 @@ async fn launch_screen_mode_survives_configuration_reload() -> anyhow::Result<()
         );
 
         let mut reloaded_config = config.clone();
-        reloaded_config.features.disable(Feature::TranscriptV2)?;
+        reloaded_config.tui_fullscreen_transcript = false;
         reloaded_config.tui_alternate_screen = AltScreenMode::Never;
         reloaded_config.tui_theme = Some("nord".into());
         let mut expected = LocalSettings::from(&reloaded_config);
@@ -98,6 +98,7 @@ whimsy = false # Retired: must not override effects or prevent strict loading.
 show_tooltips = false
 show_server_version_notice = false
 auto_recap = false
+fullscreen_transcript = true
 vim_mode_default = true
 terminal_resize_reflow_max_rows = 0
 session_picker_view = "comfortable"
@@ -119,7 +120,14 @@ fast_default_opt_out = true
                 ignore_project_config: true,
                 ..LoaderOverrides::without_managed_config_for_tests()
             })
-            .cli_overrides(vec![("tui.disable_paste_burst".into(), true.into())])
+            .cli_overrides(vec![
+                ("tui.disable_paste_burst".into(), true.into()),
+                // The deprecated flag must not override or migrate into the TUI preference.
+                (
+                    "features.transcript_v2".into(),
+                    config_text.is_empty().into(),
+                ),
+            ])
             .build()
             .await?;
         assert_eq!(config.startup_warnings, Vec::<String>::new());
@@ -133,11 +141,24 @@ fast_default_opt_out = true
             expected.show_tooltips = false;
             expected.show_server_version_notice = false;
             expected.auto_recap = false;
+            expected.fullscreen_transcript = true;
             expected.vim_mode_default = true;
             expected.terminal_resize_reflow_max_rows = Some(0);
             expected.session_picker_view = Some(SessionPickerViewMode::Comfortable);
         }
+        assert_eq!(
+            local.transcript_mode.is_owned(),
+            expected.fullscreen_transcript
+        );
         assert_eq!(local.tui, expected);
+        assert_eq!(
+            config
+                .features
+                .legacy_feature_usages()
+                .map(|usage| usage.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["features.transcript_v2"],
+        );
         assert_eq!(
             local.terminal_resize_reflow(),
             config.terminal_resize_reflow

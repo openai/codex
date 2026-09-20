@@ -1843,7 +1843,7 @@ async fn run_ratatui_app(
     // Cloud configuration and session selection can change screen policy after first paint.
     let use_alt_screen = determine_alt_screen_mode(cli.no_alt_screen, config.tui_alternate_screen);
     let mode = crate::transcript_mode::TranscriptMode::resolve(
-        config.features.enabled(Feature::TranscriptV2),
+        config.tui_fullscreen_transcript,
         use_alt_screen,
     );
     if use_alt_screen != tui.is_alt_screen_enabled() || mode.is_owned() != tui.is_owned_screen() {

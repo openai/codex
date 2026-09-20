@@ -15,15 +15,6 @@ use toml::Table;
 use toml::Value as TomlValue;
 
 #[test]
-fn transcript_v2_resolves_explicit_config_overrides() {
-    let mut features = Features::with_defaults();
-    for enabled in [false, true, false] {
-        features.apply_map(&BTreeMap::from([("transcript_v2".to_string(), enabled)]));
-        assert_eq!(features.enabled(Feature::TranscriptV2), enabled);
-    }
-}
-
-#[test]
 fn sleep_tool_config_rejects_unknown_mode() {
     assert!(toml::from_str::<FeaturesToml>("[sleep_tool]\nmode = 'off'").is_err());
 }

@@ -52,7 +52,10 @@ pub(super) fn config_exclusion(
     if !cli_kv_overrides
         .iter()
         .all(|(key, value)| match key.as_str() {
-            "suppress_unstable_features_warning" => value.is_bool(),
+            "suppress_unstable_features_warning" | "tui.fullscreen_transcript" => value.is_bool(),
+            "tui" => value.as_table().is_some_and(|tui| {
+                tui.len() == 1 && tui.get("fullscreen_transcript").is_some_and(toml::Value::is_bool)
+            }),
             "features" => value.as_table().is_some_and(|features| {
                 !features.is_empty()
                     && features

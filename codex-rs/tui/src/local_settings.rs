@@ -13,7 +13,6 @@ use crate::transcript_mode::TranscriptMode;
 use codex_config::types::History;
 use codex_config::types::Notice;
 use codex_config::types::Tui;
-use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,7 +55,7 @@ impl LocalSettings {
         };
         Self {
             transcript_mode: TranscriptMode::resolve(
-                config.features.enabled(Feature::TranscriptV2),
+                config.tui_fullscreen_transcript,
                 config.tui_alternate_screen != codex_config::types::AltScreenMode::Never,
             ),
             tui: Tui {
@@ -71,6 +70,7 @@ impl LocalSettings {
                 vim_mode_default: config.tui_vim_mode_default,
                 question_esc_back: config.tui_question_esc_back,
                 raw_output_mode: config.tui_raw_output_mode,
+                fullscreen_transcript: config.tui_fullscreen_transcript,
                 alternate_screen: config.tui_alternate_screen,
                 status_line: config.tui_status_line.clone(),
                 status_line_use_colors: config.tui_status_line_use_colors,

@@ -194,7 +194,7 @@ impl App {
         }
 
         // Adopt actual launch ownership before constructing session-local preferences.
-        tui.prepare_owned_screen(config.features.enabled(Feature::TranscriptV2))?;
+        tui.prepare_owned_screen(config.tui_fullscreen_transcript)?;
         let mut local_settings = crate::local_settings::LocalSettings::for_tui(&config, tui);
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();

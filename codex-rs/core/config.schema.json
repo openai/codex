@@ -4226,6 +4226,11 @@
           },
           "description": "Individual visual effects. Each also requires animations to be enabled."
         },
+        "fullscreen_transcript": {
+          "default": false,
+          "description": "Own the fullscreen transcript, including scrolling, selection, and search. Defaults to `false`; alternate-screen restrictions take precedence.",
+          "type": "boolean"
+        },
         "keymap": {
           "allOf": [
             {

@@ -37,10 +37,7 @@ async fn terminal_dynamic_activity_retains_calls_across_both_fallbacks() {
         [(false, AltScreenMode::Always), (true, AltScreenMode::Never)]
     {
         let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
-        chat.config
-            .features
-            .set_enabled(Feature::TranscriptV2, owned_enabled)
-            .expect("configure transcript feature");
+        chat.config.tui_fullscreen_transcript = owned_enabled;
         chat.config.tui_alternate_screen = alternate_screen;
         chat.local_settings = LocalSettings::from(&chat.config);
         assert_eq!(
@@ -89,10 +86,7 @@ async fn owned_dynamic_activity_updates_the_retained_row_after_config_refresh() 
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.transcript_mode = TranscriptMode::Owned;
     // A thread/config refresh cannot change ownership after the terminal starts.
-    chat.config
-        .features
-        .disable(Feature::TranscriptV2)
-        .expect("disable transcript feature in refreshed config");
+    chat.config.tui_fullscreen_transcript = false;
     drain_insert_history(&mut rx);
     chat.on_dynamic_tool_item(dynamic_item("call-1", DynamicToolCallStatus::InProgress));
     let retained = std::iter::from_fn(|| rx.try_recv().ok())

@@ -5,7 +5,6 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use crate::local_settings::LocalSettings;
 use codex_config::types::AltScreenMode;
-use codex_features::Feature;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 
@@ -42,10 +41,7 @@ async fn owned_initial_history_stops_after_viewport_or_scan_budget() {
         .build()
         .await
         .expect("config");
-    config
-        .features
-        .enable(Feature::TranscriptV2)
-        .expect("enable owned transcript");
+    config.tui_fullscreen_transcript = true;
     config.tui_alternate_screen = AltScreenMode::Always;
     config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
     let local_settings = LocalSettings::from(&config);
@@ -78,10 +74,7 @@ async fn owned_initial_history_stops_after_viewport_or_scan_budget() {
         Some(100),
     );
 
-    config
-        .features
-        .disable(Feature::TranscriptV2)
-        .expect("disable owned transcript");
+    config.tui_fullscreen_transcript = false;
     // The mode selected at launch wins even if thread config changes or is unavailable.
     for config in [Some(&config), None] {
         let budget = HistoryLoadBudget::new(
