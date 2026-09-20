@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/usage.rs
-assertion_line: 429
 expression: "render_bottom_popup(&chat, 44)"
 ---
   Usage limit resets
@@ -12,4 +11,4 @@ expression: "render_bottom_popup(&chat, 44)"
   2. Full reset  Does not expire.
   3. Cancel
 
-  enter select · esc back
+  enter choose · esc back

@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/usage.rs
-assertion_line: 409
 expression: "states.join(\"\\n---\\n\")"
 ---
   Usage limit resets
@@ -19,7 +18,7 @@ expression: "states.join(\"\\n---\\n\")"
   2. Full reset (Weekly + 5 hr)  Expires 08:59 on 27 Jun 2026.
   3. Cancel
 
-  enter select · esc back
+  enter choose · esc back
 ---
   Usage limit resets
   You don't have any usage limit resets available.

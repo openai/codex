@@ -22,7 +22,7 @@ impl Live {
             .backend
             .request(|client| async move { client.get_account_profile().await })
             .await;
-        session.backend.ensure_identity().await?;
+        self.ensure_identity().await?;
         profile.map(Some).map_err(super::client::request_error)
     }
 }

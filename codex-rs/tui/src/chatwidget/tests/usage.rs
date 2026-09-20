@@ -128,6 +128,10 @@ async fn usage_command_opens_menu_when_reset_is_available_snapshot() {
         "usage_command_menu",
         render_bottom_popup(&chat, /*width*/ 80)
     );
+    assert_chatwidget_snapshot!(
+        "usage_command_menu_narrow",
+        render_bottom_popup(&chat, /*width*/ 40)
+    );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAnalytics { view: None }));
 }
@@ -212,7 +216,7 @@ async fn usage_menu_refresh_failure_preserves_disabled_known_zero() {
         Err("backend unavailable".to_string()),
     );
 
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("No usage limit resets available."));
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("None available."));
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAnalytics { view: None }));
 }
@@ -816,8 +820,8 @@ async fn failed_post_consume_refresh_does_not_keep_stale_reset_count() {
     chat.dispatch_command(SlashCommand::Usage);
 
     let rendered = render_bottom_popup(&chat, /*width*/ 80);
-    assert!(rendered.contains("Check reset availability."));
-    assert!(!rendered.contains("You have 2 usage limit resets available."));
+    assert!(rendered.contains("Check availability."));
+    assert!(!rendered.contains("2 available."));
 }
 
 #[tokio::test]

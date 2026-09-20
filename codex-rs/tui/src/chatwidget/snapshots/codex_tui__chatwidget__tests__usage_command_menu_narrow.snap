@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/usage.rs
+expression: "render_bottom_popup(&chat, 40)"
+---
+  Usage
+  Account usage and resets.
+
+
+› 1. View analytics
+  2. Redeem reset
+
+  enter open · esc back

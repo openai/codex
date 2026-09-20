@@ -1,6 +1,7 @@
 //! Exercise local Analytics plan discovery and report recovery while connected to an app-server.
 
 use super::tests::live;
+use super::tests::sign_in;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::RemoteAppServerClient;
 use codex_app_server_client::RemoteAppServerConnectArgs;
@@ -70,7 +71,7 @@ async fn local_reports_share_an_account_and_recover_profile_errors() {
     use crate::analytics::sections::Section;
 
     let http = crate::analytics::test_support::server().await;
-    let (_home, local) = live(&http, "enterprise").await;
+    let (home, local) = live(&http, "enterprise").await;
     let (client, server) = remote().await;
     let failed_profile = Mock::given(method("GET"))
         .and(wiremock::matchers::path("/backend-api/wham/profiles/me"))
@@ -129,6 +130,49 @@ async fn local_reports_share_an_account_and_recover_profile_errors() {
             "account-a"
         );
     }
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/backend-api/wham/accounts/check"))
+        .and(header("chatgpt-account-id", "account-b"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
+            "accounts": [{"id": "account-b", "plan_type": "enterprise"}]
+        })))
+        .with_priority(/*p*/ 1)
+        .expect(/*r*/ 1)
+        .mount(&http)
+        .await;
+    sign_in(home.path(), "account-b", "user-b", "enterprise");
+    assert!(
+        view.live
+            .as_ref()
+            .unwrap()
+            .history(
+                super::Report::Usage,
+                /*days*/ 7,
+                super::Grouping::Surface
+            )
+            .await
+            .is_err()
+    );
+    view.poll_reports();
+    assert!(matches!(view.account, Load::Loading(_)));
+    assert!(matches!(view.profile, Load::Unavailable));
+    assert!(
+        view.sections
+            .0
+            .iter()
+            .all(|section| matches!(section.history, Load::Unavailable))
+    );
+    crate::analytics::test_support::settle(&mut view).await;
+    assert_eq!(
+        view.account.ready(),
+        Some(&codex_protocol::account::PlanType::Enterprise)
+    );
+    for section in view.visible_sections() {
+        if section.report().is_some() {
+            assert!(view.sections[*section].history.ready().is_some());
+        }
+    }
+    http.verify().await;
     view.cancel_loads();
     client.shutdown().await.unwrap();
     server.await.unwrap();
@@ -184,7 +228,10 @@ async fn account_lookup_failure_recovers_on_refresh_with_the_server_plan() {
         .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({"stats": {}})))
         .mount(&http)
         .await;
-    view.refresh();
+    view.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('R'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
     crate::analytics::test_support::settle(&mut view).await;
     assert_eq!(
         view.visible_sections(),

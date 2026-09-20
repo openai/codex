@@ -78,6 +78,13 @@ pub(super) enum RangeGroup {
 
 impl AnalyticsView {
     pub(super) fn poll_reports(&mut self) {
+        if self.live.as_ref().is_some_and(|live| {
+            live.identity_invalidated
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }) {
+            self.refresh();
+            return;
+        }
         for section in &mut self.sections.0 {
             section.history.poll();
         }

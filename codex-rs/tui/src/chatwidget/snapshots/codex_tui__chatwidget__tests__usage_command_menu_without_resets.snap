@@ -3,10 +3,10 @@ source: tui/src/chatwidget/tests/usage.rs
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Usage
-  View account usage or redeem an earned reset.
+  Account usage and resets.
 
 
-› 1. View analytics            Browse account usage and activity.
-     Redeem usage limit reset  No usage limit resets available.
+› 1. View analytics  Usage history.
+     Redeem reset    None available.
 
-  enter select · esc back
+  enter open · esc back

@@ -44,11 +44,12 @@ pub(super) async fn read(
     if !super::models::thread_usage_supported(session.backend.account().plan_type) {
         return Ok(None);
     }
-    session.backend.ensure_identity().await?;
+    live.ensure_identity().await?;
     let threads = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 60), roots(&handle))
         .await
-        .map_err(|_| "Chat listing timed out. Press R to retry.".to_string())??;
-    session.backend.ensure_identity().await?;
+        .map_err(|_| "Chat listing timed out. Press R to retry.".to_string());
+    live.ensure_identity().await?;
+    let threads = threads??;
     if threads.is_empty() {
         return Ok(Some(Chats { rows: Vec::new() }));
     }
@@ -65,6 +66,7 @@ pub(super) async fn read(
             tokio::time::timeout_at(deadline, estimates(session, &pair[..midpoint])),
             tokio::time::timeout_at(deadline, estimates(session, &pair[midpoint..])),
         );
+        live.ensure_identity().await?;
         for batch in [first, second].into_iter().flatten() {
             data.extend(batch?);
         }
@@ -72,7 +74,7 @@ pub(super) async fn read(
             break;
         }
     }
-    session.backend.ensure_identity().await?;
+    live.ensure_identity().await?;
     let mut usage: HashMap<_, _> = data
         .into_iter()
         .map(|row| (row.thread_id.clone(), row))

@@ -12,7 +12,13 @@ use wiremock::matchers::path;
 
 #[tokio::test]
 async fn consumer_roots_include_paginated_archived_descendants_and_keep_missing_usage() {
-    for (unsupported, status) in [(false, 200), (true, 200), (false, 404), (false, 503)] {
+    for (unsupported, status, switch_account) in [
+        (false, 200, false),
+        (true, 200, false),
+        (false, 404, false),
+        (false, 503, false),
+        (false, 200, true),
+    ] {
         use codex_app_server_client::RemoteAppServerClient;
         use codex_app_server_client::RemoteAppServerConnectArgs;
         use codex_app_server_client::RemoteAppServerEndpoint;
@@ -20,7 +26,8 @@ async fn consumer_roots_include_paginated_archived_descendants_and_keep_missing_
         use tokio_tungstenite::tungstenite::Message;
 
         let server = MockServer::start().await;
-        let (_home, live) = live(&server, "plus").await;
+        let (home, live) = live(&server, "plus").await;
+        let home_path = home.path().to_path_buf();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let websocket_url = format!("ws://{}", listener.local_addr().unwrap());
         let rpc = tokio::spawn(async move {
@@ -103,12 +110,29 @@ async fn consumer_roots_include_paginated_archived_descendants_and_keep_missing_
             ]});
             if unsupported { expected["threads"].as_array_mut().unwrap().retain(|thread| thread["thread_id"] == "missing"); }
             assert_eq!(body, expected);
+            if switch_account {
+                super::super::client::tests::sign_in(&home_path, "account-b", "user-b", "plus");
+            }
             let mut response=json!({"data_as_of":null,"threads":[]});
             if !unsupported { response["threads"] = json!([{ "thread_id":"root", "data_status":"partial", "usage_source":"included_plan", "weekly_limit_percent":125, "five_hour_limit_percent":null, "balance_usage_credits":null, "groups":[] }]); }
             ResponseTemplate::new(status).set_body_json(response)
         }).expect(/*r*/ 1).mount(&server).await;
         let handle = AppServerRequestHandle::Remote(remote.request_handle());
-        let chats = read(handle, Arc::new(live)).await.unwrap().unwrap();
+        let live = Arc::new(live);
+        let result = read(handle, Arc::clone(&live)).await;
+        assert_eq!(rpc.await.unwrap(), if unsupported { 4 } else { 6 });
+        if switch_account {
+            assert_eq!(
+                (
+                    result.is_err(),
+                    live.identity_invalidated
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                (true, true)
+            );
+            continue;
+        }
+        let chats = result.unwrap().unwrap();
         assert_eq!(
             (
                 chats.rows.len(),
@@ -127,6 +151,5 @@ async fn consumer_roots_include_paginated_archived_descendants_and_keep_missing_
                 }
             )
         );
-        assert_eq!(rpc.await.unwrap(), if unsupported { 4 } else { 6 });
     }
 }

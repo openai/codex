@@ -14,7 +14,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-pub(super) fn sign_in(home: &std::path::Path, account: &str, user: &str, plan: &str) {
+pub(in crate::analytics) fn sign_in(home: &std::path::Path, account: &str, user: &str, plan: &str) {
     let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
         json!({
             "exp": 4102444800_i64, "email": "analytics@example.test",

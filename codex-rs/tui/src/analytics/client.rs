@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 
 pub(super) struct Live {
+    pub(super) identity_invalidated: std::sync::atomic::AtomicBool,
     config: Arc<Config>,
     end_date: chrono::NaiveDate,
     session: OnceCell<Session>,
@@ -34,6 +35,7 @@ pub(super) struct Session {
 impl Live {
     pub(super) fn new(config: Arc<Config>, end_date: chrono::NaiveDate) -> Self {
         Self {
+            identity_invalidated: std::sync::atomic::AtomicBool::new(/*v*/ false),
             config,
             end_date,
             session: OnceCell::new(),
@@ -91,6 +93,19 @@ impl Live {
             .await
     }
 
+    /// Every report shares the same privacy boundary, including cached report loads.
+    pub(super) async fn ensure_identity(&self) -> Result<(), String> {
+        let identity = match self.session().await {
+            Ok(session) => session.backend.ensure_identity().await,
+            Err(error) => Err(error),
+        };
+        if identity.is_err() {
+            self.identity_invalidated
+                .store(/*val*/ true, std::sync::atomic::Ordering::Relaxed);
+        }
+        identity
+    }
+
     pub(super) async fn plan_history(&self) -> Result<Option<super::plan::Report>, String> {
         let session = self.session().await?;
         if session.kind != AccountKind::Consumer {
@@ -100,7 +115,7 @@ impl Live {
             .backend
             .request(|client| async move { client.get_plan_limit_history().await })
             .await;
-        session.backend.ensure_identity().await?;
+        self.ensure_identity().await?;
         history
             .map_err(request_error)?
             .map(super::plan::Report::parse)
@@ -131,7 +146,7 @@ impl Live {
             .and_then(|offset| end.checked_sub_days(chrono::Days::new(u64::from(offset))))
             .ok_or("Invalid analytics date range.")?;
         let session = self.session().await?;
-        session.backend.ensure_identity().await?;
+        self.ensure_identity().await?;
         let enterprise_tokens = report == Report::Usage
             && matches!(
                 session.kind,
@@ -166,7 +181,7 @@ impl Live {
                 .await
                 .map(AnalyticsData::from)
         };
-        session.backend.ensure_identity().await?;
+        self.ensure_identity().await?;
         let response = response.map_err(request_error)?;
         let history = (|| {
             if enterprise_tokens {
