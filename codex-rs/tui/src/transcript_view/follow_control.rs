@@ -1,4 +1,5 @@
 //! Return-to-latest affordance in the owned transcript's existing composer gap.
+//! The control is hidden whenever the current final transcript row is visible.
 //! Rendering owns the hit rectangle; hidden controls never intercept pointer input.
 
 use super::*;
@@ -20,7 +21,8 @@ impl TranscriptView {
     pub(crate) fn render_follow_control(&mut self, area: Option<Rect>, buf: &mut Buffer) {
         let area = area.filter(|area| {
             !area.is_empty()
-                && self.can_return_to_latest()
+                && !self.area.is_empty()
+                && !self.tail_visible
                 && self.highlight.is_none()
                 && self.selection.is_none()
                 && !self.is_search_active()

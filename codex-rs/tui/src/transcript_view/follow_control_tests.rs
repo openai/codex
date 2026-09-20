@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::history_cell::PlainHistoryCell;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
@@ -102,6 +103,112 @@ fn no_op_scroll_keeps_following_and_real_scroll_pauses() {
 }
 
 #[test]
+fn empty_viewport_does_not_show_back_to_bottom() {
+    let cells = vec![cell("one")];
+    let mut view = TranscriptView::default();
+    let gap = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 1,
+    );
+    let mut buffer = Buffer::empty(gap);
+    view.render(Rect { height: 0, ..gap }, &mut buffer, &cells);
+    view.render_follow_control(Some(gap), &mut buffer);
+
+    assert!(view.is_following());
+    assert!(view.follow_control.area.is_none());
+    assert_eq!(buffer, Buffer::empty(gap));
+    insta::assert_snapshot!(crate::transcript_view::tests::text(&buffer), @"");
+}
+
+#[test]
+fn copying_selection_at_bottom_does_not_show_back_to_bottom() {
+    let cells = vec![cell("one\ntwo\nthree\nfour\nneedle")];
+    let mut view = TranscriptView::default();
+    let before = paint(&mut view, &cells, /*width*/ 40);
+    assert!(view.tail_visible);
+    assert!(view.follow_control.area.is_none());
+
+    view.begin_selection(&cells, /*column*/ 0, /*row*/ 2, /*clicks*/ 2);
+    view.end_drag();
+    let selected = view.selected_text(&cells).expect("selected word");
+    view.copy_selected_text_with(&cells, &selected, |text| {
+        assert_eq!(text, "needle");
+        Ok(crate::clipboard_copy::CopyStatus::Confirmed)
+    })
+    .expect("successful copy");
+
+    let after = paint(&mut view, &cells, /*width*/ 40);
+    assert!(view.selected_text(&cells).is_none());
+    assert!(!view.is_following());
+    assert!(view.tail_visible);
+    assert!(view.follow_control.area.is_none());
+    assert_eq!(after, before);
+    insta::assert_snapshot!(crate::transcript_view::tests::text(&after), @"
+    three
+    four
+    needle
+    ");
+}
+
+#[test]
+fn closing_find_at_bottom_does_not_show_back_to_bottom() {
+    let cells = vec![cell("one\ntwo\nthree\nfour\nneedle")];
+    let mut view = TranscriptView::default();
+    let before = paint(&mut view, &cells, /*width*/ 40);
+    view.begin_selection(&cells, /*column*/ 0, /*row*/ 2, /*clicks*/ 2);
+    view.end_drag();
+    view.begin_search();
+    view.paste_search("needle");
+    assert!(!view.advance_search(&cells));
+    paint(&mut view, &cells, /*width*/ 40);
+
+    view.handle_key(KeyCode::Esc.into(), &cells);
+    let after = paint(&mut view, &cells, /*width*/ 40);
+    assert!(!view.is_search_active());
+    assert!(!view.is_following());
+    assert!(view.tail_visible);
+    assert!(view.follow_control.area.is_none());
+    assert_eq!(after, before);
+}
+
+#[test]
+fn enlarging_paused_view_hides_back_to_bottom_when_tail_fits() {
+    let cells = vec![cell("one\ntwo\nthree\nfour\nfive")];
+    let mut view = TranscriptView::default();
+    paint(&mut view, &cells, /*width*/ 40);
+    view.scroll(&cells, /*rows*/ -2);
+    paint(&mut view, &cells, /*width*/ 40);
+    assert!(view.follow_control.area.is_some());
+
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 6,
+    );
+    let mut buffer = Buffer::empty(area);
+    view.render(
+        Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 5,
+        ),
+        &mut buffer,
+        &cells,
+    );
+    view.render_follow_control(
+        Some(Rect::new(
+            /*x*/ 0, /*y*/ 5, /*width*/ 40, /*height*/ 1,
+        )),
+        &mut buffer,
+    );
+    assert!(!view.is_following());
+    assert!(view.tail_visible);
+    assert!(view.follow_control.area.is_none());
+    insta::assert_snapshot!(crate::transcript_view::tests::text(&buffer), @"
+    one
+    two
+    three
+    four
+    five
+    ");
+}
+
+#[test]
 fn copying_live_selection_retains_the_displayed_revision() {
     let mut view = TranscriptView::default();
     let cells = Vec::new();
@@ -120,9 +227,17 @@ fn copying_live_selection_retains_the_displayed_revision() {
     .unwrap();
     let buffer = paint(&mut view, &cells, /*width*/ 40);
     assert!(!view.is_following());
+    assert!(!view.tail_visible);
+    assert!(view.follow_control.area.is_some());
     assert!(format!("{buffer:?}").contains("original live text"));
+    assert!(
+        crate::transcript_view::tests::text(&buffer).contains("New activity · ↓ Back to bottom")
+    );
     view.jump_to_latest();
-    assert!(format!("{:?}", paint(&mut view, &cells, /*width*/ 40)).contains("changed live text"));
+    let buffer = paint(&mut view, &cells, /*width*/ 40);
+    assert!(format!("{buffer:?}").contains("changed live text"));
+    assert!(view.tail_visible);
+    assert!(view.follow_control.area.is_none());
 }
 
 #[test]

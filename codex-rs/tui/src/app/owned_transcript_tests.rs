@@ -238,7 +238,8 @@ async fn owned_transcript_reserves_a_row_above_the_composer() -> Result<()> {
         let gap = Rect::new(/*x*/ 0, bottom.y - 1, width, /*height*/ 1);
         let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
         let start = buffer.index_of(gap.x, gap.y);
-        if app.transcript_view.is_following() {
+        // Both scenarios show the current tail, including the paused detailed view.
+        if matches!(label, "Latest" | "Detailed") {
             assert_eq!(
                 &buffer.content()[start..start + usize::from(width)],
                 Buffer::empty(gap).content(),

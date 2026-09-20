@@ -36,6 +36,7 @@ fn feedback_releases_navigation_targets_and_expiry_restores_them() {
     let mut view = TranscriptView::default();
     render(&mut view, &cells, /*width*/ 60, /*height*/ 3);
     view.scroll(&cells, /*rows*/ -2);
+    render(&mut view, &cells, /*width*/ 60, /*height*/ 3);
     let area = Rect::new(
         /*x*/ 0, /*y*/ 3, /*width*/ 60, /*height*/ 1,
     );

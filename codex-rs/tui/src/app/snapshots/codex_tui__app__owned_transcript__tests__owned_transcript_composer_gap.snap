@@ -1,6 +1,6 @@
 ---
 source: tui/src/app/owned_transcript_tests.rs
-assertion_line: 220
+assertion_line: 227
 expression: "snapshots.join(\"\\n\\n\")"
 ---
 Latest
@@ -59,7 +59,7 @@ Detailed
 
 
 
-                             ↓ Back to bottom · esc
+
 
 › preserved draft
 
