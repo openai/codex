@@ -14,24 +14,22 @@ use crate::transcript_view::ViewAction;
 use ratatui::widgets::Widget;
 
 impl App {
-    /// Copy draft selections before interrupt/exit shortcuts and configurable chords can consume C.
+    /// Copy draft selections before key shortcuts, or after mouse layout has been refreshed.
     pub(super) fn handle_composer_copy_event(
         &mut self,
         tui: &mut tui::Tui,
         event: &TuiEvent,
         copy: impl FnOnce(&mut tui::Tui, &str) -> Result<crate::clipboard_copy::CopyStatus, String>,
     ) -> bool {
-        if let TuiEvent::Key(key) = event
-            && tui.is_owned_screen()
+        if tui.is_owned_screen()
             && self.overlay.is_none()
             && !self.transcript_view.has_active_interaction()
-            && let Some(text) = self.chat_widget.composer_selection_for_copy(*key)
+            && let Some((char_count, result)) = self
+                .chat_widget
+                .copy_composer_selection(event, |text| copy(tui, text))
         {
             self.cancel_pending_key_chord();
-            self.chat_widget.end_composer_drag();
-            let result = copy(tui, &text);
-            self.transcript_view
-                .show_copy_feedback(&result, text.chars().count());
+            self.transcript_view.show_copy_feedback(&result, char_count);
             tui.frame_requester().schedule_frame();
             return true;
         }
@@ -254,6 +252,11 @@ impl App {
             if mouse.kind != crossterm::event::MouseEventKind::Moved {
                 let size = tui.prepare_draw_size()?;
                 self.render_owned_transcript(tui, size)?;
+            }
+            if composer_ready
+                && self.handle_composer_copy_event(tui, event, tui::Tui::copy_transcript_selection)
+            {
+                return Ok(true);
             }
             if composer_ready && self.chat_widget.handle_composer_mouse(*mouse) {
                 self.transcript_view.end_selection(&self.transcript_cells);

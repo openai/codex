@@ -1,0 +1,21 @@
+---
+source: tui/src/transcript_view/right_click_copy_tests.rs
+expression: "frames.join(\"\\n\\n\")"
+---
+Err("clipboard unavailable")
+selected text
+second line
+third line
+                Copy failed · try again
+
+Ok(Unconfirmed)
+selected text
+second line
+third line
+Copy sent to terminal · paste to verify
+
+Ok(Confirmed)
+selected text
+second line
+third line
+      Copied 14 chars to host clipboard

@@ -9,8 +9,12 @@ impl ChatWidget {
         self.bottom_pane.end_composer_drag();
     }
 
-    pub(crate) fn composer_selection_for_copy(&mut self, key: KeyEvent) -> Option<String> {
-        self.bottom_pane.composer_selection_for_copy(key)
+    pub(crate) fn copy_composer_selection(
+        &mut self,
+        event: &crate::tui::TuiEvent,
+        copy: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyStatus, String>,
+    ) -> Option<(usize, Result<crate::clipboard_copy::CopyStatus, String>)> {
+        self.bottom_pane.copy_composer_selection(event, copy)
     }
 
     pub(crate) fn handle_composer_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {

@@ -1747,11 +1747,15 @@ impl BottomPane {
         self.composer.end_mouse_drag();
     }
 
-    pub(crate) fn composer_selection_for_copy(&mut self, key: KeyEvent) -> Option<String> {
+    pub(crate) fn copy_composer_selection(
+        &mut self,
+        event: &crate::tui::TuiEvent,
+        copy: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyStatus, String>,
+    ) -> Option<(usize, Result<crate::clipboard_copy::CopyStatus, String>)> {
         if self.has_active_view() || self.questions.as_ref().is_some_and(|q| q.expanded) {
             return None;
         }
-        self.composer.selection_for_copy(key)
+        self.composer.copy_selection(event, copy)
     }
 
     pub(crate) fn prepare_composer_mouse(&mut self, event: crossterm::event::MouseEvent) -> bool {

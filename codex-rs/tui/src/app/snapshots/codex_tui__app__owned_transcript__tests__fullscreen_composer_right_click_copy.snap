@@ -1,0 +1,52 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+assertion_line: 1245
+expression: "format!(\"{}\\n\\n{}\", selection_frames.join(\"\\n\\n\"),\nnormalize_snapshot_paths(buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal))))"
+---
+keyboard Err("clipboard unavailable")
+hello world
+^^^^^······
+
+keyboard Ok(Unconfirmed)
+hello world
+^^^^^······
+
+keyboard Ok(Confirmed)
+hello world
+^^^^^······
+
+right-click Err("clipboard unavailable")
+hello world
+^^^^^······
+
+right-click Ok(Unconfirmed)
+hello world
+^^^^^······
+
+right-click Ok(Confirmed)
+hello world
+···········
+
+
+› transcript text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                               Copied 5 chars to host clipboard
+
+› hello world
+
+  GPT-5.6-Sol default · /tmp/project

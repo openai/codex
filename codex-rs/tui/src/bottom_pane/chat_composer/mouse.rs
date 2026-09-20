@@ -1,15 +1,26 @@
 //! Mouse gestures flush pending typing before layout and hit testing. Left dragging selects
 //! editable text using the textarea's last rendered viewport and hides completion suggestions.
 //! Double/triple clicks select words/logical lines using the transcript's shared gesture rules.
-//! Copy shortcuts preserve the draft and selection and use fullscreen copy feedback above the input.
+//! Copy preserves the draft; confirmed right-click copies clear selection, keyboard copies retain it.
 
 use super::*;
+use crate::clipboard_copy::CopyStatus;
+use crate::tui::TuiEvent;
+use crossterm::event::MouseButton;
 use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 
 impl ChatComposer {
-    pub(crate) fn selection_for_copy(&mut self, key: KeyEvent) -> Option<String> {
-        if !crate::text_selection::is_copy_key(key)
+    pub(crate) fn copy_selection(
+        &mut self,
+        event: &TuiEvent,
+        copy: impl FnOnce(&str) -> Result<CopyStatus, String>,
+    ) -> Option<(usize, Result<CopyStatus, String>)> {
+        let copy_requested = matches!(event, TuiEvent::Key(key) if crate::text_selection::is_copy_key(*key))
+            || matches!(event, TuiEvent::Mouse(mouse)
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Right)
+                        && self.draft.textarea.contains_mouse(*mouse));
+        if !copy_requested
             || !self.draft.input_enabled
             || self.history_search.is_some()
             || self.draft.textarea.vim_query().is_some()
@@ -20,10 +31,15 @@ impl ChatComposer {
             self.apply_paste(pasted);
         }
         self.draft.paste_burst.clear_window_after_non_char();
-        self.draft
-            .textarea
-            .mouse_selection_range()
-            .map(|range| self.draft.textarea.text()[range].to_owned())
+        let range = self.draft.textarea.mouse_selection_range()?;
+        self.end_mouse_drag();
+        let text = &self.draft.textarea.text()[range];
+        let char_count = text.chars().count();
+        let result = copy(text);
+        if matches!(event, TuiEvent::Mouse(_)) && result == Ok(CopyStatus::Confirmed) {
+            self.draft.textarea.set_cursor(self.draft.textarea.cursor());
+        }
+        Some((char_count, result))
     }
 
     pub(crate) fn end_mouse_drag(&mut self) {

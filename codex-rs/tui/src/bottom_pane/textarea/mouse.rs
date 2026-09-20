@@ -16,6 +16,12 @@ pub(super) struct MouseSelection {
 }
 
 impl TextArea {
+    pub(in crate::bottom_pane) fn contains_mouse(&self, event: MouseEvent) -> bool {
+        self.rendered_area
+            .get()
+            .contains(Position::new(event.column, event.row))
+    }
+
     pub(crate) fn end_mouse_drag(&mut self) {
         if let Some(selection) = &mut self.mouse_selection {
             selection.dragging = false;
@@ -47,8 +53,7 @@ impl TextArea {
         }
         match event.kind {
             MouseEventKind::Down(MouseButton::Left)
-                if event.modifiers.is_empty()
-                    && area.contains(Position::new(event.column, event.row)) => {}
+                if event.modifiers.is_empty() && self.contains_mouse(event) => {}
             MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
                 if dragging => {}
             _ => return false,

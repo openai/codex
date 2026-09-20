@@ -202,6 +202,12 @@ impl TranscriptView {
         match event.kind {
             MouseEventKind::ScrollUp => self.scroll(cells, /*rows*/ -3),
             MouseEventKind::ScrollDown => self.scroll(cells, /*rows*/ 3),
+            MouseEventKind::Down(MouseButton::Right) if inside => {
+                return self
+                    .selected_text(cells)
+                    .filter(|text| !text.is_empty())
+                    .map(ViewAction::Copy);
+            }
             MouseEventKind::Down(MouseButton::Left) => return self.pointer_down(event, cells),
             MouseEventKind::Drag(MouseButton::Left) if dragging => {
                 self.extend_selection(event.column, event.row);
@@ -360,3 +366,7 @@ impl TranscriptView {
 #[cfg(test)]
 #[path = "input_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "right_click_copy_tests.rs"]
+mod right_click_copy_tests;

@@ -3,6 +3,7 @@
 use super::super::tests::new_test_composer;
 use super::*;
 use crossterm::event::MouseButton::Left;
+use crossterm::event::MouseButton::Right;
 use crossterm::event::MouseEventKind::Down;
 use crossterm::event::MouseEventKind::Up;
 use pretty_assertions::assert_eq;
@@ -104,4 +105,54 @@ fn selected_text_navigation_does_not_recall_history_or_select_images() {
             ("second".to_string(), None, None)
         );
     }
+}
+
+#[test]
+fn right_click_copy_uses_the_refreshed_editor_bounds() {
+    let (mut composer, _rx) = new_test_composer();
+    composer.insert_str("hello world");
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 40, /*height*/ 4,
+    );
+    composer.render(area, &mut Buffer::empty(area));
+    let (x, y) = composer.cursor_pos(area).unwrap();
+    for (kind, column) in [
+        (Down(Left), x - 11),
+        (MouseEventKind::Drag(Left), x - 6),
+        (Up(Left), x - 6),
+    ] {
+        mouse(&mut composer, area, kind, column, y);
+    }
+    let click = MouseEvent {
+        kind: Down(Right),
+        column: x - 9,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    };
+    assert_eq!(
+        composer.copy_selection(&TuiEvent::Mouse(click), |text| {
+            assert_eq!(text, "hello");
+            Ok(CopyStatus::Unconfirmed)
+        }),
+        Some((5, Ok(CopyStatus::Unconfirmed)))
+    );
+
+    let shifted_area = Rect::new(
+        /*x*/ 0, /*y*/ 10, /*width*/ 20, /*height*/ 4,
+    );
+    assert!(composer.prepare_mouse(click));
+    composer.render(shifted_area, &mut Buffer::empty(shifted_area));
+    assert_eq!(
+        composer.copy_selection(&TuiEvent::Mouse(click), |_| unreachable!()),
+        None
+    );
+    let (_, row) = composer.cursor_pos(shifted_area).unwrap();
+    assert_eq!(
+        composer.copy_selection(&TuiEvent::Mouse(MouseEvent { row, ..click }), |text| {
+            assert_eq!(text, "hello");
+            Ok(CopyStatus::Unconfirmed)
+        }),
+        Some((5, Ok(CopyStatus::Unconfirmed)))
+    );
+    assert_eq!(composer.current_text(), "hello world");
 }

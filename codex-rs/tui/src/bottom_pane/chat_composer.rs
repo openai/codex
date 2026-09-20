@@ -1,9 +1,8 @@
 //! The chat composer is the bottom-pane text input state machine.
 //!
-//! It edits the [`TextArea`] buffer and attachment elements, routes popup keys, promotes
-//! completed slash commands to atomic elements, and handles Enter submission/newlines.
-//! It also shows Luna Reserve's yellow prompt arrow and detects unbracketed paste bursts
-//! from raw key streams, particularly on Windows.
+//! It edits [`TextArea`] and attachments, routes popup keys, makes completed slash commands atomic,
+//! and handles Enter/newlines. It shows Luna Reserve's yellow arrow and detects unbracketed paste
+//! bursts, especially on Windows. Copy shortcuts and right clicks preserve selected draft text.
 //! The live voice strip renders after effort ignition, followed by the Astra sparkle when eligible.
 //! Owned transcripts keep persistent status below the composer and hints on a separate final row.
 //! Shortcut help expands above the composer, with its close hint replacing the final shortcuts row
