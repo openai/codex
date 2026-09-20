@@ -14,7 +14,7 @@ use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::best_color_for_level;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
-use crate::terminal_palette::stdout_color_level;
+use crate::terminal_palette::effective_stdout_color_level;
 
 // In low-color terminals we distinguish empty vs active cells by glyph (a
 // width-matched filled/hollow pair). In truecolor terminals the grid uses a
@@ -40,7 +40,7 @@ impl TokenActivityPalette {
         Self::from_parts(
             default_fg(),
             default_bg(),
-            stdout_color_level(),
+            effective_stdout_color_level(),
             theme_activity_style(),
         )
     }

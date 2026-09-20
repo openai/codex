@@ -4,6 +4,34 @@ use pretty_assertions::assert_eq;
 use ratatui::style::Modifier;
 
 #[test]
+fn current_palette_uses_effective_terminal_color_level() {
+    let theme =
+        crate::render::highlight::resolve_theme_by_name("ada", /*codex_home*/ None).unwrap();
+    crate::render::highlight::set_syntax_theme(theme);
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (240, 240, 240),
+            bg: (0, 0, 0),
+        },
+        || {
+            let palette = TokenActivityPalette::current();
+            assert!(palette.uses_color);
+            let legend = (0..5)
+                .map(|level| {
+                    format!(
+                        "{} {:?}",
+                        palette.glyph(TokenActivityView::Daily, level),
+                        palette.for_level(level).fg,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            insta::assert_snapshot!(legend);
+        },
+    );
+}
+
+#[test]
 fn truecolor_palette_blends_theme_accent_against_dark_background() {
     let default_fg = Some((240, 240, 240));
     let default_bg = Some((0, 0, 0));

@@ -1,0 +1,10 @@
+---
+source: tui/src/analytics/activity_chart/palette_tests.rs
+assertion_line: 29
+expression: legend
+---
+■ Some(Rgb(33, 33, 33))
+■ Some(Rgb(20, 47, 56))
+■ Some(Rgb(39, 90, 107))
+■ Some(Rgb(64, 146, 173))
+■ Some(Rgb(95, 215, 255))
