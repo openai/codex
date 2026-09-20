@@ -19,7 +19,7 @@ fn partial_writes_account_for_samples_until_the_device_consumes_them() {
     assert_eq!(first, BLOCK * 4);
     assert_eq!(writer.write(&bytes[first..]).unwrap(), 20 * 4);
     assert_eq!(
-        (writer.rate(), writer.delay()),
+        (writer.rate(), buffers.queued.load(Ordering::Acquire)),
         (48000, (BLOCK + 20) as u32)
     );
     let mut playback = Playback::default();
@@ -27,7 +27,7 @@ fn partial_writes_account_for_samples_until_the_device_consumes_them() {
         .map(|_| playback.next(&buffers).unwrap())
         .collect();
     assert_eq!(actual, samples);
-    assert_eq!(writer.delay(), 0);
+    assert_eq!(buffers.queued.load(Ordering::Acquire), 0);
     assert_eq!(playback.next(&buffers), None);
 }
 
@@ -51,21 +51,6 @@ fn suppression_cancels_a_full_writer_and_old_writers_cannot_resume() {
 }
 
 #[test]
-fn delay_includes_pending_dac_time_but_not_another_generation() {
-    let (buffers, _, writer) = active(/*rate*/ 48000);
-    writer.write(&[0; 40]).unwrap();
-    let end = buffers.clock.elapsed() + Duration::from_millis(/*millis*/ 100);
-    buffers
-        .last_dac_ns
-        .store(end.as_nanos() as u64, Ordering::Release);
-    let delay = writer.delay();
-    assert!((10..=4810).contains(&delay));
-    assert!(delay > 10);
-    Buffers::set_disabled(&buffers.speaker, /*disabled*/ true).unwrap();
-    assert_eq!(writer.delay(), 0);
-}
-
-#[test]
 fn retired_sink_failure_cannot_fail_the_next_speaker_epoch() {
     let (buffers, port, writer) = active(/*rate*/ 48_000);
     let transition = buffers.speaker_failure_gate.lock().unwrap();
@@ -85,43 +70,6 @@ fn retired_sink_failure_cannot_fail_the_next_speaker_epoch() {
     buffers.set_speaker_disabled(/*disabled*/ false).unwrap();
     port.writer().fail_if_current();
     assert!(buffers.failed.load(Ordering::Acquire));
-}
-
-#[test]
-fn delay_contention_preserves_the_last_snapshot_without_failing_the_device() {
-    let (buffers, port, writer) = active(/*rate*/ 48000);
-    writer.write(&[0; 40]).unwrap();
-    assert_eq!(writer.delay(), 10);
-    buffers
-        .callback_sequence
-        .store(/*val*/ 1, Ordering::Release);
-    let mut playback = Playback::default();
-    let consumed: Vec<_> = (0..10).map(|_| playback.next(&buffers).unwrap()).collect();
-    assert_eq!(consumed, vec![0.0; 10]);
-    assert_eq!(
-        (writer.delay(), buffers.failed.load(Ordering::Acquire)),
-        (10, false)
-    );
-    buffers
-        .callback_sequence
-        .store(/*val*/ 2, Ordering::Release);
-    assert_eq!(writer.delay(), 0);
-
-    writer.write(&[0; 20]).unwrap();
-    assert_eq!(writer.delay(), 5);
-    buffers
-        .callback_sequence
-        .store(/*val*/ 3, Ordering::Release);
-    Buffers::set_disabled(&buffers.speaker, /*disabled*/ true).unwrap();
-    assert_eq!(writer.delay(), 0);
-    Buffers::set_disabled(&buffers.speaker, /*disabled*/ false).unwrap();
-    assert_eq!(
-        (
-            port.writer().delay(),
-            buffers.failed.load(Ordering::Acquire)
-        ),
-        (0, false)
-    );
 }
 
 #[test]

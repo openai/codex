@@ -1,5 +1,6 @@
 //! One explicit RTP jitter/decode pipeline per audible epoch; no autoplugging or device discovery.
-//! Owned RTP memory retains ingress permits, and native bus messages never accumulate or escape.
+//! Owned RTP memory retains ingress permits, bounding bursts without dropping valid queued speech.
+//! Native bus messages never accumulate or escape.
 
 use super::audio_sink::Sink;
 use super::playback::PlaybackWriter;
@@ -46,7 +47,9 @@ impl Playout {
         let jitter = gst::ElementFactory::make("rtpjitterbuffer")
             .property("latency", 60u32)
             .property_from_str("mode", "slave")
-            .property("drop-on-latency", true)
+            // Latency is the reordering deadline, not a cap on valid burst audio.
+            // Ingress permits already bound retained packets and bytes through decoding.
+            .property("drop-on-latency", false)
             .property("do-lost", true)
             .property("do-retransmission", false)
             .build()

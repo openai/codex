@@ -168,7 +168,6 @@ impl Devices {
             while buffers.playback.pop().is_some() {}
             while buffers.rendered.pop().is_some() {}
             buffers.queued.store(/*val*/ 0, Ordering::Release);
-            buffers.last_dac_ns.store(/*val*/ 0, Ordering::Release);
             drop(producer);
             while buffers.rendered.pop().is_some() {}
             // Opening a Bluetooth microphone can change the speaker's format.
@@ -385,9 +384,6 @@ where
     device.build_output_stream(
         *config,
         move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
-            buffers
-                .callback_sequence
-                .fetch_add(/*val*/ 1, Ordering::AcqRel);
             let timestamp = info.timestamp();
             let start = Instant::now()
                 + timestamp
@@ -395,9 +391,6 @@ where
                     .checked_duration_since(timestamp.callback)
                     .unwrap_or_default();
             render_output(data, channels, rate, start, &buffers, &mut output);
-            buffers
-                .callback_sequence
-                .fetch_add(/*val*/ 1, Ordering::Release);
         },
         move |error| handle_stream_error(&failure, error),
         /*timeout*/ None,
@@ -425,7 +418,6 @@ fn render_output<T>(
         data.fill(T::from_sample(0.0));
         return;
     }
-    let mut delivered_until = None;
     for (index, chunk) in data.chunks_mut(BLOCK * channels).enumerate() {
         let mut reference = Frame {
             samples: [0.0; BLOCK],
@@ -433,18 +425,8 @@ fn render_output<T>(
             at: start + Duration::from_secs_f64((index * BLOCK) as f64 / rate),
             generation: buffers.speaker.load(Ordering::Acquire),
         };
-        for (offset, (frame, sample)) in chunk
-            .chunks_mut(channels)
-            .zip(&mut reference.samples)
-            .enumerate()
-        {
-            let next = output.playback.next(buffers);
-            if next.is_some() {
-                delivered_until = Some(
-                    start + Duration::from_secs_f64((index * BLOCK + offset + 1) as f64 / rate),
-                );
-            }
-            let rendered = T::from_sample(next.unwrap_or(0.0));
+        for (frame, sample) in chunk.chunks_mut(channels).zip(&mut reference.samples) {
+            let rendered = T::from_sample(output.playback.next(buffers).unwrap_or(0.0));
             frame.fill(rendered);
             *sample = f32::from_sample(rendered);
             record_peak(&buffers.speaker_peak, *sample);
@@ -453,14 +435,6 @@ fn render_output<T>(
             output.reference.reset();
             buffers.render_dropped.store(true, Ordering::Release);
         }
-    }
-    if let Some(end) = delivered_until {
-        buffers.last_dac_ns.store(
-            end.saturating_duration_since(buffers.clock)
-                .as_nanos()
-                .min(u128::from(u64::MAX)) as u64,
-            Ordering::Release,
-        );
     }
 }
 

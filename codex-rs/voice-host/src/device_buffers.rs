@@ -103,9 +103,6 @@ pub(super) struct Buffers {
     pub(super) microphone_peak: AtomicU16,
     pub(super) speaker_peak: AtomicU16,
     pub(super) queued: AtomicU32,
-    pub(super) last_dac_ns: AtomicU64,
-    pub(super) clock: Instant,
-    pub(super) callback_sequence: AtomicU64,
 }
 
 impl Buffers {
@@ -143,9 +140,6 @@ impl Buffers {
             microphone_peak: AtomicU16::new(/*v*/ 0),
             speaker_peak: AtomicU16::new(/*v*/ 0),
             queued: AtomicU32::new(/*v*/ 0),
-            last_dac_ns: AtomicU64::new(/*v*/ 0),
-            clock: Instant::now(),
-            callback_sequence: AtomicU64::new(/*v*/ 0),
         }
     }
 
