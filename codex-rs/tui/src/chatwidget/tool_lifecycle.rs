@@ -143,6 +143,21 @@ impl ChatWidget {
     }
 
     pub(super) fn on_sub_agent_activity(&mut self, item: ThreadItem) {
+        // Background agents can finish while the parent answer is still streaming.
+        // Keep that stream intact until its authoritative message completion.
+        // After the turn stops, leftover prompts must not hold up late activity.
+        if !self.turn_lifecycle.agent_turn_running && self.stream_controller.is_none() {
+            self.handle_sub_agent_activity_now(item);
+        } else {
+            self.defer_or_handle(
+                item,
+                InterruptManager::push_item_completed,
+                Self::handle_sub_agent_activity_now,
+            );
+        }
+    }
+
+    fn handle_sub_agent_activity_now(&mut self, item: ThreadItem) {
         if let Some(cell) = multi_agents::sub_agent_activity_history_cell(&item) {
             self.on_collab_event(cell);
         }
@@ -300,6 +315,7 @@ impl ChatWidget {
             item @ ThreadItem::FileChange { .. } => self.handle_file_change_completed_now(item),
             item @ ThreadItem::McpToolCall { .. } => self.handle_mcp_tool_call_completed_now(item),
             item @ ThreadItem::DynamicToolCall { .. } => self.handle_dynamic_tool_item_now(item),
+            item @ ThreadItem::SubAgentActivity { .. } => self.handle_sub_agent_activity_now(item),
             _ => {}
         }
     }

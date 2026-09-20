@@ -1,4 +1,6 @@
-//! Queue prompt overlays and deferred tool activity while another interrupt is visible.
+//! Defer prompt overlays and tool activity until assistant streams finish.
+//!
+//! Turn termination settles background activity without opening queued prompts.
 
 use std::collections::VecDeque;
 
@@ -91,6 +93,21 @@ impl InterruptManager {
 
     pub(crate) fn push_item_completed(&mut self, item: ThreadItem) {
         self.queue.push_back(QueuedInterrupt::ItemCompleted(item));
+    }
+
+    /// Settle background activity at turn end without opening queued prompts.
+    pub(crate) fn flush_activity(&mut self, chat: &mut ChatWidget) {
+        let mut pending_prompts = VecDeque::new();
+        while let Some(queued) = self.queue.pop_front() {
+            match queued {
+                QueuedInterrupt::ItemStarted(item) => chat.handle_queued_item_started_now(item),
+                QueuedInterrupt::ItemCompleted(item) => {
+                    chat.handle_queued_item_completed_now(item);
+                }
+                prompt => pending_prompts.push_back(prompt),
+            }
+        }
+        self.queue = pending_prompts;
     }
 
     pub(crate) fn remove_resolved_prompt(&mut self, request: &ResolvedAppServerRequest) -> bool {

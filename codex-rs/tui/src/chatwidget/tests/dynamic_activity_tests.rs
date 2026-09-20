@@ -114,6 +114,21 @@ async fn owned_dynamic_activity_updates_the_retained_row_after_config_refresh() 
 async fn turn_finalization_drains_lifecycle_queue_before_interrupting_remaining_calls() {
     let (mut chat, mut events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     drain_insert_history(&mut events);
+    chat.interrupts.push_user_input(ToolRequestUserInputParams {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        item_id: "question-1".to_string(),
+        questions: vec![ToolRequestUserInputQuestion {
+            id: "scope".to_string(),
+            header: "Scope".to_string(),
+            question: "Which change should I review?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: None,
+        }],
+        is_blocking: true,
+        auto_resolution_ms: None,
+    });
     chat.interrupts
         .push_item_started(dynamic_item("completed", DynamicToolCallStatus::InProgress));
     chat.interrupts
@@ -123,6 +138,8 @@ async fn turn_finalization_drains_lifecycle_queue_before_interrupting_remaining_
         DynamicToolCallStatus::InProgress,
     ));
     chat.finalize_turn();
+    assert!(chat.interrupts.has_pending_prompt());
+    assert!(!chat.bottom_pane.has_active_view());
     let cells = std::iter::from_fn(|| events.try_recv().ok())
         .filter_map(|event| match event {
             AppEvent::InsertHistoryCell(cell)

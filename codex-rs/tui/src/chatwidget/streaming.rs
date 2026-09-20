@@ -526,6 +526,12 @@ impl ChatWidget {
         self.interrupts = mgr;
     }
 
+    pub(super) fn flush_interrupt_activity(&mut self) {
+        let mut mgr = std::mem::take(&mut self.interrupts);
+        mgr.flush_activity(self);
+        self.interrupts = mgr;
+    }
+
     /// Move a lifecycle payload into the interrupt queue or its immediate handler.
     #[inline]
     pub(super) fn defer_or_handle<T>(
