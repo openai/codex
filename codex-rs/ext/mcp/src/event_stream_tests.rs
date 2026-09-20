@@ -176,7 +176,6 @@ impl Fixture {
             client_mcp_extensions: Default::default(),
             auth: Some(auth_value.clone()),
             auth_manager: Some(Arc::clone(&auth)),
-            allow_user_interaction: true,
             elicitation_reviewer: None,
             elicitation_lifecycle: None,
         };

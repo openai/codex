@@ -2,7 +2,7 @@
 source: core/tests/suite/scenarios.rs
 expression: snapshot
 ---
-Scenario: An MCP browser sign-in request fails in a subagent without prompting the user; the next model request contains guidance to ask the parent.
+Scenario: A subagent waits for an MCP browser sign-in prompt, then receives the accepted response and continues.
 
 ## Window 1
 Settings:
@@ -37,4 +37,4 @@ Settings:
 -- request 2 (turn) --
 03:function_call/mcp__elicitation.request_input:{}
 04:function_call_output:Wall time: <DURATION> seconds
-    Output: | {"code": -32603, "message": "MCP server elicitations can only be requested by the root thread. Ask the p... until the parent confirms the blocker is resolved."} [hash=096a35c5742e4b6f]
+    Output: | {"action": "accept", "content": {}}

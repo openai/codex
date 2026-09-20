@@ -93,7 +93,6 @@ fn elicitation_fixture(
         .insert("another-independent-mcp".to_string(), permission_profile);
     let manager = ElicitationRequestManager::new(
         config,
-        /*allow_user_interaction*/ true,
         reviewer.map(|reviewer| reviewer as Arc<dyn ElicitationReviewer>),
         lifecycle,
         ElicitationRequestRouter::default(),
@@ -120,16 +119,6 @@ async fn send_elicitation(sender: &SendElicitation, marker: Option<Value>) -> El
         .expect("elicitation must receive a terminal response")
 }
 
-fn disable_user_interaction(manager: &ElicitationRequestManager) {
-    let authority = manager.authority.lock().unwrap().clone().unwrap();
-    assert!(manager.update(
-        authority.config,
-        /*allow_user_interaction*/ false,
-        authority.reviewer,
-        authority.lifecycle,
-    ));
-}
-
 fn form_elicitations(meta: Option<Value>, properties: Value) -> [Elicitation; 3] {
     let schema = json!({"type": "object", "properties": properties});
     [
@@ -153,85 +142,8 @@ fn form_elicitations(meta: Option<Value>, properties: Value) -> [Elicitation; 3]
     ]
 }
 
-async fn assert_subagent_elicitation_blocked(sender: &SendElicitation, elicitation: Elicitation) {
-    let error = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        sender(RequestId::Number(7), elicitation),
-    )
-    .await
-    .expect("blocked elicitation must not wait for user input")
-    .unwrap_err();
-    assert_eq!(error.to_string(), MCP_ELICITATION_HANDOFF_MESSAGE);
-}
-
 #[tokio::test]
-async fn subagent_human_input_is_rejected_before_automatic_approval() {
-    let mut requests = Vec::new();
-    for meta in [
-        json!({"codex_approval_kind": "browser_auth"}),
-        json!({"codex_approval_kind": "browser_auth", "codex_requires_user_input": true}),
-        json!({"codex_requires_user_input": true}),
-        json!({
-            "codex_approval_kind": "mcp_tool_call",
-            "codex_request_type": "approval_request",
-            "codex_strict_auto_review": true,
-            "codex_requires_user_input": true,
-        }),
-    ] {
-        requests.extend(form_elicitations(Some(meta), json!({})));
-    }
-    for meta in [None, Some(json!({"codex_strict_auto_review": true}))] {
-        requests.extend(form_elicitations(
-            meta.clone(),
-            json!({"answer": {"type": "string"}}),
-        ));
-        requests.push(Elicitation::Mcp(
-            ElicitRequestParams::UrlElicitationParams {
-                meta: meta.map(|meta| RequestMetaObject::from(meta.as_object().unwrap().clone())),
-                message: "Sign in to continue".into(),
-                url: "https://example.com/auth".into(),
-                elicitation_id: "test-auth".into(),
-            },
-        ));
-    }
-
-    for approval_policy in [AskForApproval::OnRequest, AskForApproval::Never] {
-        let reviewer = RecordingReviewer::new(Ok(Some(approved_response())));
-        let (manager, events, sender) = elicitation_fixture(
-            approval_policy,
-            PermissionProfile::Disabled,
-            Some(reviewer.clone()),
-        );
-        // Update after creating the sender so a retained connection observes the restriction.
-        disable_user_interaction(&manager);
-        for elicitation in requests.iter().cloned() {
-            assert_subagent_elicitation_blocked(&sender, elicitation).await;
-        }
-        assert!(events.is_empty());
-        assert!(manager.router.requests.lock().unwrap().is_empty());
-        assert_eq!(reviewer.calls.load(Relaxed), 0);
-        assert_eq!(reviewer.active_elicitations.load(Relaxed), 0);
-
-        let (manager, events, sender) =
-            verification_fixture(approval_policy, Some(reviewer.clone()));
-        disable_user_interaction(&manager);
-        assert_subagent_elicitation_blocked(
-            &sender,
-            Elicitation::UserVerification {
-                title: "Approve purchase".into(),
-                description: "Pay $200".into(),
-                challenge: "AQID".into(),
-            },
-        )
-        .await;
-        assert!(events.is_empty());
-        assert!(manager.router.requests.lock().unwrap().is_empty());
-        assert_eq!(reviewer.calls.load(Relaxed), 0);
-    }
-}
-
-#[tokio::test]
-async fn subagent_permission_preserves_automatic_review_decisions() {
+async fn permission_elicitation_preserves_automatic_review_decisions() {
     for (strict_auto_review, approval_policy, expected_reviews) in [
         (false, AskForApproval::OnRequest, 1),
         (true, AskForApproval::OnRequest, 1),
@@ -252,7 +164,6 @@ async fn subagent_permission_preserves_automatic_review_decisions() {
                 PermissionProfile::Disabled,
                 Some(reviewer.clone()),
             );
-            disable_user_interaction(&manager);
             let [request, _, _] = form_elicitations(
                 Some(json!({
                     "codex_request_type": "approval_request",
@@ -284,77 +195,67 @@ async fn subagent_permission_preserves_automatic_review_decisions() {
 }
 
 #[tokio::test]
-async fn subagent_without_an_automatic_decision_does_not_prompt() {
+async fn elicitation_without_an_automatic_decision_prompts() {
     for reviewer in [None, Some(RecordingReviewer::new(Ok(None)))] {
         let (manager, events, sender) = elicitation_fixture(
             AskForApproval::OnRequest,
             PermissionProfile::read_only(),
             reviewer.clone(),
         );
-        disable_user_interaction(&manager);
-        for elicitation in form_elicitations(/*meta*/ None, json!({})) {
-            assert_subagent_elicitation_blocked(&sender, elicitation).await;
+        let mut requests = Vec::from(form_elicitations(/*meta*/ None, json!({})));
+        requests.extend(form_elicitations(
+            Some(json!({"codex_requires_user_input": true})),
+            json!({"answer": {"type": "string"}}),
+        ));
+        requests.push(Elicitation::Mcp(
+            ElicitRequestParams::UrlElicitationParams {
+                meta: None,
+                message: "Sign in to continue".into(),
+                url: "https://example.com/auth".into(),
+                elicitation_id: "test-auth".into(),
+            },
+        ));
+        let expected_reviews = requests.len() + 1;
+        for elicitation in requests {
+            let pending = tokio::spawn(sender(RequestId::Number(7), elicitation));
+            let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+                .await
+                .expect("elicitation should prompt")
+                .expect("event channel should remain open");
+            let EventMsg::ElicitationRequest(request) = event.msg else {
+                panic!("expected MCP elicitation");
+            };
+            assert!(!pending.is_finished());
+            let ProtocolRequestId::String(request_id) = request.id else {
+                panic!("expected Codex-owned string request ID");
+            };
+            let response = ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: Some(json!({"answer": "continue"})),
+                meta: None,
+            };
+            manager
+                .router
+                .resolve(
+                    request.server_name,
+                    RequestId::String(request_id.into()),
+                    response.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(pending.await.unwrap().unwrap(), response);
         }
         assert_eq!(
             send_elicitation(&sender, Some(json!(true))).await,
             strict_auto_review_decline()
         );
         if let Some(reviewer) = reviewer {
-            assert_eq!(reviewer.calls.load(Relaxed), 4);
+            assert_eq!(reviewer.calls.load(Relaxed), expected_reviews);
             assert_eq!(reviewer.active_elicitations.load(Relaxed), 0);
         }
         assert!(events.is_empty());
         assert!(manager.router.requests.lock().unwrap().is_empty());
     }
-}
-
-#[test]
-fn final_prompt_guard_rejects_subagents_before_registration() {
-    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
-    let mut authority = manager.authority.lock().unwrap().clone().unwrap();
-    authority.allow_user_interaction = false;
-    let registrations = Arc::new(AtomicUsize::new(0));
-    let starts = registrations.clone();
-    authority.lifecycle = Some(ElicitationLifecycle::new(move || {
-        starts.fetch_add(/*val*/ 1, Relaxed);
-    }));
-    let (tx, events) = async_channel::bounded(1);
-    for sender in [Some(tx.clone()), None] {
-        let error = manager
-            .router
-            .request_user_interaction(
-                sender,
-                &authority,
-                crate::CODEX_APPS_MCP_SERVER_NAME.into(),
-                ElicitationRequest::Form {
-                    meta: None,
-                    message: "Confirm the action".into(),
-                    requested_schema: json!({"type": "object", "properties": {}}),
-                },
-            )
-            .now_or_never()
-            .expect("a subagent must not wait for user input")
-            .unwrap_err();
-        assert_eq!(error.to_string(), MCP_ELICITATION_HANDOFF_MESSAGE);
-    }
-    let error = user_verification_elicitation::route(
-        manager.router.clone(),
-        Some(tx),
-        Some(authority),
-        crate::CODEX_APPS_MCP_SERVER_NAME.into(),
-        ElicitationRequest::UserVerification {
-            title: "Approve purchase".into(),
-            description: "Pay $200".into(),
-            challenge: "AQID".into(),
-        },
-    )
-    .now_or_never()
-    .expect("direct verification routing must not wait for a subagent")
-    .unwrap_err();
-    assert_eq!(error.to_string(), MCP_ELICITATION_HANDOFF_MESSAGE);
-    assert_eq!(registrations.load(Relaxed), 0);
-    assert!(events.is_empty());
-    assert!(manager.router.requests.lock().unwrap().is_empty());
 }
 
 async fn assert_declined(marker: Value, response: Option<ReviewerResponse>) {
@@ -394,7 +295,6 @@ fn closed_event_channel_immediately_cleans_up_pending_elicitation() {
             AskForApproval::OnRequest,
             PermissionProfile::Disabled
         ),
-        /*allow_user_interaction*/ true,
         /*reviewer*/ None,
         Some(lifecycle),
     ));
@@ -583,7 +483,6 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
 
     let manager = ElicitationRequestManager::new(
         Arc::new(config.clone()),
-        /*allow_user_interaction*/ true,
         /*reviewer*/ None,
         /*lifecycle*/ None,
         ElicitationRequestRouter::default(),
@@ -614,7 +513,6 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     );
     assert!(manager.update(
         Arc::new(config.clone()),
-        /*allow_user_interaction*/ true,
         /*reviewer*/ None,
         /*lifecycle*/ None,
     ));
@@ -638,7 +536,6 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     );
     assert!(manager.update(
         Arc::new(config.clone()),
-        /*allow_user_interaction*/ true,
         /*reviewer*/ None,
         /*lifecycle*/ None,
     ));
@@ -651,7 +548,6 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     config.set_server_permission_profiles(&servers, std::iter::empty());
     assert!(manager.update(
         Arc::new(config.clone()),
-        /*allow_user_interaction*/ true,
         /*reviewer*/ None,
         /*lifecycle*/ None,
     ));
@@ -683,7 +579,6 @@ fn verification_fixture(
     Arc::make_mut(&mut config).mcp_server_catalog = catalog.build();
     let manager = ElicitationRequestManager::new(
         config,
-        /*allow_user_interaction*/ true,
         reviewer.map(|reviewer| reviewer as Arc<dyn ElicitationReviewer>),
         /*lifecycle*/ None,
         ElicitationRequestRouter::default(),

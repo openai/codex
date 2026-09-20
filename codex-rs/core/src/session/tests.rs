@@ -638,9 +638,17 @@ async fn regular_turn_emits_turn_started_with_trace_id_without_waiting_for_start
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
+#[test_case(SessionSource::Exec; "root")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Review); "subagent")]
+#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "guardian")]
 #[tokio::test]
-async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled() {
-    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled(
+    source: SessionSource,
+) {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should not be shared")
+        .session_source = source;
     session
         .services
         .mcp_runtime
@@ -660,8 +668,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
                 }),
             },
         )
-        .await
-        .expect("root thread elicitation should be accepted");
+        .await;
 
     assert_eq!(
         response.response,
@@ -675,56 +682,78 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
     assert!(rx.try_recv().is_err());
 }
 
-#[test_case(false; "interactive")]
-#[test_case(true; "auto_accept")]
+#[test_case(SessionSource::Exec; "root")]
+#[test_case(SessionSource::SubAgent(SubAgentSource::Review); "subagent")]
+#[test_case(SessionSource::Internal(InternalSessionSource::Guardian); "guardian")]
 #[tokio::test]
-async fn request_mcp_server_elicitation_rejects_non_root_threads(auto_deny: bool) {
-    for source in [
-        SessionSource::SubAgent(SubAgentSource::Review),
-        SessionSource::Internal(InternalSessionSource::Guardian),
-    ] {
-        let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
-        Arc::get_mut(&mut turn_context)
-            .expect("turn context should not be shared")
-            .session_source = source;
-        *session.active_turn.lock().await = Some(ActiveTurn::default());
-        session
-            .services
-            .mcp_runtime
-            .set_elicitations_auto_deny(auto_deny);
-        let paused = session.subscribe_elicitation_pause_state();
+async fn request_mcp_server_elicitation_waits_for_user_response(source: SessionSource) {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut turn_context)
+        .expect("turn context should not be shared")
+        .session_source = source;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    let paused = session.subscribe_elicitation_pause_state();
+    let request = ElicitationRequest::Url {
+        meta: None,
+        message: "Connect this app to continue.".to_string(),
+        url: "https://example.com/connect".to_string(),
+        elicitation_id: "connect-1".to_string(),
+    };
+    let pending = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        let request = request.clone();
+        async move {
+            session
+                .request_mcp_server_elicitation(
+                    &turn_context,
+                    "codex_apps".to_string(),
+                    RequestId::String("request-1".into()),
+                    request,
+                )
+                .await
+        }
+    });
+    let event = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("elicitation event should arrive")
+        .expect("event channel should remain open");
+    let EventMsg::ElicitationRequest(event) = event.msg else {
+        panic!("expected MCP elicitation");
+    };
+    assert_eq!(
+        event,
+        codex_protocol::approvals::ElicitationRequestEvent {
+            turn_id: Some(turn_context.sub_id.clone()),
+            server_name: "codex_apps".to_string(),
+            id: codex_protocol::mcp::RequestId::String("request-1".to_string()),
+            request,
+        }
+    );
+    assert!(*paused.borrow());
+    assert!(!pending.is_finished());
 
-        let Err(error) = tokio::time::timeout(
-            Duration::from_secs(1),
-            session.request_mcp_server_elicitation(
-                turn_context.as_ref(),
-                "codex_apps".to_string(),
-                RequestId::String("request-1".into()),
-                ElicitationRequest::Url {
-                    meta: None,
-                    message: "Connect this app to continue.".to_string(),
-                    url: "https://example.com/connect".to_string(),
-                    elicitation_id: "connect-1".to_string(),
-                },
-            ),
+    let response = ElicitationResponse {
+        action: ElicitationAction::Accept,
+        content: None,
+        meta: None,
+    };
+    session
+        .resolve_elicitation(
+            "codex_apps".to_string(),
+            RequestId::String("request-1".into()),
+            response.clone(),
         )
         .await
-        .expect("non-root elicitation must not wait for user input") else {
-            panic!("non-root elicitation must be rejected");
-        };
-
-        assert_eq!(
-            error.to_string(),
-            codex_mcp::MCP_ELICITATION_HANDOFF_MESSAGE
-        );
-        assert!(rx.try_recv().is_err());
-        assert!(!*paused.borrow());
-        assert!(
-            !paused
-                .has_changed()
-                .expect("elicitation service should remain available")
-        );
-    }
+        .expect("user response should resolve the elicitation");
+    let outcome = tokio::time::timeout(Duration::from_secs(1), pending)
+        .await
+        .expect("elicitation should finish")
+        .expect("elicitation task should succeed");
+    assert_eq!(outcome.response, Some(response));
+    assert!(outcome.sent);
+    assert!(!*paused.borrow());
+    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]

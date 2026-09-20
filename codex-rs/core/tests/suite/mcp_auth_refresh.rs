@@ -109,7 +109,6 @@ async fn hosted_plugin_runtime_ps_mcp_tool_calls_use_current_auth_manager_token(
         client_mcp_extensions: ClientMcpExtensions::default(),
         auth: Some(expected_auth.clone()),
         auth_manager: Some(Arc::clone(&auth_manager)),
-        allow_user_interaction: true,
         elicitation_reviewer: None,
         elicitation_lifecycle: None,
     })

@@ -1,4 +1,4 @@
-//! Verify MCP prompts, non-root refusal, and elicitation analytics through actual turns.
+//! Verify MCP prompts and elicitation analytics through actual turns.
 
 use anyhow::Result;
 use codex_analytics::AnalyticsEventsClient;
@@ -15,11 +15,11 @@ use codex_extension_api::ToolLifecycleFuture;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::MCP_ELICITATION_HANDOFF_MESSAGE;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ElicitationAction;
@@ -524,15 +524,15 @@ enum SubagentRequestKind {
     ConnectorAuth(AuthFailureFormat),
 }
 
-#[test_case(SubagentRequestKind::ToolApproval, None; "child_tool_approval_is_rejected_before_execution")]
-#[test_case(SubagentRequestKind::LegacyToolApproval, None; "child_legacy_tool_approval_is_rejected_before_execution")]
-#[test_case(SubagentRequestKind::ConnectorAuth(AuthFailureFormat::Text), None; "child_connector_auth_preserves_text_diagnostics_and_requests_handoff")]
-#[test_case(SubagentRequestKind::ConnectorAuth(AuthFailureFormat::Structured), None; "child_connector_auth_preserves_structured_diagnostics_and_requests_handoff")]
-#[test_case(SubagentRequestKind::ConnectorAuth(AuthFailureFormat::Structured), Some(1); "child_connector_auth_structured_diagnostics_respect_output_limit")]
+#[test_case(SubagentRequestKind::ToolApproval, ElicitationAction::Accept; "child_tool_approval_waits_for_user_before_execution")]
+#[test_case(SubagentRequestKind::LegacyToolApproval, ElicitationAction::Accept; "child_legacy_tool_approval_is_rejected_before_execution")]
+#[test_case(SubagentRequestKind::ConnectorAuth(AuthFailureFormat::Text), ElicitationAction::Accept; "child_connector_auth_accepts_text_failure")]
+#[test_case(SubagentRequestKind::ConnectorAuth(AuthFailureFormat::Structured), ElicitationAction::Accept; "child_connector_auth_accepts_structured_failure")]
+#[test_case(SubagentRequestKind::ConnectorAuth(AuthFailureFormat::Structured), ElicitationAction::Decline; "child_declined_connector_auth_preserves_original_failure")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn core_generated_mcp_elicitations_are_root_only(
+async fn core_generated_mcp_elicitations_support_subagents(
     kind: SubagentRequestKind,
-    tool_output_token_limit: Option<usize>,
+    decision: ElicitationAction,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -556,7 +556,6 @@ async fn core_generated_mcp_elicitations_are_root_only(
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::User;
-            config.tool_output_token_limit = tool_output_token_limit;
             config
                 .features
                 .enable(Feature::AuthElicitation)
@@ -633,28 +632,72 @@ approvals_reviewer = "user"
         .await?;
     let mut completed_status = None;
     let mut completed_result = None;
-    wait_for_event(&child, |event| {
-        assert!(
-            !matches!(
+    let mut prompts = 0;
+    loop {
+        let event = wait_for_event(&child, |event| {
+            assert!(
+                !matches!(event, EventMsg::RequestUserInput(_)),
+                "subagents must not fall back to request_user_input"
+            );
+            if let EventMsg::ItemCompleted(event) = event
+                && let TurnItem::McpToolCall(item) = &event.item
+                && item.id == "calendar-call"
+            {
+                completed_status = Some(item.status);
+                completed_result = item.result.clone();
+            }
+            matches!(
                 event,
-                EventMsg::ElicitationRequest(_) | EventMsg::RequestUserInput(_)
-            ),
-            "child MCP tool calls must not prompt the user"
+                EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
+            )
+        })
+        .await;
+        let EventMsg::ElicitationRequest(request) = event else {
+            break;
+        };
+        assert_eq!(prompts, 0, "one tool call must not prompt twice");
+        prompts += 1;
+        assert_eq!(request.server_name, CODEX_APPS_MCP_SERVER_NAME);
+        assert!(
+            follow_up.requests().is_empty(),
+            "the tool must wait for input"
         );
-        if let EventMsg::ItemCompleted(event) = event
-            && let TurnItem::McpToolCall(item) = &event.item
-            && item.id == "calendar-call"
-        {
-            completed_status = Some(item.status);
-            completed_result = item.result.clone();
+        match kind {
+            SubagentRequestKind::ToolApproval => {
+                assert!(matches!(request.request, ElicitationRequest::Form { .. }));
+                assert!(recorded_apps_tool_calls(&server).await.is_empty());
+            }
+            SubagentRequestKind::ConnectorAuth(_) => {
+                assert!(matches!(request.request, ElicitationRequest::Url { .. }));
+                assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
+            }
+            SubagentRequestKind::LegacyToolApproval => {
+                panic!("legacy subagent approval must be rejected before prompting");
+            }
         }
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-    assert_eq!(completed_status, Some(McpToolCallStatus::Failed));
+        child
+            .submit(Op::ResolveElicitation {
+                server_name: request.server_name,
+                request_id: request.id,
+                decision,
+                content: None,
+                meta: None,
+            })
+            .await?;
+    }
+    let expects_prompt = !matches!(kind, SubagentRequestKind::LegacyToolApproval);
+    assert_eq!(prompts, usize::from(expects_prompt));
+    assert_eq!(
+        completed_status,
+        Some(if matches!(kind, SubagentRequestKind::ToolApproval) {
+            McpToolCallStatus::Completed
+        } else {
+            McpToolCallStatus::Failed
+        })
+    );
     assert_eq!(
         recorded_apps_tool_calls(&server).await.len(),
-        usize::from(matches!(kind, SubagentRequestKind::ConnectorAuth(_)))
+        usize::from(expects_prompt)
     );
     let output = follow_up
         .single_request()
@@ -668,49 +711,33 @@ approvals_reviewer = "user"
             .join("\n"),
         other => panic!("unexpected MCP output: {other}"),
     };
-    assert_eq!(
-        output_text.contains(MCP_ELICITATION_HANDOFF_MESSAGE),
-        tool_output_token_limit.is_none(),
-        "handoff guidance must use the ordinary tool-output limit"
-    );
-    if tool_output_token_limit.is_some() {
-        assert!(output_text.contains("truncated") || output_text.contains("omitted"));
+    if matches!(kind, SubagentRequestKind::LegacyToolApproval) {
+        assert!(output_text.contains("parent agent"));
     }
     if let SubagentRequestKind::ConnectorAuth(format) = kind {
-        let original = AuthFailureResponder {
-            scenario: Scenario::DefaultAuth,
-            format,
-        }
-        .result();
-        let completed_result = completed_result.expect("completed auth failure result");
-        assert_eq!(completed_result.is_error, Some(true));
-        assert_eq!(completed_result.meta, Some(original["_meta"].clone()));
-        assert_eq!(completed_result.structured_content, None);
-
-        let mut expected_content = vec![json!({
-            "type": "text",
-            "text": format!(
-                "Authentication for Calendar could not be completed. {MCP_ELICITATION_HANDOFF_MESSAGE}"
-            ),
-        })];
-        expected_content.extend(
-            original["content"]
-                .as_array()
-                .expect("original content")
-                .clone(),
-        );
-        if let Some(structured_content) = original.get("structuredContent") {
-            expected_content.push(json!({"type": "text", "text": structured_content.to_string()}));
-        }
-        assert_eq!(completed_result.content, expected_content);
-        for content in &expected_content {
-            let text = content["text"].as_str().expect("auth diagnostic text");
-            assert_eq!(
-                output_text.contains(text),
-                tool_output_token_limit.is_none(),
-                "auth diagnostics and guidance must share the ordinary tool-output limit"
-            );
-        }
+        let original: CallToolResult = serde_json::from_value(
+            AuthFailureResponder {
+                scenario: Scenario::DefaultAuth,
+                format,
+            }
+            .result(),
+        )?;
+        let expected_result = if decision == ElicitationAction::Accept {
+            let text =
+                "Authentication for Calendar was requested and accepted. Retry this tool call now.";
+            assert!(output_text.contains(text));
+            assert!(!output_text.contains(PRIVATE_SENTINEL));
+            CallToolResult {
+                content: vec![json!({"type": "text", "text": text})],
+                structured_content: None,
+                is_error: Some(true),
+                meta: original.meta,
+            }
+        } else {
+            assert!(output_text.contains("synthetic-structured-auth-failure"));
+            original
+        };
+        assert_eq!(completed_result, Some(expected_result));
         assert!(
             !output_text.contains("link_123"),
             "private auth metadata must not reach the model"

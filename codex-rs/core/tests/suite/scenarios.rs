@@ -888,7 +888,7 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn subagent_browser_auth_returns_handoff_without_prompting() -> Result<()> {
+async fn subagent_browser_auth_resolves_user_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(Ok(()), "the MCP fixture requires a host Python interpreter");
     use super::mcp_subagent_elicitation::Caller;
@@ -898,7 +898,7 @@ async fn subagent_browser_auth_returns_handoff_without_prompting() -> Result<()>
     let requests =
         mcp_server_elicitation_scenario(Caller::Subagent, RequestKind::BrowserAuth).await?;
     let snapshot = context_snapshot::format_request_history_snapshot(
-        "An MCP browser sign-in request fails in a subagent without prompting the user; the next model request contains guidance to ask the parent.",
+        "A subagent waits for an MCP browser sign-in prompt, then receives the accepted response and continues.",
         &requests,
         &ContextSnapshotOptions::default()
             .rewrite_known_segments()
@@ -907,7 +907,7 @@ async fn subagent_browser_auth_returns_handoff_without_prompting() -> Result<()>
     let snapshot = regex_lite::Regex::new(r"Wall time: [0-9]+(?:\.[0-9]+)? seconds")?
         .replace_all(&snapshot, "Wall time: <DURATION> seconds")
         .into_owned();
-    insta::assert_snapshot!("subagent_browser_auth_handoff", snapshot);
+    insta::assert_snapshot!("subagent_browser_auth", snapshot);
     Ok(())
 }
 

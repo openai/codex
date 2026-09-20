@@ -4,8 +4,7 @@
 //! from the user. It decides whether the request can be automatically accepted,
 //! must be declined by policy, or should be surfaced as a Codex protocol event
 //! and later resolved through the stored responder.
-//! Non-root agents may use automatic decisions, but explicit user-input requests
-//! are rejected before review and no pending user prompt is registered.
+//! Explicit MCP elicitation requests can be surfaced by root and non-root agents.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,11 +25,9 @@ use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_ELICITATION_EXTENSION_ID;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
-use codex_protocol::mcp_approval_meta::APPROVAL_KIND_BROWSER_AUTH;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::APPROVALS_REVIEWER_KEY;
-use codex_protocol::mcp_approval_meta::REQUIRES_USER_INPUT_KEY;
 use codex_protocol::mcp_approval_meta::STRICT_AUTO_REVIEW_KEY;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -48,12 +45,6 @@ use tokio::sync::oneshot;
 static NEXT_ELICITATION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
 const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str = "Automated review of this operation failed. Do not proceed without asking the user for explicit approval.";
-/// Recovery guidance for a request that a non-root agent cannot present to the user.
-pub const MCP_ELICITATION_HANDOFF_MESSAGE: &str = concat!(
-    "MCP server elicitations can only be requested by the root thread. ",
-    "Ask the parent agent to handle this request. ",
-    "Do not retry the blocked action until the parent confirms the blocker is resolved."
-);
 
 #[path = "user_verification_elicitation.rs"]
 mod user_verification_elicitation;
@@ -172,10 +163,6 @@ impl ElicitationRequestRouter {
         server_name: String,
         request: ElicitationRequest,
     ) -> Result<ElicitationResponse> {
-        anyhow::ensure!(
-            authority.allow_user_interaction,
-            MCP_ELICITATION_HANDOFF_MESSAGE
-        );
         let Some(events) = events else {
             return Ok(ElicitationResponse {
                 action: ElicitationAction::Decline,
@@ -235,7 +222,6 @@ impl ElicitationRequestRouter {
 #[derive(Clone)]
 pub(crate) struct ElicitationAuthority {
     pub(crate) config: Arc<McpConfig>,
-    pub(crate) allow_user_interaction: bool,
     reviewer: Option<ElicitationReviewerHandle>,
     lifecycle: Option<ElicitationLifecycle>,
 }
@@ -249,7 +235,6 @@ pub(crate) struct ElicitationRequestManager {
 impl ElicitationRequestManager {
     pub(crate) fn new(
         config: Arc<McpConfig>,
-        allow_user_interaction: bool,
         reviewer: Option<ElicitationReviewerHandle>,
         lifecycle: Option<ElicitationLifecycle>,
         router: ElicitationRequestRouter,
@@ -258,7 +243,6 @@ impl ElicitationRequestManager {
             router,
             authority: Arc::new(StdMutex::new(Some(ElicitationAuthority {
                 config,
-                allow_user_interaction,
                 reviewer,
                 lifecycle,
             }))),
@@ -268,7 +252,6 @@ impl ElicitationRequestManager {
     pub(crate) fn update(
         &self,
         config: Arc<McpConfig>,
-        allow_user_interaction: bool,
         reviewer: Option<ElicitationReviewerHandle>,
         lifecycle: Option<ElicitationLifecycle>,
     ) -> bool {
@@ -277,7 +260,6 @@ impl ElicitationRequestManager {
         };
         *authority = Some(ElicitationAuthority {
             config,
-            allow_user_interaction,
             reviewer,
             lifecycle,
         });
@@ -308,36 +290,6 @@ impl ElicitationRequestManager {
                     .lock()
                     .ok()
                     .and_then(|authority| authority.clone());
-                let user_interaction_disabled = authority
-                    .as_ref()
-                    .is_some_and(|authority| !authority.allow_user_interaction);
-                if user_interaction_disabled {
-                    // Browser sign-in can use an empty schema. Explicit user-input
-                    // markers must take precedence over automatic approval or review.
-                    let requires_user_input = elicitation.meta().is_some_and(|meta| {
-                        meta.get(REQUIRES_USER_INPUT_KEY) == Some(&Value::Bool(true))
-                            || meta.get(APPROVAL_KIND_KEY).and_then(Value::as_str)
-                                == Some(APPROVAL_KIND_BROWSER_AUTH)
-                    }) || match &elicitation {
-                        Elicitation::Mcp(
-                            rmcp::model::ElicitRequestParams::FormElicitationParams {
-                                requested_schema,
-                                ..
-                            },
-                        ) => !requested_schema.properties.is_empty(),
-                        Elicitation::OpenAiForm {
-                            requested_schema, ..
-                        }
-                        | Elicitation::OpenAiElicitationForm {
-                            requested_schema, ..
-                        } => requested_schema
-                            .get("properties")
-                            .and_then(Value::as_object)
-                            .is_some_and(|properties| !properties.is_empty()),
-                        Elicitation::Mcp(_) | Elicitation::UserVerification { .. } => true,
-                    };
-                    anyhow::ensure!(!requires_user_input, MCP_ELICITATION_HANDOFF_MESSAGE);
-                }
                 if let Elicitation::UserVerification {
                     title,
                     description,

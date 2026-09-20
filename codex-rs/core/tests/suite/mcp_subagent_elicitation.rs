@@ -1,4 +1,4 @@
-//! MCP requests keep human input on the root and allow automatic approval in subagents.
+//! MCP server elicitations reach subagents and preserve automatic approval and review.
 
 use anyhow::Result;
 use codex_core::StartThreadOptions;
@@ -25,8 +25,6 @@ use serde_json::Value;
 use serde_json::json;
 use test_case::test_case;
 use wiremock::matchers::body_partial_json;
-
-const ROOT_ONLY_MESSAGE: &str = codex_mcp::MCP_ELICITATION_HANDOFF_MESSAGE;
 
 const SERVER: &str = r#"
 import json
@@ -76,16 +74,19 @@ pub(super) enum Caller {
 #[derive(Clone, Copy)]
 pub(super) enum RequestKind {
     BrowserAuth,
+    FormInput,
     Permission,
     StrictReview,
 }
 
-#[test_case(Caller::FullAccessSubagent, RequestKind::BrowserAuth; "full_access_cannot_auto_accept_subagent_browser_auth")]
+#[test_case(Caller::FullAccessSubagent, RequestKind::BrowserAuth; "full_access_subagent_preserves_automatic_approval")]
 #[test_case(Caller::Root, RequestKind::BrowserAuth; "root_browser_auth_remains_interactive")]
+#[test_case(Caller::Subagent, RequestKind::FormInput; "subagent_receives_form_input")]
+#[test_case(Caller::Subagent, RequestKind::Permission; "subagent_permission_remains_interactive")]
 #[test_case(Caller::FullAccessSubagent, RequestKind::Permission; "full_access_subagent_automatically_approves_permission")]
 #[test_case(Caller::Subagent, RequestKind::StrictReview; "subagent_keeps_strict_automatic_safety_review")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_server_elicitations_keep_user_interaction_on_root(
+async fn mcp_server_elicitations_follow_approval_policy(
     caller: Caller,
     request_kind: RequestKind,
 ) -> Result<()> {
@@ -117,6 +118,9 @@ pub(super) async fn mcp_server_elicitation_scenario(
                 "fields": [{"id": "password", "label": "Password", "type": "password", "required": true}]
             });
         }
+        RequestKind::FormInput => {
+            elicitation["requestedSchema"]["properties"] = json!({"answer": {"type": "string"}});
+        }
         RequestKind::Permission | RequestKind::StrictReview => {
             elicitation["_meta"] = json!({
                 "codex_request_type": "approval_request",
@@ -137,8 +141,9 @@ pub(super) async fn mcp_server_elicitation_scenario(
             "default_tools_approval_mode": "approve"
         }
     }))?)?;
-    let expects_prompt = matches!(caller, Caller::Root);
-    let session_source = if expects_prompt {
+    let full_access = matches!(caller, Caller::FullAccessSubagent);
+    let expects_prompt = !full_access && !matches!(request_kind, RequestKind::StrictReview);
+    let session_source = if matches!(caller, Caller::Root) {
         SessionSource::Exec
     } else {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -202,7 +207,6 @@ pub(super) async fn mcp_server_elicitation_scenario(
         ]),
     )
     .await;
-    let full_access = matches!(caller, Caller::FullAccessSubagent);
     thread
         .start_or_steer_turn(
             TurnInputRequest::user_input(vec![UserInput::Text {
@@ -224,6 +228,11 @@ pub(super) async fn mcp_server_elicitation_scenario(
             }),
         )
         .await?;
+    let response_content = if matches!(request_kind, RequestKind::FormInput) {
+        json!({"answer": "continue"})
+    } else {
+        json!({})
+    };
     let mut prompts = 0;
     loop {
         let event = wait_for_event(&thread, |event| {
@@ -238,7 +247,7 @@ pub(super) async fn mcp_server_elicitation_scenario(
         };
         assert!(
             expects_prompt,
-            "subagent MCP elicitations must not reach the user"
+            "automatically handled elicitations must not prompt the user"
         );
         assert_eq!(prompts, 0, "one tool call must not prompt twice");
         prompts += 1;
@@ -251,7 +260,7 @@ pub(super) async fn mcp_server_elicitation_scenario(
                 server_name: request.server_name,
                 request_id: request.id,
                 decision: ElicitationAction::Accept,
-                content: Some(json!({})),
+                content: Some(response_content.clone()),
                 meta: None,
             })
             .await?;
@@ -270,10 +279,8 @@ pub(super) async fn mcp_server_elicitation_scenario(
             "action": "accept", "content": {},
             "_meta": {"approvals_reviewer": "auto_review"}
         })
-    } else if expects_prompt || full_access && matches!(request_kind, RequestKind::Permission) {
-        json!({"action": "accept", "content": {}})
     } else {
-        json!({"code": -32603, "message": ROOT_ONLY_MESSAGE})
+        json!({"action": "accept", "content": response_content})
     };
     assert_eq!(response, expected);
     let mut requests = tool_call.requests();

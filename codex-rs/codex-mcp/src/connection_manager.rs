@@ -222,7 +222,6 @@ impl McpConnectionSet {
             client_mcp_extensions,
             auth,
             auth_manager,
-            allow_user_interaction,
             elicitation_reviewer,
             elicitation_lifecycle,
         } = input;
@@ -259,7 +258,6 @@ impl McpConnectionSet {
             !previous.servers.is_empty()
                 && previous.elicitation_requests.update(
                     Arc::clone(&config),
-                    allow_user_interaction,
                     elicitation_reviewer.clone(),
                     elicitation_lifecycle.clone(),
                 )
@@ -269,7 +267,6 @@ impl McpConnectionSet {
         } else {
             ElicitationRequestManager::new(
                 Arc::clone(&config),
-                allow_user_interaction,
                 elicitation_reviewer,
                 elicitation_lifecycle,
                 elicitation_router,
