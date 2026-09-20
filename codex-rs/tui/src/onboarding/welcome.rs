@@ -15,7 +15,6 @@ use ratatui::widgets::Wrap;
 use std::cell::Cell;
 use std::cell::RefCell;
 
-use crate::empty_state_animation::AnimationEnd;
 use crate::empty_state_animation::EmptyStateAnimation;
 use crate::empty_state_animation::Presentation;
 use crate::key_hint::KeyBindingListExt;
@@ -26,10 +25,10 @@ use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
 
-const MIN_ANIMATION_HEIGHT: u16 = 37;
-const MIN_ANIMATION_WIDTH: u16 = 60;
-const ANIMATION_WIDTH: u16 = 48;
-const ANIMATION_HEIGHT: u16 = 17;
+const MIN_ANIMATION_HEIGHT: u16 = 41;
+const MIN_ANIMATION_WIDTH: u16 = 64;
+const ANIMATION_WIDTH: u16 = 60;
+const ANIMATION_HEIGHT: u16 = 21;
 
 pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
@@ -109,16 +108,11 @@ impl WidgetRef for &WelcomeWidget {
         } else {
             self.presentation.get()
         };
-        let stage = Rect::new(
-            area.x.saturating_add(/*rhs*/ 2),
-            area.y,
-            ANIMATION_WIDTH,
-            ANIMATION_HEIGHT,
-        );
-        if let Some(delay) =
-            self.animation
-                .borrow_mut()
-                .render_in(stage, buf, presentation, AnimationEnd::Faded)
+        let stage = Rect::new(area.x, area.y, ANIMATION_WIDTH, ANIMATION_HEIGHT);
+        if let Some(delay) = self
+            .animation
+            .borrow_mut()
+            .render_in(stage, buf, presentation)
         {
             self.request_frame.schedule_frame_in(delay);
         }

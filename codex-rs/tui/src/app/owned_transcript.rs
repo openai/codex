@@ -1,7 +1,6 @@
 //! Compose the owned transcript above the composer and route their selection gestures.
 //! Reserve a cleared row between transcript content and the composer. Slash suggestions overlay
 //! already-painted rows so opening or closing them leaves transcript geometry unchanged.
-//! Fresh-thread decoration is painted separately in unused cells and never enters history.
 //! Plain Enter returns an empty composer to latest after transcript interactions and prompt editing.
 
 use super::*;
@@ -71,7 +70,7 @@ impl App {
             self.local_settings.tui.animations && self.local_settings.tui.effects.shimmer,
         );
         let focused = tui.is_terminal_focused();
-        let logo = self.empty_state_presentation(
+        self.empty_state_presentation(
             MotionMode::from_animations_enabled(
                 self.local_settings.tui.animations && self.local_settings.tui.effects.welcome,
             ),
@@ -130,7 +129,6 @@ impl App {
         );
         let mut rendered_cursor = None;
         let mut footer_height_changed = false;
-        let mut decoration_tick = None;
         let mut feedback_tick = None;
         tui.draw(screen_size.height, |frame| {
             ratatui::widgets::Clear.render(
@@ -146,12 +144,6 @@ impl App {
                 ),
                 frame.buffer,
                 &self.transcript_cells,
-            );
-            decoration_tick = chat_widget.empty_state_animation.borrow_mut().render(
-                screen_size,
-                bottom_area,
-                frame.buffer,
-                logo,
             );
             let follow_area =
                 (available > 0 && chat_widget.no_modal_or_popup_active()).then(|| {
@@ -204,9 +196,6 @@ impl App {
             tui.frame_requester().schedule_frame();
         }
         if let Some(delay) = feedback_tick {
-            tui.frame_requester().schedule_frame_in(delay);
-        }
-        if let Some(delay) = decoration_tick {
             tui.frame_requester().schedule_frame_in(delay);
         }
         let animating =

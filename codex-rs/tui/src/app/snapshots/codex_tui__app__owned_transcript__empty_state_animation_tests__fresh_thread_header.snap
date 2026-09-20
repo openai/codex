@@ -1,0 +1,48 @@
+---
+source: tui/src/app/empty_state_animation_tests.rs
+expression: text(after)
+---
+╭───────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)                  │
+│                                           │
+│ model:     GPT-5.6-Sol   /model to change │
+│ directory: /tmp/project                   │
+╰───────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                             Tip: @ mentions files, skills, and plugins
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts                                                                              ⚠ 1 warning · f2 to view

@@ -370,7 +370,6 @@ async fn pending_mcp_startup_dispatches_queued_slash_commands() {
                 area,
                 &mut buffer,
                 crate::empty_state_animation::Presentation::Animated,
-                crate::empty_state_animation::AnimationEnd::Hide,
             )
             .is_some()
     );

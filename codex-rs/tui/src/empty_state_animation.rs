@@ -1,15 +1,5 @@
-//! Decoration for a fresh owned-screen conversation, independent of transcript/history data.
-//!
-//! Eligibility is opt-in at genuine thread creation and ends on first submission/activity.
-//! The UI supplies an explicit presentation; unused screen space only controls placement.
-//! Rendering never changes layout or cursor state; reduced motion hides the decoration entirely.
-//! The stage is anchored near the top-right corner, with room around the terminal edges.
-//! A nonempty composer or unfocused terminal fades and holds the current Codex pose.
-//! The intact logo spins immediately; focus loss and drafting fade it into rest.
-//! Motion is limited to three rotations, followed by a fade to nothing. Focus and drafting
-//! pause that budget; completed animations never restart until a genuinely fresh thread.
-//! Owners pause visible time when a handoff skips rendering; returning never catches up offscreen.
-//! Onboarding can reserve a header stage and retain the faded mark after the same sequence.
+//! The blossom welcome animation for onboarding, with a full-color final pose.
+//! Visible time pauses while hidden; conversation lifecycle tracking is retained for the header.
 
 mod geometry;
 mod lighting;
@@ -24,7 +14,6 @@ use std::time::Instant;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::layout::Size;
 use ratatui::style::Color;
 
 use crate::terminal_palette;
@@ -43,12 +32,6 @@ pub(crate) enum ComposerState {
     Draft,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum AnimationEnd {
-    Hide,
-    Faded,
-}
-
 #[derive(Default)]
 pub(crate) struct EmptyStateAnimation {
     eligible: bool,
@@ -59,7 +42,6 @@ pub(crate) struct EmptyStateAnimation {
     opacity: f32,
     fade_from: f32,
     renderer: Option<Renderer>,
-    cell_aspect: Option<(Size, f64)>,
 }
 
 impl EmptyStateAnimation {
@@ -82,45 +64,6 @@ impl EmptyStateAnimation {
         self.last_frame = None;
     }
 
-    /// Paint only in unused cells. Returns a redraw deadline only for visible motion.
-    pub(crate) fn render(
-        &mut self,
-        screen: Size,
-        bottom: Rect,
-        buffer: &mut Buffer,
-        presentation: Presentation,
-    ) -> Option<Duration> {
-        if !self.eligible {
-            return None;
-        }
-        if presentation == Presentation::Hidden {
-            self.pause_clock();
-            return None;
-        }
-        let aspect = match self.cell_aspect {
-            Some((size, aspect)) if size == screen => aspect,
-            _ => {
-                let aspect = crossterm::terminal::window_size()
-                    .ok()
-                    .filter(|size| {
-                        size.width > 0 && size.height > 0 && size.columns > 0 && size.rows > 0
-                    })
-                    .map_or(/*default*/ 0.5, |size| {
-                        (f64::from(size.width) * f64::from(size.rows)
-                            / (f64::from(size.height) * f64::from(size.columns)))
-                        .clamp(/*min*/ 0.25, /*max*/ 1.0)
-                    });
-                self.cell_aspect = Some((screen, aspect));
-                aspect
-            }
-        };
-        let Some(area) = stage(screen, bottom, buffer, aspect) else {
-            self.pause_clock();
-            return None;
-        };
-        self.render_in(area, buffer, presentation, AnimationEnd::Hide)
-    }
-
     /// Paint the shared logo sequence inside a caller-owned, reserved rectangle.
     /// The caller clears the stage and keeps its layout stable after motion finishes.
     pub(crate) fn render_in(
@@ -128,10 +71,9 @@ impl EmptyStateAnimation {
         area: Rect,
         buffer: &mut Buffer,
         presentation: Presentation,
-        end: AnimationEnd,
     ) -> Option<Duration> {
         let now = Instant::now();
-        self.render_in_at(area, buffer, presentation, end, now)
+        self.render_in_at(area, buffer, presentation, now)
     }
 
     fn render_in_at(
@@ -139,7 +81,6 @@ impl EmptyStateAnimation {
         area: Rect,
         buffer: &mut Buffer,
         presentation: Presentation,
-        end: AnimationEnd,
         now: Instant,
     ) -> Option<Duration> {
         if !self.eligible
@@ -165,38 +106,16 @@ impl EmptyStateAnimation {
             let elapsed = now.saturating_duration_since(previous);
             self.fade_elapsed += elapsed;
             if !static_mark {
-                self.spin_elapsed += if self.spin_elapsed >= sequence::SPIN_DURATION {
-                    self.fade_elapsed
-                        .saturating_sub(sequence::STATIC_FADE)
-                        .min(elapsed)
-                } else {
-                    elapsed
-                };
+                self.spin_elapsed += elapsed;
             }
         }
         self.static_mark = Some(static_mark);
-        let completing = !static_mark && self.spin_elapsed >= sequence::SPIN_DURATION;
-        let finished = self.spin_elapsed >= sequence::SPIN_DURATION + sequence::COMPLETION_FADE;
-        if finished && matches!(end, AnimationEnd::Hide) {
-            self.dismiss();
-            return None;
-        }
-        let phase = if finished {
-            0.0
-        } else {
-            self.spin_elapsed.min(sequence::SPIN_DURATION).as_secs_f64() / sequence::LOOP_SECONDS
-        };
+        let finished = self.spin_elapsed >= sequence::SPIN_DURATION;
+        let phase =
+            self.spin_elapsed.min(sequence::SPIN_DURATION).as_secs_f64() / sequence::LOOP_SECONDS;
         let settling = !finished && static_mark && self.fade_elapsed < sequence::STATIC_FADE;
         self.opacity = if finished {
-            sequence::STATIC_OPACITY
-        } else if completing {
-            let opacity = sequence::completion_opacity(self.spin_elapsed - sequence::SPIN_DURATION);
-            match end {
-                AnimationEnd::Hide => opacity,
-                AnimationEnd::Faded => {
-                    sequence::STATIC_OPACITY + (1.0 - sequence::STATIC_OPACITY) * opacity
-                }
-            }
+            1.0
         } else if static_mark {
             sequence::static_opacity(self.fade_elapsed, self.fade_from)
         } else {
@@ -258,34 +177,10 @@ impl EmptyStateAnimation {
                 target.set_style(target.style().dim());
             }
         }
-        (!finished && (!static_mark || settling || completing)).then_some(FRAME_INTERVAL)
+        (!finished && (!static_mark || settling)).then_some(FRAME_INTERVAL)
     }
-}
-
-fn stage(screen: Size, bottom: Rect, buffer: &Buffer, aspect: f64) -> Option<Rect> {
-    const RIGHT_MARGIN: u16 = 4;
-    const TOP_MARGIN: u16 = 2;
-    (32..=MAX_COLUMNS.min(screen.width.saturating_sub(RIGHT_MARGIN * 2)))
-        .rev()
-        .find_map(|width| {
-            let height = (f64::from(width) * 550.0 / 800.0 * aspect).round() as u16;
-            if height == 0 || height > MAX_ROWS || height > screen.height {
-                return None;
-            }
-            let area = Rect::new(
-                screen.width - width - RIGHT_MARGIN,
-                TOP_MARGIN,
-                width,
-                height,
-            );
-            (area.bottom() < bottom.y
-                && area.intersection(buffer.area) == area
-                && (area.y..area.bottom())
-                    .all(|y| (area.x..area.right()).all(|x| buffer[(x, y)].symbol() == " ")))
-            .then_some(area)
-        })
 }
 
 #[cfg(test)]
 #[path = "empty_state_animation_tests.rs"]
-pub(crate) mod tests;
+mod tests;

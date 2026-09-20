@@ -3,6 +3,13 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+impl EmptyStateAnimation {
+    // App integration tests inspect lifecycle eligibility without advancing the render clock.
+    pub(crate) fn is_eligible_for_test(&self) -> bool {
+        self.eligible
+    }
+}
+
 #[test]
 fn loop_closes_and_light_themes_preserve_coverage() {
     let mut renderer = Renderer::default();
@@ -41,32 +48,6 @@ fn loop_closes_and_light_themes_preserve_coverage() {
     }
 }
 
-pub(crate) fn fixture() -> (EmptyStateAnimation, Size, Rect, Buffer) {
-    let size = Size::new(/*width*/ 120, /*height*/ 44);
-    let mut animation = EmptyStateAnimation::default();
-    animation.start_fresh();
-    animation.cell_aspect = Some((size, 0.5));
-    let area = Rect::new(/*x*/ 0, /*y*/ 0, size.width, size.height);
-    let bottom = Rect::new(/*x*/ 0, /*y*/ 39, size.width, /*height*/ 5);
-    (animation, size, bottom, Buffer::empty(area))
-}
-
-#[test]
-fn upper_right_stage_shrinks_and_hides_without_touching_occupied_cells() {
-    let (_, size, bottom, mut buffer) = fixture();
-    assert_eq!(
-        stage(size, bottom, &buffer, /*aspect*/ 0.5),
-        Some(Rect::new(
-            /*x*/ 56, /*y*/ 2, /*width*/ 60, /*height*/ 21
-        ))
-    );
-    buffer[(56, 2)].set_symbol("header");
-    let smaller = stage(size, bottom, &buffer, /*aspect*/ 0.5).unwrap();
-    assert!(smaller.width < 60);
-    buffer[(115, 2)].set_symbol("notice");
-    assert_eq!(stage(size, bottom, &buffer, /*aspect*/ 0.5), None);
-}
-
 #[test]
 fn faded_presentation_settles_without_redraws_then_resumes() {
     let area = Rect::new(
@@ -75,19 +56,13 @@ fn faded_presentation_settles_without_redraws_then_resumes() {
     let start = Instant::now();
     for elapsed in [
         Duration::from_secs(/*secs*/ 2),
-        sequence::SPIN_DURATION + sequence::COMPLETION_FADE - FRAME_INTERVAL,
+        sequence::SPIN_DURATION - FRAME_INTERVAL * 2,
     ] {
         let mut animation = EmptyStateAnimation::default();
         animation.start_fresh();
         animation.spin_elapsed = elapsed;
         let mut buffer = Buffer::empty(area);
-        animation.render_in_at(
-            area,
-            &mut buffer,
-            Presentation::Animated,
-            AnimationEnd::Hide,
-            start,
-        );
+        animation.render_in_at(area, &mut buffer, Presentation::Animated, start);
         let moving = buffer.clone();
         buffer.reset();
         assert_eq!(
@@ -95,7 +70,6 @@ fn faded_presentation_settles_without_redraws_then_resumes() {
                 area,
                 &mut buffer,
                 Presentation::Faded,
-                AnimationEnd::Hide,
                 start + FRAME_INTERVAL,
             ),
             Some(FRAME_INTERVAL)
@@ -104,13 +78,7 @@ fn faded_presentation_settles_without_redraws_then_resumes() {
         let settled_at = start + FRAME_INTERVAL + sequence::STATIC_FADE;
         buffer.reset();
         assert_eq!(
-            animation.render_in_at(
-                area,
-                &mut buffer,
-                Presentation::Faded,
-                AnimationEnd::Hide,
-                settled_at,
-            ),
+            animation.render_in_at(area, &mut buffer, Presentation::Faded, settled_at,),
             None
         );
         assert!(buffer.content.iter().any(|cell| cell.symbol() != " "));
@@ -131,7 +99,6 @@ fn faded_presentation_settles_without_redraws_then_resumes() {
                 area,
                 &mut buffer,
                 Presentation::Faded,
-                AnimationEnd::Hide,
                 settled_at + Duration::from_secs(/*secs*/ 60),
             ),
             None
@@ -143,7 +110,6 @@ fn faded_presentation_settles_without_redraws_then_resumes() {
                 area,
                 &mut buffer,
                 Presentation::Animated,
-                AnimationEnd::Hide,
                 settled_at + Duration::from_secs(/*secs*/ 61),
             ),
             Some(FRAME_INTERVAL)
@@ -156,61 +122,12 @@ fn faded_presentation_settles_without_redraws_then_resumes() {
                 area,
                 &mut buffer,
                 Presentation::Animated,
-                AnimationEnd::Hide,
                 settled_at + Duration::from_secs(/*secs*/ 61) + FRAME_INTERVAL,
             ),
             Some(FRAME_INTERVAL)
         );
         assert_ne!(animation.opacity, sequence::STATIC_OPACITY);
     }
-}
-
-#[test]
-fn three_rotations_stop_then_fade_without_restarting() {
-    let (mut animation, size, bottom, mut buffer) = fixture();
-    animation.spin_elapsed = sequence::SPIN_DURATION;
-    assert_eq!(
-        animation.render(size, bottom, &mut buffer, Presentation::Animated,),
-        Some(FRAME_INTERVAL)
-    );
-    assert_eq!(animation.opacity, 1.0);
-    let stopped = buffer.clone();
-    animation.last_frame = None;
-    animation.spin_elapsed += sequence::COMPLETION_FADE / 2;
-    buffer.reset();
-    assert_eq!(
-        animation.render(size, bottom, &mut buffer, Presentation::Animated,),
-        Some(FRAME_INTERVAL)
-    );
-    assert_eq!(animation.opacity, 0.5);
-    // Fading changes color only: rotation has stopped on the third completed turn.
-    assert_eq!(
-        buffer
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect::<Vec<_>>(),
-        stopped
-            .content
-            .iter()
-            .map(ratatui::buffer::Cell::symbol)
-            .collect::<Vec<_>>()
-    );
-    animation.spin_elapsed = sequence::SPIN_DURATION + sequence::COMPLETION_FADE;
-    for presentation in [Presentation::Animated, Presentation::Faded] {
-        buffer.reset();
-        assert_eq!(
-            animation.render(size, bottom, &mut buffer, presentation,),
-            None
-        );
-        assert_eq!(buffer, Buffer::empty(buffer.area));
-    }
-    animation.start_fresh();
-    assert_eq!(
-        animation.render(size, bottom, &mut buffer, Presentation::Animated,),
-        Some(FRAME_INTERVAL)
-    );
-    assert_eq!(animation.spin_elapsed, Duration::ZERO);
 }
 
 #[test]
@@ -224,34 +141,16 @@ fn skipped_frames_preserve_spin_until_visible_time_resumes() {
     let mut animation = EmptyStateAnimation::default();
     animation.start_fresh();
     let mut buffer = Buffer::empty(area);
-    animation.render_in_at(
-        area,
-        &mut buffer,
-        Presentation::Animated,
-        AnimationEnd::Hide,
-        start,
-    );
+    animation.render_in_at(area, &mut buffer, Presentation::Animated, start);
     let visible = Duration::from_millis(/*millis*/ 150);
     buffer.reset();
-    animation.render_in_at(
-        area,
-        &mut buffer,
-        Presentation::Animated,
-        AnimationEnd::Hide,
-        start + visible,
-    );
+    animation.render_in_at(area, &mut buffer, Presentation::Animated, start + visible);
     let before = buffer.clone();
     animation.pause_clock();
     let resumed = start + Duration::from_secs(/*secs*/ 3600);
     buffer.reset();
     assert_eq!(
-        animation.render_in_at(
-            area,
-            &mut buffer,
-            Presentation::Animated,
-            AnimationEnd::Hide,
-            resumed
-        ),
+        animation.render_in_at(area, &mut buffer, Presentation::Animated, resumed),
         Some(FRAME_INTERVAL)
     );
     assert_eq!(buffer, before);
@@ -261,14 +160,13 @@ fn skipped_frames_preserve_spin_until_visible_time_resumes() {
         area,
         &mut buffer,
         Presentation::Animated,
-        AnimationEnd::Hide,
         resumed + FRAME_INTERVAL,
     );
     assert_eq!(animation.spin_elapsed, visible + FRAME_INTERVAL);
 }
 
 #[test]
-fn hidden_and_clipped_frames_preserve_completion_fade_without_restarting() {
+fn hidden_and_clipped_frames_preserve_spin_budget_without_restarting() {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 17,
     );
@@ -276,15 +174,9 @@ fn hidden_and_clipped_frames_preserve_completion_fade_without_restarting() {
     for hidden_area in [area, Rect::default()] {
         let mut animation = EmptyStateAnimation::default();
         animation.start_fresh();
-        animation.spin_elapsed = sequence::SPIN_DURATION + sequence::COMPLETION_FADE / 2;
+        animation.spin_elapsed = sequence::SPIN_DURATION - FRAME_INTERVAL;
         let mut buffer = Buffer::empty(area);
-        animation.render_in_at(
-            area,
-            &mut buffer,
-            Presentation::Animated,
-            AnimationEnd::Hide,
-            start,
-        );
+        animation.render_in_at(area, &mut buffer, Presentation::Animated, start);
         let before = buffer.clone();
         buffer.reset();
         let hidden = if hidden_area.is_empty() {
@@ -297,20 +189,13 @@ fn hidden_and_clipped_frames_preserve_completion_fade_without_restarting() {
                 hidden_area,
                 &mut buffer,
                 hidden,
-                AnimationEnd::Hide,
                 start + Duration::from_secs(/*secs*/ 20)
             ),
             None
         );
         assert_eq!(buffer, Buffer::empty(area));
         let resumed = start + Duration::from_secs(/*secs*/ 40);
-        animation.render_in_at(
-            area,
-            &mut buffer,
-            Presentation::Animated,
-            AnimationEnd::Hide,
-            resumed,
-        );
+        animation.render_in_at(area, &mut buffer, Presentation::Animated, resumed);
         assert_eq!(buffer, before);
         buffer.reset();
         assert_eq!(
@@ -318,50 +203,71 @@ fn hidden_and_clipped_frames_preserve_completion_fade_without_restarting() {
                 area,
                 &mut buffer,
                 Presentation::Animated,
-                AnimationEnd::Hide,
-                resumed + sequence::COMPLETION_FADE / 2
+                resumed + FRAME_INTERVAL
             ),
             None
         );
-        assert_eq!(buffer, Buffer::empty(area));
+        assert!(buffer.content.iter().any(|cell| cell.symbol() != " "));
+        assert_eq!(animation.opacity, 1.0);
         animation.pause_clock();
-        assert!(!animation.eligible);
     }
 }
 
 #[test]
-fn onboarding_keeps_a_settled_mark_after_budget_and_pause() {
-    let area = Rect::new(
-        /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 17,
+fn onboarding_keeps_full_color_after_budget_and_pause() {
+    crate::terminal_palette::with_test_default_colors(
+        crate::terminal_probe::DefaultColors {
+            fg: (210, 221, 235),
+            bg: (15, 20, 37),
+        },
+        || {
+            let area = Rect::new(
+                /*x*/ 0, /*y*/ 0, /*width*/ 48, /*height*/ 17,
+            );
+            let start = Instant::now();
+            let mut animation = EmptyStateAnimation::default();
+            animation.start_fresh();
+            let mut buffer = Buffer::empty(area);
+            animation.render_in_at(area, &mut buffer, Presentation::Animated, start);
+            buffer.reset();
+            assert_eq!(
+                animation.render_in_at(
+                    area,
+                    &mut buffer,
+                    Presentation::Animated,
+                    start + sequence::SPIN_DURATION
+                ),
+                None
+            );
+            assert_eq!(animation.opacity, 1.0);
+            assert!(buffer.content.iter().any(|cell| cell.symbol() != " "));
+            insta::assert_snapshot!(
+                "onboarding_settled_logo",
+                buffer
+                    .content
+                    .chunks(usize::from(area.width))
+                    .map(|row| row
+                        .iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let settled = buffer.clone();
+            animation.pause_clock();
+            buffer.reset();
+            assert_eq!(
+                animation.render_in_at(
+                    area,
+                    &mut buffer,
+                    Presentation::Faded,
+                    start + Duration::from_secs(/*secs*/ 3600)
+                ),
+                None
+            );
+            assert_eq!(buffer, settled);
+        },
     );
-    let start = Instant::now();
-    let mut animation = EmptyStateAnimation::default();
-    animation.start_fresh();
-    animation.spin_elapsed = sequence::SPIN_DURATION + sequence::COMPLETION_FADE;
-    let mut buffer = Buffer::empty(area);
-    assert_eq!(
-        animation.render_in_at(
-            area,
-            &mut buffer,
-            Presentation::Animated,
-            AnimationEnd::Faded,
-            start
-        ),
-        None
-    );
-    assert!(buffer.content.iter().any(|cell| cell.symbol() != " "));
-    let settled = buffer.clone();
-    animation.pause_clock();
-    buffer.reset();
-    assert_eq!(
-        animation.render_in_at(
-            area,
-            &mut buffer,
-            Presentation::Faded,
-            AnimationEnd::Faded,
-            start + Duration::from_secs(/*secs*/ 3600)
-        ),
-        None
-    );
-    assert_eq!(buffer, settled);
 }
