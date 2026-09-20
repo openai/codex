@@ -3,7 +3,7 @@ source: tui/src/app/agent_center_tests.rs
 expression: rendered
 ---
   Agent command center  Group: Projec…
-  0 need input   0 working   1 ready
+   All 1   Needs you 0   Working 0   ›
   ────────────────────────────────────
   Rename › 界 界 界 界 界 界 界 日 本 語  é 👩‍💻
       Tasks

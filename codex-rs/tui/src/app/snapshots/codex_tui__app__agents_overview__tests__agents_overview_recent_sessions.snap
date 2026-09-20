@@ -3,7 +3,7 @@ source: tui/src/app/agents_overview_tests.rs
 expression: "age.replace_all(&rendered, \" [age]\")"
 ---
   Agent command center  Group: Project  g
-  0 need input   0 working   0 ready
+   All 10   Needs you 0   Working 0   Ready 0   Inactive 10
   ────────────────────────────────────────────────────────────────────────────
   Search tasks · f
       Tasks                                            Status         Updated

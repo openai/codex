@@ -23,7 +23,11 @@ impl AgentsOverviewView {
                     .primary_hint(ListAction::Accept)
                     .map(crate::key_hint::ShortcutHint::display_label)
                     .unwrap_or_default(),
-                if state.renaming { "rename" } else { "open" }
+                if state.rename_target.is_some() {
+                    "rename"
+                } else {
+                    "open"
+                }
             ))
         } else if state.connection_notice.is_some() {
             Some("ctrl+c quit · actions paused until the list is refreshed".into())

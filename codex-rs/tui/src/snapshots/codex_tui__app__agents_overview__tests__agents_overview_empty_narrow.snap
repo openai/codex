@@ -3,7 +3,7 @@ source: tui/src/app/agents_overview_tests.rs
 expression: rendered
 ---
   Agent command center  Group: Project  g
-  0 need input   0 working   0 ready
+   All 0   Needs you 0   Working 0           ›
   ────────────────────────────────────────────
   Search tasks · f
   No tasks yet

@@ -33,7 +33,7 @@ impl AgentsOverviewView {
     pub(in crate::app::agents_overview_view) fn page_selection(&mut self, action: ListAction) {
         let indices = self.visible_indices();
         let mut state = self.state();
-        if state.renaming || indices.is_empty() {
+        if state.rename_target.is_some() || indices.is_empty() {
             return;
         }
         let forward = action == ListAction::PageDown;

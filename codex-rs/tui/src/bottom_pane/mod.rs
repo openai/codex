@@ -200,6 +200,7 @@ pub(crate) use selection_popup_common::menu_surface_padding_height;
 pub(crate) use selection_popup_common::render_menu_surface;
 mod selection_row_layout;
 mod selection_tabs;
+pub(crate) use selection_tabs::render_filled_tab_bar;
 mod startup;
 mod textarea;
 pub(crate) use textarea::TextArea;

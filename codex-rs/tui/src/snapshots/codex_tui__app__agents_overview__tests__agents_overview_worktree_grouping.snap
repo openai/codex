@@ -3,7 +3,7 @@ source: tui/src/app/agents_overview_tests.rs
 expression: normalize_agent_center_snapshot(grouping)
 ---
   Agent command center  Group: Project  g
-  0 need input   0 working   4 ready
+   All 4   Needs you 0   Working 0   Ready 4   Inactive 0                                                                                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   Search tasks · f
       Tasks                                                                                   Status         Updated

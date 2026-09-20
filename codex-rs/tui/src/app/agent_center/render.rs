@@ -1,6 +1,8 @@
 //! Task rows, metadata editing and read-only details share a wide/narrow layout.
 
+use super::hints::hint_line;
 use super::*;
+use crate::bottom_pane::render_filled_tab_bar;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -94,12 +96,12 @@ impl Renderable for AgentsOverviewView {
         let layout = self.center_layout(area);
         let state = self.state();
         if state.editing_metadata() && !layout.search.is_empty() {
-            let input = if state.renaming {
+            let input = if state.rename_target.is_some() {
                 &state.input
             } else {
                 &state.search
             };
-            let prefix = if state.renaming {
+            let prefix = if state.rename_target.is_some() {
                 "Rename › "
             } else {
                 "Search › "
@@ -128,6 +130,11 @@ impl Renderable for AgentsOverviewView {
             .map(ShortcutHint::display_label)
             .unwrap_or_default();
         let state = self.state();
+        let filter_keys = if state.editing_metadata() {
+            String::new()
+        } else {
+            self.center_filter_hint()
+        };
         let grouping = match state.grouping {
             AgentsOverviewGrouping::Project => "Project",
             AgentsOverviewGrouping::Status => "Status",
@@ -146,18 +153,31 @@ impl Renderable for AgentsOverviewView {
             inset(layout.header),
             buf,
         );
-        let (needs_you, working, ready) = self.rows.iter().fold((0, 0, 0), |counts, row| {
-            let (needs_you, working, ready) = counts;
-            match row.group {
-                AgentsOverviewGroup::NeedsYou => (needs_you + 1, working, ready),
-                AgentsOverviewGroup::Working => (needs_you, working + 1, ready),
-                AgentsOverviewGroup::Ready => (needs_you, working, ready + 1),
-                AgentsOverviewGroup::Finished => counts,
-            }
-        });
-        line(
-            format!("{needs_you} need input   {working} working   {ready} ready").dim(),
-            inset(row(layout.header, /*offset*/ 1, /*height*/ 1)),
+        let labels = TASK_FILTERS
+            .iter()
+            .map(|(label, group)| {
+                let count = self
+                    .rows
+                    .iter()
+                    .filter(|row| group.is_none_or(|group| group == row.group))
+                    .count();
+                format!("{label} {count}")
+            })
+            .collect::<Vec<_>>();
+        let mut tabs = inset(row(layout.header, /*offset*/ 1, /*height*/ 1));
+        let filter_hint = hint_line(&[(filter_keys, "filter".into())]);
+        if tabs.width >= 80 && filter_hint.width() > 0 {
+            let hint_width = filter_hint.width() as u16;
+            filter_hint.render(
+                Rect::new(tabs.right() - hint_width, tabs.y, hint_width, tabs.height),
+                buf,
+            );
+            tabs.width = tabs.width.saturating_sub(hint_width + 2);
+        }
+        render_filled_tab_bar(
+            &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+            state.status_filter,
+            tabs,
             buf,
         );
         line(
@@ -168,7 +188,7 @@ impl Renderable for AgentsOverviewView {
             buf,
         );
         if state.editing_metadata() {
-            let (label, input) = if state.renaming {
+            let (label, input) = if state.rename_target.is_some() {
                 ("Rename › ", &state.input)
             } else {
                 ("Search › ", &state.search)

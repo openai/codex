@@ -1,0 +1,16 @@
+---
+source: tui/src/app/agent_center_tests.rs
+expression: "screen(&view, 40, 12)"
+---
+  Agent command center  Group: Projec…
+  ‹  Working 0   Ready 1   Inactive 1
+  ────────────────────────────────────
+  Search tasks · f
+  ↑   Tasks
+  › ○ Unloaded task
+
+  ↑↓ navigate o resume enter open
+  n new w new worktree f search
+  g group: project r rename x stop
+  h hide a archive del delete
+  ctrl+c quit

@@ -144,7 +144,12 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
         app.agents_overview.visible_thread_ids = view.thread_ids();
         app.chat_widget.show_bottom_pane_view(Box::new(view));
         app.agents_overview.view_state.lock().unwrap().input = "Keep this task draft".into();
-        app.agents_overview.view_state.lock().unwrap().renaming = true;
+        app.agents_overview.view_state.lock().unwrap().rename_target =
+            Some(if previous_thread.is_some() {
+                vanished
+            } else {
+                selected
+            });
         let draft = |app: &App| app.agents_overview.view_state.lock().unwrap().input.clone();
         let stale_request = Uuid::new_v4();
         app.agents_overview.request_id = Some(stale_request);

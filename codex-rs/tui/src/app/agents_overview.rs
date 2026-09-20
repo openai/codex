@@ -211,9 +211,16 @@ impl App {
         };
         let selected_thread_id = self
             .agents_overview
-            .visible_thread_ids
-            .get(selected)
-            .copied();
+            .view_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rename_target
+            .or_else(|| {
+                self.agents_overview
+                    .visible_thread_ids
+                    .get(selected)
+                    .copied()
+            });
         let threads = self
             .agents_overview
             .threads
@@ -226,7 +233,7 @@ impl App {
         if selected_thread_id
             .is_some_and(|thread_id| !self.agents_overview.visible_thread_ids.contains(&thread_id))
             && let Ok(mut state) = self.agents_overview.view_state.lock()
-            && state.renaming
+            && state.rename_target.is_some()
         {
             self.chat_widget.add_info_message(
                 format!(
@@ -235,7 +242,7 @@ impl App {
                 ),
                 /*hint*/ None,
             );
-            state.renaming = false;
+            state.rename_target = None;
             state.input.clear();
         }
         self.chat_widget

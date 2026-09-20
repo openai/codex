@@ -269,7 +269,10 @@ async fn hiding_rename_target_does_not_transfer_draft_to_neighbor() -> Result<()
     Box::pin(app.handle_event(&mut tui, &mut app_server, hide)).await?;
     {
         let state = app.agents_overview.view_state.lock().unwrap();
-        assert_eq!((state.renaming, state.input.as_str()), (false, ""));
+        assert_eq!(
+            (state.rename_target.is_some(), state.input.as_str()),
+            (false, "")
+        );
     }
     app.chat_widget.handle_key_event(KeyCode::Enter.into());
     assert!(

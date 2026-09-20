@@ -215,7 +215,14 @@ async fn overview_right_preserves_editors_and_offline_state() {
     );
     view.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
     view.handle_key_event(KeyCode::Right.into());
-    assert!(app.agents_overview.view_state.lock().unwrap().renaming);
+    assert!(
+        app.agents_overview
+            .view_state
+            .lock()
+            .unwrap()
+            .rename_target
+            .is_some()
+    );
     view.handle_key_event(KeyCode::Esc.into());
     app.agents_overview
         .view_state

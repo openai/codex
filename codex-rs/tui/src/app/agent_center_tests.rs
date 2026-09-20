@@ -164,3 +164,126 @@ async fn live_center_metadata_clips_at_grapheme_boundaries() {
         view.handle_key_event(KeyCode::Esc.into());
     }
 }
+
+#[tokio::test]
+async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result<()> {
+    let mut app = make_test_app().await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    let id = ThreadId::new();
+    let other = ThreadId::new();
+    let mut threads = vec![
+        overview_thread(
+            id,
+            /*parent_thread_id*/ None,
+            "Target",
+            ThreadStatus::Idle,
+        ),
+        overview_thread(
+            other,
+            /*parent_thread_id*/ None,
+            "Other",
+            ThreadStatus::Idle,
+        ),
+    ];
+    for key in [KeyCode::Esc, KeyCode::Enter] {
+        threads[0].status = ThreadStatus::Idle;
+        let mut view = app.agents_overview_view(threads.clone(), Some(id));
+        // Reuse the Ready tab after the first iteration.
+        if key == KeyCode::Esc {
+            for _ in 0..3 {
+                view.handle_key_event(KeyCode::Tab.into());
+            }
+        }
+        view.handle_key_event(KeyCode::Char('r').into());
+        threads[0].status = ThreadStatus::SystemError;
+        view = app.agents_overview_view(threads.clone(), Some(id));
+        view.handle_key_event(KeyCode::Char('!').into());
+        view.handle_key_event(key.into());
+        assert_eq!(view.rows[view.selected_index().unwrap()].thread_id, other);
+        if key == KeyCode::Enter {
+            let rename = rx.try_recv().unwrap();
+            assert!(
+                matches!(&rename, AppEvent::RenameAgentsOverviewThread { thread_id, name } if *thread_id == id && name == "Target!")
+            );
+            app.agents_overview.threads = threads
+                .iter()
+                .map(|thread| {
+                    (
+                        ThreadId::from_string(&thread.id).unwrap(),
+                        Some(thread.clone()),
+                    )
+                })
+                .collect();
+            app.agents_overview.visible_thread_ids = view.thread_ids();
+            app.chat_widget.show_bottom_pane_view(Box::new(view));
+            let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+            let mut tui = crate::tui::test_support::make_test_tui()?;
+            // Synthetic IDs have no rollout: the server rejects the rename.
+            Box::pin(app.handle_event(&mut tui, &mut server, rename)).await?;
+            let mut retry = app.agents_overview_view(threads.clone(), Some(other));
+            assert_eq!(retry.rows[retry.selected_index().unwrap()].thread_id, id);
+            retry.handle_key_event(KeyCode::Enter.into());
+            assert!(std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(event, AppEvent::RenameAgentsOverviewThread { thread_id, name } if thread_id == id && name == "Target!")));
+            server.shutdown().await?;
+        } else {
+            assert!(rx.try_recv().is_err());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_center_navigation_and_complete_hints() {
+    let app = make_test_app().await;
+    let ready = ThreadId::from_u128(/*value*/ 42);
+    let needs_you = ThreadId::from_u128(/*value*/ 43);
+    let unloaded = ThreadId::from_u128(/*value*/ 44);
+    let mut view = app.agents_overview_view(
+        vec![
+            overview_thread(
+                ready,
+                /*parent_thread_id*/ None,
+                "Ready task",
+                ThreadStatus::Idle,
+            ),
+            overview_thread(
+                needs_you,
+                /*parent_thread_id*/ None,
+                "Needs input",
+                ThreadStatus::SystemError,
+            ),
+            overview_thread(
+                unloaded,
+                /*parent_thread_id*/ None,
+                "Unloaded task",
+                ThreadStatus::NotLoaded,
+            ),
+        ],
+        Some(ready),
+    );
+    let selected = |view: &AgentsOverviewView| view.rows[view.selected_index().unwrap()].thread_id;
+    view.handle_key_event(KeyCode::Tab.into());
+    assert_eq!(selected(&view), needs_you);
+    view.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    view.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+    assert_eq!(selected(&view), unloaded);
+    insta::assert_snapshot!(
+        "live_center_status_filter",
+        screen(&view, /*width*/ 40, /*height*/ 12)
+    );
+    view.handle_key_event(KeyCode::Tab.into());
+}
+
+#[tokio::test]
+async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
+    let mut app = make_test_app().await;
+    let config: TuiKeymap = toml::from_str("[agents]\nresume = 'tab'").unwrap();
+    app.keymap = RuntimeKeymap::from_config(&config).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    view.handle_key_event(KeyCode::Tab.into());
+    assert!(matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker)));
+    assert!(rx.try_recv().is_err());
+}

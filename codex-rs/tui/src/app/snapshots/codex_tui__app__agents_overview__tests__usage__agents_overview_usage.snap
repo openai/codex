@@ -3,7 +3,7 @@ source: tui/src/app/agents_overview_usage_tests.rs
 expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{project}  2\"),\n&group).replace(&project, \"/tmp/project\").replace(\"fwd del\", \"del\")"
 ---
   Agent command center  Group: Project  g
-  1 need input   0 working   1 ready
+   All 2   Needs you 1   Working 0   Ready 1   Inactive 0                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
   Search tasks · f                                    │ Task details
       Tasks                                           │
