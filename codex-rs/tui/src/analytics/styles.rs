@@ -35,3 +35,14 @@ pub(super) fn secondary_style() -> Style {
         _ => Style::default().dim(),
     }
 }
+
+/// Paint one selectable row, including its padding, using the shared picker accent.
+pub(super) fn select_row(line: &mut ratatui::text::Line<'static>, width: usize) {
+    let style = crate::bottom_pane::selection_style();
+    line.spans
+        .push(" ".repeat(width.saturating_sub(line.width())).into());
+    line.style = style;
+    for span in &mut line.spans {
+        span.style = style;
+    }
+}

@@ -48,10 +48,15 @@ impl AnalyticsView {
             if index == selection.start {
                 wrapped_selection.start = wrapped.len();
             }
-            wrapped.extend(word_wrap_lines(
-                [line],
-                RtOptions::new(width.max(/*other*/ 1)),
-            ));
+            if line.style.bg.is_some() && line.width() <= width {
+                // Keep highlighted padding on selected rows that already fit the panel.
+                wrapped.push(line);
+            } else {
+                wrapped.extend(word_wrap_lines(
+                    [line],
+                    RtOptions::new(width.max(/*other*/ 1)),
+                ));
+            }
             if index + 1 == selection.end {
                 wrapped_selection.end = wrapped.len();
             }

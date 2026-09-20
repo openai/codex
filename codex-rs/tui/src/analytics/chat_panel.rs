@@ -18,7 +18,8 @@ use std::ops::Range;
 
 impl AnalyticsView {
     pub(super) fn chat_lines(&self, width: usize) -> (Vec<Line<'static>>, Range<usize>) {
-        let width = width.clamp(/*min*/ 1, /*max*/ 96);
+        let row_width = width.clamp(/*min*/ 1, /*max*/ 97);
+        let width = row_width.saturating_sub(/*rhs*/ 1).max(/*other*/ 1);
         let wrap = |lines: Vec<Line<'static>>| word_wrap_lines(lines, RtOptions::new(width));
         let mut lines = wrap(vec![
             "Active in past 30 days · sorted by lifetime credits"
@@ -126,6 +127,7 @@ impl AnalyticsView {
                         width,
                     )]
                 };
+                let header_len = row.len();
                 if self.sections[Section::Chats].detail == Some(index)
                     && let Some(usage) = &chat.usage
                 {
@@ -254,7 +256,16 @@ impl AnalyticsView {
                     }
                     row.push(Line::default());
                 }
-                wrap(row)
+                let details = row.split_off(header_len);
+                let mut row = wrap(row);
+                // Wrap first: wrapping trims the highlighted trailing blank otherwise.
+                if selected {
+                    for line in &mut row {
+                        super::styles::select_row(line, row_width);
+                    }
+                }
+                row.extend(wrap(details));
+                row
             })
             .collect::<Vec<_>>();
         let coverage = wrap(vec![
@@ -279,13 +290,10 @@ impl AnalyticsView {
         ])
         .len();
         // Measure wrapped details before choosing neighbors so the range describes the rendered rows.
-        let budget = if self.zoomed {
-            self.viewport_height
-                .saturating_sub(lines.len() + coverage.len() + range_height + 4)
-        } else {
-            usize::MAX
-        };
-        let row_limit = if self.zoomed { count } else { 5 };
+        let budget = self
+            .viewport_height
+            .saturating_sub(lines.len() + coverage.len() + range_height + 2);
+        let row_limit = count;
         let cursor = self.sections[Section::Chats].cursor.min(count - 1);
         let mut first = cursor;
         let mut end = cursor + 1;

@@ -74,9 +74,7 @@ async fn changing_ranges_and_grouping_preserves_other_reports_and_focus() {
         view.sections.0.each_ref().map(|state| state.detail),
         view.sections.0.each_ref().map(|state| state.group),
     );
-    press(&mut view, KeyCode::Char('z'));
     screen(&mut view, /*width*/ 58, /*height*/ 25);
-    press(&mut view, KeyCode::Char('z'));
     assert_eq!(
         (
             view.ranges,
@@ -457,7 +455,11 @@ fn taller_report_reveals_more_legend_rows_and_keeps_timestamp_in_controls() {
         tall.lines().filter(|line| line.contains('●')).count()
             > short.lines().filter(|line| line.contains('●')).count()
     );
-    assert!(tall.lines().take(6).any(|line| line.contains("Updated")));
+    assert!(
+        tall.lines()
+            .take(usize::from(view.body_area.y))
+            .any(|line| line.contains("Updated"))
+    );
     for width in [24, 40, 64] {
         let narrow = screen(&mut view, width, /*height*/ 60);
         assert!(narrow.lines().nth(/*n*/ 3).unwrap().contains("7d/30d"));

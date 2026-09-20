@@ -1,5 +1,5 @@
 //! Account-specific section order, request eligibility, and independent report ranges.
-//! Resolving the account precedes report loading; refreshing drops all account-owned data.
+//! Resolving the account precedes report loading; reopening drops all account-owned data.
 
 use super::AnalyticsView;
 use super::chats;
@@ -55,6 +55,8 @@ pub(super) struct SectionState {
     pub(super) cursor: usize,
     pub(super) detail: Option<usize>,
     pub(super) group: usize,
+    pub(super) scroll_offset: usize,
+    pub(super) follow_selection_on_focus: bool,
 }
 
 impl Default for SectionState {
@@ -64,6 +66,8 @@ impl Default for SectionState {
             cursor: 6,
             detail: None,
             group: 0,
+            scroll_offset: 0,
+            follow_selection_on_focus: false,
         }
     }
 }

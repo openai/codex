@@ -1,5 +1,5 @@
-//! Report navigation and keyboard help for the full-screen usage view.
-//! Help has an independent scroll position and preserves report selection.
+//! Report navigation and bounded keyboard help for the full-screen usage view.
+//! Each report retains its own reading position; help never replaces its selection or draft.
 
 use super::AnalyticsView;
 use super::controls::Control;
@@ -22,35 +22,38 @@ impl AnalyticsView {
         }
     }
 
+    /// Each surface owns its reading position; switching surfaces never copies it.
     pub(super) fn scroll_offset(&self) -> usize {
         if self.show_help {
             self.help_scroll
+        } else if self.zoomed {
+            self.sections[self.section].scroll_offset
         } else {
-            self.scroll_offset
+            self.dashboard_scroll
         }
     }
 
     pub(super) fn scroll_offset_mut(&mut self) -> &mut usize {
         if self.show_help {
             &mut self.help_scroll
+        } else if self.zoomed {
+            &mut self.sections[self.section].scroll_offset
         } else {
-            &mut self.scroll_offset
+            &mut self.dashboard_scroll
         }
     }
 
     pub(super) fn toggle_dashboard(&mut self) {
         self.zoomed = !self.zoomed;
-        self.scroll_offset = 0;
-        self.follow_selection = true;
+        self.follow_selection = !self.zoomed;
     }
 
     pub(super) fn select_section(&mut self, section: Section) {
-        if self.zoomed && section != self.section {
-            self.scroll_offset = 0;
+        if section != self.section {
+            self.section = section;
+            self.follow_selection = !self.zoomed;
+            self.show_help = false;
         }
-        self.follow_selection = !self.zoomed || section != self.section;
-        self.section = section;
-        self.show_help = false;
     }
 
     pub(super) fn chat_has_details(&self) -> bool {

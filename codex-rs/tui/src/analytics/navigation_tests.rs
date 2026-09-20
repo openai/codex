@@ -148,7 +148,7 @@ fn vim_summary_navigation_scrolls_like_arrows() {
         ],
         /*size*/ (64, 18),
     );
-    assert_eq!(views[0].scroll_offset, 1);
+    assert_eq!(views[0].scroll_offset(), 1);
 }
 
 #[test]

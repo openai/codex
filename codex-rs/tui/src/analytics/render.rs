@@ -1,4 +1,4 @@
-//! Fixed analytics navigation and keyboard help around existing report panels.
+//! Fixed analytics navigation and responsive report space.
 //! Tabs and hints never wrap or move when a report loads, changes range, or becomes empty.
 
 use super::AnalyticsView;
@@ -155,6 +155,12 @@ impl AnalyticsView {
             tabs,
             buf,
         );
+        // Keep a visible selection on screen across reflow, while retaining intentional
+        // reading positions when the user has scrolled away from that selection.
+        if !self.show_help && self.report_area != body && self.selection_visible {
+            self.follow_selection = true;
+        }
+        self.body_area = body;
         Line::from("─".repeat(width)).dim().render(rule, buf);
         self.render_controls(controls, buf);
         self.viewport_height = usize::from(body.height).max(/*other*/ 1);
@@ -175,36 +181,29 @@ impl AnalyticsView {
         } else if !self.zoomed {
             self.dashboard_lines(width, self.viewport_height)
         } else {
-            let chart_height =
-                (usize::from(body.height) / 5).clamp(/*min*/ 4, /*max*/ 10);
-            let mut panel = self.panel(self.section, width, chart_height);
-            if panel.chart_bands > 0 {
-                let overhead = panel.lines.len() - chart_height * panel.chart_bands;
-                let height =
-                    usize::from(body.height).saturating_sub(overhead + 1) / panel.chart_bands;
-                let height = height.max(/*other*/ 2);
-                if height != chart_height {
-                    panel = self.panel(self.section, width, height);
-                }
+            let mut height = (self.viewport_height / 3).clamp(/*min*/ 2, /*max*/ 10);
+            if body.height < 15 || width < 50 {
+                height = 0;
             }
-            let center_summary =
-                self.section == super::sections::Section::Summary && self.profile.ready().is_some();
-            if center_summary {
-                let padding = usize::from(body.height).saturating_sub(panel.lines.len()) / 2;
+            let mut panel = self.panel(self.section, width, height);
+            if panel.chart_bands > 0 {
+                let overhead = panel.lines.len().saturating_sub(height * panel.chart_bands);
+                let available = self.viewport_height.saturating_sub(overhead) / panel.chart_bands;
+                height = available.max(/*other*/ 2);
+                panel = self.panel(self.section, width, height);
+            }
+            if self.section == super::sections::Section::Summary && self.profile.ready().is_some() {
+                let padding = self.viewport_height.saturating_sub(panel.lines.len()) / 2;
                 panel
                     .lines
                     .splice(0..0, std::iter::repeat_n(Line::default(), padding));
             }
-            let selection = if panel.lines.len() <= usize::from(body.height) {
-                0..panel.lines.len()
-            } else {
-                panel.selection
-            };
-            if !center_summary && panel.lines.len() > usize::from(body.height) {
-                panel.lines.push(Line::default());
-            }
-            (panel.lines, selection)
+            (panel.lines, panel.selection)
         };
+        if self.zoomed && !self.show_help {
+            self.follow_selection |=
+                std::mem::take(&mut self.sections[self.section].follow_selection_on_focus);
+        }
         let mut scroll_offset = self.scroll_offset();
         if self.follow_selection {
             if selection.start < scroll_offset {
@@ -220,6 +219,16 @@ impl AnalyticsView {
         scroll_offset = scroll_offset.min(lines.len().saturating_sub(self.viewport_height));
         *self.scroll_offset_mut() = scroll_offset;
         self.follow_selection = false;
+        if !self.show_help {
+            self.report_area = body;
+            self.selection_visible = (!self.zoomed
+                || matches!(
+                    self.section,
+                    super::sections::Section::Chats | super::sections::Section::Plan
+                ))
+                && selection.start < scroll_offset + self.viewport_height
+                && selection.start >= scroll_offset;
+        }
         Paragraph::new(lines)
             .scroll(
                 /*offset*/ (scroll_offset.min(usize::from(u16::MAX)) as u16, 0),

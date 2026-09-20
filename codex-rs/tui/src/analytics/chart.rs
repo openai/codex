@@ -1,5 +1,6 @@
 //! Daily history with a stable chart and a compact, separated breakdown table.
 //! Chart series rank by the full range; table rows rank by the selected day and retain series colors.
+//! Wide focused reports place their breakdown beside the plot; narrow reports stack it.
 //! Missing and zero days retain the same row count; only viewport changes and explicit expansion change height.
 
 use super::AnalyticsView;
@@ -148,12 +149,14 @@ impl AnalyticsView {
             .data
             .iter()
             .any(|day| day.total != 0.0 || day.values.iter().any(|value| value.value != 0.0));
+        let side_by_side = self.zoomed && width >= 140 && height > 0;
+        let plot_width = if side_by_side { width - 48 } else { width };
         let mut bands = 0;
-        if has_activity {
-            let chart = plot::chart(&days, &categories, cursor, width, height, history.unit);
+        if has_activity && height > 0 {
+            let chart = plot::chart(&days, &categories, cursor, plot_width, height, history.unit);
             bands = chart.bands;
             lines.extend(chart.lines);
-        } else {
+        } else if !has_activity {
             lines.push(
                 if matches!(
                     section,
@@ -170,7 +173,12 @@ impl AnalyticsView {
             );
         }
 
-        let table_width = width.min(/*other*/ 56);
+        let chart_end = lines.len();
+        let table_width = if side_by_side {
+            44
+        } else {
+            width.min(/*other*/ 56)
+        };
         lines.push(Line::default());
         if self.zoomed {
             lines.push("─".repeat(table_width).dim().into());
@@ -193,7 +201,7 @@ impl AnalyticsView {
         };
         lines.push(truncate_line_with_ellipsis_if_overflow(
             vec![selected_date.clone().bold(), summary].into(),
-            width,
+            table_width,
         ));
         if self.zoomed {
             lines.push(columns(
@@ -318,7 +326,7 @@ impl AnalyticsView {
                 }
                 .set_style(secondary_style())
                 .into(),
-                width,
+                table_width,
             ));
             lines.resize(table_end, Line::default());
         }
@@ -332,6 +340,10 @@ impl AnalyticsView {
                     .set_style(secondary_style())
                     .into(),
             );
+        }
+        if side_by_side {
+            let table = lines.split_off(chart_end);
+            lines = super::render::join_columns(&lines, &table[1..], plot_width);
         }
         plot::Chart { lines, bands }
     }

@@ -33,8 +33,6 @@ fn analytics_tools_reflow_and_keep_independent_days() {
         (29, 28, [0, 0, 1])
     );
     press(&mut view, KeyCode::Char('r'));
-    press(&mut view, KeyCode::Char('z'));
-    press(&mut view, KeyCode::Char('z'));
     assert_eq!(
         (
             view.sections[Section::Plugins].cursor,

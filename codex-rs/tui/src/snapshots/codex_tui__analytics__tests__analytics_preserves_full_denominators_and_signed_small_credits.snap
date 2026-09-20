@@ -3,6 +3,7 @@ source: tui/src/analytics_tests.rs
 expression: "task.into_iter().chain(credits).map(|line|\nline.to_string()).collect::<Vec<_>>().join(\"\\n\")"
 ---
 Total usage · relative units
+Approximate · may be delayed up to 6 hours
 All usage by how each turn started
 
  100                                             100
@@ -11,7 +12,9 @@ All usage by how each turn started
                                                   ▲
      Aug 27 Aug 28 Aug 29 Aug 30 Aug 31  Sep 1  Sep 2
 
+──────────────────────────────────────────────────────
 Sep 2 · 100 usage units
+Turn start                                       Share
 ● Goals                                          30.0%
 -0.000004 credits
 
@@ -24,5 +27,7 @@ Sep 2 · 100 usage units
                                                   ▲
             27    28    29    30    31     1      2
 
+──────────────────────────────────────────────────────
 Sep 2 · -0.000004 credits
+Product                                        Credits
 ● CLI                                        -0.000004

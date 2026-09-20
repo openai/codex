@@ -106,7 +106,8 @@ impl AnalyticsView {
     }
 
     pub(super) fn task_lines(&self, width: usize) -> (Vec<Line<'static>>, Range<usize>) {
-        let width = width.clamp(/*min*/ 1, /*max*/ 110);
+        let row_width = width.clamp(/*min*/ 1, /*max*/ 111);
+        let width = row_width.saturating_sub(/*rhs*/ 1).max(/*other*/ 1);
         let wrap = |lines| word_wrap_lines(lines, RtOptions::new(width));
         let Some(chats) = self.tasks.ready() else {
             return (
@@ -239,6 +240,7 @@ impl AnalyticsView {
                     },
                     width,
                 )];
+                let header_len = row.len();
                 if self.zoomed && self.sections[Section::Chats].detail == Some(index) {
                     row.push("─".repeat(width).dim().into());
                     row.extend(word_wrap_lines(
@@ -305,7 +307,16 @@ impl AnalyticsView {
                     }
                     row.push(Line::default());
                 }
-                wrap(row)
+                let details = row.split_off(header_len);
+                let mut row = wrap(row);
+                // Wrap first: wrapping trims the highlighted trailing blank otherwise.
+                if selected {
+                    for line in &mut row {
+                        super::styles::select_row(line, row_width);
+                    }
+                }
+                row.extend(wrap(details));
+                row
             })
             .collect::<Vec<_>>();
         let mut coverage = vec![

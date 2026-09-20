@@ -64,7 +64,6 @@ fn analytics_exact_fit_content_has_no_scroll_hint() {
 #[test]
 fn analytics_narrow_charts_and_small_terminals_keep_valid_cursors() {
     let mut view = fixture::view(models::AccountKind::Consumer);
-    press(&mut view, KeyCode::Char('z'));
     for section in ['2', '3', '4'] {
         press(&mut view, KeyCode::Char(section));
         press(&mut view, KeyCode::Char('r'));
@@ -77,7 +76,6 @@ fn analytics_narrow_charts_and_small_terminals_keep_valid_cursors() {
         assert_eq!(view.sections[view.section].cursor, 29);
     }
     for _ in 0..2 {
-        press(&mut view, KeyCode::Char('z'));
         for width in [1, 4, 32, 107, 108] {
             screen(&mut view, width, /*height*/ 1);
         }
@@ -92,6 +90,7 @@ async fn analytics_credits_grouping_preserves_selected_day_and_total() {
     let (_home, _app_server, mut view) = client::tests::connected_view(&server, "business").await;
     test_support::settle(&mut view).await;
     press(&mut view, KeyCode::Char('2'));
+    test_support::settle(&mut view).await;
     press(&mut view, KeyCode::Left);
     let before = view.sections[Section::Credits]
         .history
@@ -171,7 +170,6 @@ fn analytics_preserves_full_denominators_and_signed_small_credits() {
     use crate::analytics::models::AccountAnalyticsDay;
     use crate::analytics::models::AccountAnalyticsValue;
     let mut view = fixture::view(models::AccountKind::Consumer);
-    press(&mut view, KeyCode::Char('z'));
     let mut history = fixture::history(/*report*/ 0, /*range*/ 0, /*group*/ 3);
     history.data = vec![AccountAnalyticsDay {
         date: "2026-09-02".parse().unwrap(),
@@ -326,7 +324,6 @@ fn analytics_dates_distinguish_zero_missing_and_exact_details() {
 #[test]
 fn analytics_model_labels_and_tool_remainders_are_unambiguous() {
     let mut view = fixture::view(models::AccountKind::Consumer);
-    press(&mut view, KeyCode::Char('z'));
     view.model_names
         .insert("GPT-5.6-Sol".into(), "Friendly model".into());
     let mut tools = fixture::history(/*report*/ 4, /*range*/ 0, /*group*/ 0);
@@ -620,10 +617,7 @@ mod chats_table;
 fn analytics_details_reflow_and_keep_focus() {
     let mut view = fixture::view(models::AccountKind::Enterprise);
     view.chats = Load::Ready(fixture::chats());
-    press(&mut view, KeyCode::Char('z'));
     press(&mut view, KeyCode::Char('6'));
-    press(&mut view, KeyCode::Enter);
-    assert!(view.zoomed);
     press(&mut view, KeyCode::Enter);
     screen(&mut view, /*width*/ 120, /*height*/ 42);
     view.follow_selection = true;

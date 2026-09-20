@@ -1,5 +1,6 @@
 //! Snapshot semantics and independent plan-period navigation without a live billing service.
 use super::*;
+use crate::analytics::AnalyticsView;
 use crate::analytics::fixture;
 use crate::analytics::models::AccountKind;
 use crate::analytics::sections::Section;
@@ -26,6 +27,93 @@ fn response() -> PlanLimitHistory {
         ]
     }))
     .unwrap()
+}
+
+#[tokio::test]
+async fn resize_keeps_visible_weekly_selection_and_respects_manual_scroll() {
+    let mut history = response();
+    for index in 0..12 {
+        let mut period = history.periods[0].clone();
+        period.id = format!("five-{index}");
+        history.periods.push(period);
+    }
+    let mut view = fixture::view(AccountKind::Consumer);
+    view.plan.enabled = true;
+    view.plan.report = Load::Ready(Report::parse(history).unwrap().unwrap());
+    view.plan.poll();
+    view.section = Section::Plan;
+    view.zoomed = false;
+    view.plan.expanded[0] = Some("five".into());
+    let dashboard = view.dashboard_lines(/*width*/ 120, /*height*/ 60).0;
+    assert!(
+        dashboard
+            .iter()
+            .any(|line| line.to_string().contains("Weekly limits"))
+    );
+    view.zoomed = true;
+    view.plan.expanded[0] = None;
+    let render = |view: &mut AnalyticsView, width, height| {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
+            .unwrap();
+        terminal.backend().to_string()
+    };
+    render(&mut view, /*width*/ 80, /*height*/ 24);
+    for code in [KeyCode::Char('z'), KeyCode::Right] {
+        view.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        render(&mut view, /*width*/ 80, /*height*/ 24);
+    }
+    view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(render(&mut view, /*width*/ 80, /*height*/ 24).contains("Sep 1 00:00 – Sep 8 00:00"));
+    render(&mut view, /*width*/ 120, /*height*/ 36);
+    view.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+    render(&mut view, /*width*/ 40, /*height*/ 16);
+    view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let narrow = render(&mut view, /*width*/ 40, /*height*/ 16);
+    assert!(view.scroll_offset() > 0);
+    assert!(narrow.contains("Sep 1 00:00 – Sep 8 00:00"));
+    assert!(narrow.contains("↑/↓ period · enter details"));
+    view.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+    render(&mut view, /*width*/ 40, /*height*/ 16);
+    let reading_position = view.scroll_offset();
+    assert!(!view.selection_visible);
+    for code in [KeyCode::Char('z'), KeyCode::Enter] {
+        view.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+        render(&mut view, /*width*/ 40, /*height*/ 16);
+    }
+    assert_eq!(view.scroll_offset(), reading_position);
+    view.handle_key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+    render(&mut view, /*width*/ 50, /*height*/ 16);
+    view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    render(&mut view, /*width*/ 50, /*height*/ 16);
+    assert_eq!(view.scroll_offset(), reading_position);
+    let mut tui = crate::tui::test_support::make_test_tui().unwrap();
+    let event = crate::tui::TuiEvent::Resize(ratatui::layout::Size {
+        width: 55,
+        height: 16,
+    });
+    tui.screen_size_for_event(&event).unwrap();
+    view.handle_event(&mut tui, event).unwrap();
+    assert_eq!(view.scroll_offset(), reading_position);
+
+    let mut history = response();
+    let breakdown = &mut history.periods[0].breakdowns.as_mut().unwrap()[1];
+    breakdown.rows = vec![breakdown.rows[0].clone(); 20];
+    view.plan.report = Load::Ready(Report::parse(history).unwrap().unwrap());
+    view.plan.poll();
+    view.plan.window = 0;
+    view.sections[Section::Plan].group = 1;
+    view.plan.expanded[0] = Some("five".into());
+    view.follow_selection = true;
+    render(&mut view, /*width*/ 58, /*height*/ 16);
+    view.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+    render(&mut view, /*width*/ 58, /*height*/ 16);
+    let reading_position = view.scroll_offset();
+    assert!(reading_position > 0);
+    render(&mut view, /*width*/ 60, /*height*/ 16);
+    assert_eq!(view.scroll_offset(), reading_position);
 }
 
 #[test]
@@ -186,29 +274,15 @@ async fn plan_gate_prevents_requests_and_unavailable_plan_does_not_block_other_r
 }
 
 #[test]
-fn plan_overview_escape_closes_with_retained_expansion() {
-    let mut history = response();
-    for index in 1..12 {
-        let mut period = history.periods[0].clone();
-        period.id = format!("five-{index}");
-        history.periods.push(period);
-    }
+fn plan_escape_collapses_details_before_closing() {
     let mut view = fixture::view(AccountKind::Consumer);
     view.plan.enabled = true;
-    view.plan.report = Load::Ready(Report::parse(history).unwrap().unwrap());
+    view.plan.report = Load::Ready(Report::parse(response()).unwrap().unwrap());
     view.plan.poll();
     view.section = Section::Plan;
     view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    view.handle_key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
-        /*width*/ 120, /*height*/ 60,
-    ))
-    .unwrap();
-    terminal
-        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
-        .unwrap();
-    let output = terminal.backend().to_string();
-    assert!(output.contains("Latest period · 12 total") && output.contains("Weekly limits"));
+    view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(!view.is_done);
     view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(view.is_done);
 }

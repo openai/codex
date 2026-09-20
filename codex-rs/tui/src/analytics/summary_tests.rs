@@ -44,10 +44,9 @@ fn summary_modes_reflow_and_keep_selection_across_tabs() {
     screen(&mut view, /*width*/ 64, /*height*/ 18);
     press(&mut view, KeyCode::End);
     screen(&mut view, /*width*/ 64, /*height*/ 18);
-    assert!(view.scroll_offset > 0);
+    assert!(view.scroll_offset() > 0);
     press(&mut view, KeyCode::Home);
-    assert_eq!(view.scroll_offset, 0);
-    press(&mut view, KeyCode::Char('z'));
+    assert_eq!(view.scroll_offset(), 0);
     press(&mut view, KeyCode::Esc);
     assert!(view.is_done);
 }
@@ -68,7 +67,7 @@ fn partial_summary_keeps_missing_values_and_zero() {
 }
 
 #[tokio::test]
-async fn summary_loads_once_per_refresh_and_does_not_block_other_reports() {
+async fn summary_loads_once_per_open_and_does_not_block_other_reports() {
     use wiremock::Mock;
     use wiremock::ResponseTemplate;
     use wiremock::matchers::header;
@@ -98,10 +97,14 @@ async fn summary_loads_once_per_refresh_and_does_not_block_other_reports() {
     assert!(view.sections[Section::Usage].history.ready().is_some());
     press(&mut view, KeyCode::Char('g'));
     press(&mut view, KeyCode::Tab);
+    test_support::settle(&mut view).await;
+    assert!(view.sections[Section::Usage].history.ready().is_some());
     press(&mut view, KeyCode::BackTab);
     test_support::settle(&mut view).await;
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
-    press(&mut view, KeyCode::Char('R'));
+    let (config, handle, frame) = view.connection.as_ref().unwrap().clone();
+    view.cancel_loads();
+    view.open(handle, frame, Vec::new(), config);
     test_support::settle(&mut view).await;
     assert_eq!(
         view.profile.ready().unwrap().stats.tokens.lifetime_tokens,

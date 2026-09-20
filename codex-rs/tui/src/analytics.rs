@@ -75,7 +75,10 @@ pub(crate) struct AnalyticsView {
     section: Section,
     show_help: bool,
     zoomed: bool,
-    scroll_offset: usize,
+    dashboard_scroll: usize,
+    body_area: ratatui::layout::Rect,
+    report_area: ratatui::layout::Rect,
+    selection_visible: bool,
     help_scroll: usize,
     follow_selection: bool,
     viewport_height: usize,
@@ -104,7 +107,10 @@ impl AnalyticsView {
             section: Section::Summary,
             show_help: false,
             zoomed: true,
-            scroll_offset: 0,
+            dashboard_scroll: 0,
+            body_area: ratatui::layout::Rect::default(),
+            report_area: ratatui::layout::Rect::default(),
+            selection_visible: false,
             help_scroll: 0,
             follow_selection: true,
             viewport_height: 1,
@@ -425,7 +431,12 @@ impl AnalyticsView {
         let chart = self.section != Section::Chats;
         let count = self.row_count().max(/*other*/ 1);
         let mut scroll_offset = self.scroll_offset();
-        let SectionState { cursor, detail, .. } = &mut self.sections[self.section];
+        let SectionState {
+            cursor,
+            detail,
+            follow_selection_on_focus,
+            ..
+        } = &mut self.sections[self.section];
         let previous_cursor = *cursor;
         match action {
             Some(ListAction::MoveUp) => *cursor = cursor.saturating_sub(/*rhs*/ 1),
@@ -460,6 +471,7 @@ impl AnalyticsView {
         } else if !chart && *cursor != previous_cursor {
             *detail = None;
         }
+        *follow_selection_on_focus |= !self.zoomed && *cursor != previous_cursor;
         *self.scroll_offset_mut() = scroll_offset;
     }
 
@@ -487,9 +499,8 @@ impl AnalyticsView {
                 tui.frame_requester().schedule_frame();
             }
             TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {
-                if matches!(event, TuiEvent::Resize(_)) && !self.show_help {
-                    self.follow_selection = true;
-                }
+                // Rendering follows a selection on resize only when it was visible before
+                // reflow. Preserve an intentional reading position away from that selection.
                 tui.draw(u16::MAX, |frame| self.render(frame.area(), frame.buffer))?;
             }
             _ => {}

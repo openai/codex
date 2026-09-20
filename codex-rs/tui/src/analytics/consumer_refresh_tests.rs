@@ -71,7 +71,7 @@ fn consumer_chats_keep_missing_rows_and_only_offer_known_metrics() {
 }
 
 #[test]
-fn consumer_overview_shows_top_five_and_closes_with_retained_details() {
+fn consumer_chats_show_all_rows_and_collapse_details_before_closing() {
     let mut view = fixture::view(models::AccountKind::Consumer);
     view.section = Section::Chats;
     view.tasks = Load::Ready(Chats {
@@ -84,18 +84,20 @@ fn consumer_overview_shows_top_five_and_closes_with_retained_details() {
         }).collect(),
         ..Chats::default()
     });
+    screen(&mut view, /*width*/ 120, /*height*/ 42);
     press(&mut view, KeyCode::End);
     press(&mut view, KeyCode::Enter);
     assert_eq!(view.sections[Section::Chats].detail, Some(5));
-    press(&mut view, KeyCode::Char('z'));
     let content = view
         .task_lines(/*width*/ 70)
         .0
         .iter()
-        .map(ToString::to_string)
+        .map(|line| line.to_string().trim_end().to_owned())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(content.contains("Task 5") && !content.contains("Task 0"));
+    assert!(content.contains("Task 5") && content.contains("Task 0"));
+    press(&mut view, KeyCode::Esc);
+    assert!(!view.is_done);
     press(&mut view, KeyCode::Esc);
     assert!(view.is_done);
 }

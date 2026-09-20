@@ -126,3 +126,60 @@ fn analytics_sections_adapt_to_terminal_colors() {
         });
     }
 }
+
+#[test]
+fn chat_selection_keeps_a_highlighted_trailing_blank_after_wrapping() {
+    with_test_default_colors(
+        DefaultColors {
+            fg: (30, 30, 30),
+            bg: (255, 255, 255),
+        },
+        || {
+            for kind in [models::AccountKind::Business, models::AccountKind::Consumer] {
+                let mut view = fixture::view(kind);
+                view.section = Section::Chats;
+                view.tasks = Load::Ready(tasks::Chats {
+                    rows: vec![tasks::Chat {
+                        title: "Building Analytics".into(),
+                        task: Some(
+                            serde_json::from_value(serde_json::json!({
+                                "thread_id": "padding-fixture",
+                                "data_status": "available",
+                                "usage_source": "credits",
+                                "weekly_limit_percent": 42.0,
+                                "five_hour_limit_percent": 15.0,
+                                "balance_usage_credits": "35.83",
+                                "groups": []
+                            }))
+                            .unwrap(),
+                        ),
+                    }],
+                    ..tasks::Chats::default()
+                });
+                for width in [40, 120] {
+                    let area = Rect::new(/*x*/ 0, /*y*/ 0, width, /*height*/ 30);
+                    let mut buffer = Buffer::empty(area);
+                    view.render(area, &mut buffer);
+                    let selection = crate::bottom_pane::selection_style().bg.unwrap();
+                    let selected_rows = buffer
+                        .content
+                        .chunks(usize::from(width))
+                        .skip(usize::from(view.body_area.y))
+                        .take(usize::from(view.body_area.height))
+                        .filter(|row| row.iter().any(|cell| cell.bg == selection))
+                        .collect::<Vec<_>>();
+                    assert!(!selected_rows.is_empty());
+                    for row in selected_rows {
+                        let end = row.iter().rposition(|cell| cell.bg == selection).unwrap();
+                        assert_eq!(row[end].symbol(), " ");
+                        assert!(
+                            row[..end]
+                                .iter()
+                                .any(|cell| !cell.symbol().trim().is_empty())
+                        );
+                    }
+                }
+            }
+        },
+    );
+}

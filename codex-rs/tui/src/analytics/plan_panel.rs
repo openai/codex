@@ -7,7 +7,6 @@ use super::render::join_columns;
 use super::sections::Section;
 use super::styles::secondary_style;
 use crate::keymap::ListAction;
-use crate::style::accent_style;
 use codex_backend_client::PlanLimitDimension;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
@@ -23,6 +22,7 @@ impl AnalyticsView {
             .ready()
             .map(|report| &report.periods[window]);
         let count = periods.map_or(/*default*/ 0, Vec::len);
+        let mut scroll_offset = self.scroll_offset();
         let cursor = &mut self.plan.cursor[window];
         let previous_cursor = *cursor;
         match action {
@@ -44,14 +44,14 @@ impl AnalyticsView {
                 }
             }
             Some(ListAction::Cancel) => {
-                self.is_done |= !self.zoomed || self.plan.expanded[window].take().is_none();
+                self.is_done |= self.plan.expanded[window].take().is_none();
             }
             Some(ListAction::PageDown) => {
-                self.scroll_offset += self.viewport_height;
+                scroll_offset += self.viewport_height;
                 self.follow_selection = false;
             }
             Some(ListAction::PageUp) => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(self.viewport_height);
+                scroll_offset = scroll_offset.saturating_sub(self.viewport_height);
                 self.follow_selection = false;
             }
             None => {}
@@ -59,6 +59,9 @@ impl AnalyticsView {
         if *cursor != previous_cursor {
             self.plan.expanded[window] = None;
         }
+        self.sections[Section::Plan].follow_selection_on_focus |=
+            !self.zoomed && (self.plan.window != window || *cursor != previous_cursor);
+        *self.scroll_offset_mut() = scroll_offset;
     }
 
     pub(super) fn plan_lines(&self, width: usize) -> (Vec<Line<'static>>, Range<usize>) {
@@ -103,31 +106,26 @@ impl AnalyticsView {
                 {
                     let start = lines.len();
                     let selected = self.plan.cursor[window] == index;
-                    let label = if !self.zoomed {
-                        format!("Latest period · {} total", report.periods[window].len())
-                    } else {
-                        format!(
-                            "{} {} – {}{}",
-                            if selected { "›" } else { " " },
-                            period.start.format("%b %-d %H:%M"),
-                            period.end.format("%b %-d %H:%M"),
-                            if period.start <= report.as_of && period.end > report.as_of {
-                                " *"
-                            } else {
-                                ""
-                            }
-                        )
-                    };
+                    let label = format!(
+                        "{} {} – {}{}",
+                        if selected { "›" } else { " " },
+                        period.start.format("%b %-d %H:%M"),
+                        period.end.format("%b %-d %H:%M"),
+                        if period.start <= report.as_of && period.end > report.as_of {
+                            " *"
+                        } else {
+                            ""
+                        }
+                    );
                     let amount = period
                         .used
                         .map(|value| format!("{}%", data::amount(value / 100.0)))
                         .unwrap_or_else(|| "Not available".into());
-                    let row = columns(label.into(), amount.into(), table_width);
-                    lines.push(if selected && self.plan.window == window {
-                        row.set_style(accent_style())
-                    } else {
-                        row
-                    });
+                    let mut row = columns(label.into(), amount.into(), table_width);
+                    if selected && self.plan.window == window {
+                        super::styles::select_row(&mut row, table_width);
+                    }
+                    lines.push(row);
                     if self.zoomed && self.plan.expanded[window].as_ref() == Some(&period.id) {
                         if !period.complete {
                             lines.push(
@@ -228,13 +226,8 @@ impl AnalyticsView {
             }
             lines.push(
                 format!(
-                    "Usage as of {} UTC{}",
-                    as_of.format("%b %-d %H:%M"),
-                    if self.zoomed {
-                        " · * current at last update"
-                    } else {
-                        ""
-                    }
+                    "Usage as of {} UTC · * current at last update",
+                    as_of.format("%b %-d %H:%M")
                 )
                 .dim()
                 .into(),
