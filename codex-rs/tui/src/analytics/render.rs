@@ -149,12 +149,15 @@ impl AnalyticsView {
             .iter()
             .position(|section| *section == self.section)
             .unwrap_or_default();
-        crate::bottom_pane::render_filled_tab_bar(
+        self.tab_hits = crate::bottom_pane::render_filled_tab_bar(
             &labels.iter().map(String::as_str).collect::<Vec<_>>(),
             selected,
             tabs,
             buf,
-        );
+        )
+        .into_iter()
+        .map(|(index, rect)| (visible[index], rect))
+        .collect();
         // Keep a visible selection on screen across reflow, while retaining intentional
         // reading positions when the user has scrolled away from that selection.
         if !self.show_help && self.report_area != body && self.selection_visible {
@@ -216,7 +219,8 @@ impl AnalyticsView {
             }
         }
         let scrollable = lines.len() > self.viewport_height;
-        scroll_offset = scroll_offset.min(lines.len().saturating_sub(self.viewport_height));
+        self.max_scroll = lines.len().saturating_sub(self.viewport_height);
+        scroll_offset = scroll_offset.min(self.max_scroll);
         *self.scroll_offset_mut() = scroll_offset;
         self.follow_selection = false;
         if !self.show_help {
@@ -234,6 +238,7 @@ impl AnalyticsView {
                 /*offset*/ (scroll_offset.min(usize::from(u16::MAX)) as u16, 0),
             )
             .render(body, buf);
+        self.mouse_context = Some((self.section, self.show_help, self.zoomed));
         Paragraph::new(self.footer_lines(width, scrollable))
             .style(secondary_style())
             .render(hints, buf);

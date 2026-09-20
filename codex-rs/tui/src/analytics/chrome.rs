@@ -1,4 +1,4 @@
-//! Report navigation and bounded keyboard help for the full-screen usage view.
+//! Report navigation and bounded keyboard/mouse help for the full-screen usage view.
 //! Each report retains its own reading position; help never replaces its selection or draft.
 
 use super::AnalyticsView;
@@ -121,6 +121,7 @@ impl AnalyticsView {
                 self.hint(ListAction::PageUp),
                 self.hint(ListAction::PageDown)
             ),
+            "In alternate screen: mouse wheel · scroll; click tabs or report controls".into(),
         ];
         if self.control_available(Control::Range) {
             controls.push("r · switch between 7 and 30 days".into());

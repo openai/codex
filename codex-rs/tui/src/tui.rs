@@ -599,7 +599,6 @@ pub(crate) enum OverlayInput {
     Default,
     Transcript,
     StaticPager,
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     Usage,
 }
 

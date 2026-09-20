@@ -1,4 +1,4 @@
-//! Visible report controls, update times, and shared keyboard actions.
+//! Visible report controls and update times. Mouse targets and keyboard shortcuts invoke the same semantic actions.
 //! Their reserved rows depend only on terminal width, so loading never shifts the report body.
 
 use super::AnalyticsView;
@@ -16,7 +16,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Widget;
 
-/// Report actions shared by keyboard dispatch, visible controls, and help.
+/// A mouse action is independent of a user's remapped or disabled arrow bindings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Control {
     Range,
@@ -54,6 +54,8 @@ impl AnalyticsView {
         if !self.control_available(control) {
             return;
         }
+        // Labels can change width; wait for their new painted positions before another click.
+        self.invalidate_mouse_targets();
         match control {
             Control::ZeroCreditGroups => {
                 self.show_zero_credit_groups = !self.show_zero_credit_groups
@@ -101,6 +103,7 @@ impl AnalyticsView {
     }
 
     pub(super) fn render_controls(&mut self, area: Rect, buf: &mut Buffer) {
+        self.control_hits.clear();
         if area.is_empty() {
             return;
         }
@@ -237,7 +240,7 @@ impl AnalyticsView {
             .take(usize::from(area.height.saturating_sub(/*rhs*/ 1)))
         {
             let mut x = area.x;
-            for (_, line) in controls {
+            for (key, line) in controls {
                 if x > area.x {
                     " · ".dim().render(
                         Rect::new(
@@ -262,6 +265,9 @@ impl AnalyticsView {
                     /*height*/ 1,
                 );
                 line.render(hit, buf);
+                if !hit.is_empty() {
+                    self.control_hits.push((key, hit));
+                }
                 x = hit.right();
             }
         }

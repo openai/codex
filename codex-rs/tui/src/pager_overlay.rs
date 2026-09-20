@@ -72,7 +72,7 @@ impl Overlay {
         let input = match self {
             Overlay::Transcript(_) => tui::OverlayInput::Transcript,
             Overlay::Static(_) => tui::OverlayInput::StaticPager,
-            Overlay::Analytics(_) => tui::OverlayInput::Default,
+            Overlay::Analytics(_) => tui::OverlayInput::Usage,
         };
         tui.set_overlay_input(input)?;
         let result = match self {

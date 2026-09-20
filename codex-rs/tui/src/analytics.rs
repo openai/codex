@@ -18,6 +18,7 @@ mod data;
 mod fixture;
 mod hints;
 mod models;
+mod mouse;
 mod normalize;
 mod panels;
 mod plan;
@@ -49,6 +50,8 @@ use codex_app_server_client::AppServerRequestHandle;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::MouseButton;
+use crossterm::event::MouseEventKind;
 use data::Load;
 use sections::Section;
 use sections::SectionState;
@@ -78,6 +81,10 @@ pub(crate) struct AnalyticsView {
     dashboard_scroll: usize,
     body_area: ratatui::layout::Rect,
     report_area: ratatui::layout::Rect,
+    tab_hits: Vec<(Section, ratatui::layout::Rect)>,
+    control_hits: Vec<(controls::Control, ratatui::layout::Rect)>,
+    mouse_context: Option<(Section, bool, bool)>,
+    max_scroll: usize,
     selection_visible: bool,
     help_scroll: usize,
     follow_selection: bool,
@@ -110,6 +117,10 @@ impl AnalyticsView {
             dashboard_scroll: 0,
             body_area: ratatui::layout::Rect::default(),
             report_area: ratatui::layout::Rect::default(),
+            tab_hits: Vec::new(),
+            control_hits: Vec::new(),
+            mouse_context: None,
+            max_scroll: 0,
             selection_visible: false,
             help_scroll: 0,
             follow_selection: true,
@@ -148,6 +159,7 @@ impl AnalyticsView {
     }
 
     pub(crate) fn refresh(&mut self) {
+        self.invalidate_mouse_targets();
         self.end_date = chrono::Utc::now().date_naive();
         self.live = self.connection.as_ref().map(|(config, _, _)| {
             std::sync::Arc::new(client::Live::new(
@@ -189,6 +201,7 @@ impl AnalyticsView {
 
     /// Abort work when closing or invalidating a retained view; reopening starts fresh requests.
     pub(crate) fn cancel_loads(&mut self) {
+        self.invalidate_mouse_targets();
         for section in &mut self.sections.0 {
             section.history = Load::Unavailable;
         }
@@ -496,6 +509,17 @@ impl AnalyticsView {
                     self.account = Load::Unavailable;
                     self.connection = None;
                 }
+                tui.frame_requester().schedule_frame();
+            }
+            TuiEvent::Mouse(mouse)
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::Down(MouseButton::Left)
+                        | MouseEventKind::ScrollUp
+                        | MouseEventKind::ScrollDown
+                ) =>
+            {
+                self.handle_mouse(mouse);
                 tui.frame_requester().schedule_frame();
             }
             TuiEvent::Draw | TuiEvent::Resume | TuiEvent::Resize(_) | TuiEvent::FocusGained => {

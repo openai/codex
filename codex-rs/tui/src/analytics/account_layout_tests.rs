@@ -140,7 +140,17 @@ async fn business_tokens_filter_models() {
     fixture::seed_reports(&mut view);
     assert_eq!(view.token_model.as_deref(), Some("GPT-5.5"));
     screen(&mut view, /*width*/ 100, /*height*/ 30);
-    press(&mut view, KeyCode::Char('m'));
+    let (_, target) = view
+        .control_hits
+        .iter()
+        .find(|(control, _)| *control == crate::analytics::controls::Control::Model)
+        .unwrap();
+    view.handle_mouse(crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: target.x,
+        row: target.y,
+        modifiers: KeyModifiers::NONE,
+    });
     test_support::settle(&mut view).await;
     fixture::seed_reports(&mut view);
     assert_eq!(view.token_model, None);

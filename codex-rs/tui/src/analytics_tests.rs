@@ -662,3 +662,6 @@ fn analytics_details_reflow_and_keep_focus() {
 
 #[path = "analytics/dashboard_tests.rs"]
 mod dashboard;
+
+#[path = "analytics/mouse_tests.rs"]
+mod mouse;
