@@ -6,11 +6,11 @@ expression: "screen(&view, 40, 12)"
   ‹  Working 0   Ready 1   Inactive 1
   ────────────────────────────────────
   Search tasks · f
-  ↑   Tasks
+      Tasks
+  /tmp/project  1 of 3
   › ○ Unloaded task
 
-  ↑↓ navigate o resume enter open
-  n new w new worktree f search
-  g group: project r rename x stop
-  h hide a archive del delete
-  ctrl+c quit
+
+
+
+  ? help  esc back  enter open  n new…

@@ -4,9 +4,6 @@
 #[path = "agent_center/mod.rs"]
 pub(super) mod command_center;
 
-#[path = "agents_overview_render.rs"]
-mod render;
-
 #[path = "agents_overview_grouping.rs"]
 mod grouping;
 
@@ -137,6 +134,7 @@ pub(super) struct AgentsOverviewViewState {
     scroll: usize,
     page_height: usize,
     status_filter: usize,
+    help: bool,
     pub(super) input: String,
     pub(super) key_chord_hint: Option<Vec<(String, String)>>,
     pub(super) creating_worktree: bool,
@@ -518,10 +516,6 @@ impl BottomPaneView for AgentsOverviewView {
         if self.command_center_key(key) {
             return;
         }
-        if key.code == KeyCode::Esc {
-            self.on_ctrl_c();
-            return;
-        }
         if key.code == KeyCode::Backspace
             && self.state().editing_metadata()
             && key.modifiers.is_empty()
@@ -658,7 +652,9 @@ impl BottomPaneView for AgentsOverviewView {
                 }
                 ListAction::Accept => self.activate(),
                 ListAction::Cancel => {
-                    self.on_ctrl_c();
+                    if matches!(self.on_ctrl_c(), CancellationEvent::NotHandled) {
+                        self.state().completion = Some(ViewCompletion::Cancelled);
+                    }
                 }
                 ListAction::PageUp | ListAction::PageDown => {
                     self.page_selection(action);

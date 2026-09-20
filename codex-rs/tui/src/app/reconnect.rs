@@ -271,6 +271,7 @@ impl App {
                 .view_state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.connection_notice = None;
             if state.creating_worktree {
                 state.creating_worktree = false;
                 self.pending_managed_worktree_creation = false;
@@ -443,9 +444,6 @@ impl App {
         // A hidden overview performs this discovery when it is next opened.
         self.agents_overview.initialized = false;
         if self.reconnect.presentation == ReconnectPresentation::Overview {
-            if let Ok(mut state) = self.agents_overview.view_state.lock() {
-                state.connection_notice = None;
-            }
             let threads = self
                 .agents_overview
                 .threads

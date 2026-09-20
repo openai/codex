@@ -1,0 +1,28 @@
+---
+source: tui/src/app/agent_center_tests.rs
+expression: "screen(&view, 40, 24)"
+---
+  Agent command center  Group: Projec…
+   All 3   Needs you 1   Working 0   ›
+  ────────────────────────────────────
+  Task shortcuts
+
+  tab/shift+tab filter  n new  w new
+  worktree  o resume  f search  g
+  group  r rename  x stop  a archive
+  h hide  del delete  ↑ up  ↓ down
+  enter open  pgup page up  pgdn page
+  down  ctrl+c quit
+
+
+
+
+
+
+
+
+
+
+
+
+  esc back

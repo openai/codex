@@ -1,4 +1,4 @@
-//! Task rows, metadata editing and read-only details share a wide/narrow layout.
+//! Status tabs, task rows and read-only details share a simple wide/narrow layout.
 
 use super::hints::hint_line;
 use super::*;
@@ -48,9 +48,8 @@ struct CenterLayout {
 
 impl AgentsOverviewView {
     fn center_layout(&self, area: Rect) -> CenterLayout {
-        let footer_height = (self.footer_lines(area.width.saturating_sub(4)).len() as u16)
-            .min(area.height.saturating_sub(4));
         let state = self.state();
+        let footer_height = u16::from(area.height >= 2);
         let header_height = if area.height >= 6 { 3 } else { 0 };
         let footer = row(area, area.height - footer_height, footer_height);
         let header = row(area, /*offset*/ 0, header_height);
@@ -123,7 +122,7 @@ impl Renderable for AgentsOverviewView {
         let layout = self.center_layout(area);
         let inset =
             |area: Rect| area.inner(Margin::new(/*horizontal*/ 2, /*vertical*/ 0));
-        let footer_lines = self.footer_lines(area.width.saturating_sub(4));
+        let footer_hints = self.center_footer_hints();
         let search_key = self
             .agents_keymap
             .primary_hint("search", &self.agents_keymap.search)
@@ -223,12 +222,31 @@ impl Renderable for AgentsOverviewView {
                 (state.refresh_failed && !state.loading).then(|| "Error loading tasks".to_owned())
             })
             .or_else(|| state.server_version_notice.clone());
-        if let Some(notice) = notice.filter(|_| state.key_chord_hint.is_none()) {
+        if let Some(notice) = notice.filter(|_| !state.help && state.key_chord_hint.is_none()) {
             line(notice.dim(), inset(layout.footer), buf);
         } else {
-            Paragraph::new(footer_lines).render(inset(layout.footer), buf);
+            line(hint_line(&footer_hints), inset(layout.footer), buf);
         }
+        let help = state.help;
         drop(state);
+        if help {
+            let body = row(
+                area,
+                layout.header.height,
+                layout.footer.y - layout.header.bottom(),
+            );
+            Clear.render(inset(body), buf);
+            let lines = crate::wrapping::word_wrap_lines(
+                vec![
+                    "Task shortcuts".bold().into(),
+                    Line::default(),
+                    hint_line(&self.center_task_hints()),
+                ],
+                usize::from(inset(body).width),
+            );
+            Paragraph::new(lines).render(inset(body), buf);
+            return;
+        }
         for y in layout.gap.y..layout.gap.bottom() {
             if layout.gap.width > 1 {
                 buf[(layout.gap.x + 1, y)]

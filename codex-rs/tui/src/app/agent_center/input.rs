@@ -1,6 +1,7 @@
-//! Status-tab shortcuts yield to configured task and list bindings.
+//! Tab filters and shortcut help yield to configured task and list bindings.
 
 use super::*;
+use crossterm::event::KeyEventKind;
 
 impl AgentsOverviewView {
     pub(in crate::app::agents_overview_view) fn command_center_key(
@@ -8,11 +9,39 @@ impl AgentsOverviewView {
         key: KeyEvent,
     ) -> bool {
         if self.state().editing_metadata() {
+            if self.keymap.action_for(key) == Some(ListAction::Cancel) {
+                self.on_ctrl_c();
+                return true;
+            }
             return false;
         }
         let mut state = self.state();
+        if state.help && self.keymap.action_for(key) == Some(ListAction::Cancel) {
+            state.help = false;
+            return true;
+        }
+        if state.help {
+            if key.code == KeyCode::Char('?')
+                && key.kind == KeyEventKind::Press
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            {
+                state.help = false;
+            }
+            return true;
+        }
         if self.center_shortcut_keys.is_pressed(key) {
             return false;
+        }
+        if key.code == KeyCode::Char('?')
+            && key.kind == KeyEventKind::Press
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            state.help = !state.help;
+            return true;
         }
         if key.code == KeyCode::Tab
             && !key

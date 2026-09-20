@@ -79,12 +79,7 @@ async fn older_server_notice_is_visible_in_agents_overview() {
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-    insta::assert_snapshot!(
-        rendered
-            .lines()
-            .find(|line| line.contains("Service v0.153.0") || line.contains("Service v0.152.1"))
-            .unwrap()
-    );
+    insta::assert_snapshot!(rendered.lines().last().unwrap());
 }
 
 #[tokio::test]
@@ -95,7 +90,7 @@ async fn server_version_overview_notice_updates_and_clears() {
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-    insta::assert_snapshot!(rendered.lines().find(|line| line.contains("Service v0.151.0")).unwrap(), @"  Service v0.151.0 < Codex CLI v0.153.0");
+    insta::assert_snapshot!(rendered.lines().last().unwrap(), @"  Service v0.151.0 < Codex CLI v0.153.0");
 
     app.update_server_version_overview_notice("0.153.0", /*server_version*/ None);
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
@@ -2605,90 +2600,6 @@ fn trust_fixture_folders(app: &mut App) {
 
 #[path = "agents_overview_usage_tests.rs"]
 mod usage;
-
-#[tokio::test]
-async fn command_center_escape_cancels_editors_and_never_closes_list() {
-    for (vim, offline, empty, running) in [
-        (false, false, false, false),
-        (true, false, false, false),
-        (false, true, false, false),
-        (false, false, true, false),
-        (false, false, false, true),
-    ] {
-        let (mut app, mut rx, mut op_rx) = crate::app::tests::make_test_app_with_channels().await;
-        if vim {
-            app.chat_widget.toggle_vim_mode_and_notify();
-        }
-        if running {
-            app.chat_widget.handle_server_notification(
-                ServerNotification::TurnStarted(
-                    codex_app_server_protocol::TurnStartedNotification {
-                        thread_id: ThreadId::new().to_string(),
-                        turn: codex_app_server_protocol::Turn {
-                            id: "running".into(),
-                            items_view: codex_app_server_protocol::TurnItemsView::Full,
-                            items: Vec::new(),
-                            status: codex_app_server_protocol::TurnStatus::InProgress,
-                            error: None,
-                            started_at: None,
-                            completed_at: None,
-                            duration_ms: None,
-                        },
-                    },
-                ),
-                /*replay_kind*/ None,
-            );
-            assert!(app.chat_widget.is_task_running_for_test());
-        }
-        while rx.try_recv().is_ok() {}
-        let rows = if empty {
-            Vec::new()
-        } else {
-            vec![overview_thread(
-                ThreadId::new(),
-                /*parent_thread_id*/ None,
-                "Task",
-                ThreadStatus::Idle,
-            )]
-        };
-        let mut view = app.agents_overview_view(rows, /*selected_thread_id*/ None);
-        if offline {
-            app.agents_overview
-                .view_state
-                .lock()
-                .unwrap()
-                .connection_notice = Some("Offline");
-        }
-        view.handle_key_event(KeyCode::Char('f').into());
-        view.handle_paste("nwogrxfha".into());
-        assert!(rx.try_recv().is_err());
-        view.handle_key_event(KeyCode::Esc.into());
-        if !empty {
-            assert_eq!(view.selected_index(), Some(0));
-        }
-        assert_eq!(
-            view.on_ctrl_c(),
-            crate::bottom_pane::CancellationEvent::NotHandled
-        );
-        app.chat_widget.show_bottom_pane_view(Box::new(view));
-        for _ in 0..3 {
-            app.chat_widget.handle_key_event(KeyCode::Esc.into());
-        }
-        assert!(
-            app.chat_widget
-                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
-                .is_some()
-        );
-        assert!(rx.try_recv().is_err());
-        app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        assert!(op_rx.try_recv().is_err());
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(AppEvent::Exit(crate::app_event::ExitMode::ShutdownFirst))
-        ));
-    }
-}
 
 #[tokio::test]
 async fn command_center_new_actions_use_selection_and_leave_metadata_text_alone() {

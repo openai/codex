@@ -235,7 +235,8 @@ async fn live_center_rename_retains_target_when_status_leaves_filter() -> Result
 
 #[tokio::test]
 async fn live_center_navigation_and_complete_hints() {
-    let app = make_test_app().await;
+    let mut app = make_test_app().await;
+    app.config.features.enable(Feature::Worktrees).unwrap();
     let ready = ThreadId::from_u128(/*value*/ 42);
     let needs_you = ThreadId::from_u128(/*value*/ 43);
     let unloaded = ThreadId::from_u128(/*value*/ 44);
@@ -273,17 +274,105 @@ async fn live_center_navigation_and_complete_hints() {
         screen(&view, /*width*/ 40, /*height*/ 12)
     );
     view.handle_key_event(KeyCode::Tab.into());
+
+    let repeat_help =
+        KeyEvent::new_with_kind(KeyCode::Char('?'), KeyModifiers::NONE, KeyEventKind::Repeat);
+    view.handle_key_event(KeyCode::Char('?').into());
+    view.handle_key_event(repeat_help);
+    insta::assert_snapshot!(screen(&view, /*width*/ 40, /*height*/ 24));
+    view.handle_key_event(KeyCode::Esc.into());
+    view.handle_key_event(repeat_help);
+    assert!(screen(&view, /*width*/ 40, /*height*/ 24).contains("Search tasks"));
+    assert!(!view.is_complete());
+    view.handle_key_event(KeyCode::Esc.into());
+    assert!(view.is_complete());
 }
 
 #[tokio::test]
 async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
     let mut app = make_test_app().await;
-    let config: TuiKeymap = toml::from_str("[agents]\nresume = 'tab'").unwrap();
+    let config: TuiKeymap = toml::from_str("[list]\ncancel = 'q'").unwrap();
     app.keymap = RuntimeKeymap::from_config(&config).unwrap();
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    app.app_event_tx = AppEventSender::new(tx);
-    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
-    view.handle_key_event(KeyCode::Tab.into());
-    assert!(matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker)));
-    assert!(rx.try_recv().is_err());
+    for editor_key in ['f', 'r'] {
+        let mut view = app.agents_overview_view(
+            vec![overview_thread(
+                ThreadId::from_u128(/*value*/ 42),
+                /*parent_thread_id*/ None,
+                "Task",
+                ThreadStatus::Idle,
+            )],
+            /*selected_thread_id*/ None,
+        );
+        view.handle_key_event(KeyCode::Char(editor_key).into());
+        assert!(
+            app.agents_overview
+                .view_state
+                .lock()
+                .unwrap()
+                .editing_metadata()
+        );
+        view.handle_key_event(KeyCode::Char('q').into());
+        assert!(
+            !app.agents_overview
+                .view_state
+                .lock()
+                .unwrap()
+                .editing_metadata()
+        );
+        assert!(!view.is_complete());
+    }
+    for (binding, key) in [
+        ("tab", KeyEvent::from(KeyCode::Tab)),
+        ("?", KeyEvent::from(KeyCode::Char('?'))),
+        (
+            "shift-?",
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT),
+        ),
+        ("f9", KeyEvent::from(KeyCode::F(9))),
+        ("enter", KeyEvent::from(KeyCode::Enter)),
+    ] {
+        let mut app = make_test_app().await;
+        let config: TuiKeymap = toml::from_str(&format!(
+            "[list]\ncancel = 'f9'\n[agents]\nresume = '{binding}'"
+        ))
+        .unwrap();
+        app.keymap = RuntimeKeymap::from_config(&config).unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        app.app_event_tx = AppEventSender::new(tx);
+        let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+        view.handle_key_event(KeyCode::Esc.into());
+        assert!(!view.is_complete());
+        if key.code == KeyCode::Char('?') {
+            assert!(!screen(&view, /*width*/ 100, /*height*/ 24).contains("? help"));
+        }
+        if key.code == KeyCode::Enter {
+            assert!(!screen(&view, /*width*/ 100, /*height*/ 24).contains("enter open"));
+            view.handle_key_event(KeyCode::Char('?').into());
+            assert!(!screen(&view, /*width*/ 100, /*height*/ 24).contains("enter open"));
+            app.agents_overview
+                .view_state
+                .lock()
+                .unwrap()
+                .server_version_notice = Some("Version notice".into());
+            assert!(screen(&view, /*width*/ 100, /*height*/ 24).contains("f9 back"));
+            view.handle_key_event(KeyCode::Esc.into());
+            assert!(screen(&view, /*width*/ 100, /*height*/ 24).contains("Task shortcuts"));
+            view.handle_key_event(KeyCode::F(9).into());
+            assert!(!screen(&view, /*width*/ 100, /*height*/ 24).contains("Task shortcuts"));
+            app.agents_overview
+                .view_state
+                .lock()
+                .unwrap()
+                .server_version_notice = None;
+            view.handle_key_event(KeyCode::Char('f').into());
+            assert!(!screen(&view, /*width*/ 100, /*height*/ 24).contains("enter open"));
+        }
+        view.handle_key_event(key);
+        assert!(!view.is_complete());
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker)),
+            "{binding}"
+        );
+        assert!(rx.try_recv().is_err());
+    }
 }

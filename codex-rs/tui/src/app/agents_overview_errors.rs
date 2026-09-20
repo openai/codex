@@ -38,7 +38,7 @@ impl App {
                     Line::from(message.clone().dim()),
                 ])),
                 items,
-                ..Default::default()
+                ..SelectionViewParams::picker()
             });
         }
         self.chat_widget.add_error_message(message);

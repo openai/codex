@@ -24,4 +24,5 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
                                                           │
                                                           │
                                                           │
+                                                          │
   Service v2.0.0 ≠ Codex CLI v0.0.0 · /daemon

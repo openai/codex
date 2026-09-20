@@ -24,5 +24,5 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │
                                                       │
-  ↑↓ navigate o resume enter open n new w new worktree f search g group: project r rename
-  x stop h hide a archive del delete ctrl+c quit
+                                                      │
+  ? help  esc back  enter open  n new  w new worktree

@@ -438,20 +438,6 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
             )
             .await?;
 
-            assert!(app.chat_widget.has_active_view());
-            app.handle_tui_event(
-                &mut tui,
-                &mut session,
-                TuiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-            )
-            .await?;
-
-            assert!(app.chat_widget.has_active_view());
-            // Esc stays in the overview. Dismiss the retained view explicitly
-            // to inspect the unavailable conversation and its cached draft below.
-            app.agents_overview.view_state.lock().unwrap().completion =
-                Some(crate::bottom_pane::ViewCompletion::Accepted);
-            app.chat_widget.handle_key_event(KeyCode::Null.into());
             assert!(!app.chat_widget.has_active_view());
             assert_eq!(app.current_displayed_thread_id(), Some(id));
             let history = drain_history(&mut app, &mut tui, &mut session, &mut events).await?;

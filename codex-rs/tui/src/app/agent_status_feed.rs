@@ -4,6 +4,7 @@ use super::ThreadBufferedEvent;
 use super::ThreadEventStore;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::plain_lines;
+use crate::style::accent_color;
 use crate::text_formatting::truncate_text;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::ServerNotification;
@@ -112,7 +113,11 @@ impl AgentStatusThreadPreview {
     }
 
     fn title_line(&self) -> Line<'static> {
-        vec!["  • ".dim(), format!("`{}`", self.agent_path).cyan()].into()
+        vec![
+            "  • ".dim(),
+            format!("`{}`", self.agent_path).fg(accent_color()),
+        ]
+        .into()
     }
 
     fn preview_lines(&self, width: u16) -> Vec<Line<'static>> {

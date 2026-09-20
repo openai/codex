@@ -215,6 +215,10 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
                 },
             );
         }
+        if edit_offline {
+            let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+            app.chat_widget.show_bottom_pane_view(Box::new(view));
+        }
         app.begin_reconnect();
         if deferred_notice {
             assert_eq!(
@@ -227,6 +231,12 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
             );
         }
         if edit_offline {
+            for key in [KeyCode::Esc, KeyCode::Enter] {
+                app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(key.into()))
+                    .await?;
+            }
+            assert!(!app.chat_widget.has_active_view());
+            assert_eq!(app.chat_widget.composer_text_with_pending(), "kept draft");
             app.handle_tui_event(
                 &mut tui,
                 &mut session,
@@ -280,6 +290,17 @@ async fn reconnect_restores_history_permissions_and_keeps_old_input_paused() -> 
         );
         app.finish_reconnect(&mut tui, &mut session, &mut events, connected, "2.1.0")
             .await?;
+        if edit_offline {
+            assert!(!app.chat_widget.has_active_view());
+            assert!(
+                app.agents_overview
+                    .view_state
+                    .lock()
+                    .unwrap()
+                    .connection_notice
+                    .is_none()
+            );
+        }
         assert!(app.pending_server_profiles.is_empty());
         assert!(!app.pending_managed_worktree_creation);
         assert!(
