@@ -1,4 +1,5 @@
-//! Display an editable, non-submitting composer while startup work continues.
+//! Keep the first composer editable and bottom-anchored while startup work continues.
+//! Submit keys confirm one draft locally; session dispatch waits for the protected handoff.
 
 use std::future::Future;
 use std::io;
@@ -8,10 +9,7 @@ use std::task::Poll;
 use std::time::Duration;
 use std::time::Instant;
 
-use crossterm::event::KeyCode;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
-use crossterm::event::KeyModifiers;
+use crossterm::SynchronizedUpdate;
 use ratatui::layout::Size;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
@@ -31,7 +29,6 @@ use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::ComposerDraftSnapshot;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
-use crate::key_hint;
 use crate::keymap::RuntimeKeymap;
 use crate::legacy_core::config::Config;
 use crate::render::Insets;
@@ -49,6 +46,23 @@ use crate::version::CODEX_CLI_VERSION;
 const STARTUP_EVENT_BATCH_SIZE: usize = 64;
 const STARTUP_PASTE_NEWLINE_TIMEOUT: Duration = Duration::from_millis(120);
 
+#[path = "startup_draft_layout.rs"]
+mod layout;
+
+#[path = "startup_draft_input.rs"]
+mod input;
+#[cfg(test)]
+use input::handle_startup_draft_key;
+
+/// Locally resolved presentation used before the first editable frame.
+pub(crate) struct StartupScreen {
+    pub(crate) use_alt_screen: bool,
+    pub(crate) transcript_mode: crate::transcript_mode::TranscriptMode,
+    pub(crate) status_line_enabled: bool,
+    pub(crate) keymap: RuntimeKeymap,
+    pub(crate) disable_paste_burst: bool,
+}
+
 /// Identifies the first interactive surface expected for the current invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StartupDraftInitialScreen {
@@ -61,7 +75,6 @@ pub(crate) enum StartupDraftInitialScreen {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StartupDraftSessionAction {
     New,
-    /// Keep in-app creation alive while allowing draft edits until setup finishes.
     NewFromCommandCenter,
     Resume,
     Fork,
@@ -87,7 +100,7 @@ pub(crate) struct StartupDraft {
     pump: StartupDraftPump,
 }
 
-/// Keeps the existing terminal responsive without owning it or permitting startup submission.
+/// Keeps terminal input responsive and carries one submission intent into the live session.
 pub(crate) struct StartupDraftPump {
     header: Box<dyn HistoryCell>,
     bottom_pane: BottomPane,
@@ -95,31 +108,50 @@ pub(crate) struct StartupDraftPump {
     app_event_rx: UnboundedReceiver<AppEvent>,
     initial_screen: StartupDraftInitialScreen,
     session_action: StartupDraftSessionAction,
+    resolved_selection: Option<SessionSelection>,
+    configured_cwd: Option<PathBuf>,
     pending_paste_newline: Option<(Instant, String)>,
+    submission_pending: bool,
+    key_chord_matcher: crate::keymap::KeyChordMatcher,
+    key_chords: std::sync::Arc<crate::keymap::RuntimeChordKeymap>,
 }
 
 impl StartupDraft {
-    /// Initialize the terminal without showing a composer before an expected session picker.
+    /// Adopt the initialized terminal and apply editing policy before the first composer paint.
     pub(crate) fn new(
+        mut initialized_terminal: tui::InitializedTerminal,
+        terminal_restore_guard: TerminalRestoreGuard,
         initial_screen: StartupDraftInitialScreen,
         session_action: StartupDraftSessionAction,
+        screen: StartupScreen,
     ) -> io::Result<Self> {
-        let mut initialized_terminal = tui::init()?;
-        let terminal_restore_guard = TerminalRestoreGuard::new();
         initialized_terminal.terminal.clear()?;
 
-        let tui = Tui::new(
+        let mut tui = Tui::new(
             initialized_terminal.terminal,
             initialized_terminal.enhanced_keys_supported,
             initialized_terminal.stderr_guard,
         );
-        let pump = StartupDraftPump::new(&tui, initial_screen, session_action);
+        tui.set_alt_screen_enabled(screen.use_alt_screen);
+        let mut pump = StartupDraftPump::new(&tui, initial_screen, session_action);
+        pump.bottom_pane
+            .set_status_line_enabled(screen.status_line_enabled);
+        pump.bottom_pane.set_keymap_bindings(&screen.keymap);
+        pump.bottom_pane
+            .set_disable_paste_burst(screen.disable_paste_burst);
+        pump.key_chords = screen.keymap.chords;
         let mut draft = Self {
             tui,
             terminal_restore_guard,
             pump,
         };
-        draft.pump.show_initial_screen(&mut draft.tui)?;
+        // Present the screen switch and its first composer frame together.
+        std::io::stdout().sync_update(|_| {
+            draft
+                .tui
+                .set_owned_screen(screen.transcript_mode.is_owned())?;
+            draft.pump.redraw_if_visible(&mut draft.tui)
+        })??;
         Ok(draft)
     }
 
@@ -143,6 +175,7 @@ impl StartupDraft {
 
     /// Lend the original terminal to an existing interactive startup screen.
     pub(crate) fn tui_mut(&mut self) -> &mut Tui {
+        self.pump.key_chord_matcher.cancel();
         &mut self.tui
     }
 
@@ -171,7 +204,17 @@ impl StartupDraftPump {
             initial_screen,
             session_action,
             pending_paste_newline: None,
+            resolved_selection: None,
+            configured_cwd: None,
+            submission_pending: false,
+            key_chord_matcher: Default::default(),
+            key_chords: RuntimeKeymap::defaults().chords,
         }
+    }
+
+    pub(crate) fn take_draft(&mut self) -> ComposerDraftSnapshot {
+        self.bottom_pane.flush_composer_paste_burst();
+        self.bottom_pane.composer_draft_snapshot()
     }
 
     /// Keep a provisional composer responsive when the caller has one to display.
@@ -192,17 +235,39 @@ impl StartupDraftPump {
 
     /// Refresh the session header and safe editor shortcuts without enabling modal editing.
     pub(crate) fn apply_config(&mut self, config: &Config) {
+        if self
+            .configured_cwd
+            .as_deref()
+            .is_some_and(|cwd| cwd != config.cwd.as_path())
+        {
+            self.cancel_submission();
+        }
+        self.configured_cwd = Some(config.cwd.to_path_buf());
         let local_settings = crate::local_settings::LocalSettings::from(config);
         self.header = startup_session_header(Some(config));
+        self.bottom_pane.set_status_line_enabled(
+            local_settings
+                .tui
+                .status_line
+                .as_ref()
+                .is_none_or(|items| !items.is_empty()),
+        );
         self.bottom_pane
             .set_disable_paste_burst(local_settings.tui.disable_paste_burst.unwrap_or(false));
         self.bottom_pane.request_redraw();
         if let Ok(keymap) = RuntimeKeymap::from_config(&local_settings.tui.keymap) {
+            if crate::keymap::keymap_action_id("composer", "submit").is_none_or(|submit| {
+                self.key_chords.configured_specs(submit) != keymap.chords.configured_specs(submit)
+            }) {
+                self.cancel_submission();
+            }
             self.bottom_pane.set_keymap_bindings(&keymap);
+            self.key_chord_matcher.cancel();
+            self.key_chords = keymap.chords;
         }
     }
 
-    /// Align the provisional loading message with the resolved session selection.
+    /// Align the loading message and revoke confirmation when startup changes its destination.
     pub(crate) fn update_session_selection(
         &mut self,
         tui: &mut Tui,
@@ -215,9 +280,31 @@ impl StartupDraftPump {
             SessionSelection::Resume(_) => StartupDraftSessionAction::Resume,
             SessionSelection::Fork(_) => StartupDraftSessionAction::Fork,
         };
-        if self.session_action == session_action {
-            return Ok(());
+        let destination_changed = match self.resolved_selection.as_ref() {
+            Some(SessionSelection::StartFresh) => {
+                !matches!(session_selection, SessionSelection::StartFresh)
+            }
+            Some(SessionSelection::AgentsOverview) => {
+                !matches!(session_selection, SessionSelection::AgentsOverview)
+            }
+            Some(SessionSelection::Exit) => !matches!(session_selection, SessionSelection::Exit),
+            Some(SessionSelection::Resume(previous)) => {
+                !matches!(session_selection, SessionSelection::Resume(next) if previous.thread_id == next.thread_id && previous.cwd == next.cwd)
+            }
+            Some(SessionSelection::Fork(previous)) => {
+                !matches!(session_selection, SessionSelection::Fork(next) if previous.thread_id == next.thread_id && previous.cwd == next.cwd)
+            }
+            None => self.session_action != session_action,
+        };
+        if destination_changed
+            || matches!(
+                session_selection,
+                SessionSelection::AgentsOverview | SessionSelection::Exit
+            )
+        {
+            self.cancel_submission();
         }
+        self.resolved_selection = Some(session_selection.clone());
         self.session_action = session_action;
         if self.initial_screen == StartupDraftInitialScreen::Composer {
             self.draw(tui, tui.terminal.last_known_screen_size)?;
@@ -289,16 +376,24 @@ impl StartupDraftPump {
 
     /// Preserve the editable draft, its cursor, and any pending large-paste placeholders.
     pub(crate) fn into_draft(mut self) -> ComposerDraftSnapshot {
-        self.take_draft()
+        let draft = self.take_draft();
+        crate::startup_recovery::remember(draft.clone());
+        draft
     }
 
-    pub(crate) fn take_draft(&mut self) -> ComposerDraftSnapshot {
-        self.bottom_pane.flush_composer_paste_burst();
-        self.bottom_pane.composer_draft_snapshot()
+    /// Transfer the single confirmed submission without removing its visible draft.
+    pub(crate) fn take_submission_intent(&mut self) -> bool {
+        std::mem::take(&mut self.submission_pending)
     }
 
-    /// Draw the initial composer only when no protected startup screen must appear first.
-    fn show_initial_screen(&mut self, tui: &mut Tui) -> io::Result<()> {
+    fn cancel_submission(&mut self) {
+        if std::mem::take(&mut self.submission_pending) {
+            self.bottom_pane.set_footer_hint_override(/*items*/ None);
+        }
+    }
+
+    /// Redraw the composer without revealing it while a protected startup screen owns input.
+    pub(crate) fn redraw_if_visible(&mut self, tui: &mut Tui) -> io::Result<()> {
         if self.initial_screen == StartupDraftInitialScreen::Composer {
             self.show(tui)?;
         }
@@ -311,113 +406,28 @@ impl StartupDraftPump {
         self.draw(tui, tui.terminal.last_known_screen_size)
     }
 
-    fn handle_event(&mut self, tui: &mut Tui, event: TuiEvent) -> io::Result<()> {
-        let screen_size = tui.screen_size_for_event(&event)?;
-        if let Some((started_at, mut newlines)) = self.pending_paste_newline.take() {
-            let continues_paste = match &event {
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Char(_),
-                    modifiers,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) => !key_hint::has_ctrl_or_alt(*modifiers),
-                TuiEvent::Key(KeyEvent {
-                    code: KeyCode::Enter,
-                    modifiers,
-                    kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                    ..
-                }) if modifiers.is_empty() => {
-                    if started_at.elapsed() <= STARTUP_PASTE_NEWLINE_TIMEOUT {
-                        newlines.push('\n');
-                        self.pending_paste_newline = Some((Instant::now(), newlines));
-                    }
-                    return Ok(());
-                }
-                TuiEvent::Paste(text) => !text.is_empty(),
-                TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume | TuiEvent::FocusGained => {
-                    self.pending_paste_newline = Some((started_at, newlines));
-                    if self.initial_screen == StartupDraftInitialScreen::Composer {
-                        self.draw(tui, screen_size)?;
-                    }
-                    return Ok(());
-                }
-                TuiEvent::Mouse(_) | TuiEvent::FocusLost => {
-                    self.pending_paste_newline = Some((started_at, newlines));
-                    return Ok(());
-                }
-                TuiEvent::Key(_) => false,
-            };
-            if continues_paste && started_at.elapsed() <= STARTUP_PASTE_NEWLINE_TIMEOUT {
-                self.bottom_pane.handle_paste(newlines);
-            }
-        }
-        match event {
-            TuiEvent::Key(key) => {
-                if self.initial_screen != StartupDraftInitialScreen::Composer
-                    && !key_hint::ctrl(KeyCode::Char('c')).is_press(key)
-                    && !key_hint::ctrl(KeyCode::Char('d')).is_press(key)
-                {
-                    return Ok(());
-                }
-                if key.code == KeyCode::Enter
-                    && key.modifiers.is_empty()
-                    && self.bottom_pane.is_in_paste_burst()
-                {
-                    let text_len = self.bottom_pane.composer_text().len();
-                    self.bottom_pane.flush_composer_paste_burst();
-                    if self
-                        .bottom_pane
-                        .composer_text()
-                        .len()
-                        .saturating_sub(text_len)
-                        > 1
-                    {
-                        self.pending_paste_newline = Some((Instant::now(), "\n".to_string()));
-                    }
-                }
-                match handle_startup_draft_key(&mut self.bottom_pane, key) {
-                    Err(error) if StartupCancelled::matches(&error) => {
-                        // In-app setup owns a live creation request. Keep pumping input
-                        // instead of abandoning it or blocking on cancellation cleanup.
-                        if self.session_action != StartupDraftSessionAction::NewFromCommandCenter {
-                            if let Err(clear_error) = tui.terminal.clear() {
-                                tracing::warn!(
-                                    error = %clear_error,
-                                    "failed to clear the cancelled startup composer"
-                                );
-                            }
-                            return Err(error);
-                        }
-                    }
-                    result => result?,
-                }
-            }
-            TuiEvent::Paste(text) => {
-                if self.initial_screen == StartupDraftInitialScreen::Composer {
-                    self.bottom_pane.flush_composer_paste_burst();
-                    self.bottom_pane.handle_paste(text);
-                }
-            }
-            TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume | TuiEvent::FocusGained => {}
-            TuiEvent::Mouse(_) | TuiEvent::FocusLost => return Ok(()),
-        }
-        if self.initial_screen == StartupDraftInitialScreen::Composer {
-            self.draw(tui, screen_size)?;
-        }
-        while self.app_event_rx.try_recv().is_ok() {}
-        Ok(())
-    }
-
     fn draw(&mut self, tui: &mut Tui, screen_size: Size) -> io::Result<()> {
-        let _ = self.bottom_pane.flush_paste_burst_if_due();
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            crate::startup_recovery::remember(self.bottom_pane.composer_recovery_snapshot());
+        }
         if self.bottom_pane.is_in_paste_burst() {
             tui.frame_requester()
                 .schedule_frame_in(ChatComposer::recommended_paste_flush_delay());
         }
         self.bottom_pane.pre_draw_tick();
-        let renderable =
-            startup_draft_renderable(&self.header, &self.bottom_pane, self.session_action);
-        let desired_height = renderable.desired_height(screen_size.width);
+        let owned = tui.is_owned_screen();
+        let owned_layout =
+            layout::OwnedStartupLayout::new(&self.header, &self.bottom_pane, self.session_action);
+        let renderable = if owned {
+            RenderableItem::Borrowed(&owned_layout)
+        } else {
+            startup_draft_renderable(&self.header, &self.bottom_pane, self.session_action)
+        };
+        let desired_height = if owned {
+            screen_size.height
+        } else {
+            renderable.desired_height(screen_size.width)
+        };
         tui.draw_with_resize_reflow(desired_height, screen_size, |frame| {
             let area = frame.area();
             renderable.render(area, frame.buffer);
@@ -425,64 +435,9 @@ impl StartupDraftPump {
                 frame.set_cursor_style(renderable.cursor_style(area));
                 frame.set_cursor_position((x, y));
             }
-        })
+        })?;
+        Ok(())
     }
-}
-
-fn handle_startup_draft_key(bottom_pane: &mut BottomPane, key: KeyEvent) -> io::Result<()> {
-    let _ = bottom_pane.flush_paste_burst_if_due();
-    if key.kind == KeyEventKind::Release
-        || key.code == KeyCode::Enter && key.modifiers.is_empty()
-        || matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
-        || bottom_pane.is_startup_composer_action(key)
-    {
-        return Ok(());
-    }
-
-    if let KeyCode::Char(_) = key.code {
-        let (code, modifiers) = key_hint::normalize_key_parts(key.code, key.modifiers);
-        if key_hint::has_ctrl_or_alt(modifiers) && matches!(code, KeyCode::Char('r' | 'v')) {
-            return Ok(());
-        }
-        let is_ctrl_c = key_hint::ctrl(KeyCode::Char('c')).is_press(key);
-        let is_ctrl_d = key_hint::ctrl(KeyCode::Char('d')).is_press(key);
-        if key.kind == KeyEventKind::Press && (is_ctrl_c || is_ctrl_d) {
-            bottom_pane.flush_composer_paste_burst();
-            if bottom_pane.composer_is_empty() {
-                return Err(io::Error::new(io::ErrorKind::Interrupted, StartupCancelled));
-            }
-            if is_ctrl_c {
-                bottom_pane.on_ctrl_c();
-                return Ok(());
-            }
-        }
-    }
-
-    if key_hint::has_ctrl_or_alt(key.modifiers) && !bottom_pane.is_safe_startup_editor_key(key)
-        || key.code == KeyCode::Enter && !bottom_pane.is_safe_startup_editor_key(key)
-        || key
-            .modifiers
-            .intersects(KeyModifiers::SUPER | KeyModifiers::HYPER | KeyModifiers::META)
-        || !matches!(
-            key.code,
-            KeyCode::Char(_)
-                | KeyCode::Enter
-                | KeyCode::Esc
-                | KeyCode::Left
-                | KeyCode::Right
-                | KeyCode::Up
-                | KeyCode::Down
-                | KeyCode::Home
-                | KeyCode::End
-                | KeyCode::Backspace
-                | KeyCode::Delete
-        )
-    {
-        return Ok(());
-    }
-
-    let _ = bottom_pane.handle_key_event(key);
-    Ok(())
 }
 
 fn startup_session_header(config: Option<&Config>) -> Box<dyn HistoryCell> {
@@ -525,7 +480,7 @@ fn startup_draft_renderable<'a>(
     renderable.push(
         /*flex*/ 0,
         bottom_pane
-            .as_renderable_with_options(Default::default())
+            .as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions::default())
             .inset(Insets::tlbr(
                 /*top*/ u16::from(loading_message.is_none()),
                 /*left*/ 0,
@@ -561,3 +516,7 @@ fn startup_draft_bottom_pane(
 #[cfg(test)]
 #[path = "startup_draft_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "startup_draft_submission_tests.rs"]
+mod submission_tests;

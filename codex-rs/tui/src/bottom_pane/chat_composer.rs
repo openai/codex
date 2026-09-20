@@ -89,8 +89,10 @@
 //!
 //! # Startup Draft Handoff
 //!
-//! Startup uses a provisional plain-text composer: editing remains available, but submission,
-//! popups, attachments, and other actions are disabled. [`ComposerDraftSnapshot`] transfers its
+//! Startup uses a provisional plain-text composer: editing remains available while its owner
+//! records one submit intent. Popups, attachments, and direct dispatch stay disabled. After the
+//! protected startup gates finish, `prepare_startup_submission` applies normal submission parsing
+//! once, including expansion of paste placeholders. [`ComposerDraftSnapshot`] transfers its
 //! text, cursor, pending paste placeholders, local history, and recent activity to the fully
 //! initialized composer.
 //! `ChatWidget` merges the draft with any existing initial prompt and attachments, rebasing cursor
@@ -3121,6 +3123,15 @@ impl ChatComposer {
         let result = self.handle_submission_with_time(should_queue, Instant::now());
         self.reset_vim_mode_after_successful_dispatch(&result.0);
         result
+    }
+
+    /// Prepare a startup-confirmed draft through the normal queue parser, independent of keymaps.
+    pub(super) fn prepare_startup_submission(&mut self) -> InputResult {
+        // Startup's plain-text editor cannot show shell mode; require confirmation here.
+        if self.is_bang_shell_command() {
+            return InputResult::None;
+        }
+        self.handle_submission(/*should_queue*/ true).0
     }
 
     fn reset_vim_mode_after_successful_dispatch(&mut self, result: &InputResult) {

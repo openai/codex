@@ -21,6 +21,8 @@ pub(super) struct PendingInputPreview {
 
 #[derive(Debug, Default)]
 pub(super) struct InputQueueState {
+    /// The visible draft confirmed during startup, awaiting the protected-input handoff.
+    pub(super) startup_submission: Option<crate::bottom_pane::ComposerDraftSnapshot>,
     /// User inputs queued while a turn is in progress.
     pub(super) queued_user_messages: VecDeque<QueuedUserMessage>,
     /// History records for queued user messages. Slash commands such as `/goal`
@@ -56,6 +58,7 @@ impl InputQueueState {
     }
 
     pub(super) fn clear(&mut self) {
+        self.startup_submission = None;
         self.recovered_queue = false;
         self.queued_user_messages.clear();
         self.queued_user_message_history_records.clear();

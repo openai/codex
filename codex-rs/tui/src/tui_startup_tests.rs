@@ -200,9 +200,20 @@ async fn startup_typeahead_pty_child() {
         return;
     };
     let signals = PathBuf::from(signals);
+    let initialized_terminal = crate::tui::init().expect("initialize startup terminal");
+    let terminal_restore_guard = crate::TerminalRestoreGuard::new();
     let mut startup_draft = crate::startup_draft::StartupDraft::new(
+        initialized_terminal,
+        terminal_restore_guard,
         crate::startup_draft::StartupDraftInitialScreen::Composer,
         crate::startup_draft::StartupDraftSessionAction::New,
+        crate::startup_draft::StartupScreen {
+            use_alt_screen: false,
+            transcript_mode: crate::transcript_mode::TranscriptMode::Terminal,
+            status_line_enabled: true,
+            keymap: crate::keymap::RuntimeKeymap::defaults(),
+            disable_paste_burst: false,
+        },
     )
     .expect("initialize the real startup composer");
 

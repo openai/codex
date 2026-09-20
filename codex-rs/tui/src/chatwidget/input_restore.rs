@@ -96,6 +96,7 @@ impl ChatWidget {
         if startup_has_content && self.local_settings.tui.vim_mode_default {
             self.bottom_pane.enable_vim_in_insert_mode();
         }
+        crate::startup_recovery::handed_off(|| self.bottom_pane.composer_recovery_snapshot());
     }
 
     /// Includes protected prompts deferred by streaming or the approval idle timer.

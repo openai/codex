@@ -1,7 +1,7 @@
 //! Bottom-pane adapters for the provisional startup composer and its protected handoff.
 //!
-//! Startup accepts safe editor input while keeping submission, search, and other actions
-//! unavailable. Once initialization finishes, these adapters preserve buffered paste text,
+//! Startup accepts safe editor input and records submission intent while keeping search and
+//! other actions unavailable. Once initialization finishes, these adapters preserve buffered paste text,
 //! composer history and cursor state, and the approval-idle timing inherited by the real composer.
 
 use std::time::Instant;
@@ -14,6 +14,16 @@ use super::HistoryEntry;
 use crate::key_hint::KeyBindingListExt;
 
 impl BottomPane {
+    /// Use the effective submit binding for startup confirmation as soon as config is loaded.
+    pub(crate) fn is_startup_submit_key(&self, key_event: KeyEvent) -> bool {
+        self.keymap.composer.submit.is_pressed(key_event)
+    }
+
+    /// Consume a confirmed startup draft only after its caller has checked submission readiness.
+    pub(crate) fn prepare_startup_submission(&mut self) -> super::InputResult {
+        self.composer.prepare_startup_submission()
+    }
+
     /// Return whether a key would submit, queue, or search outside the startup draft.
     pub(crate) fn is_startup_composer_action(&self, key_event: KeyEvent) -> bool {
         let composer = &self.keymap.composer;
@@ -31,8 +41,26 @@ impl BottomPane {
     /// Return whether a key is bound only to local startup-safe text editing.
     pub(crate) fn is_safe_startup_editor_key(&self, key_event: KeyEvent) -> bool {
         let editor = &self.keymap.editor;
+        self.is_startup_cursor_key(key_event)
+            || [
+                &editor.insert_newline,
+                &editor.delete_backward,
+                &editor.delete_forward,
+                &editor.delete_backward_word,
+                &editor.delete_forward_word,
+                &editor.kill_line_start,
+                &editor.kill_whole_line,
+                &editor.kill_line_end,
+                &editor.yank,
+            ]
+            .into_iter()
+            .any(|bindings| bindings.is_pressed(key_event))
+    }
+
+    /// Resolve cursor movement through the same configured bindings as the editor.
+    pub(crate) fn is_startup_cursor_key(&self, key_event: KeyEvent) -> bool {
+        let editor = &self.keymap.editor;
         [
-            &editor.insert_newline,
             &editor.move_left,
             &editor.move_right,
             &editor.move_up,
@@ -41,14 +69,6 @@ impl BottomPane {
             &editor.move_word_right,
             &editor.move_line_start,
             &editor.move_line_end,
-            &editor.delete_backward,
-            &editor.delete_forward,
-            &editor.delete_backward_word,
-            &editor.delete_forward_word,
-            &editor.kill_line_start,
-            &editor.kill_whole_line,
-            &editor.kill_line_end,
-            &editor.yank,
         ]
         .into_iter()
         .any(|bindings| bindings.is_pressed(key_event))
@@ -71,6 +91,11 @@ impl BottomPane {
         let mut draft = self.composer.draft_snapshot();
         draft.last_composer_activity_at = self.last_composer_activity_at;
         draft
+    }
+
+    /// Preserve keys still buffered by paste detection if startup exits before its next frame.
+    pub(crate) fn composer_recovery_snapshot(&self) -> ComposerDraftSnapshot {
+        self.composer.recovery_snapshot()
     }
 
     /// Restore the visible cursor before synchronizing composer-owned popups.

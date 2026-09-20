@@ -20,16 +20,22 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     // macOS's default temporary directory leaves too little room for the control socket path.
     let codex_home = tempfile::tempdir_in("/tmp")?;
     write_test_config(codex_home.path(), &repo_root)?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[tui]\nstatus_line = [\"thread-id\"]\n"),
+    )?;
     let socket = codex_app_server_client::app_server_control_socket_path(codex_home.path())?;
     std::fs::create_dir_all(socket.parent().unwrap())?;
     let listener = UnixListener::bind(socket.as_path())?;
     let (disconnect_tx, mut disconnect_rx) = tokio::sync::oneshot::channel();
     let (restore_tx, restore_rx) = tokio::sync::oneshot::channel();
     let server_cwd = repo_root.clone();
+    let id = "00000000-0000-0000-0000-000000000001";
     let server = tokio::spawn(async move {
         let mut methods = Vec::new();
         let mut restore_rx = Some(restore_rx);
-        let id = "00000000-0000-0000-0000-000000000001";
         let thread = json!({
             "id": id, "sessionId": id, "preview": "", "ephemeral": false,
             "modelProvider": "openai", "createdAt": 1, "updatedAt": 2,
@@ -91,7 +97,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                     }
                     "model/list" => json!({"data": [], "nextCursor": null}),
                     "config/read" => {
-                        json!({"config": {"model": "gpt-5.6-terra", "model_provider": "openai", "projects": {
+                        json!({"config": {"model": "gpt-5.6-terra", "model_provider": "openai",
+                        "tui": {"status_line": ["thread-id"]}, "projects": {
                         server_cwd.to_string_lossy(): {"trust_level": "trusted"}
                     }}, "origins": {}, "layers": []})
                     }
@@ -149,7 +156,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
     let mut disconnect_tx = Some(disconnect_tx);
     let mut restore_tx = Some(restore_tx);
     for expected in [
-        "gpt-5.6-terra",
+        id, // The model label does not establish that the client has attached a thread.
         "preserved-draft",
         "Reconnecting",
         "preserved-draft!",
@@ -165,7 +172,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
             terminal.screen_contents()
         );
         match expected {
-            "gpt-5.6-terra" => terminal.write_input(b"preserved-draft")?,
+            ready if ready == id => terminal.write_input(b"preserved-draft")?,
             "preserved-draft" => {
                 disconnect_tx.take().unwrap().send(()).unwrap();
             }

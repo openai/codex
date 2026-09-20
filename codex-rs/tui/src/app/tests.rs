@@ -76,6 +76,8 @@ mod safety_buffering;
 mod session_lifecycle_requests;
 mod session_summary;
 mod startup;
+#[path = "tests/startup_frame_tests.rs"]
+mod startup_frame_tests;
 #[path = "tests/startup_warnings_tests.rs"]
 mod startup_warnings_tests;
 #[path = "tests/stream_animation_tests.rs"]

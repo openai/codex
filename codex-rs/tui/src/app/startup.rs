@@ -2,6 +2,7 @@
 //!
 //! Owns the main app run loop from app-server bootstrap through terminal shutdown. Startup input
 //! remains isolated from protected interactive requests until the initialized composer owns it.
+//! Queued resume history replaces the provisional loading frame only when it is ready to render.
 
 use super::reconnect::ReconnectState;
 use super::*;
@@ -100,6 +101,26 @@ pub(super) fn startup_model(
 }
 
 impl App {
+    /// Keep the provisional loading frame until queued history reaches the owned transcript.
+    /// Visible startup decisions and the agent overview must still render immediately.
+    pub(super) fn render_startup_frame(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_event_rx: &mpsc::UnboundedReceiver<AppEvent>,
+    ) -> Result<()> {
+        if tui.is_owned_screen() && !app_event_rx.is_empty() && !self.chat_widget.has_active_view()
+        {
+            return Ok(());
+        }
+        self.chat_widget.pre_draw_tick();
+        self.render_chat_widget_frame(tui, tui.terminal.last_known_screen_size)?;
+        if self.chat_widget.has_active_view() && self.startup_protected_input_boundary {
+            tui.discard_pending_input_before_interactive_screen()?;
+            self.startup_pending_protected_request = false;
+        }
+        Ok(())
+    }
+
     /// Recognizes queued requests before they become visible protected screens.
     pub(super) fn has_queued_startup_protected_request(&self) -> bool {
         self.startup_protected_input_boundary
@@ -170,16 +191,6 @@ impl App {
                 tracing::warn!("app-server shutdown failed: {shutdown_error}");
             }
             Err(error.into())
-        }
-
-        fn render_startup_frame(app: &mut App, tui: &mut tui::Tui) -> Result<()> {
-            app.chat_widget.pre_draw_tick();
-            app.render_chat_widget_frame(tui, tui.terminal.last_known_screen_size)?;
-            if app.chat_widget.has_active_view() && app.startup_protected_input_boundary {
-                tui.discard_pending_input_before_interactive_screen()?;
-                app.startup_pending_protected_request = false;
-            }
-            Ok(())
         }
 
         // Adopt actual launch ownership before constructing session-local preferences.
@@ -922,12 +933,15 @@ See the Codex keymap documentation for supported actions and examples."
         {
             return shutdown_on_startup_error(app_server, err).await;
         }
-        // Input for the cancelled resume/fork must not appear in a later selected session.
-        let mut pending_startup_draft =
-            (!startup_session_cancelled).then(|| startup_draft.into_draft());
+        // Keep cancelled resume/fork text editable, but never carry confirmation to another session.
+        let mut pending_startup_submission =
+            startup_draft.take_submission_intent() && !startup_session_cancelled;
+        let mut pending_startup_draft = Some(startup_draft.into_draft());
         if app_event_rx.is_empty() && !app.has_queued_startup_protected_request() {
-            app.chat_widget
-                .restore_startup_draft_when_ready(&mut pending_startup_draft);
+            app.chat_widget.restore_startup_input_when_ready(
+                &mut pending_startup_draft,
+                &mut pending_startup_submission,
+            );
         }
 
         #[cfg(windows)]
@@ -940,7 +954,7 @@ See the Codex keymap documentation for supported actions and examples."
 
         let event_stream_started_at = Instant::now();
         tui.schedule_screen_size_recheck(Duration::ZERO);
-        if let Err(err) = render_startup_frame(&mut app, tui) {
+        if let Err(err) = app.render_startup_frame(tui, &app_event_rx) {
             return shutdown_on_startup_error(app_server, err).await;
         }
         let tui_events = tui.event_stream();
@@ -1094,7 +1108,7 @@ See the Codex keymap documentation for supported actions and examples."
                                 }
                                 if !had_active_view
                                     && app.chat_widget.has_active_view()
-                                    && let Err(err) = render_startup_frame(&mut app, tui)
+                                    && let Err(err) = app.render_startup_frame(tui, &app_event_rx)
                                 {
                                     break Err(err);
                                 }
@@ -1236,16 +1250,22 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     if !had_active_view
                         && app.chat_widget.has_active_view()
-                        && let Err(err) = render_startup_frame(&mut app, tui)
+                        && let Err(err) = app.render_startup_frame(tui, &app_event_rx)
                     {
                         break Err(err);
                     }
                 }
                 match control {
                     AppRunControl::Continue => {
+                        if app.reconnect.offline {
+                            pending_startup_submission = false;
+                            app.chat_widget.cancel_startup_submission();
+                        }
                         if app_event_rx.is_empty() && !app.has_queued_startup_protected_request() {
-                            app.chat_widget
-                                .restore_startup_draft_when_ready(&mut pending_startup_draft);
+                            app.chat_widget.restore_startup_input_when_ready(
+                                &mut pending_startup_draft,
+                                &mut pending_startup_submission,
+                            );
                         }
                         #[cfg(windows)]
                         if terminal_color_probe_pending
@@ -1264,6 +1284,7 @@ See the Codex keymap documentation for supported actions and examples."
         }
         let clear_pet_result = tui.clear_ambient_pet_image();
         let clear_result = tui.terminal.clear();
+        // Keep the alternate screen active until the outer guard restores both keyboard stacks.
         let exit_reason = match exit_reason_result {
             Ok(exit_reason) => {
                 clear_pet_result?;

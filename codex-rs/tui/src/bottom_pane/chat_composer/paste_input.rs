@@ -4,6 +4,19 @@ use super::*;
 use crate::bottom_pane::paste_burst::FlushResult;
 
 impl ChatComposer {
+    /// Include accepted but unflushed keys without changing live paste detection.
+    pub(crate) fn recovery_snapshot(&self) -> ComposerDraftSnapshot {
+        let mut snapshot = self.draft_snapshot();
+        if let Some(pending) = self.draft.paste_burst.clone().flush_before_modified_input() {
+            let mut textarea = TextArea::new();
+            textarea.set_text_with_elements(&snapshot.text, &snapshot.text_elements);
+            textarea.insert_str_at(snapshot.cursor, &pending);
+            snapshot.text = textarea.text().to_owned();
+            snapshot.text_elements = textarea.text_elements();
+        }
+        snapshot
+    }
+
     /// Classify an explicit paste before integrating text shared with the buffered key path.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         self.note_sparkle_paste(&pasted);
