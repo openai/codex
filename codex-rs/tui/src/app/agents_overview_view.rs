@@ -1,6 +1,9 @@
 //! Dashboard for inspecting and managing the TUI's retained daemon tasks.
 //! Search and rename input survive metadata refreshes; root Escape never exits.
 
+#[path = "agent_center/mod.rs"]
+pub(super) mod command_center;
+
 #[path = "agents_overview_grouping.rs"]
 mod grouping;
 #[path = "agents_overview_input.rs"]
@@ -84,7 +87,7 @@ impl AgentsOverviewGroup {
             Self::NeedsYou => "Needs input",
             Self::Working => "Working",
             Self::Ready => "Ready",
-            Self::Finished => "Finished",
+            Self::Finished => "Inactive",
         }
     }
 }
@@ -132,6 +135,8 @@ impl AgentsOverviewProjectGroup {
 
 #[derive(Default)]
 pub(super) struct AgentsOverviewViewState {
+    scroll: usize,
+    page_height: usize,
     pub(super) input: String,
     pub(super) key_chord_hint: Option<Vec<(String, String)>>,
     pub(super) creating_worktree: bool,
@@ -324,89 +329,13 @@ impl AgentsOverviewView {
 
     fn status(row: &AgentsOverviewRow) -> (&'static str, Span<'static>) {
         match row.group {
+            AgentsOverviewGroup::NeedsYou if row.thread.status == ThreadStatus::SystemError => {
+                ("Error", "!".red())
+            }
             AgentsOverviewGroup::NeedsYou => ("Needs input", "●".red()),
             AgentsOverviewGroup::Working => ("Working", "●".green()),
             AgentsOverviewGroup::Ready => ("Ready", "○".cyan()),
-            AgentsOverviewGroup::Finished => ("Finished", "✓".dim()),
-        }
-    }
-
-    fn render_rows(&self, area: Rect, buf: &mut Buffer) {
-        let mut offset = 0;
-        let mut previous_group_index: Option<usize> = None;
-        let grouping = self.state().grouping;
-        let visible = self.visible_indices();
-        let mut first = visible
-            .iter()
-            .position(|index| *index == self.selected)
-            .unwrap_or_default();
-        let mut height = 2;
-        while first > 0 {
-            let previous_index = visible[first - 1];
-            let current_index = visible[first];
-            let group_changed = !self.same_group(grouping, previous_index, current_index);
-            let added_height = 1 + 2 * u16::from(group_changed);
-            if height + added_height > area.height {
-                break;
-            }
-            height += added_height;
-            first -= 1;
-        }
-        for index in visible.into_iter().skip(first) {
-            if offset >= area.height {
-                break;
-            }
-            let row = &self.rows[index];
-            let group = match grouping {
-                AgentsOverviewGrouping::Project => {
-                    self.project_groups[index].heading.display().to_string()
-                }
-                AgentsOverviewGrouping::Status => row.group.label().to_string(),
-                AgentsOverviewGrouping::Model => model_name(&row.thread).to_string(),
-            };
-            let group_changed = previous_group_index
-                .is_none_or(|previous_index| !self.same_group(grouping, previous_index, index));
-            if group_changed {
-                offset += u16::from(previous_group_index.is_some());
-                if offset >= area.height {
-                    break;
-                }
-                let count = self
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .filter(|(candidate_index, _)| {
-                        self.same_group(grouping, *candidate_index, index)
-                    })
-                    .count();
-                Line::from(vec![group.clone().bold(), format!("  {count}").dim()])
-                    .render(Rect::new(area.x, area.y + offset, area.width, 1), buf);
-                offset += 1;
-                previous_group_index = Some(index);
-            }
-            if offset >= area.height {
-                break;
-            }
-            let marker = if self.selected == index {
-                "›".cyan().bold()
-            } else {
-                " ".into()
-            };
-            let (status, dot) = Self::status(row);
-            let current = if row.is_current { "  current" } else { "" };
-            let mut spans = vec![
-                marker,
-                " ".into(),
-                dot,
-                " ".into(),
-                Span::styled(display_title(&row.thread), self.title_style(row.thread_id)),
-                current.dim(),
-            ];
-            if grouping != AgentsOverviewGrouping::Status {
-                spans.extend(["  ".into(), status.dim()]);
-            }
-            Line::from(spans).render(Rect::new(area.x, area.y + offset, area.width, 1), buf);
-            offset += 1;
+            AgentsOverviewGroup::Finished => ("Inactive", "○".dim()),
         }
     }
 
@@ -594,6 +523,9 @@ impl BottomPaneView for AgentsOverviewView {
             match self.keymap.action_for(key) {
                 Some(ListAction::MoveUp) => self.move_selection(/*forward*/ false),
                 Some(ListAction::MoveDown) => self.move_selection(/*forward*/ true),
+                Some(action @ (ListAction::PageUp | ListAction::PageDown)) => {
+                    self.page_selection(action);
+                }
                 _ => {}
             }
             return;
@@ -702,9 +634,7 @@ impl BottomPaneView for AgentsOverviewView {
                     self.on_ctrl_c();
                 }
                 ListAction::PageUp | ListAction::PageDown => {
-                    for _ in 0..5 {
-                        self.move_selection(action == ListAction::PageDown);
-                    }
+                    self.page_selection(action);
                 }
                 ListAction::MoveRight if !self.state().editing_metadata() => self.activate(),
                 ListAction::MoveLeft | ListAction::MoveRight => {}

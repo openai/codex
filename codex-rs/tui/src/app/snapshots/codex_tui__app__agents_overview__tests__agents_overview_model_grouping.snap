@@ -1,20 +1,20 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
-expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_display(\"/tmp/project\"),\n\"/tmp/project\").replace(\"del\", \"del\")"
+expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_display(\"/tmp/project\"),\n\"/tmp/project\").replace(\"fwd del\", \"del\")"
 ---
   Agent command center
   0 need input   0 working   4 ready
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  Unknown  1                                              │ Task details
-  › ○ Legacy task  Ready                                  │
-                                                          │ Legacy task
-  model-a  2                                              │ ○ Ready
-    ○ Recent task  Ready                                  │
-    ○ Older task  Ready                                   │ Project
-                                                          │ /tmp/project
-  model-b  1                                              │ Model: Unknown
-    ○ Other model  Ready                                  │
-                                                          │ Prompt
+      Tasks                                               │ Task details
+  Unknown  1                                              │
+  › ○ Legacy task                                         │ Legacy task
+                                                          │ ○ Ready
+  model-a  2                                              │
+    ○ Recent task                                         │ Project
+    ○ Older task                                          │ /tmp/project
+                                                          │ Model: Unknown
+  model-b  1                                              │
+    ○ Other model                                         │ Prompt
                                                           │ Legacy task
                                                           │
                                                           │

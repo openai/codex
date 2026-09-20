@@ -5,10 +5,10 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   Agent command center
   1 need input   0 working   0 ready
   ────────────────────────────────────────────────────────────────────────────────────────────
-  /tmp/project  2                                     │ Task details
-  › ● Repair authentication  Needs input              │
-    ✓ Investigate parser  Finished                    │ Repair authentication
-                                                      │ ● Needs input
+      Tasks                                           │ Task details
+  /tmp/project  2                                     │
+  › ● Repair authentication                           │ Repair authentication
+    ○ Investigate parser                              │ ● Needs input
                                                       │
                                                       │ Agent: Check dependencies
                                                       │ Which dependency version should I use?

@@ -1,13 +1,13 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
-expression: "cached.replace(&format!(\"{project}  1\"),\n&format!(\"/tmp/project  1{padding}\")).replace(&project,\n&format!(\"/tmp/project{padding}\"))"
+expression: normalize_agent_center_snapshot(&cached)
 ---
 "  Agent command center                                                                          "
 "  0 need input   0 working   1 ready                                                            "
 "  ────────────────────────────────────────────────────────────────────────────────────────────  "
-"  /tmp/project  1                                     │ Task details                            "
-"  › ○ Review parser  Ready                            │                                         "
-"                                                      │ Review parser                           "
+"      Tasks                                           │ Task details                            "
+"  /tmp/project  1                                     │                                         "
+"  › ○ Review parser                                   │ Review parser                           "
 "                                                      │ ○ Ready                                 "
 "                                                      │                                         "
 "                                                      │ Last message                            "

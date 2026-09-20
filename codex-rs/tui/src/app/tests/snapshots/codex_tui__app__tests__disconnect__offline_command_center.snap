@@ -5,7 +5,7 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
   Agent command center
   Reconnecting — agent list is stale
   ────────────────────────────────────────────────────────────────────────────────────────────────
-                                                          │
+  Reconnecting…                                           │
                                                           │
                                                           │
                                                           │

@@ -294,10 +294,10 @@ impl Renderable for AgentsOverviewView {
                     .set_symbol("│")
                     .set_style(Style::new().dim());
             }
-            self.render_rows(list, buf);
+            self.render_center_rows(list, buf);
             self.render_details(details, buf);
         } else {
-            self.render_rows(body, buf);
+            self.render_center_rows(body, buf);
         }
         let state = self.state();
         let (label, input) = if state.searching {

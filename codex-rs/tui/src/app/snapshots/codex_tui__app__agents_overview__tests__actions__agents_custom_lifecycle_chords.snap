@@ -5,9 +5,9 @@ expression: "render_bottom_popup(&app.chat_widget,\n48).replace(&test_path_displ
   Agent command center
   0 need input   0 working   1 ready
   ────────────────────────────────────────────
+      Tasks
   /tmp/project  1
-  › ○ Task  Ready
-
+  › ○ Task
 
 
 

@@ -3436,7 +3436,7 @@ fn expanded_time_detail_line(
     expanded_detail_line(label, &value, width)
 }
 
-fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> String {
+pub(crate) fn format_relative_time(reference: DateTime<Utc>, ts: Option<DateTime<Utc>>) -> String {
     let Some(ts) = ts else {
         return "-".to_string();
     };

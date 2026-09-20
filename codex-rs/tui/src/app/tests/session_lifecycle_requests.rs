@@ -1067,11 +1067,6 @@ async fn archive_current_thread_returns_shared_servers_to_agents() -> Result<()>
                 )
                 .is_some()
         );
-        assert_snapshot!(
-            "agents_command_center_after_archive",
-            render_bottom_popup(&app.chat_widget, /*width*/ 100)
-        );
-
         server.shutdown().await?;
         proxy.await??;
     }

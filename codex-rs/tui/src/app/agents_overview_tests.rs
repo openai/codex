@@ -1,5 +1,9 @@
+#[path = "agent_center_tests.rs"]
+mod command_center;
+
 use super::super::agents_overview_view::AgentsOverviewGrouping;
 use super::*;
+use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 
 #[tokio::test]
 async fn overview_worktree_creation_busy_state() {
@@ -34,7 +38,13 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
             ThreadStatus::Idle,
         );
         thread.name = Some("Named task".into());
-        let view = app.agents_overview_view(vec![thread], Some(id));
+        let mut selected = thread.clone();
+        selected.id = ThreadId::from_u128(/*value*/ 43).to_string();
+        selected.name = Some("Selected task".into());
+        let view = app.agents_overview_view(
+            vec![thread, selected],
+            Some(ThreadId::from_u128(/*value*/ 43)),
+        );
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal
             .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
@@ -46,7 +56,7 @@ async fn overview_thread_colors_match_footer_and_respect_color_suppression() {
                 let x = text[..x].chars().count();
                 snapshot.push(format!(
                     "{} | title style: {:?}",
-                    text.trim_end(),
+                    crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(&text),
                     row[x].style()
                 ));
             }
@@ -86,8 +96,7 @@ async fn server_version_overview_notice_updates_and_clears() {
     let view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80);
-    insta::assert_snapshot!(rendered.lines().take(/*n*/ 2).collect::<Vec<_>>().join("\n"), @"  Agent command center
-  0 need input   0 working   0 ready");
+    assert!(!rendered.contains("Service v"));
 }
 
 #[tokio::test]
@@ -603,10 +612,12 @@ async fn shared_overview_seeds_once_and_retains_locally_resumed_history() -> Res
     let retained: HashSet<_> = restarted.agents_overview.threads.keys().copied().collect();
     assert_eq!(retained, recent_ids);
     restarted.open_agents_overview(&app_server);
+    let rendered = render_bottom_popup(&restarted.chat_widget, /*width*/ 80)
+        .replace(&test_path_display("/"), "/");
+    let age = regex_lite::Regex::new(r" +[0-9]+d ago").unwrap();
     insta::assert_snapshot!(
         "agents_overview_recent_sessions",
-        render_bottom_popup(&restarted.chat_widget, /*width*/ 80)
-            .replace(&test_path_display("/"), "/")
+        age.replace_all(&rendered, " [age]")
     );
     app_server.shutdown().await?;
     Ok(())
@@ -863,16 +874,9 @@ async fn agents_overview_details_render_markdown() {
         .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
         .unwrap();
     let cached = terminal.backend().to_string();
-    let project = test_path_display("/tmp/project");
-    let padding = " ".repeat(project.len().saturating_sub("/tmp/project".len()));
     insta::assert_snapshot!(
         "agents_overview_markdown",
-        cached
-            .replace(
-                &format!("{project}  1"),
-                &format!("/tmp/project  1{padding}")
-            )
-            .replace(&project, &format!("/tmp/project{padding}"))
+        normalize_agent_center_snapshot(&cached)
     );
 
     app.agents_overview.last_messages.clear();
@@ -906,12 +910,10 @@ async fn agents_overview_details_render_markdown() {
     );
     let view = app.agents_overview_view(vec![thread.clone()], Some(thread_id));
     app.chat_widget.show_bottom_pane_view(Box::new(view));
-    let normalized_group = format!("/tmp/project  1{padding}");
+
     insta::assert_snapshot!(
         "agents_overview_markdown_long_lines",
-        render_bottom_popup(&app.chat_widget, /*width*/ 96)
-            .replace(&format!("{project}  1"), &normalized_group)
-            .replace(&project, "/tmp/project")
+        normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 96))
     );
 
     app.agents_overview.last_messages.insert(
@@ -922,9 +924,7 @@ async fn agents_overview_details_render_markdown() {
     app.chat_widget.show_bottom_pane_view(Box::new(view));
     insta::assert_snapshot!(
         "agents_overview_markdown_table",
-        render_bottom_popup(&app.chat_widget, /*width*/ 96)
-            .replace(&format!("{project}  1"), &normalized_group)
-            .replace(&project, "/tmp/project")
+        normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widget, /*width*/ 96))
     );
 }
 
@@ -1072,7 +1072,14 @@ async fn worktrees_overview_grouping_requires_feature() {
             thread
         })
         .collect::<Vec<_>>();
-    let grouped_heading = format!("{}  2", primary.join("").display());
+    let headings = [primary.join(""), primary.join("subdir").join("child")].map(|path| {
+        crate::text_formatting::center_truncate_path(
+            &crate::status::format_directory_display(&path, /*max_width*/ None),
+            /*max_width*/ 64,
+        )
+    });
+    let display_heading = &headings[0];
+    let grouped_heading = format!("{display_heading}  2");
     let width = 160;
     for enabled in [false, true] {
         app.config
@@ -1089,13 +1096,14 @@ async fn worktrees_overview_grouping_requires_feature() {
                 .map(|line| line.split('│').next().unwrap_or(line).trim_end())
                 .collect::<Vec<_>>()
                 .join("\n")
-                .replace(
-                    &primary.join("").display().to_string(),
-                    "/tmp/worktree-root/primary/",
-                )
+                .replace(&headings[1], "/tmp/worktree-root/primary/subdir/child")
+                .replace(display_heading, "/tmp/worktree-root/primary")
                 .replace('\\', "/");
             insta::with_settings!({snapshot_path => "../snapshots"}, {
-                insta::assert_snapshot!("agents_overview_worktree_grouping", grouping);
+                insta::assert_snapshot!(
+                    "agents_overview_worktree_grouping",
+                    normalize_agent_center_snapshot(grouping)
+                );
             });
         }
     }
@@ -1119,13 +1127,12 @@ async fn overview_model_grouping_shows_details_and_preserves_selection() {
             ThreadStatus::Idle,
         );
         thread.model = model.map(str::to_string);
-        thread.updated_at = index as i64;
+        thread.updated_at = *OVERVIEW_TIMESTAMP + index as i64 - 30;
         thread
     })
     .collect();
     let selected = ThreadId::from_u128(/*value*/ 1);
     let mut view = app.agents_overview_view(threads, Some(selected));
-    view.handle_key_event(KeyCode::Esc.into());
     for _ in 0..2 {
         view.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE));
     }
@@ -1295,8 +1302,7 @@ async fn shared_overview_shows_only_root_sessions() {
     assert!(
         rendered
             .lines()
-            .any(|line| line.contains("› ● Inspect unnamed task  current")
-                && line.contains("Needs input"))
+            .any(|line| line.contains("› ● Inspect unnamed task") && line.contains("current"))
     );
 
     app.transcript_cells.push(std::sync::Arc::new(

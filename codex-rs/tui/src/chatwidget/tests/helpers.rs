@@ -67,6 +67,44 @@ pub(crate) fn normalize_snapshot_paths(text: impl Into<String>) -> String {
     }
 }
 
+/// Normalize command-center fixture paths without moving fixed pane separators.
+/// Pad after each complete pane so group counts and destination hints keep their spacing.
+pub(crate) fn normalize_agent_center_snapshot(text: impl AsRef<str>) -> String {
+    text.as_ref()
+        .split('\n')
+        .map(|line| {
+            let quoted = line
+                .strip_prefix('"')
+                .and_then(|line| line.strip_suffix('"'));
+            let content = quoted.unwrap_or(line);
+            let normalized = content
+                .split('│')
+                .map(|pane| {
+                    let mut normalized = pane.to_owned();
+                    for unix_path in ["/tmp/second-project", "/tmp/project", "/project"] {
+                        // test_path_buf uses this drive for all absolute Windows fixtures.
+                        let windows_path = format!("C:{}", unix_path.replace('/', "\\"));
+                        normalized = normalized
+                            .replace(&windows_path, unix_path)
+                            .replace(&windows_path.replace('\\', "/"), unix_path);
+                    }
+                    // Only ASCII path bytes change, so this is also the removed cell width.
+                    let padding = pane.len().saturating_sub(normalized.len());
+                    normalized.push_str(&" ".repeat(padding));
+                    normalized
+                })
+                .collect::<Vec<_>>()
+                .join("│");
+            if quoted.is_some() {
+                format!("\"{normalized}\"")
+            } else {
+                normalized.trim_end().to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub(super) fn normalized_backend_snapshot<T: std::fmt::Display>(value: &T) -> String {
     let platform_test_cwd = test_path_display("/tmp/project");
     let rendered = format!("{value}");

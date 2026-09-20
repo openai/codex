@@ -5,10 +5,10 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
   Agent command center
   Reconnect failed — agent list is stale; relaunch to retry
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  /tmp/project  2                                         │ Task details
-  › ● Selected task  Working                              │
-    ○ Vanished task  Ready                                │ Selected task
-                                                          │ ● Working
+      Tasks                                               │ Task details
+  /tmp/project  2                                         │
+  › ● Selected task                                       │ Selected task
+    ○ Vanished task                                       │ ● Working
                                                           │
                                                           │ Project
                                                           │ /tmp/project

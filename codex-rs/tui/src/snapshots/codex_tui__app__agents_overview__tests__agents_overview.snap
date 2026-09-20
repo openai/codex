@@ -5,11 +5,11 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   Agent command center
   1 need input   1 working   0 ready
   ────────────────────────────────────────────────────────────────────────────────────────────
-  /tmp/project  3                                     │ Task details
-  › ● Build the dashboard  current  Needs input       │
-    ● Repair authentication  Working                  │ Build the dashboard
-    ✓ Review yesterday's changes  Finished            │ ● Needs input
-                                                      │
+      Tasks                                           │ Task details
+  /tmp/project  3                                     │
+  › ● Build the dashboard                   current   │ Build the dashboard
+    ● Repair authentication                           │ ● Needs input
+    ○ Review yesterday's changes                      │
                                                       │ Agent: Inspect keyboard shortcuts
                                                       │ Open task to review.
                                                       │ Waiting for approval.

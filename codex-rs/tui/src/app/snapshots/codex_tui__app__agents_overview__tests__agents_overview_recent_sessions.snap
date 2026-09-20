@@ -1,22 +1,22 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
-expression: "render_bottom_popup(&restarted.chat_widget,\n80).replace(&test_path_display(\"/\"), \"/\")"
+expression: "age.replace_all(&rendered, \" [age]\")"
 ---
   Agent command center
   0 need input   0 working   0 ready
   ────────────────────────────────────────────────────────────────────────────
+      Tasks                                            Status         Updated
   /  10
-  › ✓ Task 12  Finished
-    ✓ Task 11  Finished
-    ✓ Task 10  Finished
-    ✓ Task 9  Finished
-    ✓ Task 8  Finished
-    ✓ Task 7  Finished
-    ✓ Task 6  Finished
-    ✓ Task 5  Finished
-    ✓ Task 4  Finished
-    ✓ Task 3  Finished
-
+  › ○ Task 12                                          Inactive [age]
+    ○ Task 11                                          Inactive [age]
+    ○ Task 10                                          Inactive [age]
+    ○ Task 9                                           Inactive [age]
+    ○ Task 8                                           Inactive [age]
+    ○ Task 7                                           Inactive [age]
+    ○ Task 6                                           Inactive [age]
+    ○ Task 5                                           Inactive [age]
+    ○ Task 4                                           Inactive [age]
+    ○ Task 3                                           Inactive [age]
 
 
 
