@@ -44,6 +44,8 @@ impl App {
     ) -> Result<Rect> {
         self.chat_widget.sync_warnings(&self.transcript_cells);
         let motion = MotionMode::from_animations_enabled(self.local_settings.tui.animations);
+        let focused = tui.is_terminal_focused();
+        let logo = self.empty_state_presentation(motion, focused);
         let latest_navigation = if self.enter_returns_to_latest() {
             "enter/esc latest"
         } else {
@@ -97,6 +99,7 @@ impl App {
         );
         let mut rendered_cursor = None;
         let mut footer_height_changed = false;
+        let mut decoration_tick = None;
         let mut feedback_tick = None;
         tui.draw(screen_size.height, |frame| {
             ratatui::widgets::Clear.render(
@@ -112,6 +115,12 @@ impl App {
                 ),
                 frame.buffer,
                 &self.transcript_cells,
+            );
+            decoration_tick = chat_widget.empty_state_animation.borrow_mut().render(
+                screen_size,
+                bottom_area,
+                frame.buffer,
+                logo,
             );
             let follow_area =
                 (available > 0 && chat_widget.no_modal_or_popup_active()).then(|| {
@@ -166,7 +175,9 @@ impl App {
         if let Some(delay) = feedback_tick {
             tui.frame_requester().schedule_frame_in(delay);
         }
-
+        if let Some(delay) = decoration_tick {
+            tui.frame_requester().schedule_frame_in(delay);
+        }
         let animating =
             view.is_following() && active_key.is_some_and(|key| key.animation_tick.is_some());
         let loading = view.is_loading_history() && motion == MotionMode::Animated;
@@ -415,6 +426,10 @@ impl App {
 #[cfg(test)]
 #[path = "owned_transcript_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "empty_state_animation_tests.rs"]
+mod empty_state_animation_tests;
 
 #[cfg(test)]
 #[path = "owned_transcript_input_tests.rs"]

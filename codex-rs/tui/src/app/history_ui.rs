@@ -23,6 +23,12 @@ pub(super) struct ThreadUsageStatusHistory {
 
 impl App {
     pub(super) fn insert_history_cell(&mut self, tui: &mut tui::Tui, cell: Box<dyn HistoryCell>) {
+        if !crate::empty_state_animation::is_startup_cell(cell.as_ref()) {
+            self.chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .dismiss();
+        }
         if let Some(warnings) = cell
             .as_any()
             .downcast_ref::<history_cell::StartupWarningsCell>()
@@ -239,7 +245,7 @@ impl App {
 
     fn insert_pending_usage_output(&mut self, tui: &mut tui::Tui) {
         if let Some(cell) = self.chat_widget.take_pending_rate_limit_reset_hint() {
-            self.insert_history_cell(tui, Box::new(cell));
+            self.insert_history_cell(tui, Box::new(history_cell::SessionNoticeCell(cell)));
         }
     }
 

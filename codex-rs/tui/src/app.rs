@@ -219,6 +219,7 @@ mod composer_hints;
 mod config_persistence;
 mod connector_mentions;
 mod daemon_menu;
+mod empty_state_policy;
 mod event_dispatch;
 mod exit_summary;
 mod experimental_features;
@@ -856,6 +857,13 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        // Resume arrives after suspension; retain the last painted phase across hidden owners.
+        if matches!(&event, TuiEvent::Resume) || !tui.is_owned_screen() || self.overlay.is_some() {
+            self.chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .pause_clock();
+        }
         let transcript_owns_input = match (&event, &self.overlay) {
             (TuiEvent::Key(key), Some(Overlay::Transcript(overlay))) => {
                 overlay.owns_interaction_key(*key)
@@ -1101,6 +1109,10 @@ impl App {
         if tui.is_owned_screen() {
             return self.render_owned_transcript(tui, screen_size);
         }
+        self.chat_widget
+            .empty_state_animation
+            .borrow_mut()
+            .pause_clock();
         self.chat_widget.sync_warnings(&self.transcript_cells);
         let dashboard_visible = self
             .chat_widget

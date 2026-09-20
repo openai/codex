@@ -70,6 +70,7 @@ mod app_link_view;
 mod apply_patch_header;
 mod approval_overlay;
 mod async_questions;
+mod empty_state_policy;
 mod hook_status;
 mod mcp_server_elicitation;
 mod multi_select_picker;

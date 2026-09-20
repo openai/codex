@@ -1026,7 +1026,10 @@ impl App {
                                 vec!["To continue this session, run ".into(), command.cyan()];
                             lines.push(spans.into());
                         }
-                        self.chat_widget.add_plain_history_lines(lines);
+                        self.chat_widget
+                            .add_to_history(history_cell::SessionNoticeCell(
+                                history_cell::PlainHistoryCell::new(lines),
+                            ));
                     }
                 }
             }
@@ -1065,6 +1068,10 @@ impl App {
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         if matches!(presentation, ThreadAttachPresentation::Fresh) {
             self.chat_widget.mark_fresh_task_for_sparkle(&started);
+            self.chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .start_fresh();
         }
         self.chat_widget
             .set_task_mentions_enabled(started.task_tools_available);

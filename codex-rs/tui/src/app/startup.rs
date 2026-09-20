@@ -697,6 +697,9 @@ impl App {
             start_in_agents_overview = true;
         }
         chat_widget.note_rendered_width(tui.terminal.last_known_screen_size.width);
+        if pending_startup_thread_start && !start_in_agents_overview {
+            chat_widget.empty_state_animation.borrow_mut().start_fresh();
+        }
         chat_widget.remote_connection = remote_connection;
         chat_widget.snapshot_local_images = app_server_target.uses_remote_workspace();
         chat_widget.set_local_worktree_operations(!crate::uses_remote_workspace_or_environment(

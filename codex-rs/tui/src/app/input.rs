@@ -229,6 +229,10 @@ impl App {
     }
 
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget
+            .empty_state_animation
+            .borrow_mut()
+            .pause_clock();
         let editor_cmd = match external_editor::resolve_editor_command() {
             Ok(cmd) => cmd,
             Err(external_editor::EditorError::MissingEditor) => {
@@ -284,6 +288,10 @@ impl App {
     }
 
     pub(super) fn request_external_editor_launch(&mut self, tui: &mut tui::Tui) {
+        self.chat_widget
+            .empty_state_animation
+            .borrow_mut()
+            .pause_clock();
         self.chat_widget
             .set_external_editor_state(ExternalEditorState::Requested);
         self.chat_widget.set_footer_hint_override(Some(vec![(

@@ -322,6 +322,7 @@ mod connector_mentions;
 mod connectors;
 mod constructor;
 mod dynamic_activity;
+mod empty_state_policy;
 pub(crate) use self::connectors::ConnectorScopeGeneration;
 use self::connectors::ConnectorsState;
 mod exec_state;
@@ -567,6 +568,8 @@ pub(crate) enum ExternalEditorState {
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
+    pub(crate) empty_state_animation:
+        std::cell::RefCell<crate::empty_state_animation::EmptyStateAnimation>,
     pub(crate) cyber_policy_notice: crate::daybreak::NoticeCache,
     app_event_tx: AppEventSender,
     codex_op_target: CodexOpTarget,

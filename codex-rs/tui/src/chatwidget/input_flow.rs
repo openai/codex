@@ -153,6 +153,9 @@ impl ChatWidget {
             && !self.is_user_turn_pending_or_running()
             && !self.input_queue.suppress_queue_autosend
             && !self.input_queue.rate_limit_recovery_pending;
+        if action != QueuedInputAction::ParseSlash {
+            self.empty_state_animation.borrow_mut().dismiss();
+        }
         if !should_run_now || action != QueuedInputAction::Plain {
             let queued_slash_prompt = action == QueuedInputAction::ParseSlash
                 && parse_slash_name(&user_message.text).is_none_or(|(name, args, _)| {

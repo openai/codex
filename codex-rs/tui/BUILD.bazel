@@ -5,7 +5,6 @@ codex_rust_crate(
     binaries_with_build_commit = ["codex-tui"],
     compile_data = glob([
         "assets/**",
-        "frames/**",
     ]),
     crate_name = "codex_tui",
     extra_binaries = [

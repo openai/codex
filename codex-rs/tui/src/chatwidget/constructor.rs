@@ -97,6 +97,7 @@ impl ChatWidget {
             pet_http_client.clone(),
         );
         let mut widget = Self {
+            empty_state_animation: Default::default(),
             cyber_policy_notice: Default::default(),
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),

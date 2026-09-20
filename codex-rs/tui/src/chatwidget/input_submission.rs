@@ -138,6 +138,7 @@ impl ChatWidget {
         if self.has_misalignment_policy_violation() {
             return (false, None);
         }
+        self.empty_state_animation.borrow_mut().dismiss();
         if self.input_queue.rate_limit_recovery_pending || self.pending_image_submission.is_some() {
             let model_prompt = source == UserMessageSource::Prompt
                 && (shell_escape_policy == ShellEscapePolicy::Disallow
