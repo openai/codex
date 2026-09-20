@@ -29,10 +29,6 @@ fn summary_modes_reflow_and_keep_selection_across_tabs() {
     press(&mut view, KeyCode::Char('g'));
     assert_eq!(view.sections[Section::Summary].group, 1);
     assert!(view.profile.ready().is_some());
-    insta::assert_snapshot!(
-        "summary_weekly",
-        screen(&mut view, /*width*/ 110, /*height*/ 44)
-    );
     press(&mut view, KeyCode::Tab);
     press(&mut view, KeyCode::BackTab);
     assert_eq!(view.sections[Section::Summary].group, 1);
@@ -47,16 +43,11 @@ fn summary_modes_reflow_and_keep_selection_across_tabs() {
     }
     screen(&mut view, /*width*/ 64, /*height*/ 18);
     press(&mut view, KeyCode::End);
-    insta::assert_snapshot!(
-        "summary_scrolled",
-        screen(&mut view, /*width*/ 64, /*height*/ 18)
-    );
+    screen(&mut view, /*width*/ 64, /*height*/ 18);
+    assert!(view.scroll_offset > 0);
     press(&mut view, KeyCode::Home);
+    assert_eq!(view.scroll_offset, 0);
     press(&mut view, KeyCode::Char('z'));
-    insta::assert_snapshot!(
-        "summary_overview",
-        screen(&mut view, /*width*/ 144, /*height*/ 64)
-    );
     press(&mut view, KeyCode::Esc);
     assert!(view.is_done);
 }

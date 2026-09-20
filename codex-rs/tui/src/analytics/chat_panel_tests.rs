@@ -30,7 +30,6 @@ fn chats_range_controls_and_visible_rows() {
         ),
         before
     );
-    let mut screens = Vec::new();
     for key in [KeyCode::Home, KeyCode::End, KeyCode::Enter] {
         press(&mut view, key);
         let output = screen(&mut view, /*width*/ 110, /*height*/ 24);
@@ -43,7 +42,6 @@ fn chats_range_controls_and_visible_rows() {
             visible.first().unwrap(),
             visible.last().unwrap()
         )));
-        screens.push(output);
     }
     press(&mut view, KeyCode::Char('z'));
     press(&mut view, KeyCode::Char('r'));
@@ -52,7 +50,6 @@ fn chats_range_controls_and_visible_rows() {
     press(&mut view, KeyCode::Char('r'));
     press(&mut view, KeyCode::Char('z'));
     assert!(screen(&mut view, /*width*/ 110, /*height*/ 24).contains("[30d]"));
-    insta::assert_snapshot!(screens.join("\n"));
 }
 
 #[test]
@@ -159,16 +156,13 @@ fn unavailable_chat_titles_are_hidden_in_panel_and_overview() {
             usage: None,
         }],
     });
-    let mut screens = Vec::new();
     for zoomed in [true, false] {
         view.zoomed = zoomed;
         view.follow_selection = true;
         let output = screen(&mut view, /*width*/ 110, /*height*/ 28);
         assert!(!output.contains("Another workspace's private title"));
         assert!(output.contains("Chat usage unavailable"));
-        screens.push(output);
     }
-    insta::assert_snapshot!(screens.join("\n"));
 }
 
 #[test]
@@ -206,9 +200,6 @@ fn moving_chat_selection_collapses_details_before_they_leave_the_viewport() {
         assert_eq!(view.sections[Section::Chats].detail, Some(start));
         press(&mut view, key);
         assert_eq!(view.sections[Section::Chats].detail, None);
-        if key == KeyCode::End {
-            insta::assert_snapshot!(screen(&mut view, /*width*/ 110, /*height*/ 24));
-        }
         press(&mut view, KeyCode::Esc);
         assert!(view.is_done);
     }

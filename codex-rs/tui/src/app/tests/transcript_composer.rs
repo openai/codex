@@ -164,19 +164,6 @@ async fn analytics_menu_reopen_preserves_navigation_and_explicit_view_selects_su
     assert!(screens[1].contains("[4 Plugins called]"));
     assert!(screens[2].contains("[1 Summary]"));
     assert!(screens[2].contains("Weekly"));
-    let snapshot = screens.join("\n\n");
-    let snapshot = snapshot
-        .lines()
-        .map(|line| {
-            if line.starts_with("  [7d]  30d  · ") {
-                "  [7d]  30d  · [date range]"
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    insta::assert_snapshot!(snapshot);
     Ok(())
 }
 

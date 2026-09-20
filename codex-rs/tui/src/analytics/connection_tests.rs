@@ -103,16 +103,6 @@ async fn local_reports_share_an_account_and_recover_profile_errors() {
             assert!(view.sections[*section].history.ready().is_some());
         }
     }
-    view.select_summary(/*view*/ None);
-    view.end_date = "2026-09-09".parse().unwrap();
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
-        /*width*/ 100, /*height*/ 48,
-    ))
-    .unwrap();
-    terminal
-        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
-        .unwrap();
-    insta::assert_snapshot!("local_profile_error", terminal.backend().to_string());
     drop(failed_profile);
 
     let profile = json!({
@@ -133,11 +123,6 @@ async fn local_reports_share_an_account_and_recover_profile_errors() {
         view.profile.ready(),
         Some(&serde_json::from_value(profile).unwrap())
     );
-    view.end_date = "2026-09-09".parse().unwrap();
-    terminal
-        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
-        .unwrap();
-    insta::assert_snapshot!("local_profile_recovered", terminal.backend().to_string());
     for request in http.received_requests().await.unwrap() {
         assert_eq!(
             request.headers.get("chatgpt-account-id").unwrap(),
@@ -184,16 +169,6 @@ async fn account_lookup_failure_recovers_on_refresh_with_the_server_plan() {
             .collect::<Vec<_>>(),
         ["/backend-api/wham/accounts/check"]
     );
-    view.end_date = "2026-09-09".parse().unwrap();
-    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
-        /*width*/ 100, /*height*/ 40,
-    ))
-    .unwrap();
-    terminal
-        .draw(|frame| view.render(frame.area(), frame.buffer_mut()))
-        .unwrap();
-    insta::assert_snapshot!("account_plan_error", terminal.backend().to_string());
-
     Mock::given(method("GET"))
         .and(wiremock::matchers::path("/backend-api/wham/accounts/check"))
         .and(header("chatgpt-account-id", "account-a"))

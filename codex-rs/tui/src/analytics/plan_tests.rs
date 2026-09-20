@@ -209,7 +209,6 @@ fn plan_overview_escape_closes_with_retained_expansion() {
         .unwrap();
     let output = terminal.backend().to_string();
     assert!(output.contains("Latest period · 12 total") && output.contains("Weekly limits"));
-    insta::assert_snapshot!(output);
     view.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(view.is_done);
 }

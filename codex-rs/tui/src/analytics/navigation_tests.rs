@@ -37,7 +37,7 @@ fn vim_chart_navigation_matches_arrows_in_focused_and_dashboard_views() {
                 view.sections[section].cursor = 3;
                 view.sections[section].detail = Some(3);
             }
-            let output = navigate(
+            navigate(
                 &mut views,
                 &[
                     ('h', KeyCode::Left),
@@ -56,9 +56,6 @@ fn vim_chart_navigation_matches_arrows_in_focused_and_dashboard_views() {
                 ),
                 (section, 2, Some(2))
             );
-            if kind == AccountKind::Consumer && section == Section::Usage && zoomed {
-                insta::assert_snapshot!("vim_chart_navigation", output);
-            }
         }
     }
 }

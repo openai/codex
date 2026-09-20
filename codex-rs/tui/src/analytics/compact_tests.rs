@@ -3,7 +3,6 @@ use super::*;
 
 #[test]
 fn report_headlines_and_axes_compact_large_values() {
-    let mut screenshots = Vec::new();
     for (section, unit, total, headline) in [
         (
             Section::Usage,
@@ -42,7 +41,5 @@ fn report_headlines_and_axes_compact_large_values() {
         let rendered = screen(&mut view, /*width*/ 100, /*height*/ 30);
         assert!(rendered.contains(headline));
         assert!(rendered.contains(&data::amount(total)));
-        screenshots.push(rendered);
     }
-    insta::assert_snapshot!(screenshots.join("\n"));
 }

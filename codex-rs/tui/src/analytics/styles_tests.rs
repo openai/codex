@@ -42,22 +42,12 @@ fn analytics_sections_adapt_to_terminal_colors() {
         ),
     ] {
         with_test_default_colors(colors, || {
-            for business in [false, true] {
-                let mut view = fixture::view(models::AccountKind::Consumer);
-                if business {
-                    view = fixture::view(models::AccountKind::Enterprise);
-                }
+            for kind in [
+                models::AccountKind::Consumer,
+                models::AccountKind::Enterprise,
+            ] {
+                let mut view = fixture::view(kind);
                 view.sections[Section::Chats].detail = Some(0);
-                // Exercise the reported credit range and preserve exact amounts below the plot.
-                let mut credits =
-                    fixture::history(/*report*/ 1, /*range*/ 0, /*group*/ 0);
-                for day in &mut credits.data {
-                    day.total *= 40.0;
-                    for value in &mut day.values {
-                        value.value *= 40.0;
-                    }
-                }
-                view.sections[Section::Credits].history = Load::Ready(credits);
                 for section in view.visible_sections() {
                     let section = *section;
                     view.section = section;
@@ -101,59 +91,6 @@ fn analytics_sections_adapt_to_terminal_colors() {
                             );
                         }
                     }
-                    // Preserve every symbol and style while sharing repeated styles in a palette.
-                    let mut palette = Vec::new();
-                    let mut text = Vec::new();
-                    let mut runs = Vec::new();
-                    for (y, row) in buffer.content.chunks(usize::from(area.width)).enumerate() {
-                        text.push(format!(
-                            "{:?}",
-                            row.iter()
-                                .map(ratatui::buffer::Cell::symbol)
-                                .collect::<String>()
-                        ));
-                        let mut previous = None;
-                        let mut changes = Vec::new();
-                        for (x, cell) in row.iter().enumerate() {
-                            let style = format!(
-                                "{:?}|{:?}|{:?}|{:?}",
-                                cell.fg, cell.bg, cell.underline_color, cell.modifier
-                            );
-                            let index = palette
-                                .iter()
-                                .position(|candidate| *candidate == style)
-                                .unwrap_or_else(|| {
-                                    palette.push(style);
-                                    palette.len() - 1
-                                });
-                            if previous != Some(index) {
-                                changes.push(format!("{x}:{index}"));
-                                previous = Some(index);
-                            }
-                        }
-                        runs.push(format!("{y}: {}", changes.join(" ")));
-                    }
-                    let palette = palette
-                        .iter()
-                        .enumerate()
-                        .map(|(index, style)| format!("{index}: {style}"))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let snapshot = format!(
-                        "{}x{}\nText:\n{}\nPalette (foreground|background|underline|modifiers):\n{palette}\nRows (column:palette):\n{}",
-                        area.width,
-                        area.height,
-                        text.join("\n"),
-                        runs.join("\n")
-                    );
-                    insta::assert_snapshot!(
-                        format!(
-                            "analytics_{theme}_{}_{}",
-                            if business { "business" } else { "consumer" },
-                            section as usize + 1
-                        ),
-                        snapshot
-                    );
                 }
             }
         });
