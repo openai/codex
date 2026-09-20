@@ -9,6 +9,7 @@ use url::Url;
 pub(crate) struct RemoteConnectionStatus {
     pub(crate) address: String,
     pub(crate) version: String,
+    pub(crate) is_local_daemon: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,7 +41,11 @@ pub(crate) fn remote_connection_status_value(
     let version = server_version
         .map(|version| format!("v{version}"))
         .unwrap_or_else(|| "unknown".to_string());
-    Some(RemoteConnectionStatus { address, version })
+    Some(RemoteConnectionStatus {
+        address,
+        version,
+        is_local_daemon: matches!(app_server_target, AppServerTarget::LocalDaemon { .. }),
+    })
 }
 
 pub(crate) fn server_version_notice(client: &str, server: Option<&str>) -> Option<String> {
@@ -187,6 +192,7 @@ mod tests {
             Some(RemoteConnectionStatus {
                 address: "ws://127.0.0.1:4500/".to_string(),
                 version: "v1.2.3".to_string(),
+                is_local_daemon: false,
             })
         );
 
@@ -202,6 +208,20 @@ mod tests {
             Some(RemoteConnectionStatus {
                 address: format!("unix://{}", socket_path.display()),
                 version: "unknown".to_string(),
+                is_local_daemon: true,
+            })
+        );
+        let remote_socket_target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: socket_path.clone(),
+            },
+        };
+        assert_eq!(
+            remote_connection_status_value(&remote_socket_target, Some("1.2.3")),
+            Some(RemoteConnectionStatus {
+                address: format!("unix://{}", socket_path.display()),
+                version: "v1.2.3".to_string(),
+                is_local_daemon: false,
             })
         );
         Ok(())

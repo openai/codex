@@ -498,7 +498,7 @@ trust_level = "trusted"
         if backend == "daemon" && !analytics && matches!(observed, Ok(Ok(_))) {
             session.writer_sender().send(b"/status\r".to_vec()).await?;
             tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
-                while !output.contains("app-server-control.sock") {
+                while !output.contains("Local background server") {
                     let bytes = stdout
                         .recv()
                         .await
