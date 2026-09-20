@@ -113,13 +113,13 @@ pub(crate) struct ProposedPlanStreamCell {
     is_stream_continuation: bool,
 }
 
-impl HistoryCell for ProposedPlanCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        visible_lines(self.display_hyperlink_lines(width))
-    }
-
-    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
-        self.rendered_lines.render(width, || {
+impl ProposedPlanCell {
+    fn render_lines(
+        &self,
+        width: u16,
+        list_spacing: crate::markdown_render::ListSpacing,
+    ) -> Vec<HyperlinkLine> {
+        self.rendered_lines.render(width, list_spacing, || {
             let mut lines = vec![
                 HyperlinkLine::new(vec!["• ".dim(), "Proposed Plan".bold()].into()),
                 HyperlinkLine::new(Line::from(" ")),
@@ -128,10 +128,12 @@ impl HistoryCell for ProposedPlanCell {
             let mut plan_lines = vec![HyperlinkLine::new(Line::from(" "))];
             let plan_style = proposed_plan_style();
             let wrap_width = width.saturating_sub(4).max(1) as usize;
-            let mut body = crate::markdown::render_markdown_agent_with_links_and_cwd(
+            let mut body = crate::markdown::render_markdown_agent_with_list_spacing(
                 &self.plan_markdown,
                 Some(wrap_width),
                 Some(self.cwd.as_path()),
+                /*inline_visualization_context*/ None,
+                list_spacing,
             );
             if body.is_empty() {
                 body.push(HyperlinkLine::new(Line::from("(empty)".dim().italic())));
@@ -142,6 +144,20 @@ impl HistoryCell for ProposedPlanCell {
             lines.extend(plan_lines.into_iter().map(|line| line.style(plan_style)));
             lines
         })
+    }
+}
+
+impl HistoryCell for ProposedPlanCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.render_lines(width, crate::markdown_render::ListSpacing::AfterMultiline)
+    }
+
+    fn retained_hyperlink_lines(&self, width: u16, _detailed: bool) -> Vec<HyperlinkLine> {
+        self.render_lines(width, crate::markdown_render::ListSpacing::Uniform)
     }
 
     fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {

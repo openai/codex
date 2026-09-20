@@ -27,8 +27,13 @@ fn unicode_math_inline_stream_preserves_display_exclusion_boundaries() {
             );
             assert_eq!(
                 render.lines,
-                render_streaming_markdown_agent_with_links_and_cwd(&source, Some(40), Some(&cwd))
-                    .lines
+                render_streaming_markdown_agent_with_links_and_cwd(
+                    &source,
+                    Some(40),
+                    Some(&cwd),
+                    crate::markdown_render::ListSpacing::AfterMultiline
+                )
+                .lines
             );
             for width in [16, 40] {
                 let mut resized = StreamingRender::new();
@@ -44,7 +49,8 @@ fn unicode_math_inline_stream_preserves_display_exclusion_boundaries() {
                     render_streaming_markdown_agent_with_links_and_cwd(
                         &source,
                         Some(width),
-                        Some(&cwd)
+                        Some(&cwd),
+                        crate::markdown_render::ListSpacing::AfterMultiline,
                     )
                     .lines
                 );

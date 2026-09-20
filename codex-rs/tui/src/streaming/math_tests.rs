@@ -168,6 +168,7 @@ fn unicode_math_rejected_display_keeps_its_closer_and_following_text() {
                     &source,
                     Some(40),
                     Some(&cwd),
+                    crate::markdown_render::ListSpacing::AfterMultiline,
                 );
                 assert_eq!(
                     (&render.lines, render.pending_math_start),

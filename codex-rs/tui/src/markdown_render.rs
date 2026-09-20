@@ -6,6 +6,8 @@
 //! `markdown.rs`.
 //!
 //! Local file-link parsing and display policy live in [`local_links`].
+//! List spacing stays a renderer policy: compact while streaming in an owned viewport, uniform
+//! after source-backed consolidation, and historical spacing for native scrollback.
 //!
 //! ## Table rendering pipeline
 //!
@@ -72,6 +74,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 mod file_citations;
+mod list_spacing;
 mod local_links;
 mod math;
 mod mermaid;
@@ -80,11 +83,16 @@ mod table_key_value;
 mod web_links;
 
 use file_citations::FileCitations;
+pub(crate) use list_spacing::ListSpacing;
+use list_spacing::UniformList;
 use local_links::is_local_path_like_link;
 use local_links::render_local_link_target;
 use local_links::should_render_local_link_label;
 pub(crate) use streaming::StreamingMarkdownRender;
 pub(crate) use streaming::render_streaming_markdown_lines_with_width_and_cwd;
+#[cfg(test)]
+#[path = "markdown_render/list_spacing_tests.rs"]
+mod list_spacing_tests;
 pub(crate) use web_links::hide_web_link_destination;
 use web_links::style_bare_web_urls;
 
@@ -403,6 +411,8 @@ where
     list_indices: Vec<Option<u64>>,
     list_needs_blank_before_next_item: Vec<bool>,
     list_item_start_line_counts: Vec<usize>,
+    list_spacing: ListSpacing,
+    uniform_lists: Vec<UniformList>,
     link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
@@ -445,6 +455,8 @@ where
             list_indices: Vec::new(),
             list_needs_blank_before_next_item: Vec::new(),
             list_item_start_line_counts: Vec::new(),
+            list_spacing: ListSpacing::default(),
+            uniform_lists: Vec::new(),
             link: None,
             needs_newline: false,
             pending_marker_line: false,
@@ -564,6 +576,12 @@ where
             TagEnd::Item => {
                 self.flush_current_line();
                 let start_line_count = self.list_item_start_line_counts.pop().unwrap_or_default();
+                if let Some(list) = self.uniform_lists.last_mut() {
+                    let rows = &self.text[start_line_count..];
+                    list.multiline |= rows.len() > 1
+                        || (rows.len() == 1
+                            && self.wrap_width.is_some_and(|width| rows[0].width() > width));
+                }
                 if self.text.len().saturating_sub(start_line_count) > 1
                     && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
                 {
@@ -820,24 +838,45 @@ where
         }
         self.list_indices.push(index);
         self.list_needs_blank_before_next_item.push(false);
+        if self.list_spacing == ListSpacing::Uniform {
+            self.uniform_lists.push(UniformList::default());
+        }
     }
 
     fn end_list(&mut self) {
+        self.flush_current_line();
+        if let Some(list) = self.uniform_lists.pop() {
+            list.finish(&mut self.text);
+        }
         self.list_indices.pop();
         self.list_needs_blank_before_next_item.pop();
         self.needs_newline = true;
     }
 
     fn start_item(&mut self) {
-        if self
+        let after_multiline = self
             .list_needs_blank_before_next_item
             .last_mut()
             .map(std::mem::take)
-            .unwrap_or(false)
-        {
-            self.push_blank_line();
-        }
+            .unwrap_or(/*default*/ false);
         self.flush_current_line();
+        let separate = match self.list_spacing {
+            ListSpacing::AfterMultiline => after_multiline,
+            ListSpacing::Compact => false,
+            ListSpacing::Uniform => self.uniform_lists.last().is_some_and(|list| list.has_item),
+        };
+        if separate {
+            let index = self.text.len();
+            self.push_blank_line();
+            if self.text.len() > index
+                && let Some(list) = self.uniform_lists.last_mut()
+            {
+                list.separators.push(index);
+            }
+        }
+        if let Some(list) = self.uniform_lists.last_mut() {
+            list.has_item = true;
+        }
         self.list_item_start_line_counts.push(self.text.len());
         self.pending_marker_line = true;
         let depth = self.list_indices.len();
@@ -880,7 +919,14 @@ where
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
         self.flush_current_line();
-        if !self.text.is_empty() {
+        let first_item_block = self.pending_marker_line
+            && self
+                .indent_stack
+                .last()
+                .is_some_and(|context| context.is_list);
+        if !self.text.is_empty()
+            && (self.list_spacing == ListSpacing::AfterMultiline || !first_item_block)
+        {
             self.push_blank_line();
         }
         self.in_code_block = true;

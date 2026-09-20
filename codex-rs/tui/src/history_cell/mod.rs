@@ -235,6 +235,15 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         self.display_hyperlink_lines(width)
     }
 
+    /// Rich presentation in a viewport that can redraw previously visible rows.
+    fn retained_hyperlink_lines(&self, width: u16, detailed: bool) -> Vec<HyperlinkLine> {
+        if detailed {
+            self.transcript_hyperlink_lines(width)
+        } else {
+            self.compact_hyperlink_lines(width)
+        }
+    }
+
     /// Stable, namespaced member identities used to retain disclosure across grouping and replay.
     /// Empty identities indicate ordinary content without a local disclosure control.
     fn activity_ids(&self) -> Vec<String> {

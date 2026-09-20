@@ -1,0 +1,60 @@
+---
+source: tui/src/chatwidget/tests/list_spacing_tests.rs
+expression: "stages.join(\"\\n\\n---\\n\\n\")"
+---
+owned=true, plan=false
+Streaming:
+• 1. One
+  2. This item has enough
+     words to wrap
+  3. Three
+  4. Four
+Completed:
+• 1. One
+
+  2. This item has enough
+     words to wrap
+
+  3. Three
+
+  4. Four
+Wide:
+• 1. One
+  2. This item has enough words to wrap
+  3. Three
+  4. Four
+
+---
+
+owned=true, plan=true
+Streaming:
+• Proposed Plan
+
+
+  1. One
+  2. This item has enough
+     words to wrap
+  3. Three
+  4. Four
+
+Completed:
+• Proposed Plan
+
+
+  1. One
+
+  2. This item has enough
+     words to wrap
+
+  3. Three
+
+  4. Four
+
+Wide:
+• Proposed Plan
+
+
+  1. One
+  2. This item has enough words to wrap
+  3. Three
+  4. Four

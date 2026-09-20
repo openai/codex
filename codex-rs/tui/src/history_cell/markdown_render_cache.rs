@@ -1,5 +1,6 @@
 //! Single-width render cache shared by finalized source-backed markdown history cells.
 
+use crate::markdown_render::ListSpacing;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -12,6 +13,7 @@ pub(super) struct MarkdownRenderCache {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownRenderCacheKey {
     pub(super) width: u16,
+    pub(super) list_spacing: ListSpacing,
     pub(super) syntax_theme_revision: u64,
     pub(super) terminal_fg: Option<(u8, u8, u8)>,
     pub(super) terminal_bg: Option<(u8, u8, u8)>,
@@ -26,10 +28,12 @@ impl MarkdownRenderCache {
     pub(super) fn render(
         &self,
         width: u16,
+        list_spacing: ListSpacing,
         render: impl FnOnce() -> Vec<HyperlinkLine>,
     ) -> Vec<HyperlinkLine> {
         let key = MarkdownRenderCacheKey {
             width,
+            list_spacing,
             syntax_theme_revision: crate::render::highlight::syntax_theme_revision(),
             terminal_fg: crate::terminal_palette::default_fg(),
             terminal_bg: crate::terminal_palette::default_bg(),

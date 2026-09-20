@@ -3,6 +3,7 @@
 use super::*;
 use crate::app::tests::make_test_app_with_channels;
 use crate::app_command::AppCommand;
+use crate::app_event::ConsolidationScrollbackReflow;
 use crate::chatwidget::tests::helpers::normalize_snapshot_paths;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
@@ -70,6 +71,52 @@ fn buffer_text(buffer: &Buffer) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[tokio::test]
+async fn list_spacing_completion_preserves_the_scrolled_reader() -> Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    app.transcript_cells = vec![Arc::new(history_cell::AgentMessageCell::new(
+        vec![
+            "- First item wraps onto".into(),
+            "  a second row".into(),
+            "- b".into(),
+            "- c".into(),
+        ],
+        /*is_first_line*/ true,
+    ))];
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    tui.set_owned_screen(/*owned*/ true)?;
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 26, /*height*/ 1,
+    );
+    let mut before = Buffer::empty(area);
+    app.transcript_view
+        .jump_to_entry(&app.transcript_cells, /*index*/ 0);
+    app.transcript_view
+        .render(area, &mut before, &app.transcript_cells);
+    app.transcript_view
+        .scroll(&app.transcript_cells, /*rows*/ 3);
+    app.transcript_view
+        .render(area, &mut before, &app.transcript_cells);
+    assert!(buffer_text(&before).contains("- c"));
+    app.handle_consolidate_agent_message(
+        &mut tui,
+        "- First item wraps onto a second row\n- b\n- c".into(),
+        app.config.cwd.to_path_buf(),
+        /*inline_visualization_context*/ None,
+        ConsolidationScrollbackReflow::Required,
+        /*deferred_history_cell*/ None,
+    )?;
+    let mut after = Buffer::empty(area);
+    app.transcript_view
+        .render(area, &mut after, &app.transcript_cells);
+    assert_eq!(after, before);
+    app.transcript_view.jump_to_latest();
+    app.transcript_view
+        .render(area, &mut after, &app.transcript_cells);
+    assert_eq!(after, before);
+    Ok(())
 }
 
 #[tokio::test]

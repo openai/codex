@@ -314,5 +314,8 @@ pub(super) use helpers::*;
 #[path = "tests/questions_tests.rs"]
 mod questions_tests;
 
+#[path = "tests/list_spacing_tests.rs"]
+mod list_spacing_tests;
+
 #[path = "tests/question_notifications_tests.rs"]
 mod question_notifications_tests;

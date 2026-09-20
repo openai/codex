@@ -8,8 +8,9 @@ use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::raw_lines_from_source;
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::inline_visualization::contains_inline_visualization;
-use crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations;
+use crate::markdown::render_markdown_agent_with_list_spacing;
 use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
+use crate::markdown_render::ListSpacing;
 use crate::render::highlight::syntax_theme_revision;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
@@ -21,6 +22,7 @@ use std::path::Path;
 /// The prefix before both boundaries is immutable; only the final top-level Markdown block is
 /// re-rendered as committed source arrives.
 pub(super) struct StreamingRender {
+    pub(super) list_spacing: ListSpacing,
     pub(super) lines: Vec<HyperlinkLine>,
     pub(super) pending_math_start: Option<usize>,
     pub(super) mermaid_start: Option<usize>,
@@ -39,6 +41,7 @@ pub(super) struct StreamingRender {
 impl StreamingRender {
     pub(super) fn new() -> Self {
         Self {
+            list_spacing: ListSpacing::AfterMultiline,
             lines: Vec::with_capacity(64),
             pending_math_start: None,
             mermaid_start: None,
@@ -79,8 +82,12 @@ impl StreamingRender {
         self.has_inline_visualization_directive = contains_inline_visualization(source);
         self.lines = match (render_mode, inline_visualization_context) {
             (HistoryRenderMode::Rich, None) if !self.has_inline_visualization_directive => {
-                let rendered =
-                    render_streaming_markdown_agent_with_links_and_cwd(source, width, Some(cwd));
+                let rendered = render_streaming_markdown_agent_with_links_and_cwd(
+                    source,
+                    width,
+                    Some(cwd),
+                    self.list_spacing,
+                );
                 self.has_reference_link_definition = rendered.has_reference_link_definition;
                 self.pending_math_start = rendered.pending_math_start;
                 self.mermaid_start = rendered.mermaid_start;
@@ -93,16 +100,18 @@ impl StreamingRender {
                         source,
                         width,
                         Some(cwd),
+                        self.list_spacing,
                     );
                     self.pending_math_start = rendered.pending_math_start;
                     self.mermaid_start = rendered.mermaid_start;
                 }
-                render_source(
+                render_source_with_list_spacing(
                     source,
                     width,
                     cwd,
                     render_mode,
                     inline_visualization_context,
+                    self.list_spacing,
                 )
             }
         };
@@ -166,8 +175,12 @@ impl StreamingRender {
 
         let pending_source = &raw_source[self.stable_source_len..];
         let theme_revision = syntax_theme_revision();
-        let pending =
-            render_streaming_markdown_agent_with_links_and_cwd(pending_source, width, Some(cwd));
+        let pending = render_streaming_markdown_agent_with_links_and_cwd(
+            pending_source,
+            width,
+            Some(cwd),
+            self.list_spacing,
+        );
         self.pending_math_start = pending
             .pending_math_start
             .map(|start| self.stable_source_len + start);
@@ -196,12 +209,13 @@ impl StreamingRender {
         let mut newly_stable_rendered_len = None;
         if let Some(boundary) = pending.last_top_level_block_start {
             let newly_stable_source = &pending_source[..boundary];
-            let newly_stable = render_source(
+            let newly_stable = render_source_with_list_spacing(
                 newly_stable_source,
                 width,
                 cwd,
                 render_mode,
                 inline_visualization_context,
+                self.list_spacing,
             );
             self.stable_source_len += boundary;
             newly_stable_rendered_len = Some(newly_stable.len());
@@ -229,12 +243,31 @@ pub(super) fn render_source(
     render_mode: HistoryRenderMode,
     inline_visualization_context: Option<&InlineVisualizationContext>,
 ) -> Vec<HyperlinkLine> {
+    render_source_with_list_spacing(
+        source,
+        width,
+        cwd,
+        render_mode,
+        inline_visualization_context,
+        ListSpacing::AfterMultiline,
+    )
+}
+
+pub(super) fn render_source_with_list_spacing(
+    source: &str,
+    width: Option<usize>,
+    cwd: &Path,
+    render_mode: HistoryRenderMode,
+    inline_visualization_context: Option<&InlineVisualizationContext>,
+    list_spacing: ListSpacing,
+) -> Vec<HyperlinkLine> {
     match render_mode {
-        HistoryRenderMode::Rich => render_markdown_agent_with_links_cwd_and_visualizations(
+        HistoryRenderMode::Rich => render_markdown_agent_with_list_spacing(
             source,
             width,
             Some(cwd),
             inline_visualization_context,
+            list_spacing,
         ),
         HistoryRenderMode::Raw => plain_hyperlink_lines(raw_lines_from_source(source)),
     }

@@ -154,10 +154,8 @@ impl TranscriptView {
                     width,
                     expanded,
                 )
-            } else if detailed {
-                TextLayout::new(cell.transcript_hyperlink_lines(width), width)
-            } else if mode == HistoryRenderMode::Rich {
-                TextLayout::new(cell.compact_hyperlink_lines(width), width)
+            } else if detailed || mode == HistoryRenderMode::Rich {
+                TextLayout::new(cell.retained_hyperlink_lines(width, detailed), width)
             } else {
                 TextLayout::new(cell.display_hyperlink_lines_for_mode(width, mode), width)
             }

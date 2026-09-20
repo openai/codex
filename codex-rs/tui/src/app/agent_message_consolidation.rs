@@ -5,7 +5,7 @@
 //! tail in the bottom pane. Once the answer finishes, the app replaces that
 //! trailing run with a single source-backed `AgentMarkdownCell`. This makes the
 //! transcript the canonical owner of the raw markdown source used for future
-//! resize re-renders. The retained view remaps its reading position before that
+//! resize re-renders. The retained view preserves its displayed revision before that
 //! replacement, then repaints without replaying terminal scrollback.
 
 use std::path::PathBuf;
@@ -67,13 +67,24 @@ impl App {
             );
             self.native_history
                 .consolidate(&self.transcript_cells[start..end], &consolidated);
-            self.transcript_view
-                .replace_range(&self.transcript_cells, start..end, &consolidated);
+            if tui.is_owned_screen() {
+                self.transcript_view.replace_group(
+                    &self.transcript_cells,
+                    start..end,
+                    &consolidated,
+                );
+            } else {
+                self.transcript_view.replace_range(
+                    &self.transcript_cells,
+                    start..end,
+                    &consolidated,
+                );
+            }
             self.transcript_cells
                 .splice(start..end, std::iter::once(consolidated.clone()));
 
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.consolidate_cells(start..end, consolidated.clone());
+                t.regroup_cells(start..end, consolidated.clone());
                 tui.frame_requester().schedule_frame();
             }
 

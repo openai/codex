@@ -4,6 +4,7 @@
 //! cells, commit ticks, and interrupt deferral.
 
 use super::*;
+use crate::markdown_render::ListSpacing;
 
 fn latest_summary_line(text: &str) -> Option<String> {
     text.lines().rev().find_map(|line| {
@@ -214,11 +215,20 @@ impl ChatWidget {
             // Before starting a plan stream, flush any active exec cell group.
             self.flush_unified_exec_wait_streak();
             self.flush_active_cell();
-            self.plan_stream_controller = Some(PlanStreamController::new(
-                self.current_stream_width(/*reserved_cols*/ 4),
-                &self.config.cwd,
-                self.history_render_mode(),
-            ));
+            self.plan_stream_controller = Some(
+                PlanStreamController::new(
+                    self.current_stream_width(/*reserved_cols*/ 4),
+                    &self.config.cwd,
+                    self.history_render_mode(),
+                )
+                .with_list_spacing(
+                    if self.local_settings.transcript_mode.is_owned() {
+                        ListSpacing::Compact
+                    } else {
+                        ListSpacing::AfterMultiline
+                    },
+                ),
+            );
         }
         let changed = self
             .plan_stream_controller
@@ -572,12 +582,21 @@ impl ChatWidget {
                     thread_id,
                 )
             });
-            self.stream_controller = Some(StreamController::new_with_inline_visualizations(
-                self.current_stream_width(/*reserved_cols*/ 2),
-                &self.config.cwd,
-                self.history_render_mode(),
-                inline_visualization_context,
-            ));
+            self.stream_controller = Some(
+                StreamController::new_with_inline_visualizations(
+                    self.current_stream_width(/*reserved_cols*/ 2),
+                    &self.config.cwd,
+                    self.history_render_mode(),
+                    inline_visualization_context,
+                )
+                .with_list_spacing(
+                    if self.local_settings.transcript_mode.is_owned() {
+                        ListSpacing::Compact
+                    } else {
+                        ListSpacing::AfterMultiline
+                    },
+                ),
+            );
         }
         let changed = self
             .stream_controller

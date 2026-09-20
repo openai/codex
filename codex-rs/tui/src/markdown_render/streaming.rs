@@ -7,6 +7,7 @@ use super::DecodedTextMerge;
 use super::Event;
 use super::FileCitations;
 use super::HyperlinkLine;
+use super::ListSpacing;
 use super::Options;
 use super::Parser;
 use super::Tag;
@@ -40,6 +41,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
     is_hidden_link_destination: &dyn Fn(&str) -> bool,
+    list_spacing: ListSpacing,
 ) -> StreamingMarkdownRender {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -57,6 +59,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         mermaid_start: None,
     };
     let mut writer = Writer::new(input, parser, width, cwd, is_hidden_link_destination);
+    writer.list_spacing = list_spacing;
     writer.run();
     StreamingMarkdownRender {
         lines: writer.text,

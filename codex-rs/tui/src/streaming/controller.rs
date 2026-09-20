@@ -44,7 +44,8 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::{self};
 use crate::inline_visualization::InlineVisualizationContext;
-use crate::markdown::render_markdown_agent_with_links_cwd_and_visualizations;
+use crate::markdown::render_markdown_agent_with_list_spacing;
+use crate::markdown_render::ListSpacing;
 use crate::style::proposed_plan_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::prefix_hyperlink_lines;
@@ -59,7 +60,9 @@ use super::StreamState;
 use super::prose_preview::PreviewMode;
 use super::prose_preview::ProsePreview;
 use super::render::StreamingRender;
+#[cfg(test)]
 use super::render::render_source;
+use super::render::render_source_with_list_spacing;
 use super::table_holdback::TableHoldbackScanner;
 use super::table_holdback::TableHoldbackState;
 #[cfg(test)]
@@ -200,17 +203,18 @@ impl StreamCore {
     ///
     /// This intentionally re-renders from the full raw source instead of
     /// trying to stitch together queued stable lines and the current tail. The
-    /// final render is the canonical transcript representation used for
-    /// consolidation, so callers that skip `reset()` can accidentally replay a
-    /// finished stream into the next answer.
+    /// remaining rows keep the stream's spacing so emitted offsets stay valid. Consolidation
+    /// renders the returned source with the completed cell's spacing policy. Callers that skip
+    /// `reset()` can accidentally replay a finished stream into the next answer.
     fn finalize_remaining(&mut self) -> (Vec<HyperlinkLine>, String) {
         let source = self.state.collector.finalize_and_take_source();
-        let mut rendered = render_source(
+        let mut rendered = render_source_with_list_spacing(
             &source,
             self.width,
             self.cwd.as_path(),
             self.render_mode,
             self.inline_visualization_context.as_ref(),
+            self.render.list_spacing,
         );
         let remaining = rendered.split_off(self.emitted_stable_len.min(rendered.len()));
         (remaining, source)
@@ -383,12 +387,13 @@ impl StreamCore {
         if let Some(start) = previous_tail_start.or(self.active_tail_source_start(self.render_mode))
         {
             let prefix_len = |width, mode| {
-                render_source(
+                render_source_with_list_spacing(
                     &source[..start],
                     width,
                     self.cwd.as_path(),
                     mode,
                     self.inline_visualization_context.as_ref(),
+                    self.render.list_spacing,
                 )
                 .len()
             };
@@ -539,11 +544,12 @@ impl StreamCore {
 
         let render_start = Instant::now();
         let source = self.state.collector.committed_source();
-        let stable_prefix_render = render_markdown_agent_with_links_cwd_and_visualizations(
+        let stable_prefix_render = render_markdown_agent_with_list_spacing(
             &source[..source_start.min(source.len())],
             self.width,
             Some(self.cwd.as_path()),
             self.inline_visualization_context.as_ref(),
+            self.render.list_spacing,
         );
         let stable_prefix_len = stable_prefix_render.len();
         tracing::trace!(
@@ -571,6 +577,12 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
+    /// Select spacing before the first delta; final source-backed cells choose their own layout.
+    pub(crate) fn with_list_spacing(mut self, list_spacing: ListSpacing) -> Self {
+        self.core.render.list_spacing = list_spacing;
+        self
+    }
+
     /// Create a controller whose markdown renderer shortens local file links relative to `cwd`.
     ///
     /// `width` is the content width available to markdown rendering, not necessarily the full
@@ -697,6 +709,12 @@ pub(crate) struct PlanStreamController {
 }
 
 impl PlanStreamController {
+    /// Select spacing before the first delta; no list-specific holdback is needed.
+    pub(crate) fn with_list_spacing(mut self, list_spacing: ListSpacing) -> Self {
+        self.core.render.list_spacing = list_spacing;
+        self
+    }
+
     /// Create a plan-stream controller whose markdown renderer shortens local file links relative
     /// to `cwd`.
     ///

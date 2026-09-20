@@ -1,0 +1,109 @@
+---
+source: tui/src/markdown_render/list_spacing_tests.rs
+expression: "stages.join(\"\\n\\n---\\n\\n\")"
+---
+Compact:
+1. One
+2. This item has enough
+   words to wrap
+3. Three
+4. Four
+
+---
+
+Uniform:
+1. One
+
+2. This item has enough
+   words to wrap
+
+3. Three
+
+4. Four
+
+---
+
+Compact:
+- Parent
+    - Short
+    - Small
+- Other
+
+> - Quote
+> - This quoted item has
+>   enough words to wrap
+> - End
+
+---
+
+Uniform:
+- Parent
+    - Short
+    - Small
+
+- Other
+
+> - Quote
+>
+> - This quoted item has
+>   enough words to wrap
+>
+> - End
+
+---
+
+Compact:
+- First paragraph
+
+  Second paragraph
+- Next
+- Last
+
+---
+
+Uniform:
+- First paragraph
+
+  Second paragraph
+
+- Next
+
+- Last
+
+---
+
+Compact:
+- One
+-
+  code
+- Three
+
+  after paragraph
+
+---
+
+Uniform:
+- One
+
+-
+  code
+
+- Three
+
+  after paragraph
+
+---
+
+Compact:
+- https://example.com/a-very-long-path-with-many-segments
+- Short
+- End
+
+---
+
+Uniform:
+- https://example.com/a-very-long-path-with-many-segments
+
+- Short
+
+- End
