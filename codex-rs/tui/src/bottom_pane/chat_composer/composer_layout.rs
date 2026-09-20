@@ -23,11 +23,11 @@ impl ChatComposer {
 
     pub(super) fn render_voice_strip(&self, composer_rect: Rect, buf: &mut Buffer) {
         if let Some(strip) = &self.voice_strip
-            && composer_rect.height >= 6
+            && composer_rect.height >= strip.desired_height(composer_rect.width) + 4
         {
             let voice_rect = Rect {
                 y: composer_rect.y.saturating_add(/*rhs*/ 1),
-                height: 2,
+                height: strip.desired_height(composer_rect.width),
                 ..composer_rect
             };
             strip.render(voice_rect, buf);
@@ -69,7 +69,10 @@ impl ChatComposer {
                 .active
                 .required_height(area.width, footer_hint_height)
         };
-        let voice_rows = if self.voice_strip.is_some() { 3 } else { 0 };
+        let voice_rows = self
+            .voice_strip
+            .as_ref()
+            .map_or(0, |strip| strip.desired_height(area.width) + 1);
         let shortcuts_above = self.shortcuts_above_composer(options);
         let (composer_rect, popup_rect, mut footer_rect) = if shortcuts_above {
             let [shortcuts, composer, footer] = Layout::vertical([
@@ -100,7 +103,7 @@ impl ChatComposer {
         };
         footer_rect.y = footer_rect.y.saturating_add(status.height);
         // Keep the draft visible when clipped.
-        let voice_rows = voice_rows * u16::from(composer_rect.height >= 6);
+        let voice_rows = voice_rows * u16::from(composer_rect.height >= voice_rows + 3);
         let mut textarea_rect = composer_rect.inset(Insets::tlbr(
             /*top*/ 1 + voice_rows,
             LIVE_PREFIX_COLS,
@@ -190,7 +193,10 @@ impl ChatComposer {
                 0
             }
             + 2
-            + if self.voice_strip.is_some() { 3 } else { 0 }
+            + self
+                .voice_strip
+                .as_ref()
+                .map_or(0, |strip| strip.desired_height(width) + 1)
             + if self.popups.active.is_above_composer()
                 && options.command_popup_placement != CommandPopupPlacement::AboveComposer
             {

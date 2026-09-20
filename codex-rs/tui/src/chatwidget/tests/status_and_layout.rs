@@ -13,7 +13,7 @@ use ratatui::backend::TestBackend;
 use serial_test::serial;
 
 #[tokio::test]
-async fn voice_live_transcript_renders_beside_the_streamed_cell() {
+async fn finalized_voice_transcript_renders_beside_the_streamed_cell() {
     let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.local_settings.tui.animations = false;
     activate_voice_for_thread(&mut chat, ThreadId::new());
@@ -23,17 +23,21 @@ async fn voice_live_transcript_renders_beside_the_streamed_cell() {
         /*is_first_line*/ true,
     )));
     chat.on_realtime_transcript_delta("user".into(), "pick a number".into());
-
-    let width = 60;
-    let height = chat.desired_height(width);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
-    terminal
-        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
-        .expect("render live voice transcript");
-    let rendered = normalized_backend_snapshot(terminal.backend());
-    assert!(rendered.contains("Agent answer arriving"), "{rendered}");
-    assert!(rendered.contains("pick a number"), "{rendered}");
-    assert_chatwidget_snapshot!("voice_live_transcript_and_stream", rendered);
+    for (finalized, snapshot) in [
+        (false, "voice_partial_transcript_hidden"),
+        (true, "voice_live_transcript_and_stream"),
+    ] {
+        if finalized {
+            chat.on_realtime_transcript_done("user".into(), "pick a number".into());
+        }
+        let width = 60;
+        let height = chat.desired_height(width);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("create terminal");
+        terminal
+            .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+            .expect("render voice transcript");
+        assert_chatwidget_snapshot!(snapshot, normalized_backend_snapshot(terminal.backend()));
+    }
 }
 
 fn enable_test_ambient_pet(chat: &mut ChatWidget) {

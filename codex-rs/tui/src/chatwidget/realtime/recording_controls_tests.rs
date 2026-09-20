@@ -665,6 +665,7 @@ async fn clipped_voice_composer_keeps_the_draft_and_cursor_visible() {
 
     insta::assert_snapshot!(layouts.join("\n\n"), @r"
     5 rows:
+    voice ● listening ctrl+x mute     /voice stop
     › typed
 
     6 rows:
@@ -680,7 +681,7 @@ async fn clipped_voice_composer_keeps_the_draft_and_cursor_visible() {
 #[tokio::test]
 async fn compact_voice_meters_keep_real_speaker_history_when_the_microphone_is_muted() {
     let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
-    chat.local_settings.tui.animations = false;
+    chat.local_settings.tui.animations = true;
     let thread_id = activate_voice(&mut chat);
     chat.realtime_conversation.audio_meter_history = [
         (0, 255),

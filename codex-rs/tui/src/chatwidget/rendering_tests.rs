@@ -176,6 +176,7 @@ async fn owned_live_history_keeps_all_sources_in_each_presentation() {
     ]);
     widget.on_realtime_transcript_delta("assistant".into(), "assistant ".into());
     widget.on_realtime_transcript_delta("user".into(), "user caption".into());
+    widget.on_realtime_transcript_done("user".into(), "user caption".into());
     widget.on_realtime_transcript_delta("assistant".into(), "caption".into());
     let expected = [
         "active",

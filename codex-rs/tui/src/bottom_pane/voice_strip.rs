@@ -1,5 +1,6 @@
 //! Renders compact voice controls and caller-owned microphone/speaker sample histories.
 //! Keep control positions stable and show mute only when the current phase permits it.
+//! Reduced motion hides the sample-history row while preserving voice controls.
 
 use crate::key_hint::ShortcutHint;
 use crate::motion::MotionMode;
@@ -72,7 +73,11 @@ pub(super) fn loading_glyph(started_at: Instant, mode: MotionMode) -> &'static s
 
 impl Renderable for VoiceStrip {
     fn desired_height(&self, width: u16) -> u16 {
-        if width == 0 { 0 } else { 2 }
+        if width == 0 {
+            0
+        } else {
+            1 + u16::from(self.state.animations)
+        }
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -149,7 +154,7 @@ impl Renderable for VoiceStrip {
             status.spans.push(controls.dim());
         }
         Paragraph::new(status).render(Rect::new(area.x, area.y, area.width, /*height*/ 1), buf);
-        if area.height < 2 {
+        if !self.state.animations || area.height < 2 {
             return;
         }
         let meter_width = available

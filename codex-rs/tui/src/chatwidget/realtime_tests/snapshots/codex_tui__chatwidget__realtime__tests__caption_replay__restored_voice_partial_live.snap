@@ -1,7 +1,0 @@
----
-source: tui/src/chatwidget/realtime_tests/caption_replay.rs
-assertion_line: 2528
-expression: "live.display_lines(80).into_iter().map(|line|\nline.to_string()).collect::<Vec<_>>().join(\"\\n\")"
----
-
-› last

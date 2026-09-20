@@ -189,10 +189,12 @@ impl ChatWidget {
         let speaker_intensity = audio_meter_intensity(speaker_peak);
         let previous_microphone_history = self.realtime_conversation.microphone_history;
         let previous_speaker_history = self.realtime_conversation.speaker_history;
-        let mut changed = self.realtime_conversation.microphone_level != microphone_level
-            || self.realtime_conversation.speaker_level != speaker_level
-            || self.realtime_conversation.microphone_intensity != microphone_intensity
-            || self.realtime_conversation.speaker_intensity != speaker_intensity;
+        let mut changed = (self.realtime_conversation.speaker_level > 0) != (speaker_level > 0)
+            || (self.local_settings.tui.animations
+                && (self.realtime_conversation.microphone_level != microphone_level
+                    || self.realtime_conversation.speaker_level != speaker_level
+                    || self.realtime_conversation.microphone_intensity != microphone_intensity
+                    || self.realtime_conversation.speaker_intensity != speaker_intensity));
         if speaker_level > 0 {
             self.realtime_conversation.speaker_active_until = Some(now + SPEAKER_ACTIVITY_HOLD);
         } else {
@@ -228,9 +230,10 @@ impl ChatWidget {
         self.realtime_conversation
             .audio_meter_history
             .push_back((microphone_intensity, speaker_intensity));
-        changed |= previous_microphone_history != self.realtime_conversation.microphone_history
-            || previous_speaker_history != self.realtime_conversation.speaker_history
-            || had_meter_activity;
+        changed |= self.local_settings.tui.animations
+            && (previous_microphone_history != self.realtime_conversation.microphone_history
+                || previous_speaker_history != self.realtime_conversation.speaker_history
+                || had_meter_activity);
         if changed {
             self.update_realtime_footer();
         }

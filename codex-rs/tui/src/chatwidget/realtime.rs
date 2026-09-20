@@ -1297,6 +1297,20 @@ impl ChatWidget {
             .transcript_role
             .as_deref()
             .unwrap_or("");
+        // Keep recognition and interruption state current without echoing each partial utterance.
+        // The final event commits the ordinary user history cell once.
+        if role == "user" && !self.local_settings.tui.animations {
+            if self
+                .realtime_conversation
+                .live_transcript_cell
+                .take()
+                .is_some()
+            {
+                self.bump_active_cell_revision();
+                self.request_redraw();
+            }
+            return;
+        }
         let previous = self
             .realtime_conversation
             .live_transcript_cell

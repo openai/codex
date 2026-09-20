@@ -193,7 +193,7 @@ async fn transcript_deltas_track_the_current_speaker() {
 }
 
 #[tokio::test]
-async fn voice_transcripts_stream_in_the_conversation_instead_of_the_footer() {
+async fn reduced_motion_keeps_user_transcripts_hidden_until_finalized() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
     chat.local_settings.tui.animations = false;
     activate_voice(&mut chat);
@@ -202,21 +202,8 @@ async fn voice_transcripts_stream_in_the_conversation_instead_of_the_footer() {
     chat.on_realtime_transcript_delta("user".to_string(), "pick a ".to_string());
     chat.on_realtime_transcript_delta("user".to_string(), "number".to_string());
 
-    let live = chat
-        .active_cell_transcript_lines(/*width*/ 80)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(live.contains("pick a number"));
-    let footer = render_bottom_popup(&chat, /*width*/ 80);
-    assert!(footer.contains("voice ● listening"));
-    let status_line = footer
-        .lines()
-        .find(|line| line.contains("voice ● listening"))
-        .unwrap_or_default();
-    assert!(!status_line.contains("pick a number"));
+    assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+    assert_eq!(chat.realtime_conversation.transcript, "pick a number");
     assert!(events.try_recv().is_err());
 
     chat.on_realtime_transcript_done("user".to_string(), "pick a number".to_string());
@@ -770,15 +757,8 @@ async fn spoken_user_transcript_preserves_red_chevron_and_canonical_history() {
     );
     chat.local_settings.tui.animations = false;
     chat.on_realtime_transcript_delta("user".to_string(), " world".to_string());
-    assert!(
-        chat.realtime_conversation
-            .live_transcript_cell
-            .as_ref()
-            .unwrap()
-            .display_lines(/*width*/ 32)
-            .iter()
-            .any(|line| line.to_string() == "› hello world")
-    );
+    assert!(chat.realtime_conversation.live_transcript_cell.is_none());
+    assert_eq!(chat.realtime_conversation.transcript, " hello world");
     chat.on_realtime_transcript_done("user".to_string(), " hello world".to_string());
     commit_realtime_history_events(&mut chat, &mut events);
     let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
@@ -959,12 +939,8 @@ async fn empty_interleaved_caption_completion_invalidates_overlay() {
         chat.realtime_conversation.phase = phase;
         let previous_key = chat.active_cell_transcript_key().unwrap();
         chat.on_realtime_transcript_done("assistant".into(), String::new());
-        let current_key = chat.active_cell_transcript_key().unwrap();
-        assert_ne!(previous_key, current_key);
-        let visible = chat.active_cell_transcript_lines(/*width*/ 80).unwrap();
-        assert_eq!(
-            visible.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            vec!["", "› Keep this caption", ""]
-        );
+        assert_ne!(Some(previous_key), chat.active_cell_transcript_key());
+        assert!(chat.active_cell_transcript_lines(/*width*/ 80).is_none());
+        assert_eq!(chat.realtime_conversation.transcript, "Keep this caption");
     }
 }

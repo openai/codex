@@ -48,6 +48,7 @@ fn rows(strip: &VoiceStrip, width: u16) -> (String, Buffer) {
 #[test]
 fn active_dashboard_preserves_live_colors_controls_and_width() {
     let mut strip = active_strip();
+    strip.state.progress = false;
     let (actual, buffer) = rows(&strip, /*width*/ 47);
     assert_eq!(buffer[(45, 0)].symbol(), "p");
     assert_eq!(buffer[(46, 0)].symbol(), " ");
@@ -95,6 +96,7 @@ fn connecting_and_muted_indicators_follow_actual_capture() {
     assert_eq!(buffer[(7, 0)].symbol(), "◌");
     assert_eq!(buffer[(7, 0)].fg, Color::Red);
     strip.state.phase = VoiceStripPhase::Active;
+    strip.state.animations = true;
     strip.state.activity = "listening";
     strip.state.microphone_history = vec![255];
     let (reduced, _) = rows(&strip, /*width*/ 45);

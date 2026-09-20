@@ -4,7 +4,6 @@ expression: "states.join(\"\\n\\n\")"
 ---
 connecting:
  voice ◌ connecting                                                 /voice stop
-   mic ▁▁▁▁▁▁  codex ▁▁▁▁▁▁
 
 › Ask Codex to do anything
 
