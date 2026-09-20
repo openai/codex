@@ -3,8 +3,8 @@
 //! The app server reports MCP server startup as per-server status updates. This
 //! module keeps the TUI's buffered startup round state coherent and translates
 //! those updates into status headers, warnings, and queued-input release points.
-//! Initial diagnostics coalesce beneath the splash; warnings after a turn starts
-//! stay inline so failures during ongoing work remain visible.
+//! Initial and runtime diagnostics remain in retained history and the warnings viewer;
+//! compact history hides their full text behind the persistent warning notice.
 
 use std::collections::BTreeSet;
 
@@ -293,17 +293,11 @@ impl ChatWidget {
         servers: impl IntoIterator<Item = String>,
         failure_reason: Option<McpServerStartupFailureReason>,
     ) {
-        if self.warning_display_state.startup_complete {
-            for message in messages {
-                self.on_warning(message);
-            }
-        } else {
-            self.add_to_history(crate::history_cell::StartupWarningsCell::mcp(
-                messages,
-                servers,
-                failure_reason,
-            ));
-        }
+        self.add_to_history(crate::history_cell::StartupWarningsCell::mcp(
+            messages,
+            servers,
+            failure_reason,
+        ));
     }
 
     /// Update startup state and retry installed-app discovery when its MCP server becomes ready.

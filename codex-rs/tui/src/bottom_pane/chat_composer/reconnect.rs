@@ -1,4 +1,5 @@
-//! Restricted editing retains drafts; unavailable threads also allow recovery and local commands.
+//! Restricted editing retains drafts and allows the local warnings viewer.
+//! Unavailable threads also allow recovery and other local commands.
 //! Paste Enter handling is shared with normal submission so buffered newlines survive both paths.
 //! Recovery commands must occupy one line and be visible before the submit key expands pastes.
 //! Offline draft edits also consume the Astra sparkle opportunity before rendering.
@@ -73,8 +74,7 @@ impl ChatComposer {
                 }
             }
         }
-        if mode == RestrictedInputMode::UnavailableThread
-            && pending_pastes.is_empty()
+        if pending_pastes.is_empty()
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && self.submit_keys.is_pressed(key)
         {
@@ -85,7 +85,8 @@ impl ChatComposer {
                 .or_else(|| input.inline_command(text).map(|command| command.command))
                 .filter(|_| text.trim().lines().count() == 1);
             if matches!(command, Some(SlashCommandItem::Builtin(command))
-                if command.available_when_thread_unavailable())
+                if command == SlashCommand::Warnings
+                    || mode == RestrictedInputMode::UnavailableThread && command.available_when_thread_unavailable())
             {
                 return self
                     .try_dispatch_bare_slash_command()
@@ -94,7 +95,7 @@ impl ChatComposer {
             }
         }
 
-        // Enter/Tab and configured submit bindings must never consume the draft offline.
+        // Other commands and prompts stay in the draft while offline.
         // The basic editor reconciles attachments without invoking composer-level shortcuts.
         if !matches!(key.code, KeyCode::Enter | KeyCode::Tab)
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)

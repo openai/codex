@@ -43,6 +43,7 @@ pub(crate) struct KeymapContextSet(u32);
 
 const ACTIVITY_FOCUS: u32 = 1 << 13;
 const TRANSCRIPT_CLOSE: u32 = 1 << 15;
+const WARNINGS_FOCUS: u32 = 1 << 16;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -72,6 +73,15 @@ impl KeymapContextSet {
         )
     }
 
+    /// Warning pages admit navigation plus their own toggle and copy.
+    pub(crate) const fn warnings() -> Self {
+        Self(context_bit(KeymapContext::List) | context_bit(KeymapContext::Global) | WARNINGS_FOCUS)
+    }
+
+    pub(crate) const fn is_warnings(self) -> bool {
+        self.0 & WARNINGS_FOCUS != 0
+    }
+
     /// Whether this input path can dispatch the action, including focus-specific exclusions.
     pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
         self.contains(action.context)
@@ -84,6 +94,12 @@ impl KeymapContextSet {
             && (self.0 & TRANSCRIPT_BROWSING == 0
                 || action.context != KeymapContext::Global
                 || action.action == "open_transcript")
+            && (!self.is_warnings()
+                || action.context != KeymapContext::List
+                || action.action != "accept")
+            && (!self.is_warnings()
+                || action.context != KeymapContext::Global
+                || matches!(action.action, "open_warnings" | "copy"))
     }
 
     pub(crate) const fn with(self, context: KeymapContext) -> Self {
@@ -212,6 +228,30 @@ or a two-stroke chord such as `ctrl-x ctrl-t`.",
         Ok(keymap_chords)
     }
 
+    fn binding_for_completion(
+        &self,
+        prefix: KeyBinding,
+        event: KeyEvent,
+        contexts: KeymapContextSet,
+    ) -> Option<&RuntimeChordBinding> {
+        self.bindings
+            .iter()
+            .filter(|binding| {
+                contexts.contains_action(binding.action)
+                    && binding.chord.prefix == prefix
+                    && chord_stroke_matches(binding.chord.completion, event)
+            })
+            .min_by_key(|binding| {
+                (
+                    !(contexts.0 & TRANSCRIPT_CLOSE != 0
+                        && binding.action.context == KeymapContext::Pager
+                        && binding.action.action == "close_transcript"),
+                    contexts.is_warnings() && binding.action.context != KeymapContext::List,
+                    contexts.is_warnings() && binding.action.context == KeymapContext::Global,
+                )
+            })
+    }
+
     pub(crate) fn configured_specs(&self, action: KeymapActionId) -> Option<&[String]> {
         self.configured_specs
             .iter()
@@ -294,14 +334,21 @@ impl KeyChordMatcher {
             .bindings
             .iter()
             .filter(|binding| {
-                binding.chord.prefix == pending.prefix
-                    && pending.contexts.contains_action(binding.action)
+                let (code, modifiers) = binding.chord.completion.parts();
+                keymap
+                    .binding_for_completion(
+                        pending.prefix,
+                        KeyEvent::new(code, modifiers),
+                        pending.contexts,
+                    )
+                    .is_some_and(|active| std::ptr::eq(active, *binding))
             })
             .take(/*n*/ 6)
         {
             let label = match binding.action.action {
                 "focus_activity" => "activity",
                 "find_transcript" => "find",
+                "open_warnings" => "warnings",
                 action => action,
             };
             items.push((
@@ -371,19 +418,8 @@ impl KeyChordMatcher {
             if crate::key_hint::plain(KeyCode::Esc).is_press(key_event) {
                 return KeyChordMatch::Cancelled;
             }
-            if let Some(binding) = keymap
-                .bindings
-                .iter()
-                .filter(|binding| {
-                    contexts.contains_action(binding.action)
-                        && binding.chord.prefix == pending.prefix
-                        && chord_stroke_matches(binding.chord.completion, key_event)
-                })
-                .min_by_key(|binding| {
-                    !(contexts.0 & TRANSCRIPT_CLOSE != 0
-                        && binding.action.context == KeymapContext::Pager
-                        && binding.action.action == "close_transcript")
-                })
+            if let Some(binding) =
+                keymap.binding_for_completion(pending.prefix, key_event, contexts)
             {
                 let Some(dispatch_event) = dispatch_event(binding.action) else {
                     return KeyChordMatch::Ignored;

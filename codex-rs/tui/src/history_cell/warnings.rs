@@ -1,12 +1,12 @@
-//! Render inline warnings and retain diagnostic identities for the later warning footer.
+//! Retain warning details for the transcript while exposing stable identities to the footer.
 //! Message identities deduplicate replay; MCP identities count affected servers, not summary rows.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) enum WarningId {
     Message(String),
     McpServer(String),
@@ -14,23 +14,24 @@ pub(crate) enum WarningId {
 
 /// A retained diagnostic. Identity is independent of wrapping and duplicate delivery.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) struct WarningEntry {
     pub(crate) id: WarningId,
     pub(crate) source: String,
     pub(crate) details: String,
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn warning_entries(cells: &[Arc<dyn HistoryCell>]) -> Vec<WarningEntry> {
     let mut entries: Vec<WarningEntry> = Vec::new();
+    let mut indices = BTreeMap::new();
     for entry in cells.iter().flat_map(|cell| cell.warning_entries()) {
-        if let Some(existing) = entries.iter_mut().find(|existing| existing.id == entry.id) {
+        if let Some(&index) = indices.get(&entry.id) {
+            let existing: &mut WarningEntry = &mut entries[index];
             if !existing.details.contains(&entry.details) {
                 existing.details.push_str("\n\n");
                 existing.details.push_str(&entry.details);
             }
         } else {
+            indices.insert(entry.id.clone(), entries.len());
             entries.push(entry);
         }
     }
@@ -38,7 +39,6 @@ pub(crate) fn warning_entries(cells: &[Arc<dyn HistoryCell>]) -> Vec<WarningEntr
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) enum WarningKey<'a> {
     Message(&'a str),
     McpServer(&'a str),
@@ -46,20 +46,18 @@ pub(crate) enum WarningKey<'a> {
 
 #[derive(Debug)]
 pub(crate) struct WarningHistoryCell {
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(super) key: String,
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(super) diagnostic: String,
     pub(super) details: PrefixedWrappedHistoryCell,
 }
 
 impl HistoryCell for WarningHistoryCell {
     fn live_raw_lines(&self) -> Vec<Line<'static>> {
-        self.details.raw_lines()
+        Vec::new()
     }
 
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.details.display_lines(width)
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        Vec::new()
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -83,7 +81,6 @@ impl HistoryCell for WarningHistoryCell {
     }
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn warning_count(cells: &[Arc<dyn HistoryCell>]) -> usize {
     cells
         .iter()
@@ -91,3 +88,7 @@ pub(crate) fn warning_count(cells: &[Arc<dyn HistoryCell>]) -> usize {
         .collect::<BTreeSet<_>>()
         .len()
 }
+
+#[cfg(test)]
+#[path = "warnings_tests.rs"]
+mod tests;

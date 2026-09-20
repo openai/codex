@@ -2950,8 +2950,8 @@ fn deprecation_notice_renders_summary_with_details() {
         Some("Use flag `bar` instead.".to_string()),
     );
     let lines = cell.transcript_lines(/*width*/ 80);
-    assert_eq!(cell.display_lines(/*width*/ 80), lines);
-    assert_eq!(cell.live_raw_lines(), cell.raw_lines());
+    assert!(cell.display_lines(/*width*/ 80).is_empty());
+    assert!(cell.live_raw_lines().is_empty());
     let rendered = render_lines(&lines);
     assert_eq!(
         rendered,

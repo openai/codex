@@ -33,6 +33,7 @@ expression: commands
 /mention - mention a file
 /status - show current session configuration and token usage
 /daemon - Manage the local background server.
+/warnings - view retained warnings and diagnostic details
 /cd - change the current working directory
 /pwd - show the current working directory
 /title - configure which items appear in the terminal title

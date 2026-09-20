@@ -114,7 +114,7 @@ impl App {
         }
         self.chat_widget.pre_draw_tick();
         self.render_chat_widget_frame(tui, tui.terminal.last_known_screen_size)?;
-        if self.chat_widget.has_active_view() && self.startup_protected_input_boundary {
+        if self.chat_widget.has_active_modal() && self.startup_protected_input_boundary {
             tui.discard_pending_input_before_interactive_screen()?;
             self.startup_pending_protected_request = false;
         }
@@ -1100,14 +1100,14 @@ See the Codex keymap documentation for supported actions and examples."
                             AppEvent::InsertHistoryCell(cell)
                                 if cell.as_any().is::<history_cell::SessionInfoCell>()
                         );
-                        let had_active_view = app.chat_widget.has_active_view();
+                        let had_active_modal = app.chat_widget.has_active_modal();
                         match Box::pin(app.handle_event(tui, &mut app_server, event)).await {
                             Ok(AppRunControl::Continue) => {
                                 if is_initial_session_header {
                                     waiting_for_initial_session_header = false;
                                 }
-                                if !had_active_view
-                                    && app.chat_widget.has_active_view()
+                                if !had_active_modal
+                                    && app.chat_widget.has_active_modal()
                                     && let Err(err) = app.render_startup_frame(tui, &app_event_rx)
                                 {
                                     break Err(err);
@@ -1244,12 +1244,12 @@ See the Codex keymap documentation for supported actions and examples."
                     app.primary_thread_id,
                 ) {
                     waiting_for_initial_session_configured = false;
-                    let had_active_view = app.chat_widget.has_active_view();
+                    let had_active_modal = app.chat_widget.has_active_modal();
                     if let Err(err) = app.drain_active_thread_events(tui).await {
                         break Err(err);
                     }
-                    if !had_active_view
-                        && app.chat_widget.has_active_view()
+                    if !had_active_modal
+                        && app.chat_widget.has_active_modal()
                         && let Err(err) = app.render_startup_frame(tui, &app_event_rx)
                     {
                         break Err(err);

@@ -125,6 +125,12 @@ async fn completed_thread_usage_updates_status_without_scrollback_reflow() -> Re
     assert!(!app.transcript_reflow.has_pending_reflow());
     assert!(pending_history_text(&tui).contains("/status"));
 
+    let status = Arc::clone(app.transcript_cells.last().expect("status card"));
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::new_warning_event("diagnostic".into())),
+    );
+
     app.handle_event(
         &mut tui,
         &mut app_server,
@@ -137,10 +143,6 @@ async fn completed_thread_usage_updates_status_without_scrollback_reflow() -> Re
         tui.pending_history_lines_for_test().is_empty(),
         "a visible status tail should be replaced directly instead of appending a duplicate card"
     );
-    let status = app
-        .transcript_cells
-        .last()
-        .expect("status card should remain in terminal history");
     let rendered = lines_to_single_string(&status.display_lines(/*width*/ 90));
     assert!(rendered.contains("50 credits"), "{rendered}");
     app_server.shutdown().await?;
@@ -271,6 +273,10 @@ async fn account_change_discards_thread_usage_deferred_while_overlay_is_open() -
 async fn terminal_reflow_rebases_pending_status_update_to_new_width() -> Result<()> {
     let (mut app, mut app_server, mut tui, thread_id, request_id) =
         app_with_pending_thread_usage().await?;
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::new_warning_event("diagnostic".into())),
+    );
     app.insert_history_cell(
         &mut tui,
         Box::new(

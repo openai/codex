@@ -1,3 +1,4 @@
+use super::helpers::drain_insert_history_transcript;
 use super::*;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use pretty_assertions::assert_eq;
@@ -2977,14 +2978,20 @@ async fn slash_pet_hide_disables_pets_even_on_unsupported_terminal() {
 
 #[tokio::test]
 #[serial]
-async fn slash_pets_on_unsupported_terminal_warns_without_picker() {
+async fn slash_pets_in_tmux_shows_notice_and_preserves_draft() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     force_tmux_pet_image_unsupported(&mut chat);
+    chat.bottom_pane
+        .set_composer_text("Keep this draft".to_string(), Vec::new(), Vec::new());
 
     chat.dispatch_command(SlashCommand::Pets);
 
-    assert!(!chat.bottom_pane.has_active_view());
-    let cells = drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.has_active_view());
+    assert_chatwidget_snapshot!(
+        "slash_pets_unavailable_tmux_40",
+        render_bottom_popup(&chat, /*width*/ 40),
+    );
+    let cells = drain_insert_history_transcript(&mut rx);
     let rendered = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -2992,11 +2999,15 @@ async fn slash_pets_on_unsupported_terminal_warns_without_picker() {
         .join("\n");
     assert!(rendered.contains("Pets are disabled in tmux."));
     assert!(rendered.contains("outside tmux"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    assert!(!chat.bottom_pane.has_active_view());
+    assert_eq!(chat.bottom_pane.composer_text(), "Keep this draft");
 }
 
 #[tokio::test]
 #[serial]
-async fn slash_pets_with_arg_on_unsupported_terminal_warns_without_selection() {
+async fn slash_pets_with_arg_on_unsupported_terminal_shows_notice_without_selection() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     force_tmux_pet_image_unsupported(&mut chat);
 
@@ -3004,13 +3015,20 @@ async fn slash_pets_with_arg_on_unsupported_terminal_warns_without_selection() {
         .set_composer_text("/pets chefito".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let cells = drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.has_active_view());
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Pets are disabled in tmux."));
+    let cells = drain_insert_history_transcript(&mut rx);
     let rendered = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rendered.contains("Pets are disabled in tmux."));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(!chat.bottom_pane.has_active_view());
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
@@ -3023,8 +3041,12 @@ async fn slash_pets_on_unsupported_terminal_shows_terminal_warning() {
 
     chat.dispatch_command(SlashCommand::Pets);
 
-    assert!(!chat.bottom_pane.has_active_view());
-    let cells = drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.has_active_view());
+    assert!(
+        render_bottom_popup(&chat, /*width*/ 80)
+            .contains("Pets aren’t available in this terminal.")
+    );
+    let cells = drain_insert_history_transcript(&mut rx);
     let rendered = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -3042,8 +3064,9 @@ async fn slash_pets_on_old_iterm2_shows_upgrade_warning() {
 
     chat.dispatch_command(SlashCommand::Pets);
 
-    assert!(!chat.bottom_pane.has_active_view());
-    let cells = drain_insert_history(&mut rx);
+    assert!(chat.bottom_pane.has_active_view());
+    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Pets require iTerm2 3.6 or newer."));
+    let cells = drain_insert_history_transcript(&mut rx);
     let rendered = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -3643,6 +3666,9 @@ async fn transcript_copy_feedback_stays_in_the_footer_without_history_or_interru
         "transcript_copy_unconfirmed_narrow",
         render_bottom_popup(&chat, /*width*/ 40)
     );
+    chat.open_warnings(&[Arc::new(history_cell::new_warning_event(
+        "selected café".into(),
+    ))]);
     let result = chat.copy_transcript_selection_with("selected café", |_text| {
         Err("clipboard unavailable".to_string())
     });

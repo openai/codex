@@ -3795,7 +3795,7 @@ async fn side_defers_parent_approval_overlay_until_parent_replay() -> Result<()>
 }
 
 #[tokio::test]
-async fn replay_snapshot_with_pending_request_suppresses_replay_notices() {
+async fn replay_snapshot_with_pending_request_retains_warnings_without_covering_approval() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id =
         ThreadId::from_string("00000000-0000-0000-0000-000000000011").expect("valid thread");
@@ -3829,14 +3829,19 @@ async fn replay_snapshot_with_pending_request_suppresses_replay_notices() {
     assert_eq!(app.chat_widget.has_active_view(), true);
 
     let mut replayed_history = String::new();
+    let mut warnings = Vec::new();
     while let Ok(event) = app_event_rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {
-            replayed_history.push_str(&lines_to_single_string(
-                &cell.transcript_lines(/*width*/ 80),
-            ));
+            warnings.extend(
+                cell.warning_entries()
+                    .into_iter()
+                    .map(|entry| entry.details),
+            );
+            replayed_history.push_str(&lines_to_single_string(&cell.display_lines(/*width*/ 80)));
         }
     }
 
+    assert_eq!(warnings, vec![stale_warning]);
     assert!(
         replayed_history.is_empty(),
         "expected pending approval replay to suppress session notices, got {replayed_history:?}"
@@ -5417,14 +5422,7 @@ async fn active_side_thread_renders_live_mcp_startup_notifications() {
             app.insert_history_cell(&mut tui, cell);
         }
     }
-    let inline = app
-        .transcript_cells
-        .iter()
-        .flat_map(|cell| cell.display_lines(/*width*/ 120))
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(inline.contains("1 MCP startup issue"));
+    assert_eq!(history_cell::warning_count(&app.transcript_cells), 1);
     let rendered = rendered_cells.join("\n");
     assert!(app.chat_widget.side_conversation_active());
     assert_eq!(rendered.matches("sentry is not logged in").count(), 1);

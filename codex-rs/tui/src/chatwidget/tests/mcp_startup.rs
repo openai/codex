@@ -164,16 +164,16 @@ async fn mcp_startup_updates_preserve_streaming_status_suppression() {
 }
 
 #[tokio::test]
-async fn mcp_startup_summary_distinguishes_initial_resume_from_task_switch() {
+async fn mcp_startup_warning_identity_survives_resume_and_task_switch() {
     use AppServerTurnStatus::Completed;
     use AppServerTurnStatus::InProgress;
     use ReplayKind::ResumeInitialMessages;
     use ReplayKind::ThreadSnapshot;
 
-    for (replay_kind, status, compact) in [
-        (ResumeInitialMessages, Completed, true),
-        (ResumeInitialMessages, InProgress, false),
-        (ThreadSnapshot, Completed, false),
+    for (replay_kind, status) in [
+        (ResumeInitialMessages, Completed),
+        (ResumeInitialMessages, InProgress),
+        (ThreadSnapshot, Completed),
     ] {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.replay_thread_turns(
@@ -194,7 +194,7 @@ async fn mcp_startup_summary_distinguishes_initial_resume_from_task_switch() {
                 compact_cells.push(cell.as_any().is::<history_cell::StartupWarningsCell>());
             }
         }
-        assert_eq!(compact_cells, vec![compact; 2]);
+        assert_eq!(compact_cells, vec![true; 2]);
     }
 }
 
@@ -610,7 +610,7 @@ async fn mcp_startup_failure_restores_running_status_header() {
         "MCP client for `alpha` failed to start: handshake failed",
     );
     notify_mcp_status(&mut chat, "beta", McpServerStartupState::Ready);
-    let warnings = super::helpers::drain_insert_history(&mut rx);
+    let warnings = drain_insert_history(&mut rx);
     insta::assert_snapshot!(
         "runtime_mcp_warning",
         warnings

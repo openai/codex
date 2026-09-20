@@ -65,7 +65,7 @@ impl App {
                 grant_root: params.grant_root,
             },
         );
-        if self.startup_protected_input_boundary && !self.chat_widget.has_active_view() {
+        if self.startup_protected_input_boundary && !self.chat_widget.has_active_modal() {
             self.startup_pending_protected_request = true;
         }
     }

@@ -110,16 +110,24 @@ async fn mcp_startup_summary_counts_servers_and_sign_in_subset() -> Result<()> {
     drain_history(&mut app, &mut tui, &mut events);
     assert_eq!(app.transcript_cells.len(), 2);
     let warnings = &app.transcript_cells[1];
-    insta::assert_debug_snapshot!("mcp_startup_summary", warnings.display_lines(/*width*/ 100));
+    assert_eq!(history_cell::warning_count(&app.transcript_cells), 3);
+    assert_eq!(
+        history_cell::warning_entries(&app.transcript_cells)
+            .into_iter()
+            .map(|entry| (entry.source, entry.details.contains("Sign-in required.")))
+            .collect::<Vec<_>>(),
+        vec![
+            ("MCP · alpha".into(), true),
+            ("MCP · beta".into(), true),
+            ("MCP · gamma".into(), false)
+        ],
+    );
     insta::assert_snapshot!(
         "mcp_startup_details",
         lines_to_single_string(&warnings.transcript_lines(/*width*/ 40))
     );
     insert_warnings(&mut app, &mut tui, &["Skill manifest is invalid."]);
-    insta::assert_debug_snapshot!(
-        "mixed_startup_summary",
-        app.transcript_cells[1].display_lines(/*width*/ 100)
-    );
+    assert_eq!(history_cell::warning_count(&app.transcript_cells), 4);
     Ok(())
 }
 
@@ -142,18 +150,13 @@ async fn startup_warnings_wait_for_splash_and_coalesce_with_full_details() -> Re
     let transcript = app.transcript_cells[1].transcript_lines(/*width*/ 80);
     insta::assert_snapshot!(format!("display:\n{}\n\ntranscript:\n{}", lines_to_single_string(&display), lines_to_single_string(&transcript)), @"
     display:
-    ⚠ 2 startup issues · ctrl+t for details
+
 
     transcript:
     ⚠ Skill manifest is invalid.
     ⚠ MCP alpha failed to start.
     ");
-    app.keymap.app.open_transcript = vec![crate::key_hint::plain(crossterm::event::KeyCode::F(12))];
-    app.merge_startup_warnings(&mut tui, &StartupWarningsCell::default());
-    insta::assert_snapshot!(lines_to_single_string(&app.transcript_cells[1].display_lines(/*width*/ 80)), @"⚠ 2 startup issues · f12 for details");
-    app.keymap.app.open_transcript.clear();
-    app.merge_startup_warnings(&mut tui, &StartupWarningsCell::default());
-    insta::assert_snapshot!(lines_to_single_string(&app.transcript_cells[1].display_lines(/*width*/ 80)), @"⚠ 2 startup issues");
+    assert_eq!(history_cell::warning_count(&app.transcript_cells), 2);
     Ok(())
 }
 
@@ -199,7 +202,7 @@ async fn startup_skill_load_order_preserves_runtime_error_recurrence() -> Result
         assert_eq!(app.transcript_cells.len(), 3);
         let runtime = app.transcript_cells[1..]
             .iter()
-            .flat_map(|cell| cell.display_lines(/*width*/ 120))
+            .flat_map(|cell| cell.transcript_lines(/*width*/ 120))
             .collect::<Vec<_>>();
         insta::allow_duplicates! {
             insta::assert_snapshot!(lines_to_single_string(&runtime), @"

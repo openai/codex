@@ -1,4 +1,4 @@
-//! Coalesces startup diagnostics directly below the session splash.
+//! Coalesce retained startup diagnostics without adding live transcript rows or forcing reflow.
 
 use super::*;
 use crate::history_cell::StartupWarningsCell;
@@ -28,6 +28,14 @@ impl App {
         warnings
             .mcp_servers
             .extend(incoming.mcp_servers.iter().cloned());
+        for (server, messages) in &incoming.mcp_details {
+            let details = warnings.mcp_details.entry(server.clone()).or_default();
+            for message in messages {
+                if !details.contains(message) {
+                    details.push(message.clone());
+                }
+            }
+        }
         // The final MCP summary must retain the individual diagnostics' sign-in subset.
         warnings
             .sign_in_servers
@@ -35,18 +43,14 @@ impl App {
         if warnings.messages.is_empty() {
             return;
         }
-        warnings.transcript_hint = crate::keymap::primary_binding(&self.keymap.app.open_transcript)
-            .map(|binding| binding.display_label());
         let header = self
             .transcript_cells
             .iter()
             .rposition(|cell| cell.as_any().is::<history_cell::SessionInfoCell>());
         warnings.pending_header = header.is_none() && self.chat_widget.thread_id().is_none();
-        let ready_to_render = !warnings.pending_header;
-        let warnings: Arc<dyn HistoryCell> = Arc::new(warnings);
         self.transcript_cells.insert(
             header.map_or(/*default*/ 0, |index| index + 1),
-            warnings.clone(),
+            Arc::new(warnings),
         );
         self.native_history.retain(&self.transcript_cells);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
@@ -55,18 +59,6 @@ impl App {
         if self.backtrack.overlay_preview_active {
             self.apply_backtrack_selection_internal(self.backtrack.nth_user_message);
         }
-        if ready_to_render {
-            if let Some(buffer) = self.initial_history_replay_buffer.as_mut() {
-                buffer.retained_lines.clear();
-                buffer.render_from_transcript_tail = true;
-                return;
-            }
-            self.schedule_immediate_resize_reflow(tui);
-            if let Err(error) =
-                self.maybe_run_resize_reflow(tui, tui.terminal.last_known_screen_size)
-            {
-                tracing::warn!(%error, "failed to refresh startup warnings");
-            }
-        }
+        tui.frame_requester().schedule_frame();
     }
 }

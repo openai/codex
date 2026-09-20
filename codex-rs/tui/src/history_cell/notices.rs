@@ -269,11 +269,11 @@ impl HistoryCell for DeprecationNoticeCell {
     }
 
     fn live_raw_lines(&self) -> Vec<Line<'static>> {
-        self.raw_lines()
+        Vec::new()
     }
 
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        self.transcript_lines(width)
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        Vec::new()
     }
 
     fn warning_keys(&self) -> Vec<WarningKey<'_>> {

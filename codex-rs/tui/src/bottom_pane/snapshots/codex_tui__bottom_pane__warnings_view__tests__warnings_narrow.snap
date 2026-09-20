@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/warnings_view_tests.rs
+expression: "draw(&view, 40, 9)"
+---
+  Warnings · 1 of 2 · MCP · example
+
+  Long diagnostic 日 本 語
+  Details retained in full, including
+  remediation instructions.
+  Details retained in full, including
+  remediation instructions.
+  Details retained in full, including
+  esc back · ctrl+o copy · ←/→ warning

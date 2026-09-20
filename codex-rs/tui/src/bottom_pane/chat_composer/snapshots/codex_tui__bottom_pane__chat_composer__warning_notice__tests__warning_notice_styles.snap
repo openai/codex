@@ -1,0 +1,27 @@
+---
+source: tui/src/bottom_pane/chat_composer/warning_notice_tests.rs
+assertion_line: 105
+expression: styled
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 5 },
+    content: [
+        "                                                                                ",
+        "› keep this draft                                                               ",
+        "                                                                                ",
+        "  MODEL · ~/project                                                             ",
+        "                                                      ⚠ 3 warnings · f2 to view ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Rgb(44, 44, 44), underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Rgb(44, 44, 44), underline: Reset, modifier: BOLD,
+        x: 1, y: 1, fg: Reset, bg: Rgb(44, 44, 44), underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 54, y: 4, fg: Rgb(139, 139, 139), bg: Reset, underline: Reset, modifier: NONE,
+        x: 56, y: 4, fg: Rgb(196, 167, 103), bg: Reset, underline: Reset, modifier: NONE,
+        x: 66, y: 4, fg: Rgb(139, 139, 139), bg: Reset, underline: Reset, modifier: NONE,
+        x: 69, y: 4, fg: Rgb(222, 222, 222), bg: Reset, underline: Reset, modifier: BOLD,
+        x: 71, y: 4, fg: Rgb(139, 139, 139), bg: Reset, underline: Reset, modifier: NONE,
+        x: 79, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

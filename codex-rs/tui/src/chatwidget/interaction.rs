@@ -30,8 +30,9 @@ impl ChatWidget {
                     ..
                 } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'c')
             )
-            && !key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)
-            && !key_hint::ctrl(KeyCode::Char('u')).is_press(key_event)
+            && (self.bottom_pane.warnings_active()
+                || (!key_hint::ctrl(KeyCode::Char('r')).is_press(key_event)
+                    && !key_hint::ctrl(KeyCode::Char('u')).is_press(key_event)))
         {
             let should_pause_active_goal = self
                 .bottom_pane
@@ -382,7 +383,6 @@ impl ChatWidget {
     }
 
     /// Report a transcript copy without adding history and return its outcome to the viewport.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     pub(crate) fn copy_transcript_selection(
         &mut self,
         text: &str,

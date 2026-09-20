@@ -3813,7 +3813,7 @@ async fn select_ultra_with_multi_agent_thread_limit(max_threads: usize) -> (bool
                 selected_ultra = true;
             }
             AppEvent::InsertHistoryCell(cell) => {
-                warnings.push(lines_to_single_string(&cell.display_lines(/*width*/ 80)));
+                warnings.push(lines_to_single_string(&cell.transcript_lines(/*width*/ 80)));
             }
             _ => {}
         }

@@ -35,6 +35,8 @@ impl App {
             && !matches!(
                 &event,
                 AppEvent::OpenDaemonMenu
+                    | AppEvent::OpenWarnings
+                    | AppEvent::CopyWarning(_)
                     | AppEvent::ConfirmDaemonUpdate(_)
                     | AppEvent::RunDaemonUpdate(_)
                     | AppEvent::InsertHistoryCell(_)
@@ -308,6 +310,10 @@ impl App {
                     }
                     tracing::warn!(%thread_id, error = %err, "failed to load older transcript history");
                 }
+            }
+            AppEvent::OpenWarnings => self.chat_widget.open_warnings(&self.transcript_cells),
+            AppEvent::CopyWarning(text) => {
+                let _ = self.chat_widget.copy_transcript_selection(&text);
             }
             AppEvent::OpenTranscriptExportFilePrompt => {
                 self.chat_widget.show_transcript_export_file_prompt();

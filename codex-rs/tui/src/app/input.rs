@@ -98,6 +98,17 @@ impl App {
         let contexts = self.active_keymap_contexts();
         let was_pending = self.key_chord_matcher.is_pending();
         if !was_pending
+            && contexts.is_warnings()
+            && !crate::key_hint::is_plain_text_key_event(key_event)
+            && self
+                .keymap
+                .list
+                .action_for(key_event)
+                .is_some_and(|action| action != crate::keymap::ListAction::Accept)
+        {
+            return Some(key_event);
+        }
+        if !was_pending
             && contexts.contains(crate::keymap::KeymapContext::Agents)
             && self
                 .agents_overview
@@ -602,6 +613,10 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) -> bool {
+        if self.keymap.app.open_warnings.is_pressed(key_event) {
+            self.chat_widget.open_warnings(&self.transcript_cells);
+            return true;
+        }
         let side_toggle_bindings = &self.keymap.app.toggle_side_conversation;
         if side_toggle_bindings.is_pressed(key_event)
             || side_toggle_bindings.contains(&crate::key_hint::ctrl(KeyCode::Char('/')))

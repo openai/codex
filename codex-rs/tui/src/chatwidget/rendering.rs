@@ -223,6 +223,7 @@ impl ChatWidget {
             };
             self.bottom_pane
                 .as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions {
+                    warning_count: self.warning_display_state.count,
                     textarea_right_reserve: right_reserve,
                     separate_status_line: command_popup_placement
                         != crate::bottom_pane::CommandPopupPlacement::AboveComposer,

@@ -7,6 +7,7 @@
 //! While the transcript owns input, the composer is dimmed and yields its cursor to the footer.
 //! Hidden suggestions retain their query and selection until their input owner returns.
 //! A pending quit contributes a derived release hint without changing stored footer state.
+//! Warning notices use the passive hint row, including while typing, and yield to input controls.
 //! Shortcut help occupies the space above the composer and keeps its close hint on the final row.
 //! Passive transcript hints retain the shortcuts entry when it fits beside the complete hint.
 
@@ -60,6 +61,7 @@ pub(crate) enum CommandPopupPlacement {
 /// A borrowed presentation shared by measurement, painting, and cursor placement.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ComposerRenderOptions<'a> {
+    pub(crate) warning_count: usize,
     pub(crate) textarea_right_reserve: u16,
     /// Keep configured status below the composer while hints occupy the final row.
     pub(crate) separate_status_line: bool,
@@ -103,7 +105,7 @@ impl super::ChatComposer {
     }
 
     pub(super) fn footer_hint_height(&self, width: u16, options: ComposerRenderOptions<'_>) -> u16 {
-        if self.shortcuts_above_composer(options) {
+        if self.show_warning_notice(options) || self.shortcuts_above_composer(options) {
             return 1;
         }
         options
@@ -120,9 +122,10 @@ impl super::ChatComposer {
 
     pub(super) fn render_transcript_footer(
         &self,
-        hint_area: Rect,
+        mut hint_area: Rect,
         buf: &mut Buffer,
         footer: &TranscriptFooter,
+        warning_area: Option<Rect>,
     ) {
         let mut text = footer.text.clone();
         if footer.cursor_column.is_none()
@@ -131,6 +134,12 @@ impl super::ChatComposer {
             && let Some(line) = text.lines.last_mut()
         {
             *line = flash.line.clone();
+        }
+        if let Some(warning_area) = warning_area {
+            hint_area.width = warning_area
+                .x
+                .saturating_sub(hint_area.x)
+                .saturating_sub(/*rhs*/ 2);
         }
         if !footer.is_interactive
             && !self.footer.flash_visible()
@@ -185,6 +194,8 @@ pub(super) struct FooterState {
     pub(super) active_agent_label: Option<String>,
     pub(super) external_editor_key: Option<ShortcutHint>,
     pub(super) show_transcript_key: Option<ShortcutHint>,
+    pub(super) show_warnings_key: Option<ShortcutHint>,
+    pub(super) warning_notice_area: std::cell::Cell<Option<Rect>>,
     pub(super) find_transcript_key: Option<ShortcutHint>,
     pub(super) insert_newline_key: Option<ShortcutHint>,
     pub(super) queue_key: Option<ShortcutHint>,

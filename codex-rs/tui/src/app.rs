@@ -267,6 +267,9 @@ mod transcript_export;
 mod user_verification;
 mod user_verification_errors;
 mod user_verification_requests;
+#[cfg(test)]
+#[path = "app/warnings_tests.rs"]
+mod warnings_tests;
 mod working_directory;
 
 use self::agent_navigation::AgentNavigationDirection;
@@ -866,6 +869,7 @@ impl App {
         };
         if self.reconnect.offline
             && !transcript_owns_input
+            && !self.chat_widget.keymap_contexts().is_warnings()
             && let TuiEvent::Key(key) = &event
             && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -888,6 +892,15 @@ impl App {
 
         if matches!(&event, TuiEvent::Paste(_) | TuiEvent::FocusLost) {
             self.cancel_pending_key_chord();
+        }
+
+        if self.overlay.is_none()
+            && self
+                .chat_widget
+                .handle_warning_event(&event, &self.transcript_cells)
+        {
+            self.cancel_primed_browsing_for_event(&event);
+            return Ok(AppRunControl::Continue);
         }
 
         let mut event = if let TuiEvent::Key(mut key_event) = event {
@@ -935,8 +948,12 @@ impl App {
             }
         }
         if self.reconnect.offline
+            && !self.chat_widget.keymap_contexts().is_warnings()
             && !matches!(&self.overlay, Some(Overlay::Transcript(_)))
             && let TuiEvent::Key(key) = &event
+            && !(self.overlay.is_none()
+                && self.chat_widget.no_modal_or_popup_active()
+                && self.keymap.app.open_warnings.is_pressed(*key))
         {
             if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
                 self.chat_widget.handle_disconnected_view_key(*key);
@@ -991,6 +1008,7 @@ impl App {
                     }
                     self.chat_widget.handle_paste(pasted);
                     if self.reconnect.offline
+                        && !self.chat_widget.keymap_contexts().is_warnings()
                         && self.reconnect.presentation
                             == reconnect::ReconnectPresentation::Conversation
                     {
@@ -1014,7 +1032,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
                     // Allow widgets to process any pending timers before rendering.
-                    let had_active_view = self.chat_widget.has_active_view();
+                    let had_active_modal = self.chat_widget.has_active_modal();
                     self.chat_widget.pre_draw_tick();
                     self.refresh_agents_overview_usage(app_server, tui.frame_requester());
                     let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;
@@ -1024,8 +1042,8 @@ impl App {
                     {
                         self.request_owned_history(tui, app_server);
                     }
-                    if !had_active_view
-                        && self.chat_widget.has_active_view()
+                    if !had_active_modal
+                        && self.chat_widget.has_active_modal()
                         && self.startup_protected_input_boundary
                     {
                         tui.discard_pending_input_before_interactive_screen()?;
@@ -1083,6 +1101,7 @@ impl App {
         if tui.is_owned_screen() {
             return self.render_owned_transcript(tui, screen_size);
         }
+        self.chat_widget.sync_warnings(&self.transcript_cells);
         let dashboard_visible = self
             .chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)

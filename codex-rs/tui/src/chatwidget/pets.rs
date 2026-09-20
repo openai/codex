@@ -176,6 +176,18 @@ impl ChatWidget {
         };
 
         self.add_warning_message(message.to_string());
+        // Warnings are collected outside the live transcript. A command the user
+        // just invoked also needs an immediate explanation above the composer.
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Pets unavailable".to_string()),
+            subtitle: Some(message.to_string()),
+            items: vec![SelectionItem {
+                name: "Close".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            }],
+            ..SelectionViewParams::picker()
+        });
         true
     }
 

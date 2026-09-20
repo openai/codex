@@ -87,6 +87,8 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("global", "Global", "open_agents", "Open the shared agent-session overview."),
     action("global", "Global", "open_transcript", "Open the transcript overlay."),
     action("global", "Global", "find_transcript", "Find text in the full transcript."),
+    // Keep the new warnings action out of shared-config writes until older strict readers
+    // accept it. Its built-in shortcuts remain available.
     action("global", "Global", "focus_activity", "Focus transcript activity groups to expand or collapse their details."),
     action("global", "Global", "open_external_editor", "Open the current draft in an external editor."),
     action("global", "Global", "copy", "Copy the last agent response to the clipboard."),

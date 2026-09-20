@@ -186,12 +186,10 @@ fn user_message_accent_color_for(
 }
 
 /// Muted amber keeps the passive warning count visible without looking like an error.
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 pub(crate) fn warning_notice_style() -> Style {
     warning_notice_style_for(default_bg(), effective_stdout_color_level())
 }
 
-#[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
 fn warning_notice_style_for(background: Option<(u8, u8, u8)>, level: StdoutColorLevel) -> Style {
     let preferred = if background.is_some_and(is_light) {
         (139, 98, 20)

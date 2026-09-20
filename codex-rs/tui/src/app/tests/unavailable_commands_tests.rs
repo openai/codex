@@ -45,6 +45,7 @@ async fn unavailable_thread_routes_local_and_recovery_commands() -> Result<()> {
         "/agents",
         "/subagents",
         "/raw on",
+        "/warnings",
         "/quit",
         "/exit",
     ] {
@@ -64,6 +65,7 @@ async fn unavailable_thread_routes_local_and_recovery_commands() -> Result<()> {
                     | ("/agents", AppEvent::OpenAgentsOverview)
                     | ("/subagents", AppEvent::OpenAgentPicker)
                     | ("/raw on", AppEvent::RawOutputModeChanged { enabled: true })
+                    | ("/warnings", AppEvent::OpenWarnings)
                     | ("/quit" | "/exit", AppEvent::Exit(_))
             );
         }

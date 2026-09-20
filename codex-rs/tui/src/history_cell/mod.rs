@@ -145,15 +145,7 @@ pub(crate) use warnings::WarningEntry;
 pub(crate) use warnings::WarningHistoryCell;
 pub(crate) use warnings::WarningId;
 pub(crate) use warnings::WarningKey;
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use warnings::warning_count;
-#[allow(
-    unused_imports,
-    reason = "Used by later layers of the TUI refresh stack."
-)]
 pub(crate) use warnings::warning_entries;
 
 #[cfg(test)]
@@ -212,13 +204,11 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     }
 
     /// Diagnostics exposed by the warnings picker, retaining their source and full text.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     fn warning_entries(&self) -> Vec<WarningEntry> {
         Vec::new()
     }
 
     /// Stable diagnostic identities, independent of rendered wrapping and duplicate delivery.
-    #[allow(dead_code, reason = "Used by later layers of the TUI refresh stack.")]
     fn warning_keys(&self) -> Vec<WarningKey<'_>> {
         Vec::new()
     }

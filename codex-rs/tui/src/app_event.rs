@@ -424,6 +424,10 @@ pub(crate) enum AppEvent {
 
     /// Open the filename prompt for an on-demand Markdown transcript export.
     OpenTranscriptExportFilePrompt,
+    /// Open retained warnings without changing the draft or transcript position.
+    OpenWarnings,
+    /// Copy a diagnostic and acknowledge in the footer, without appending history.
+    CopyWarning(String),
 
     /// Export all current-thread history to the selected destination.
     ExportTranscript {

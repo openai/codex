@@ -595,3 +595,32 @@ fn pending_hint_skips_whole_oversized_configured_completions() {
         ]
     );
 }
+
+#[test]
+fn warning_context_keeps_local_chords_ahead_of_copy_and_hides_unreachable_hints() {
+    let config = serde_json::from_value(serde_json::json!({
+        "global":{"copy":"ctrl-x c", "open_agents":"ctrl-x a"},
+        "list":{"jump_bottom":"ctrl-x c"}
+    }))
+    .unwrap();
+    let runtime = RuntimeKeymap::from_config(&config).unwrap();
+    let mut matcher = KeyChordMatcher::default();
+    let contexts = KeymapContextSet::warnings();
+    let prefix = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+    matcher.advance(prefix, &runtime.chords, contexts);
+    assert_eq!(
+        matcher.pending_hint_items(&runtime.chords, /*width*/ 80),
+        Some(vec![
+            ("ctrl+x".into(), "then".into()),
+            ("c".into(), "jump bottom".into()),
+            ("esc".into(), "cancel".into()),
+        ])
+    );
+    let KeyChordMatch::Completed(event) =
+        matcher.advance(KeyCode::Char('c').into(), &runtime.chords, contexts)
+    else {
+        panic!("list action")
+    };
+    assert!(runtime.list.jump_bottom.is_pressed(event));
+    assert!(!runtime.app.copy.is_pressed(event));
+}

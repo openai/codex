@@ -1,3 +1,4 @@
+use super::helpers::drain_insert_history_transcript;
 use super::*;
 use codex_app_server_protocol::ImageReference;
 use pretty_assertions::assert_eq;
@@ -292,7 +293,7 @@ async fn esc_with_review_queued_steers_shows_warning_and_does_not_interrupt() {
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
     handle_entered_review_mode(&mut chat, "feature branch");
-    let _ = drain_insert_history(&mut rx);
+    let _ = drain_insert_history_transcript(&mut rx);
     chat.input_queue
         .pending_steers
         .push_back(pending_steer("review follow-up"));
@@ -304,7 +305,7 @@ async fn esc_with_review_queued_steers_shows_warning_and_does_not_interrupt() {
     assert_eq!(chat.input_queue.pending_steers.len(), 1);
     assert_no_submit_op(&mut op_rx);
 
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     let last = lines_to_single_string(cells.last().expect("review warning"));
     assert_chatwidget_snapshot!("review_submission_warning_snapshot", last);
 }

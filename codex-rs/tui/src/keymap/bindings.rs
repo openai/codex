@@ -134,8 +134,17 @@ macro_rules! runtime_group_mut {
     };
 }
 
+macro_rules! configured_binding_slot {
+    ($keymap:ident, $group:ident, $action:ident, runtime_only) => {
+        None
+    };
+    ($keymap:ident, $group:ident, $action:ident) => {
+        Some(&$keymap.$group.$action)
+    };
+}
+
 macro_rules! define_runtime_action_bindings {
-    ($($context:literal => $context_id:ident, $group:ident, $config_group:ident [$($action:ident),+ $(,)?]),+ $(,)?) => {
+    ($($context:literal => $context_id:ident, $group:ident, $config_group:ident [$($action:ident $(=> $runtime_only:ident)?),+ $(,)?]),+ $(,)?) => {
         /// Resolve a config context/action pair to its runtime identity.
         pub(crate) fn keymap_action_id(
             context: &str,
@@ -172,7 +181,7 @@ macro_rules! define_runtime_action_bindings {
                 $(
                     $(
                         ($context, stringify!($action)) => {
-                            Some(&keymap.$config_group.$action)
+                            configured_binding_slot!(keymap, $config_group, $action $(, $runtime_only)?)
                         }
                     )+
                 )+
@@ -264,6 +273,7 @@ define_runtime_action_bindings! {
         open_transcript,
         find_transcript,
         focus_activity,
+        open_warnings => runtime_only,
         open_external_editor,
         copy,
         clear_terminal,

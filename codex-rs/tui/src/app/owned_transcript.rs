@@ -42,6 +42,7 @@ impl App {
         tui: &mut tui::Tui,
         screen_size: Size,
     ) -> Result<Rect> {
+        self.chat_widget.sync_warnings(&self.transcript_cells);
         let motion = MotionMode::from_animations_enabled(self.local_settings.tui.animations);
         let latest_navigation = if self.enter_returns_to_latest() {
             "enter/esc latest"
@@ -418,6 +419,10 @@ mod tests;
 #[cfg(test)]
 #[path = "owned_transcript_input_tests.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "warning_notice_tests.rs"]
+mod warning_notice_tests;
 
 #[cfg(test)]
 #[path = "owned_transcript_follow_tests.rs"]

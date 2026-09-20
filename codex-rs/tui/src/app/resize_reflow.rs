@@ -547,13 +547,17 @@ impl App {
         self.last_rendered_history_tail = self
             .native_history
             .replayable_cells(&self.transcript_cells)
-            .last()
-            .map(|cell| super::history_ui::RenderedHistoryTail {
-                cell: Arc::downgrade(cell),
-                lines: cell.display_hyperlink_lines_for_mode(
+            .iter()
+            .rev()
+            .find_map(|cell| {
+                let lines = cell.display_hyperlink_lines_for_mode(
                     width,
                     self.chat_widget.history_render_mode(),
-                ),
+                );
+                (!lines.is_empty()).then(|| super::history_ui::RenderedHistoryTail {
+                    cell: Arc::downgrade(cell),
+                    lines,
+                })
             });
         if let Some(status_history) = self.last_thread_usage_status_cell.as_mut()
             && let Some(cell) = status_history.cell.upgrade()

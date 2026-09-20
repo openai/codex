@@ -37,8 +37,7 @@
 //! All completion suggestions render above the composer and preserve its footer.
 //! Owned transcript frames overlay suggestions with blank rows above and below, without reserving
 //! layout space. Those rows show scroll arrows when suggestions extend beyond the visible menu.
-//! Transcript interactions hide suggestions while retaining their query and selection;
-//! closing the interaction restores the same draft and completion state.
+//! Warning and transcript views hide suggestions without losing the draft, query, or selection.
 //! Measurement, painting, and cursor placement share that layout, including clipped views.
 //! Unified mention tabs retain their position across filters; Left/Right also works at a bare `@`.
 //!
@@ -140,7 +139,8 @@
 //!
 //! During reconnection, `handle_restricted_key` edits the draft directly without popup dispatch,
 //! composer shortcuts, or submission; `?` becomes literal input. Enter and Tab leave the draft
-//! intact until reconnection succeeds. When connected but the thread is unavailable, configured
+//! intact until reconnection succeeds, except for the local `/warnings` command.
+//! When connected but the thread is unavailable, configured
 //! submit keys may dispatch explicitly allowed recovery and local commands; other drafts stay put.
 //! Collapsed pastes expand into editable text so the full draft can be copied before quitting.
 //!
@@ -374,6 +374,7 @@ mod sparkle;
 mod status_surface;
 mod vim_history;
 mod vim_search;
+mod warning_notice;
 
 use self::attachment_state::AttachmentState;
 use self::draft_state::ComposerMentionBinding;
@@ -498,6 +499,7 @@ fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
                 | SlashCommand::Import
                 | SlashCommand::Hooks
                 | SlashCommand::Status
+                | SlashCommand::Warnings
                 | SlashCommand::Daemon
                 | SlashCommand::Usage
                 | SlashCommand::Ide
@@ -737,6 +739,9 @@ impl ChatComposer {
                 active_agent_label: None,
                 external_editor_key: default_keymap
                     .primary_hint(KeymapContext::Global, "open_external_editor"),
+                warning_notice_area: std::cell::Cell::default(),
+                show_warnings_key: default_keymap
+                    .primary_hint(KeymapContext::Global, "open_warnings"),
                 show_transcript_key: default_keymap
                     .primary_hint(KeymapContext::Global, "open_transcript"),
                 find_transcript_key: default_keymap
@@ -1019,6 +1024,7 @@ impl ChatComposer {
         self.draft.textarea.set_keymap_bindings(keymap);
         self.footer.external_editor_key =
             keymap.primary_hint(KeymapContext::Global, "open_external_editor");
+        self.footer.show_warnings_key = keymap.primary_hint(KeymapContext::Global, "open_warnings");
         self.footer.show_transcript_key =
             keymap.primary_hint(KeymapContext::Global, "open_transcript");
         self.footer.find_transcript_key =
@@ -4643,9 +4649,11 @@ impl ChatComposer {
             }
         }
         let transcript_hint_area = inset_footer_hint_area(footer_rect);
+        let warning_notice = self.warning_notice_layout(transcript_hint_area, options);
+        let warning_area = warning_notice.as_ref().map(|(area, _)| *area);
         match options.footer {
             Some(footer) => {
-                self.render_transcript_footer(transcript_hint_area, buf, footer);
+                self.render_transcript_footer(transcript_hint_area, buf, footer, warning_area);
             }
             None if self.shortcuts_above_composer(options) => {
                 let props = self.hint_footer_props(options);
@@ -4674,7 +4682,17 @@ impl ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let hint_rect = footer_rect;
+                let hint_rect = if let Some(warning_area) = warning_area {
+                    Rect {
+                        width: warning_area
+                            .x
+                            .saturating_sub(footer_rect.x)
+                            .saturating_sub(/*rhs*/ 2),
+                        ..footer_rect
+                    }
+                } else {
+                    footer_rect
+                };
                 if let Some(input) = self.draft.textarea.vim_query() {
                     input.render(inset_footer_hint_area(hint_rect), buf);
                 } else if let Some(line) = self.history_search_footer_line() {
@@ -4889,6 +4907,10 @@ impl ChatComposer {
                     }
                 }
             }
+        }
+        self.footer.warning_notice_area.set(warning_area);
+        if let Some((warning_area, line)) = warning_notice {
+            line.render(warning_area, buf);
         }
         let style = user_message_style();
         Block::default().style(style).render(composer_rect, buf);

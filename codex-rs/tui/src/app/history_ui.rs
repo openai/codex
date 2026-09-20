@@ -76,7 +76,8 @@ impl App {
                 lines: lines.clone(),
             });
         }
-        if deferred {
+        // Invisible diagnostics still update the badge without replacing the rendered tail.
+        if deferred || lines.is_empty() {
             tui.frame_requester().schedule_frame();
             return;
         }
@@ -85,7 +86,7 @@ impl App {
             self.last_rendered_history_tail = None;
         } else {
             self.insert_history_cell_lines(tui, cell.as_ref(), width);
-            self.last_rendered_history_tail = if self.overlay.is_none() && !lines.is_empty() {
+            self.last_rendered_history_tail = if self.overlay.is_none() {
                 Some(RenderedHistoryTail {
                     cell: Arc::downgrade(cell),
                     lines,

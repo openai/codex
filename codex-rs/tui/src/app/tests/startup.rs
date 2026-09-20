@@ -593,6 +593,8 @@ async fn startup_draft_delayed_approval_becomes_protected_on_redraw() -> Result<
     let mut pending_startup_draft = Some(draft);
     app.chat_widget
         .restore_startup_draft_when_ready(&mut pending_startup_draft);
+    // The warning panel owns input but must not mask a later protected modal.
+    app.chat_widget.open_warnings(&[]);
 
     let approval_request =
         exec_approval_request(thread_id, "turn-1", "call-1", /*approval_id*/ None);
@@ -607,7 +609,8 @@ async fn startup_draft_delayed_approval_becomes_protected_on_redraw() -> Result<
         .try_recv()
         .expect("approval should be queued on the active thread");
     app.handle_thread_event_now(approval_event);
-    assert!(!app.chat_widget.has_active_view());
+    assert!(app.chat_widget.has_active_view());
+    assert!(!app.chat_widget.has_active_modal());
     assert!(app.startup_pending_protected_request);
 
     app.handle_tui_event(
@@ -619,12 +622,12 @@ async fn startup_draft_delayed_approval_becomes_protected_on_redraw() -> Result<
     assert!(app.startup_protected_input_boundary);
     assert!(app.startup_pending_protected_request);
 
-    tokio::time::sleep(Duration::from_millis(/*millis*/ 75)).await;
+    tokio::time::sleep(Duration::from_millis(/*millis*/ 1100)).await;
     let redraw_result = app
         .handle_tui_event(&mut tui, &mut app_server, TuiEvent::Draw)
         .await;
 
-    assert!(app.chat_widget.has_active_view());
+    assert!(app.chat_widget.has_active_modal());
     assert!(!tui.terminal.viewport_area.is_empty());
     while let Ok(event) = app_event_rx.try_recv() {
         assert!(

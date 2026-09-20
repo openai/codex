@@ -1,3 +1,4 @@
+use super::helpers::drain_insert_history_transcript;
 use super::*;
 use codex_app_server_protocol::AuthRecoveryNotification;
 use codex_protocol::error::CodexErr;
@@ -923,7 +924,7 @@ async fn live_app_server_warning_notification_renders_message() {
         /*replay_kind*/ None,
     );
 
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     let normalized = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -954,7 +955,7 @@ async fn live_app_server_warning_notification_renders_message() {
     ] {
         chat.handle_server_notification(notification, /*replay_kind*/ None);
 
-        let [cell] = drain_insert_history(&mut rx)
+        let [cell] = drain_insert_history_transcript(&mut rx)
             .try_into()
             .expect("expected one authentication recovery history cell");
         recovery_messages.push_str(&lines_to_single_string(&cell));
@@ -977,7 +978,7 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
         /*replay_kind*/ None,
     );
 
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
@@ -1004,7 +1005,7 @@ async fn live_app_server_strict_review_required_notification_renders_message() {
         /*replay_kind*/ None,
     );
 
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     assert_chatwidget_snapshot!("strict_review_required", lines_to_single_string(&cells[0]));
     chat.on_exec_command_output_delta("cmd-1", "streamed output\n");
@@ -1020,7 +1021,7 @@ async fn live_app_server_strict_review_required_notification_renders_message() {
 }
 
 #[tokio::test]
-async fn config_warning_during_turn_remains_inline() {
+async fn config_warning_during_turn_retains_transcript_details() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     handle_turn_started(&mut chat, "turn-1");
     chat.handle_server_notification(
@@ -1032,7 +1033,7 @@ async fn config_warning_during_turn_remains_inline() {
         }),
         /*replay_kind*/ None,
     );
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     insta::assert_snapshot!(
         "runtime_config_warning",
         cells
@@ -1665,7 +1666,7 @@ async fn live_app_server_rate_limit_error_renders_upstream_message() {
 }
 
 #[tokio::test]
-async fn live_app_server_server_overloaded_error_renders_warning() {
+async fn live_app_server_server_overloaded_error_renders_error() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
@@ -1703,7 +1704,7 @@ async fn live_app_server_server_overloaded_error_renders_warning() {
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
-    assert_eq!(lines_to_single_string(&cells[0]), "⚠ server overloaded\n");
+    assert_eq!(lines_to_single_string(&cells[0]), "■ server overloaded\n");
     assert!(!chat.bottom_pane.is_task_running());
 }
 

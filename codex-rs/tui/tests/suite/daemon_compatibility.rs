@@ -66,7 +66,7 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
         terminal.wait_for_startup()?;
-        terminal.wait_for_screen("startup issue")?;
+        terminal.wait_for_screen("warning")?;
         terminal.write_input(b"\x14")?;
         let (snapshot, warning_end) = match scenario {
             "default" => (

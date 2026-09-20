@@ -1,3 +1,4 @@
+use super::helpers::drain_insert_history_transcript;
 use super::*;
 use crate::app_event::HistoryLookupResponse;
 use codex_app_server_protocol::ImageReference;
@@ -114,7 +115,7 @@ async fn replayed_failed_turns_preserve_overload_warnings_between_retries() {
         ReplayKind::ResumeInitialMessages,
     );
 
-    let rendered = drain_insert_history(&mut rx)
+    let rendered = drain_insert_history_transcript(&mut rx)
         .into_iter()
         .map(|lines| lines_to_single_string(&lines))
         .collect::<String>();

@@ -222,7 +222,22 @@ impl ChatWidget {
                     vec!["✓ ".green(), notification.message.into()].into(),
                 ]);
             }
-            ServerNotification::Warning(notification) => self.on_warning(notification.message),
+            ServerNotification::Warning(notification) => {
+                if self.warning_display_state.startup_complete {
+                    self.on_warning(notification.message);
+                } else if self
+                    .warning_display_state
+                    .should_display(&notification.message)
+                {
+                    // Unstable-feature and skill-budget notices arrive as ordinary warnings.
+                    // Coalesce initialization diagnostics by lifecycle, not message wording.
+                    // Both startup and runtime warnings retain details in the transcript.
+                    self.add_to_history(history_cell::StartupWarningsCell::new(vec![
+                        notification.message,
+                    ]));
+                    self.request_redraw();
+                }
+            }
             ServerNotification::GuardianWarning(notification) => {
                 if !notification
                     .message

@@ -363,7 +363,7 @@ impl ChatWidget {
             message
         };
 
-        self.add_to_history(history_cell::new_warning_event(message));
+        self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
         self.maybe_send_next_queued_input();
     }

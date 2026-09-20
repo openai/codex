@@ -1047,7 +1047,7 @@ async fn blocked_image_restore_preserves_mention_bindings() {
     );
     assert_eq!(chat.bottom_pane.take_mention_bindings(), mention_bindings);
 
-    let cells = drain_insert_history(&mut rx);
+    let cells = drain_insert_history_transcript(&mut rx);
     let warning = cells
         .last()
         .map(|lines| lines_to_single_string(lines))

@@ -84,6 +84,8 @@ mod status_surface_preview;
 mod title_setup;
 pub(crate) mod user_verification;
 mod voice_strip;
+mod warnings;
+mod warnings_view;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
 pub(crate) use actionable_banner::ActionableBanner;
@@ -273,6 +275,7 @@ pub(crate) struct BottomPane {
 
     /// Stack of views displayed instead of the composer (e.g. popups/modals).
     view_stack: Vec<Box<dyn BottomPaneView>>,
+    warnings_view: Option<warnings_view::WarningsView>,
     pub(crate) questions: Option<Box<AsyncQuestions>>,
     delayed_approval_requests: VecDeque<DelayedApprovalRequest>,
     last_composer_activity_at: Option<Instant>,
@@ -355,6 +358,7 @@ impl BottomPane {
         Self {
             composer,
             view_stack: Vec::new(),
+            warnings_view: None,
             questions: None,
             delayed_approval_requests: VecDeque::new(),
             last_composer_activity_at: None,
@@ -489,6 +493,9 @@ impl BottomPane {
     /// overlays and selection views to continue using the previous bindings.
     pub fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
         self.keymap = keymap.clone();
+        if let Some(view) = &mut self.warnings_view {
+            view.set_keymap(keymap);
+        }
         self.composer.set_keymap_bindings(keymap);
         if let Some(questions) = &mut self.questions {
             questions.set_keymap(keymap);
@@ -710,7 +717,7 @@ impl BottomPane {
         })
     }
 
-    fn record_composer_activity_at(&mut self, now: Instant) {
+    pub(crate) fn record_composer_activity_at(&mut self, now: Instant) {
         self.last_composer_activity_at = Some(now);
         if self.has_pending_approval()
             && let Some(delay) = self.approval_prompt_delay_remaining(now)
@@ -755,6 +762,7 @@ impl BottomPane {
         mode: RestrictedInputMode,
     ) -> InputResult {
         self.view_stack.clear();
+        self.warnings_view = None;
         self.delayed_approval_requests.clear();
         self.composer
             .set_input_enabled(/*enabled*/ true, /*placeholder*/ None);
@@ -776,6 +784,20 @@ impl BottomPane {
                         | KeyCode::Enter
                         | KeyCode::Tab
                 );
+        if self.warnings_active() {
+            if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+                self.record_composer_activity_at(Instant::now());
+            }
+            if self
+                .warnings_view
+                .as_mut()
+                .is_some_and(|view| view.handle_key(key_event))
+            {
+                self.warnings_view = None;
+            }
+            self.request_redraw();
+            return InputResult::None;
+        }
         if self.view_stack.is_empty()
             && let Some(questions) = self.questions.as_mut().filter(|q| q.expanded)
         {
@@ -868,6 +890,11 @@ impl BottomPane {
 
     /// Return the contexts whose ordinary handlers can consume the next key.
     pub(crate) fn keymap_contexts(&self) -> KeymapContextSet {
+        if self.warnings_active()
+            && let Some(view) = &self.warnings_view
+        {
+            return view.keymap_contexts();
+        }
         if let Some(view) = self.view_stack.last() {
             view.keymap_contexts()
         } else if let Some(questions) = self.questions.as_ref().filter(|q| q.expanded) {
@@ -887,6 +914,11 @@ impl BottomPane {
     /// was received, but it does not decide whether the process should exit; `ChatWidget` owns the
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if self.warnings_active() {
+            self.warnings_view = None;
+            self.request_redraw();
+            return CancellationEvent::Handled;
+        }
         if self.view_stack.is_empty()
             && let Some(questions) = self.questions.as_mut().filter(|q| q.expanded)
         {
@@ -919,6 +951,13 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
+        if self.warnings_active() {
+            if !pasted.is_empty() {
+                self.record_composer_activity_at(Instant::now());
+            }
+            self.request_redraw();
+            return;
+        }
         if self.view_stack.is_empty()
             && let Some(questions) = self.questions.as_mut().filter(|q| q.expanded)
         {
@@ -1048,6 +1087,7 @@ impl BottomPane {
 
     pub(crate) fn show_shutdown_in_progress(&mut self) {
         self.view_stack.clear();
+        self.warnings_view = None;
         self.composer.show_shutdown_in_progress();
         self.request_redraw();
     }
@@ -1109,6 +1149,9 @@ impl BottomPane {
     }
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        if let Some(view) = &mut self.warnings_view {
+            view.pending_hint = items.clone();
+        }
         self.composer.set_footer_hint_override(items);
         self.request_redraw();
     }
@@ -1642,6 +1685,11 @@ impl BottomPane {
     }
 
     pub(crate) fn has_active_view(&self) -> bool {
+        self.warnings_view.is_some() || self.has_active_modal()
+    }
+
+    /// Warnings own input without replacing the composer with an interactive modal.
+    pub(crate) fn has_active_modal(&self) -> bool {
         !self.view_stack.is_empty()
     }
 
@@ -2024,6 +2072,11 @@ impl BottomPane {
         &'a self,
         mut options: ComposerRenderOptions<'a>,
     ) -> RenderableItem<'a> {
+        if self.warnings_active()
+            && let Some(warnings) = &self.warnings_view
+        {
+            return RenderableItem::Borrowed(warnings);
+        }
         if (self.is_task_running || !self.view_stack.is_empty())
             && let Some(banner) = &self.inline_banner
         {
@@ -2128,6 +2181,7 @@ impl BottomPane {
             let composer: RenderableItem<'_> = if let Some(questions) = question_editor {
                 RenderableItem::Borrowed(questions.as_ref())
             } else if options.textarea_right_reserve == 0
+                && options.warning_count == 0
                 && options.footer.is_none()
                 && !options.separate_status_line
                 && options.command_popup_placement == CommandPopupPlacement::AboveComposer
@@ -2145,6 +2199,11 @@ impl BottomPane {
     }
 
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        if self.warnings_active()
+            && let Some(view) = &mut self.warnings_view
+        {
+            view.flash = Some((line.clone(), Instant::now() + duration));
+        }
         self.composer.show_footer_flash(line, duration);
         self.request_redraw();
     }
@@ -2655,24 +2714,51 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let features = Features::with_defaults();
-        let mut pane = test_pane(tx);
-        let now = Instant::now();
-        pane.last_composer_activity_at = Some(now);
+        for source in [
+            "composer",
+            "warning open",
+            "warning navigation",
+            "warning paste",
+        ] {
+            let mut pane = test_pane(tx.clone());
+            match source {
+                "warning open" => pane.show_warnings(Vec::new()),
+                "warning navigation" => {
+                    pane.show_warnings(Vec::new());
+                    pane.last_composer_activity_at = None;
+                    pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+                }
+                "warning paste" => {
+                    pane.show_warnings(Vec::new());
+                    pane.last_composer_activity_at = None;
+                    pane.handle_paste("query".into());
+                }
+                _ => pane.last_composer_activity_at = Some(Instant::now()),
+            }
+            let now = pane
+                .last_composer_activity_at
+                .expect("typing activity recorded");
 
-        pane.push_approval_request(exec_request(), &features);
+            pane.push_approval_request(exec_request(), &features);
 
-        assert!(pane.view_stack.is_empty());
-        assert_eq!(pane.delayed_approval_requests.len(), 1);
+            assert!(pane.view_stack.is_empty());
+            assert_eq!(pane.delayed_approval_requests.len(), 1);
+            if source == "warning navigation" {
+                pane.handle_key_event(KeyCode::Enter.into());
+                assert!(pane.warnings_active());
+            }
+            let now = pane.last_composer_activity_at.unwrap_or(now);
 
-        pane.pre_draw_tick_at(
-            now + APPROVAL_PROMPT_TYPING_IDLE_DELAY - Duration::from_millis(/*millis*/ 1),
-        );
-        assert!(pane.view_stack.is_empty());
-        assert_eq!(pane.delayed_approval_requests.len(), 1);
+            pane.pre_draw_tick_at(
+                now + APPROVAL_PROMPT_TYPING_IDLE_DELAY - Duration::from_millis(/*millis*/ 1),
+            );
+            assert!(pane.view_stack.is_empty());
+            assert_eq!(pane.delayed_approval_requests.len(), 1);
 
-        pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
-        assert_eq!(pane.view_stack.len(), 1);
-        assert!(pane.delayed_approval_requests.is_empty());
+            pane.pre_draw_tick_at(now + APPROVAL_PROMPT_TYPING_IDLE_DELAY);
+            assert_eq!(pane.view_stack.len(), 1);
+            assert!(pane.delayed_approval_requests.is_empty());
+        }
     }
 
     #[test]
