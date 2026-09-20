@@ -94,6 +94,8 @@ impl KeyBinding {
         }
         let key = match self.key {
             #[cfg(test)]
+            KeyCode::Backspace => "backspace".to_string(),
+            #[cfg(test)]
             KeyCode::Delete => "del".to_string(),
             KeyCode::Enter => "enter".to_string(),
             KeyCode::Char(' ') => "space".to_string(),

@@ -74,15 +74,7 @@ impl AgentsOverviewView {
         let viewport = row(area, padding, area.height - padding * 2);
         if padding > 0 {
             let (title, status, updated) = columns(row(area, /*offset*/ 0, /*height*/ 1));
-            line(
-                if !state.editing_metadata() {
-                    "Tasks".cyan().bold()
-                } else {
-                    "Tasks".dim()
-                },
-                title,
-                buf,
-            );
+            line("Tasks".dim(), title, buf);
             line("Status".dim(), status, buf);
             Line::from("Updated".dim())
                 .right_aligned()

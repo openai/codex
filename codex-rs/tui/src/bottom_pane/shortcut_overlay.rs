@@ -6,7 +6,8 @@
 
 use super::footer::FooterProps;
 use crate::key_hint;
-use crate::key_hint::ShortcutHint;
+use crate::shortcut_help::Group;
+use crate::shortcut_help::Shortcut;
 use crate::style::accent_color;
 use crate::style::secondary_text_style;
 use crate::wrapping::word_wrap_lines;
@@ -17,54 +18,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
-
-const COLUMN_GAP: usize = 4;
-
-struct Shortcut {
-    key: String,
-    action: &'static str,
-}
-
-impl Shortcut {
-    fn new(key: impl Into<ShortcutHint>, action: &'static str) -> Self {
-        Self {
-            key: key.into().display_label(),
-            action,
-        }
-    }
-}
-
-struct Group {
-    title: &'static str,
-    entries: Vec<Shortcut>,
-}
-
-impl Group {
-    fn push(&mut self, key: Option<ShortcutHint>, action: &'static str) {
-        if let Some(key) = key {
-            self.entries.push(Shortcut::new(key, action));
-        }
-    }
-
-    fn lines(&self) -> Vec<Line<'static>> {
-        let key_width = self
-            .entries
-            .iter()
-            .map(|entry| Span::raw(&entry.key).width())
-            .max()
-            .unwrap_or(/*default*/ 0);
-        let mut lines = vec![self.title.bold().into()];
-        for entry in &self.entries {
-            let key = entry.key.clone().fg(accent_color());
-            let padding = " ".repeat(key_width.saturating_sub(key.width()) + 2);
-            lines.push(vec![key, padding.into(), entry.action.into()].into());
-        }
-        lines
-    }
-}
 
 pub(super) fn lines(props: &FooterProps, width: u16) -> Vec<Line<'static>> {
     let hints = props.key_hints;
@@ -163,31 +118,12 @@ pub(super) fn lines(props: &FooterProps, width: u16) -> Vec<Line<'static>> {
         },
     ]);
 
-    let groups = [compose.lines(), session.lines(), transcript.lines()];
-    let widths: Vec<usize> = groups
-        .iter()
-        .map(|group| group.iter().map(Line::width).max().unwrap_or(/*default*/ 0))
-        .collect();
-    let width = usize::from(width.max(/*other*/ 1));
     let mut result = vec![Line::from("Keyboard shortcuts").bold(), Line::default()];
-    if widths.iter().sum::<usize>() + COLUMN_GAP * 2 <= width {
-        result.extend(columns(&groups, &widths));
-    } else if widths[0] + COLUMN_GAP + widths[1].max(widths[2]) <= width {
-        let mut right = groups[1].clone();
-        right.push(Line::default());
-        right.extend(groups[2].clone());
-        result.extend(columns(
-            &[groups[0].clone(), right],
-            &[widths[0], widths[1].max(widths[2])],
-        ));
-    } else {
-        for (index, group) in groups.into_iter().enumerate() {
-            if index > 0 {
-                result.push(Line::default());
-            }
-            result.extend(group);
-        }
-    }
+    result.extend(crate::shortcut_help::group_lines(
+        [compose, session, transcript],
+        width,
+    ));
+    let width = usize::from(width.max(/*other*/ 1));
     result.push(Line::default());
     result.extend(footer_lines(width));
     word_wrap_lines(&result, width)
@@ -216,24 +152,6 @@ fn footer_lines(width: usize) -> Vec<Line<'static>> {
         ])],
         width,
     )
-}
-
-fn columns(groups: &[Vec<Line<'static>>], widths: &[usize]) -> Vec<Line<'static>> {
-    let height = groups.iter().map(Vec::len).max().unwrap_or(/*default*/ 0);
-    (0..height)
-        .map(|row| {
-            let mut line = Line::default();
-            for (column, group) in groups.iter().enumerate() {
-                let entry = group.get(row).cloned().unwrap_or_default();
-                let padding = widths[column].saturating_sub(entry.width()) + COLUMN_GAP;
-                line.extend(entry.spans);
-                if column + 1 < groups.len() {
-                    line.push_span(" ".repeat(padding));
-                }
-            }
-            line
-        })
-        .collect()
 }
 
 pub(super) fn render(props: &FooterProps, area: Rect, buf: &mut Buffer) {

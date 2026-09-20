@@ -5,10 +5,10 @@ expression: "normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widge
   Agent command center  Group: Project  g
    All 1   Needs you 0   Working 0   Ready 1   Inactive 0                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                    │ Task details
-      Tasks                                           │
-  /tmp/project  1                                     │ Review parser
-  › ○ Review parser                                   │ ○ Ready
+      Tasks                                           │ Task details
+  /tmp/project  1                                     │
+  › ○ Review parser                                   │ Review parser
+                                                      │ ○ Ready
                                                       │
                                                       │ Last message
                                                       │ let explanation = "A long code line
@@ -25,4 +25,4 @@ expression: "normalize_agent_center_snapshot(render_bottom_popup(&app.chat_widge
                                                       │
                                                       │
                                                       │
-  ? help  esc back  enter open  n new  w new worktree
+  ? help  esc back  ↑/↓ move  enter open  n new

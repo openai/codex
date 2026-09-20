@@ -5,11 +5,11 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   Agent command center  Group: Project  g
    All 2   Needs you 1   Working 0   Ready 0   Inactive 1                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                    │ Task details
-      Tasks                                           │
-  /tmp/project  2                                     │ Investigate parser
-    ● Repair authentication                           │ ○ Inactive
-  › ○ Investigate parser                              │
+      Tasks                                           │ Task details
+  /tmp/project  2                                     │
+    ● Repair authentication                           │ Investigate parser
+  › ○ Investigate parser                              │ ○ Inactive
+                                                      │
                                                       │ Last message
                                                       │ Found the regression in the parser.
                                                       │ Found the regression in the parser.
@@ -25,4 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │ Prompt
                                                       │ Investigate parser
                                                       │ …
-  ? help  esc back  enter open  n new  w new worktree
+  ? help  esc back  ↑/↓ move  enter open  n new

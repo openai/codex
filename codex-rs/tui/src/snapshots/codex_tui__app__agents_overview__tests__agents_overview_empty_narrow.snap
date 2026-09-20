@@ -5,7 +5,6 @@ expression: rendered
   Agent command center  Group: Project  g
    All 0   Needs you 0   Working 0           ›
   ────────────────────────────────────────────
-  Search tasks · f
   No tasks yet
 
 
@@ -25,4 +24,5 @@ expression: rendered
 
 
 
-  ? help  esc back  enter open  n new  w new …
+
+  ? help  esc back  ↑/↓ move  enter open  n n…

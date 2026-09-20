@@ -1373,7 +1373,11 @@ impl RuntimeKeymap {
             (keymap.agents.rename.as_ref(), &mut agents.rename, "r"),
             (keymap.agents.stop.as_ref(), &mut agents.stop, "x"),
             (keymap.agents.archive.as_ref(), &mut agents.archive, "a"),
-            (keymap.agents.delete.as_ref(), &mut agents.delete, "delete"),
+            (
+                keymap.agents.delete.as_ref(),
+                &mut agents.delete,
+                "backspace",
+            ),
             (keymap.agents.hide.as_ref(), &mut agents.hide, "h"),
             (
                 keymap.agents.toggle_grouping.as_ref(),
@@ -1912,7 +1916,7 @@ impl RuntimeKeymap {
                 rename: default_bindings![plain(KeyCode::Char('r'))],
                 stop: default_bindings![plain(KeyCode::Char('x'))],
                 archive: default_bindings![plain(KeyCode::Char('a'))],
-                delete: default_bindings![plain(KeyCode::Delete)],
+                delete: default_bindings![plain(KeyCode::Backspace)],
                 hide: default_bindings![plain(KeyCode::Char('h'))],
                 toggle_grouping: default_bindings![plain(KeyCode::Char('g'))],
                 chord_hints: Arc::default(),
@@ -2317,7 +2321,9 @@ impl RuntimeKeymap {
             }
             if bindings.iter().any(|binding| {
                 let (code, modifiers) = binding.normalized_parts();
-                (code == KeyCode::Backspace && modifiers == KeyModifiers::NONE)
+                (action != "delete"
+                    && code == KeyCode::Backspace
+                    && modifiers == KeyModifiers::NONE)
                     || (matches!(code, KeyCode::Char(_)) && crate::key_hint::is_altgr(modifiers))
             }) {
                 return Err(format!(

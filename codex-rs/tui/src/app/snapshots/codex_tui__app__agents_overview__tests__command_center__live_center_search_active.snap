@@ -1,0 +1,20 @@
+---
+source: tui/src/app/agent_center_tests.rs
+expression: "screen(&view, area.width, area.height)"
+---
+  Agent command center  Group: Project  g
+   All 1   Needs you 0   Working 0   Ready 1   Inactive 0
+  ────────────────────────────────────────────────────────────────────────────────────
+  Search › find
+      Tasks                                                    Status         Updated
+  /tmp/project  1
+  › ○ Task to find                                             Ready           2m ago
+
+
+
+
+
+
+
+
+  esc back  enter open

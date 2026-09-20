@@ -65,11 +65,7 @@ impl AgentsOverviewView {
         } else {
             [body, Rect::default(), Rect::default()]
         };
-        let search = row(
-            list,
-            /*offset*/ 0,
-            u16::from(list.height >= 3 || state.editing_metadata()),
-        );
+        let search = row(list, /*offset*/ 0, u16::from(state.editing_metadata()));
         let list = row(
             list,
             search.height,
@@ -123,11 +119,6 @@ impl Renderable for AgentsOverviewView {
         let inset =
             |area: Rect| area.inner(Margin::new(/*horizontal*/ 2, /*vertical*/ 0));
         let footer_hints = self.center_footer_hints();
-        let search_key = self
-            .agents_keymap
-            .primary_hint("search", &self.agents_keymap.search)
-            .map(ShortcutHint::display_label)
-            .unwrap_or_default();
         let state = self.state();
         let filter_keys = if state.editing_metadata() {
             String::new()
@@ -202,13 +193,6 @@ impl Renderable for AgentsOverviewView {
                 layout.search,
                 buf,
             );
-        } else {
-            let search_label = if search_key.is_empty() {
-                "Search unavailable".to_owned()
-            } else {
-                format!("Search tasks · {search_key}")
-            };
-            line(search_label.dim(), layout.search, buf);
         }
         let notice = state
             .connection_notice
@@ -236,15 +220,13 @@ impl Renderable for AgentsOverviewView {
                 layout.footer.y - layout.header.bottom(),
             );
             Clear.render(inset(body), buf);
-            let lines = crate::wrapping::word_wrap_lines(
-                vec![
-                    "Task shortcuts".bold().into(),
-                    Line::default(),
-                    hint_line(&self.center_task_hints()),
-                ],
-                usize::from(inset(body).width),
-            );
-            Paragraph::new(lines).render(inset(body), buf);
+            let body = inset(body);
+            let mut lines = self.center_help_lines(body.width);
+            if lines.len() > usize::from(body.height) {
+                lines.truncate(usize::from(body.height.saturating_sub(/*rhs*/ 1)));
+                lines.push("… resize to see all".dim().into());
+            }
+            Paragraph::new(lines).render(body, buf);
             return;
         }
         for y in layout.gap.y..layout.gap.bottom() {

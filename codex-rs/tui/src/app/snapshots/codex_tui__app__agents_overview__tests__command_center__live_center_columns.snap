@@ -5,15 +5,15 @@ expression: "screen(&view, 160, 22)"
   Agent command center  Group: Project  g
    All 6   Needs you 2   Working 1   Ready 2   Inactive 1                                                                                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                                                                                    │ Task details
-      Tasks                                                                                   Status         Updated  │
-  /tmp/project  6                                                                                                     │ Current task
-  › ○ Current task                                                                  current   Ready              now  │ ○ Ready
-    ○ A longer task title that uses the available column                                      Ready           5m ago  │
-    ! Failed task                                                                             Error           1h ago  │ Project
-    ● Needs an answer                                                                         Needs input     2h ago  │ /tmp/project
-    ● Working task                                                                            Working         1d ago  │ Model: Unknown
-    ○ Unloaded task                                                                           Inactive        2d ago  │
+      Tasks                                                                                   Status         Updated  │ Task details
+  /tmp/project  6                                                                                                     │
+  › ○ Current task                                                                  current   Ready              now  │ Current task
+    ○ A longer task title that uses the available column                                      Ready           5m ago  │ ○ Ready
+    ! Failed task                                                                             Error           1h ago  │
+    ● Needs an answer                                                                         Needs input     2h ago  │ Project
+    ● Working task                                                                            Working         1d ago  │ /tmp/project
+    ○ Unloaded task                                                                           Inactive        2d ago  │ Model: Unknown
+                                                                                                                      │
                                                                                                                       │ Prompt
                                                                                                                       │ Current task
                                                                                                                       │
@@ -23,4 +23,4 @@ expression: "screen(&view, 160, 22)"
                                                                                                                       │
                                                                                                                       │
                                                                                                                       │
-  ? help  esc back  enter open  n new  w new worktree
+  ? help  esc back  ↑/↓ move  enter open  n new

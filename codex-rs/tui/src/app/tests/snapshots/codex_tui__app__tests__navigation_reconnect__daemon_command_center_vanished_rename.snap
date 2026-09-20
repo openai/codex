@@ -5,11 +5,11 @@ expression: "render_bottom_popup(&app.chat_widget, 100)"
   Agent command center  Group: Project  g
    All 2   Needs you 0   Working 1   Ready 1   Inactive 0                     tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                        │ Task details
-      Tasks                                               │
-  /tmp/project  2                                         │ New task
-  › ● New task                                            │ ● Working
-    ○ Selected task                                       │
+      Tasks                                               │ Task details
+  /tmp/project  2                                         │
+  › ● New task                                            │ New task
+    ○ Selected task                                       │ ● Working
+                                                          │
                                                           │ Project
                                                           │ /tmp/project
                                                           │ Model: Unknown

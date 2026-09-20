@@ -42,7 +42,7 @@ See the Codex keymap documentation for supported actions and examples."
 fn new_agents_defaults_preserve_existing_custom_bindings() {
     for (action, alias) in [
         ("archive", "a"),
-        ("delete", "delete"),
+        ("delete", "backspace"),
         ("hide", "h"),
         ("new_worktree", "w"),
     ] {
@@ -54,14 +54,17 @@ fn new_agents_defaults_preserve_existing_custom_bindings() {
             ("list", "move_down", " f12"),
         ] {
             // Plain keys are allowed in the dashboard, but global actions and list
-            // chord prefixes still share text-entry surfaces.
-            if alias != "delete" && (context == "global" || context == "list" && !suffix.is_empty())
+            // chord prefixes still share text-entry surfaces. Backspace is reserved
+            // for editing task input except when bound to task deletion.
+            if (alias == "backspace" && context == "agents")
+                || (alias != "backspace"
+                    && (context == "global" || context == "list" && !suffix.is_empty()))
             {
                 continue;
             }
             let keymap: TuiKeymap = serde_json::from_value(
                 json!({context: {existing: format!("{alias}{suffix}")}, "approval": {"open_fullscreen": "f12", "approve_for_session": []},
-                    "editor": {"move_line_start": [], "move_line_end": [], "delete_backward_word": [], "delete_forward": []}}),
+                    "editor": {"move_line_start": [], "move_line_end": [], "delete_backward": [], "delete_backward_word": [], "delete_forward": []}}),
             )
             .unwrap();
             let runtime =

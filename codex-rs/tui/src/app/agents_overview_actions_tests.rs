@@ -406,7 +406,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
     ] {
         let key = match action {
             AgentsOverviewAction::Archive => KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
-            AgentsOverviewAction::Delete => KeyCode::Delete.into(),
+            AgentsOverviewAction::Delete => KeyCode::Backspace.into(),
         };
         let (mut app, mut rx, _op_rx) =
             Box::pin(crate::app::tests::make_test_app_with_channels()).await;

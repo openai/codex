@@ -5,7 +5,6 @@ expression: "screen(&view, 40, 12)"
   Agent command center  Group: Projec…
   ‹  Working 0   Ready 1   Inactive 1
   ────────────────────────────────────
-  Search tasks · f
       Tasks
   /tmp/project  1 of 3
   › ○ Unloaded task
@@ -13,4 +12,5 @@ expression: "screen(&view, 40, 12)"
 
 
 
-  ? help  esc back  enter open  n new…
+
+  ? help  esc back  ↑/↓ move  enter o…

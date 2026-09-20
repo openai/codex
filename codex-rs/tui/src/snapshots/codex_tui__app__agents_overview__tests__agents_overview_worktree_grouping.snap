@@ -5,7 +5,6 @@ expression: normalize_agent_center_snapshot(grouping)
   Agent command center  Group: Project  g
    All 4   Needs you 0   Working 0   Ready 4   Inactive 0                                                                                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f
       Tasks                                                                                   Status         Updated
   /tmp/worktree-root/primary  2
   › ○ Task                                                                                    Ready           2m ago
@@ -25,4 +24,5 @@ expression: normalize_agent_center_snapshot(grouping)
 
 
 
-  ? help  esc back  enter open  n new  w new worktree
+
+  ? help  esc back  ↑/↓ move  enter open  n new

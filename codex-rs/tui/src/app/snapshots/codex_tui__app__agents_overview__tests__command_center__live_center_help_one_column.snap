@@ -24,5 +24,13 @@ expression: "screen(&view, width, height)"
   a          Archive
   h          Hide
   backspace  Delete
-  … resize to see all
+
+  View
+  tab/shift+tab  Filter
+  f              Search
+  g              Group
+
+
+
+
   esc back

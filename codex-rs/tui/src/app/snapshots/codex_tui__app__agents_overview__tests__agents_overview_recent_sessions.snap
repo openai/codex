@@ -5,7 +5,6 @@ expression: "age.replace_all(&rendered, \" [age]\")"
   Agent command center  Group: Project  g
    All 10   Needs you 0   Working 0   Ready 0   Inactive 10
   ────────────────────────────────────────────────────────────────────────────
-  Search tasks · f
       Tasks                                            Status         Updated
   /  10
   › ○ Task 12                                          Inactive [age]
@@ -25,4 +24,5 @@ expression: "age.replace_all(&rendered, \" [age]\")"
 
 
 
-  ? help  esc back  enter open  n new  w new worktree
+
+  ? help  esc back  ↑/↓ move  enter open  n new

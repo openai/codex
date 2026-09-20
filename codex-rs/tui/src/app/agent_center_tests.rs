@@ -279,10 +279,17 @@ async fn live_center_navigation_and_complete_hints() {
         KeyEvent::new_with_kind(KeyCode::Char('?'), KeyModifiers::NONE, KeyEventKind::Repeat);
     view.handle_key_event(KeyCode::Char('?').into());
     view.handle_key_event(repeat_help);
-    insta::assert_snapshot!(screen(&view, /*width*/ 40, /*height*/ 24));
+    for (name, width, height) in [
+        ("live_center_help_three_columns", 100, 24),
+        ("live_center_help_two_columns", 60, 24),
+        ("live_center_help_one_column", 40, 32),
+        ("live_center_navigation_and_complete_hints", 40, 24),
+    ] {
+        insta::assert_snapshot!(name, screen(&view, width, height));
+    }
     view.handle_key_event(KeyCode::Esc.into());
     view.handle_key_event(repeat_help);
-    assert!(screen(&view, /*width*/ 40, /*height*/ 24).contains("Search tasks"));
+    assert!(screen(&view, /*width*/ 40, /*height*/ 24).contains("Tasks"));
     assert!(!view.is_complete());
     view.handle_key_event(KeyCode::Esc.into());
     assert!(view.is_complete());
@@ -374,5 +381,95 @@ async fn live_center_fixed_shortcuts_yield_to_configured_actions() {
             "{binding}"
         );
         assert!(rx.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn live_center_hints_follow_configured_bindings() {
+    let mut app = make_test_app().await;
+    app.config.features.disable(Feature::Worktrees).unwrap();
+    let config: TuiKeymap = toml::from_str(
+        r#"
+[list]
+move_up = 'k'
+move_down = 'j'
+page_up = []
+[agents]
+archive = []
+rename = 'z r'
+"#,
+    )
+    .unwrap();
+    app.keymap = RuntimeKeymap::from_config(&config).unwrap();
+    let mut view = app.agents_overview_view(Vec::new(), /*selected_thread_id*/ None);
+    insta::assert_snapshot!(
+        "live_center_custom_footer",
+        screen(&view, /*width*/ 100, /*height*/ 12)
+    );
+    view.handle_key_event(KeyCode::Char('?').into());
+    insta::assert_snapshot!(
+        "live_center_custom_help",
+        screen(&view, /*width*/ 100, /*height*/ 24)
+    );
+}
+
+#[tokio::test]
+async fn live_center_search_row_appears_only_while_editing() {
+    let app = make_test_app().await;
+    let mut view = app.agents_overview_view(
+        vec![overview_thread(
+            ThreadId::from_u128(/*value*/ 42),
+            /*parent_thread_id*/ None,
+            "Task to find",
+            ThreadStatus::Idle,
+        )],
+        /*selected_thread_id*/ None,
+    );
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 88, /*height*/ 16,
+    );
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    view.render(area, &mut buf);
+    let header = &buf.content[3 * 88..4 * 88];
+    let text = header
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    let styles =
+        ["Tasks", "Status", "Updated"].map(|label| header[text.find(label).unwrap()].style());
+    assert_eq!(styles, [styles[0]; 3]);
+    let idle = screen(&view, area.width, area.height);
+    view.handle_key_event(KeyCode::Char('f').into());
+    view.handle_paste("find".into());
+    insta::assert_snapshot!(
+        "live_center_search_active",
+        screen(&view, area.width, area.height)
+    );
+    view.handle_key_event(KeyCode::Esc.into());
+    assert_eq!(screen(&view, area.width, area.height), idle);
+}
+
+#[tokio::test]
+async fn backspace_edits_search_and_rename_without_deleting_tasks() {
+    let mut app = make_test_app().await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    let mut view = app.agents_overview_view(
+        vec![overview_thread(
+            ThreadId::new(),
+            /*parent_thread_id*/ None,
+            "Task",
+            ThreadStatus::Idle,
+        )],
+        /*selected_thread_id*/ None,
+    );
+    for key in ['f', 'r'] {
+        view.handle_key_event(KeyCode::Char(key).into());
+        let initial = screen(&view, /*width*/ 88, /*height*/ 16);
+        view.handle_paste("!".into());
+        view.handle_key_event(KeyCode::Backspace.into());
+        assert_eq!(screen(&view, /*width*/ 88, /*height*/ 16), initial);
+        assert!(rx.try_recv().is_err());
+        view.handle_key_event(KeyCode::Esc.into());
     }
 }

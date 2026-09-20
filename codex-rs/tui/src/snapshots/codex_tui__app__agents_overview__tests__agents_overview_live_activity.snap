@@ -5,10 +5,10 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   Agent command center  Group: Project  g
    All 1   Needs you 0   Working 1   Ready 0   Inactive 0                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                    │ Task details
-      Tasks                                           │
-  /tmp/project  1                                     │ Check startup performance
-  › ● Check startup performance                       │ ● Working
+      Tasks                                           │ Task details
+  /tmp/project  1                                     │
+  › ● Check startup performance                       │ Check startup performance
+                                                      │ ● Working
                                                       │
                                                       │ Latest activity
                                                       │ Checking cold-start regressions
@@ -25,4 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │
                                                       │
-  ? help  esc back  enter open  n new  w new worktree
+  ? help  esc back  ↑/↓ move  enter open  n new

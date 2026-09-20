@@ -5,11 +5,11 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   Agent command center  Group: Project  g
    All 2   Needs you 1   Working 0   Ready 0   Inactive 1                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                    │ Task details
-      Tasks                                           │
-  /tmp/project  2                                     │ Repair authentication
-  › ● Repair authentication                           │ ● Needs input
-    ○ Investigate parser                              │
+      Tasks                                           │ Task details
+  /tmp/project  2                                     │
+  › ● Repair authentication                           │ Repair authentication
+    ○ Investigate parser                              │ ● Needs input
+                                                      │
                                                       │ Agent: Check dependencies
                                                       │ Which dependency version should I use?
                                                       │ Open task to review.
@@ -25,4 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │
                                                       │
-  ? help  esc back  enter open  n new  w new worktree
+  ? help  esc back  ↑/↓ move  enter open  n new

@@ -1,0 +1,28 @@
+---
+source: tui/src/app/agent_center_tests.rs
+expression: "screen(&view, 100, 24)"
+---
+  Agent command center  Group: Project  g
+   All 0   Needs you 0   Working 0   Ready 0   Inactive 0                     tab/shift+tab filter
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  Task shortcuts
+
+  Navigate             Tasks                View
+  k       Up           n          New       tab/shift+tab  Filter
+  j       Down         o          Resume    f              Search
+  enter   Open         z r        Rename    g              Group
+  pgdn    Page down    x          Stop
+  ctrl+c  Quit         h          Hide
+                       backspace  Delete
+
+
+
+
+
+
+
+
+
+
+
+  esc back

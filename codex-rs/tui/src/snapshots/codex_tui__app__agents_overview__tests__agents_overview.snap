@@ -5,12 +5,12 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
   Agent command center  Group: Project  g
    All 3   Needs you 1   Working 1   Ready 0   Inactive 1                 tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                    │ Task details
-      Tasks                                           │
-  /tmp/project  3                                     │ Build the dashboard
-  › ● Build the dashboard                   current   │ ● Needs input
-    ● Repair authentication                           │
-    ○ Review yesterday's changes                      │ Agent: Inspect keyboard shortcuts
+      Tasks                                           │ Task details
+  /tmp/project  3                                     │
+  › ● Build the dashboard                   current   │ Build the dashboard
+    ● Repair authentication                           │ ● Needs input
+    ○ Review yesterday's changes                      │
+                                                      │ Agent: Inspect keyboard shortcuts
                                                       │ Open task to review.
                                                       │ Waiting for approval.
                                                       │
@@ -25,4 +25,4 @@ expression: "render_bottom_popup(&app.chat_widget,\n96).replace(&format!(\"{proj
                                                       │
                                                       │
                                                       │
-  ? help  esc back  enter open  n new  w new worktree
+  ? help  esc back  ↑/↓ move  enter open  n new

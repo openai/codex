@@ -5,19 +5,17 @@ expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_disp
   Agent command center  Group: Model  g
    All 4   Needs you 0   Working 0   Ready 4   Inactive 0                     tab/shift+tab filter
   ────────────────────────────────────────────────────────────────────────────────────────────────
-  Search tasks · f                                        │ Task details
-      Tasks                                               │
-  Unknown  1                                              │ Legacy task
-  › ○ Legacy task                                         │ ○ Ready
-                                                          │
-  model-a  2                                              │ Project
-    ○ Recent task                                         │ /tmp/project
-    ○ Older task                                          │ Model: Unknown
-                                                          │
-  model-b  1                                              │ Prompt
-    ○ Other model                                         │ Legacy task
-                                                          │
-                                                          │
+      Tasks                                               │ Task details
+  Unknown  1                                              │
+  › ○ Legacy task                                         │ Legacy task
+                                                          │ ○ Ready
+  model-a  2                                              │
+    ○ Recent task                                         │ Project
+    ○ Older task                                          │ /tmp/project
+                                                          │ Model: Unknown
+  model-b  1                                              │
+    ○ Other model                                         │ Prompt
+                                                          │ Legacy task
                                                           │
                                                           │
                                                           │
@@ -25,4 +23,6 @@ expression: "render_bottom_popup(&app.chat_widget,\n100).replace(&test_path_disp
                                                           │
                                                           │
                                                           │
-  ? help  esc back  enter open  n new  w new worktree
+                                                          │
+                                                          │
+  ? help  esc back  ↑/↓ move  enter open  n new

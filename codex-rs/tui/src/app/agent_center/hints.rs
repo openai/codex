@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::key_hint;
+use crate::shortcut_help::Group;
+use crate::shortcut_help::Shortcut;
 use crate::style::footer_hint_label_style;
 
 pub(super) fn hint_line(items: &[(String, String)]) -> Line<'static> {
@@ -51,50 +53,72 @@ impl AgentsOverviewView {
             .join("/")
     }
 
-    pub(super) fn center_task_hints(&self) -> Vec<(String, String)> {
-        let mut hints = vec![(self.center_filter_hint(), "filter".into())];
+    pub(super) fn center_help_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut navigate = Group {
+            title: "Navigate",
+            entries: Vec::new(),
+        };
+        for (action, label) in [
+            (ListAction::MoveUp, "Up"),
+            (ListAction::MoveDown, "Down"),
+            (ListAction::Accept, "Open"),
+            (ListAction::PageUp, "Page up"),
+            (ListAction::PageDown, "Page down"),
+        ] {
+            navigate.push(self.center_list_hint(action), label);
+        }
+        navigate
+            .entries
+            .push(Shortcut::new(key_hint::ctrl(KeyCode::Char('c')), "Quit"));
+        let mut tasks = Group {
+            title: "Tasks",
+            entries: Vec::new(),
+        };
         for (action, bindings, label) in [
-            ("new_task", &self.agents_keymap.new_task, "new"),
+            ("new_task", &self.agents_keymap.new_task, "New"),
             (
                 "new_worktree",
                 &self.agents_keymap.new_worktree,
-                "new worktree",
+                "New worktree",
             ),
-            ("resume", &self.agents_keymap.resume, "resume"),
-            ("search", &self.agents_keymap.search, "search"),
+            ("resume", &self.agents_keymap.resume, "Resume"),
+            ("rename", &self.agents_keymap.rename, "Rename"),
+            ("stop", &self.agents_keymap.stop, "Stop"),
+            ("archive", &self.agents_keymap.archive, "Archive"),
+            ("hide", &self.agents_keymap.hide, "Hide"),
+            ("delete", &self.agents_keymap.delete, "Delete"),
+        ] {
+            if action != "new_worktree" || self.worktrees_enabled {
+                tasks.push(self.agents_keymap.primary_hint(action, bindings), label);
+            }
+        }
+        let mut view = Group {
+            title: "View",
+            entries: Vec::new(),
+        };
+        let filter = self.center_filter_hint();
+        if !filter.is_empty() {
+            view.entries.push(Shortcut {
+                key: filter,
+                action: "Filter",
+            });
+        }
+        for (action, bindings, label) in [
+            ("search", &self.agents_keymap.search, "Search"),
             (
                 "toggle_grouping",
                 &self.agents_keymap.toggle_grouping,
-                "group",
+                "Group",
             ),
-            ("rename", &self.agents_keymap.rename, "rename"),
-            ("stop", &self.agents_keymap.stop, "stop"),
-            ("archive", &self.agents_keymap.archive, "archive"),
-            ("hide", &self.agents_keymap.hide, "hide"),
-            ("delete", &self.agents_keymap.delete, "delete"),
         ] {
-            if (action != "new_worktree" || self.worktrees_enabled)
-                && let Some(hint) = self.agents_keymap.primary_hint(action, bindings)
-            {
-                hints.push((hint.display_label(), label.into()));
-            }
+            view.push(self.agents_keymap.primary_hint(action, bindings), label);
         }
-        for (action, label) in [
-            (ListAction::MoveUp, "up"),
-            (ListAction::MoveDown, "down"),
-            (ListAction::Accept, "open"),
-            (ListAction::PageUp, "page up"),
-            (ListAction::PageDown, "page down"),
-        ] {
-            if let Some(hint) = self.center_list_hint(action) {
-                hints.push((hint.display_label(), label.into()));
-            }
-        }
-        hints.push((
-            key_hint::ctrl(KeyCode::Char('c')).display_label(),
-            "quit".into(),
+        let mut lines = vec!["Task shortcuts".bold().into(), Line::default()];
+        lines.extend(crate::shortcut_help::group_lines(
+            [navigate, tasks, view],
+            width,
         ));
-        hints
+        crate::wrapping::word_wrap_lines(lines, usize::from(width.max(/*other*/ 1)))
     }
 
     pub(super) fn center_footer_hints(&self) -> Vec<(String, String)> {
@@ -125,6 +149,17 @@ impl AgentsOverviewView {
         if state.help {
             return hints;
         }
+        if !state.editing_metadata() {
+            let navigation = [ListAction::MoveUp, ListAction::MoveDown]
+                .into_iter()
+                .filter_map(|action| self.center_list_hint(action))
+                .map(ShortcutHint::display_label)
+                .collect::<Vec<_>>()
+                .join("/");
+            if !navigation.is_empty() {
+                hints.push((navigation, "move".into()));
+            }
+        }
         if let Some(hint) = self.center_list_hint(ListAction::Accept) {
             hints.push((
                 hint.display_label(),
@@ -136,21 +171,12 @@ impl AgentsOverviewView {
                 .into(),
             ));
         }
-        if !state.editing_metadata() {
-            for (action, bindings, label) in [
-                ("new_task", &self.agents_keymap.new_task, "new"),
-                (
-                    "new_worktree",
-                    &self.agents_keymap.new_worktree,
-                    "new worktree",
-                ),
-            ] {
-                if (action != "new_worktree" || self.worktrees_enabled)
-                    && let Some(hint) = self.agents_keymap.primary_hint(action, bindings)
-                {
-                    hints.push((hint.display_label(), label.into()));
-                }
-            }
+        if !state.editing_metadata()
+            && let Some(hint) = self
+                .agents_keymap
+                .primary_hint("new_task", &self.agents_keymap.new_task)
+        {
+            hints.push((hint.display_label(), "new".into()));
         }
         hints
     }

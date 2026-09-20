@@ -162,12 +162,12 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
             (prompt, b"\x1b"),
             ("n new", b"n"),
             ("Folder access", b"\x1b"),
-            ("Search tasks", b"o"),
+            ("Agent command center", b"o"),
             ("Resume a previous session", b"\x1b[C"),
             ("Untrusted saved task", b"\r"),
             ("Open existing task", b"\r"),
             ("moved-folder", b"\x1b"),
-            ("Search tasks", b"n"),
+            ("Agent command center", b"n"),
             (prompt, b"\r"),
         ] {
             let is_consent = expected == prompt
