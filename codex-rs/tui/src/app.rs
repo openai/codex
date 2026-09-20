@@ -265,6 +265,7 @@ mod thread_session_state;
 mod thread_settings;
 mod thread_title;
 mod transcript_export;
+mod tui_mode_picker;
 mod user_verification;
 mod user_verification_errors;
 mod user_verification_requests;

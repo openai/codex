@@ -451,6 +451,7 @@ mod tool_lifecycle;
 mod tool_requests;
 mod transcript;
 mod transcript_export;
+mod tui_mode_picker;
 mod usage_history;
 use self::transcript::TranscriptState;
 mod turn_lifecycle;

@@ -1493,6 +1493,11 @@ pub(crate) enum AppEvent {
     /// Dismiss the terminal-title setup UI without changing config.
     TerminalTitleSetupCancelled,
 
+    /// Save the transcript renderer preference for the next launch only.
+    FullscreenTranscriptSelected {
+        enabled: bool,
+    },
+
     /// Apply a user-confirmed syntax theme selection.
     SyntaxThemeSelected {
         name: String,

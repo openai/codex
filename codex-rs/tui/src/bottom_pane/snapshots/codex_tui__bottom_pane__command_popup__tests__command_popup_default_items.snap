@@ -29,6 +29,7 @@ expression: commands
 /copy - copy the last response or part of it
 /export - export the conversation as markdown
 /raw - toggle raw scrollback mode for copy-friendly terminal selection
+/tui - choose the TUI mode for the next launch
 /diff - show git diff (including untracked files)
 /mention - mention a file
 /status - show current session configuration and token usage
