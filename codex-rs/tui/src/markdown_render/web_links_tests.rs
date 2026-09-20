@@ -10,10 +10,61 @@ use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use insta::assert_debug_snapshot;
 use pretty_assertions::assert_eq;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Text;
 use std::collections::BTreeSet;
+
+#[test]
+fn bare_urls_are_styled_without_coloring_surrounding_prose() {
+    let text = Text::from(visible_lines(render(
+        "界 (https://example.com/a); https://example.com/b! **https://example.com/c**",
+        /*width*/ 100,
+        WebLinkDisplay::LabelOnly,
+    )));
+    assert_eq!(
+        text,
+        Text::from(Line::from(vec![
+            "界 (".into(),
+            "https://example.com/a".fg(accent_color()).underlined(),
+            "); ".into(),
+            "https://example.com/b".fg(accent_color()).underlined(),
+            "! ".into(),
+            "https://example.com/c"
+                .bold()
+                .fg(accent_color())
+                .underlined(),
+        ])),
+    );
+    assert_debug_snapshot!(text);
+}
+
+#[test]
+fn bare_url_styling_preserves_tabs_and_unicode() {
+    let line = super::style_bare_web_urls(
+        "界\t(https://example.com).".bold(),
+        Style::new().fg(accent_color()).underlined(),
+    );
+    assert_eq!(
+        line.line,
+        Line::from(vec![
+            "界\t(".bold(),
+            "https://example.com".bold().fg(accent_color()).underlined(),
+            ").".bold(),
+        ]),
+    );
+}
+
+#[test]
+fn bare_urls_keep_link_style_when_wrapped_in_tables() {
+    let text = Text::from(visible_lines(render(
+        "| Resource |\n| --- |\n| https://example.com/docs |",
+        /*width*/ 20,
+        WebLinkDisplay::LabelOnly,
+    )));
+    assert_debug_snapshot!(text);
+}
 
 fn terminal(name: TerminalName) -> TerminalInfo {
     TerminalInfo {

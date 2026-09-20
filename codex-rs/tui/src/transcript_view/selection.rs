@@ -16,6 +16,7 @@ pub(super) struct Selection {
     pub(super) moved: bool,
     pub(super) resume_on_empty: bool,
     pub(super) pointer: Option<ScreenPosition>,
+    pub(super) pressed_link: Option<String>,
     origin: (Anchor, Anchor),
     unit: SelectionUnit,
     preferred_column: Option<u16>,
@@ -57,6 +58,7 @@ impl TranscriptView {
             moved: false,
             resume_on_empty: was_following,
             pointer: Some(ScreenPosition::new(column, row)),
+            pressed_link: None,
         });
         if was_following {
             self.hold_position();

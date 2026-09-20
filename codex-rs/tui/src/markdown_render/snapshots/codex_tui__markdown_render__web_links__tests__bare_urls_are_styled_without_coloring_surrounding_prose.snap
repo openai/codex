@@ -1,0 +1,6 @@
+---
+source: tui/src/markdown_render/web_links_tests.rs
+assertion_line: 37
+expression: text
+---
+Text::from(Line::from_iter([Span::from("界 ("), Span::from("https://example.com/a").fg(Color::Reset).underlined(), Span::from("); "), Span::from("https://example.com/b").fg(Color::Reset).underlined(), Span::from("! "), Span::from("https://example.com/c").fg(Color::Reset).bold().underlined()]))

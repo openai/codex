@@ -47,7 +47,6 @@ use crate::render::line_utils::line_to_static;
 use crate::style::accent_color;
 use crate::style::table_separator_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
-use crate::terminal_hyperlinks::annotate_web_urls_in_line;
 use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::terminal_hyperlinks::visible_lines;
 use crate::terminal_hyperlinks::web_destination;
@@ -87,6 +86,7 @@ use local_links::should_render_local_link_label;
 pub(crate) use streaming::StreamingMarkdownRender;
 pub(crate) use streaming::render_streaming_markdown_lines_with_width_and_cwd;
 pub(crate) use web_links::hide_web_link_destination;
+use web_links::style_bare_web_urls;
 
 const TABLE_COLUMN_GAP: usize = 2;
 const TABLE_CELL_PADDING: usize = 1;
@@ -1115,7 +1115,7 @@ where
         } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
-            annotate_web_urls_in_line(Line::from(span))
+            style_bare_web_urls(span, self.styles.link)
         };
         if let Some(table_state) = self.table_state.as_mut()
             && let Some(cell) = table_state.current_cell.as_mut()
@@ -2123,7 +2123,7 @@ where
         } else if self.link.is_some() || self.in_code_block {
             HyperlinkLine::new(Line::from(span))
         } else {
-            annotate_web_urls_in_line(Line::from(span))
+            style_bare_web_urls(span, self.styles.link)
         };
         self.push_annotated(annotated);
     }

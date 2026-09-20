@@ -1,4 +1,5 @@
 //! Transcript gestures leave ordinary typing and composer editing with the existing input path.
+//! Stationary link clicks open on release; dragging or scrolling keeps the gesture in selection.
 
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
@@ -206,6 +207,27 @@ impl TranscriptView {
                 self.extend_selection(event.column, event.row);
             }
             MouseEventKind::Up(MouseButton::Left) if dragging => {
+                // Open only a stationary click. Dragging back to the origin is still selection,
+                // and wheel scrolling clears the pointer even when it cannot move the viewport.
+                let link = self.selection.as_mut().and_then(|selection| {
+                    (inside
+                        && !selection.moved
+                        && selection.pointer == Some(ScreenPosition::new(event.column, event.row))
+                        && event.modifiers.is_empty())
+                    .then(|| selection.pressed_link.take())
+                    .flatten()
+                });
+                let link = link.filter(|destination| {
+                    self.visible
+                        .get(usize::from(event.row - self.area.y))
+                        .and_then(|visible| {
+                            visible
+                                .layout
+                                .link_at(visible.row, event.column - self.area.x)
+                        })
+                        .as_ref()
+                        == Some(destination)
+                });
                 if self
                     .selection
                     .as_ref()
@@ -216,6 +238,9 @@ impl TranscriptView {
                 self.end_drag();
                 if self.selected_text(cells).is_none() {
                     self.end_selection(cells);
+                }
+                if let Some(link) = link {
+                    return Some(ViewAction::OpenLink(link));
                 }
             }
             _ => return None,
@@ -317,7 +342,21 @@ impl TranscriptView {
         {
             return None;
         }
+        let link = (clicks == 1 && event.modifiers.is_empty())
+            .then(|| {
+                visible
+                    .layout
+                    .link_at(visible.row, event.column.saturating_sub(self.area.x))
+            })
+            .flatten();
         self.begin_selection(cells, event.column, event.row, clicks);
+        if let Some(selection) = &mut self.selection {
+            selection.pressed_link = link;
+        }
         Some(ViewAction::Changed)
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;
