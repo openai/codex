@@ -1861,7 +1861,7 @@ pub(crate) fn normalize_completion_timestamps(
     }
     static COMPLETION_FOOTER: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(
         || {
-            regex_lite::Regex::new(r"(?m)^(?P<indent>[ \t]*)(?P<duration>Worked for (?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s · )?(?:[A-Z][a-z]{2} [0-9]{1,2}(?:, [0-9]{4})? at )?[0-9]{1,2}:[0-9]{2} (?:AM|PM)(?P<padding>[ \t]*)$")
+            regex_lite::Regex::new(r"(?m)^(?P<indent>[ \t]*)(?P<duration>Worked for (?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s · )?(?:[A-Z][a-z]{2} [0-9]{1,2}(?:, [0-9]{4})? at )?[0-9]{1,2}:[0-9]{2}(?: (?:AM|PM))?(?P<padding>[ \t]*)$")
                 .expect("valid completion footer pattern")
         },
     );

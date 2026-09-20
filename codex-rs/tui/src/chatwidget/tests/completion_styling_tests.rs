@@ -1,6 +1,7 @@
 //! Exercises completion metadata through live notifications and restored turn history.
 
 use super::*;
+use crate::clock_format::ClockFormat;
 use chrono::Local;
 use chrono::TimeZone;
 use pretty_assertions::assert_eq;
@@ -56,7 +57,10 @@ fn saved_completion_label() -> String {
     Local
         .timestamp_opt(COMPLETED_AT, /*nsecs*/ 0)
         .unwrap()
-        .format("%b %-d, %Y at %-I:%M %p")
+        .format(&format!(
+            "%b %-d, %Y at {}",
+            ClockFormat::system().time_format()
+        ))
         .to_string()
 }
 
@@ -109,7 +113,7 @@ async fn completion_live_applies_duration_threshold_and_preserves_timestamp_fall
             let time = if completed_at.is_some() {
                 saved_completion_label()
             } else {
-                time.format("%-I:%M %p").to_string()
+                time.format(ClockFormat::system().time_format()).to_string()
             };
             format!("{prefix}{time}")
         });
@@ -192,7 +196,11 @@ async fn completion_replay_waits_for_older_turn_items_to_load() {
     let older_time = Local
         .timestamp_opt(older_completed_at, /*nsecs*/ 0)
         .unwrap()
-        .format("%b %-d, %Y at %-I:%M %p");
+        .format(&format!(
+            "%b %-d, %Y at {}",
+            ClockFormat::system().time_format()
+        ))
+        .to_string();
     assert_eq!(
         completion_labels(&mut rx),
         format!("Worked for 2m 5s · {older_time}"),
@@ -245,14 +253,19 @@ fn completion_snapshot_normalization_preserves_clock_only_message_lines() {
         transcript
     );
 
-    let footer =
-        history_cell::FinalMessageSeparator::new(Some(3_723), /*runtime_metrics*/ None)
-            .with_completed_at(Local.timestamp_opt(COMPLETED_AT, /*nsecs*/ 0).unwrap());
-    assert_eq!(
-        normalize_completion_timestamps(
-            &footer,
-            lines_to_single_string(&footer.display_lines(/*width*/ 80))
-        ),
-        "  Worked for [duration] · [completion time]\n"
-    );
+    for clock_format in [ClockFormat::TwelveHour, ClockFormat::TwentyFourHour] {
+        let footer =
+            history_cell::FinalMessageSeparator::new(Some(3_723), /*runtime_metrics*/ None)
+                .with_completed_at(
+                    Local.timestamp_opt(COMPLETED_AT, /*nsecs*/ 0).unwrap(),
+                    clock_format,
+                );
+        assert_eq!(
+            normalize_completion_timestamps(
+                &footer,
+                lines_to_single_string(&footer.display_lines(/*width*/ 80))
+            ),
+            "  Worked for [duration] · [completion time]\n"
+        );
+    }
 }

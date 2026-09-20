@@ -176,7 +176,12 @@ async fn older_pagination_completion_footers_follow_answers_without_overlap_dupl
                 .join("\n"),
         );
     }
-    insta::assert_snapshot!(snapshots.join("\n\n--- next overlapping page ---\n\n"));
+    // Canonicalize the fixture's afternoon clock while retaining minute differences.
+    let afternoon_clock = regex_lite::Regex::new(r"at 14:(\d\d)").unwrap();
+    insta::assert_snapshot!(afternoon_clock.replace_all(
+        &snapshots.join("\n\n--- next overlapping page ---\n\n"),
+        "at 2:$1 PM",
+    ));
     app_server.shutdown().await?;
     proxy.await??;
     Ok(())

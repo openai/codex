@@ -46,7 +46,9 @@ impl ChatWidget {
             /*runtime_metrics*/ None,
         );
         Some(match completed_at {
-            Some(completed_at) => cell.with_completed_at(completed_at),
+            Some(completed_at) => {
+                cell.with_completed_at(completed_at, crate::clock_format::ClockFormat::system())
+            }
             None => cell,
         })
     }

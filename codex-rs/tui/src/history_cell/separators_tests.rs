@@ -33,7 +33,7 @@ fn completion_label_shows_duration_only_above_sixty_seconds() {
     .into_iter()
     .map(|elapsed_seconds| {
         FinalMessageSeparator::new(elapsed_seconds, /*runtime_metrics*/ None)
-            .with_completed_at(completed_at)
+            .with_completed_at(completed_at, ClockFormat::TwelveHour)
             .label(completed_at.date_naive())
             .expect("completion label")
     })
@@ -57,7 +57,7 @@ fn completion_label_includes_date_when_viewed_on_another_day() {
         /*elapsed_seconds*/ Some(125),
         /*runtime_metrics*/ None,
     )
-    .with_completed_at(completed_at);
+    .with_completed_at(completed_at, ClockFormat::TwelveHour);
     let tomorrow = completed_at.date_naive().succ_opt().expect("next day");
 
     insta::assert_snapshot!(cell.label(tomorrow).expect("completion label"), @"Worked for 2m 5s · Sep 6 at 2:32 PM");
@@ -70,7 +70,7 @@ fn completion_uses_twelve_hour_time_at_midnight_noon_and_afternoon() {
     let labels = [0, 12, 15].map(|hour| {
         let completed_at = completed_at().with_hour(hour).expect("valid hour");
         FinalMessageSeparator::new(/*elapsed_seconds*/ None, /*runtime_metrics*/ None)
-            .with_completed_at(completed_at)
+            .with_completed_at(completed_at, ClockFormat::TwelveHour)
             .label(completed_at.date_naive())
             .expect("completion label")
     });
@@ -79,6 +79,39 @@ fn completion_uses_twelve_hour_time_at_midnight_noon_and_afternoon() {
     12:32 PM
     3:32 PM
     ");
+}
+
+#[test]
+fn completion_uses_twenty_four_hour_time_with_dates_and_wrapping() {
+    let today = completed_at().date_naive();
+    let tomorrow = today.succ_opt().unwrap();
+    let next_year = today.with_year(/*year*/ 2001).unwrap();
+    let mut labels = Vec::new();
+    for hour in [0, 12, 23] {
+        let completed_at = completed_at()
+            .with_hour(hour)
+            .unwrap()
+            .with_minute(/*min*/ 25)
+            .unwrap();
+        let mut cell = FinalMessageSeparator::new(Some(125), /*runtime_metrics*/ None)
+            .with_completed_at(completed_at, ClockFormat::TwentyFourHour);
+        for date in [today, tomorrow, next_year] {
+            labels.push(cell.label(date).unwrap());
+        }
+        cell.display_date = next_year;
+        labels.push(
+            cell.display_lines(/*width*/ 24)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        assert_eq!(
+            cell.raw_lines(),
+            vec![Line::from(cell.label(next_year).unwrap())]
+        );
+    }
+    insta::assert_snapshot!(labels.join("\n"));
 }
 
 #[test]
@@ -104,7 +137,7 @@ fn completion_wraps_metadata_and_preserves_unwrapped_raw_text() {
         /*elapsed_seconds*/ Some(125),
         /*runtime_metrics*/ None,
     )
-    .with_completed_at(completed_at())
+    .with_completed_at(completed_at(), ClockFormat::TwelveHour)
     .with_runtime_metrics(Some(RuntimeMetricsSummary {
         tool_calls: RuntimeMetricTotals {
             count: 3,
@@ -135,7 +168,7 @@ fn completion_wraps_metadata_and_preserves_unwrapped_raw_text() {
 fn completion_renders_with_dim_default_colors() {
     let cell: Box<dyn HistoryCell> = Box::new(
         FinalMessageSeparator::new(/*elapsed_seconds*/ None, /*runtime_metrics*/ None)
-            .with_completed_at(completed_at()),
+            .with_completed_at(completed_at(), ClockFormat::TwelveHour),
     );
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 1,
@@ -160,7 +193,7 @@ fn completion_rendering_uses_the_captured_display_date() {
     let completed_at = completed_at();
     let mut cell =
         FinalMessageSeparator::new(/*elapsed_seconds*/ None, /*runtime_metrics*/ None)
-            .with_completed_at(completed_at);
+            .with_completed_at(completed_at, ClockFormat::TwelveHour);
     cell.display_date = completed_at.date_naive();
 
     insta::assert_snapshot!(cell.display_lines(/*width*/ 80)[0].to_string(), @"  2:32 PM");

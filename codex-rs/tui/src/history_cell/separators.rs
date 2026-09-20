@@ -1,6 +1,7 @@
 //! Subtle completion timestamps, elapsed durations, and runtime metrics for transcript history.
 
 use super::*;
+use crate::clock_format::ClockFormat;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Local;
@@ -9,7 +10,7 @@ use chrono::NaiveDate;
 /// Completion metadata shown after the assistant's final response.
 ///
 /// The timestamp records when the turn actually finished, including when restored from history.
-/// Times use a twelve-hour clock; other local days include the date and other years include the year.
+/// Times use the host's clock preference; other local days include the date and other years the year.
 /// Durations are shown only above sixty seconds; shorter turns still show their timestamp.
 /// Absent metadata occupies no transcript rows.
 /// The display date is fixed at construction so crossing midnight cannot invalidate cached heights;
@@ -20,6 +21,7 @@ pub struct FinalMessageSeparator {
     runtime_metrics: Option<RuntimeMetricsSummary>,
     completed_at: Option<DateTime<Local>>,
     display_date: NaiveDate,
+    clock_format: ClockFormat,
 }
 impl FinalMessageSeparator {
     /// Creates completion metadata using the protocol turn duration when available.
@@ -32,11 +34,17 @@ impl FinalMessageSeparator {
             runtime_metrics,
             completed_at: None,
             display_date: Local::now().date_naive(),
+            clock_format: ClockFormat::TwelveHour,
         }
     }
 
-    pub(crate) fn with_completed_at(mut self, completed_at: DateTime<Local>) -> Self {
+    pub(crate) fn with_completed_at(
+        mut self,
+        completed_at: DateTime<Local>,
+        clock_format: ClockFormat,
+    ) -> Self {
         self.completed_at = Some(completed_at);
+        self.clock_format = clock_format;
         self
     }
 
@@ -64,14 +72,18 @@ impl FinalMessageSeparator {
             label_parts.push(format!("Worked for {elapsed}"));
         }
         if let Some(completed_at) = self.completed_at {
-            let format = if completed_at.date_naive() == today {
-                "%-I:%M %p"
+            let date_format = if completed_at.date_naive() == today {
+                ""
             } else if completed_at.year() == today.year() {
-                "%b %-d at %-I:%M %p"
+                "%b %-d at "
             } else {
-                "%b %-d, %Y at %-I:%M %p"
+                "%b %-d, %Y at "
             };
-            label_parts.push(completed_at.format(format).to_string());
+            label_parts.push(format!(
+                "{}{}",
+                completed_at.format(date_format),
+                completed_at.format(self.clock_format.time_format()),
+            ));
         }
         if let Some(metrics_label) = self.runtime_metrics.and_then(runtime_metrics_label) {
             label_parts.push(metrics_label);

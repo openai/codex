@@ -4847,6 +4847,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "objc2-app-kit",
+ "objc2-foundation",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",

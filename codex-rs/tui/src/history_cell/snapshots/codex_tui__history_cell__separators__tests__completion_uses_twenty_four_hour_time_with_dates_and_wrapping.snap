@@ -1,0 +1,20 @@
+---
+source: tui/src/history_cell/separators_tests.rs
+assertion_line: 101
+expression: "labels.join(\"\\n\")"
+---
+Worked for 2m 5s · 00:25
+Worked for 2m 5s · Sep 6 at 00:25
+Worked for 2m 5s · Sep 6, 2000 at 00:25
+  Worked for 2m 5s · Sep
+  6, 2000 at 00:25
+Worked for 2m 5s · 12:25
+Worked for 2m 5s · Sep 6 at 12:25
+Worked for 2m 5s · Sep 6, 2000 at 12:25
+  Worked for 2m 5s · Sep
+  6, 2000 at 12:25
+Worked for 2m 5s · 23:25
+Worked for 2m 5s · Sep 6 at 23:25
+Worked for 2m 5s · Sep 6, 2000 at 23:25
+  Worked for 2m 5s · Sep
+  6, 2000 at 23:25
