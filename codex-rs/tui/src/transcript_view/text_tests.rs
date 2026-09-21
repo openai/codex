@@ -112,6 +112,37 @@ fn selection_highlights_wide_graphemes_without_trailing_padding() {
 }
 
 #[test]
+fn selected_newlines_respect_wrapping_and_synthetic_rows() {
+    for (width, expected) in [(8, vec![(2, 2), (6, 5), (2, 6)]), (4, vec![(2, 2), (2, 7)])] {
+        let layout = TextLayout::new(
+            vec!["".into(), "alpha beta  ".into(), "".into(), "界".into()],
+            width,
+        )
+        .with_disclosure_control_at("details".into(), /*source_offset*/ 0)
+        .with_leading_separator();
+        let area = Rect::new(/*x*/ 2, /*y*/ 1, width, /*height*/ 9);
+        let mut buffer = Buffer::empty(area);
+        layout.render(area, &mut buffer, /*start_row*/ 0);
+        for range in [0..1, 13..15] {
+            layout.highlight_selection(
+                range,
+                /*next*/ None,
+                area,
+                &mut buffer,
+                /*start_row*/ 0,
+            );
+        }
+        assert_eq!(
+            (area.top()..area.bottom())
+                .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+                .filter(|&(x, y)| buffer[(x, y)].modifier.contains(Modifier::REVERSED))
+                .collect::<Vec<_>>(),
+            expected,
+        );
+    }
+}
+
+#[test]
 fn offsets_can_reach_rows_after_u16_limit() {
     let layout = TextLayout::new(vec!["x".repeat(/*n*/ 65_538).into()], /*width*/ 1);
     let area = Rect::new(

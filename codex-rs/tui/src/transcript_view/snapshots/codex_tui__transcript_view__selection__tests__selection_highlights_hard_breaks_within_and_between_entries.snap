@@ -1,0 +1,28 @@
+---
+source: tui/src/transcript_view/selection_tests.rs
+expression: "frames.join(\"\\n\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 8, height: 3 },
+    content: [
+        "code    ",
+        "next    ",
+        "        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 5, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
+Buffer {
+    area: Rect { x: 0, y: 0, width: 8, height: 3 },
+    content: [
+        "code    ",
+        "        ",
+        "next    ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: REVERSED,
+        x: 5, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

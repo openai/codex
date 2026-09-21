@@ -62,7 +62,7 @@ async fn text_selection_temporarily_replaces_the_rendered_backtrack_highlight() 
     .await?;
     let (_, highlighted) = render(&mut app);
     assert_eq!(highlighted, "");
-    // The display-only blank before a user message may be the selection's first source row.
+    // The selection starts on the leading blank source row before the user message.
     for _ in 0..2 {
         app.handle_tui_event(
             &mut tui,
@@ -72,9 +72,8 @@ async fn text_selection_temporarily_replaces_the_rendered_backtrack_highlight() 
         .await?;
     }
     let (_, highlighted) = render(&mut app);
-    assert!(!highlighted.is_empty());
-    assert!(prompt.starts_with(&highlighted));
-    assert!(highlighted.len() < prompt.len());
+    // The selected leading newline paints one blank cell before the first prompt character.
+    assert_eq!(highlighted, " S");
 
     app.handle_tui_event(
         &mut tui,

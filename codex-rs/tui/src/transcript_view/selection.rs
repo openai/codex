@@ -332,9 +332,21 @@ impl TranscriptView {
                 self.area.width,
                 /*height*/ 1,
             );
-            visible
-                .layout
-                .highlight(begin..finish, area, buf, visible.row);
+            let next = (visible.index + 1..=end.index)
+                .filter_map(|index| {
+                    selection
+                        .snapshot
+                        .pinned
+                        .get(&self.entry_key(&selection.snapshot.cells, index))
+                })
+                .find(|layout| layout.row_count() > 0);
+            visible.layout.highlight_selection(
+                begin..finish,
+                next.map(AsRef::as_ref),
+                area,
+                buf,
+                visible.row,
+            );
         }
     }
 

@@ -19,6 +19,44 @@ use pretty_assertions::assert_eq;
 use std::time::Instant;
 
 #[test]
+fn selection_highlights_hard_breaks_within_and_between_entries() {
+    let mut frames = Vec::new();
+    for (lines, end_row) in [
+        (vec![vec!["code", "next"]], 1),
+        (vec![vec!["code"], vec!["next"]], 2),
+    ] {
+        let cells: Vec<Arc<dyn HistoryCell>> = lines
+            .into_iter()
+            .map(|lines| {
+                Arc::new(PlainHistoryCell::new(
+                    lines.into_iter().map(Line::from).collect(),
+                )) as _
+            })
+            .collect();
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 8, /*height*/ 3,
+        );
+        let mut view = TranscriptView::default();
+        let mut buffer = Buffer::empty(area);
+        view.render(area, &mut buffer, &cells);
+        view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 1);
+        view.extend_selection(/*column*/ 7, /*row*/ 0);
+        view.render(area, &mut buffer, &cells);
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("code"));
+        assert!(
+            !buffer[(4, 0)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        );
+        view.extend_selection(/*column*/ 0, end_row);
+        view.render(area, &mut buffer, &cells);
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("code\n"));
+        frames.push(format!("{buffer:?}"));
+    }
+    insta::assert_snapshot!(frames.join("\n"));
+}
+
+#[test]
 fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
     use crate::clipboard_copy::CopyStatus;
 

@@ -4,6 +4,7 @@
 //! lines introduce hard breaks. Display wrapping and synthetic controls never enter `text`.
 //! Layout offsets use `usize`; terminal coordinates are narrowed only for visible rows.
 //! Disclosure controls follow their activity's source text without changing its indentation.
+//! Selected hard breaks highlight one trailing cell when space permits.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -59,6 +60,8 @@ struct DisclosureControl {
 struct TextRow {
     line: HyperlinkLine,
     source: Range<usize>,
+    /// Source offset at the logical line end; absent on soft wraps and synthetic rows.
+    line_end: Option<usize>,
     content_width: u16,
     first_column: usize,
     prefix_columns: usize,
@@ -121,6 +124,7 @@ impl TextLayout {
             TextRow {
                 line: HyperlinkLine::from(line),
                 source: source_offset..source_offset,
+                line_end: None,
                 content_width: self.width,
                 first_column: indent,
                 prefix_columns: indent,
@@ -144,6 +148,7 @@ impl TextLayout {
                 TextRow {
                     line: HyperlinkLine::from(""),
                     source: 0..0,
+                    line_end: None,
                     content_width: self.width,
                     first_column: 0,
                     prefix_columns: 0,
@@ -282,6 +287,33 @@ impl TextLayout {
         }
     }
 
+    /// Add a trailing cell for selected hard breaks, including a copied separator to `next`.
+    pub(super) fn highlight_selection(
+        &self,
+        range: Range<usize>,
+        next: Option<&Self>,
+        area: Rect,
+        buf: &mut Buffer,
+        start_row: usize,
+    ) {
+        self.highlight(range.clone(), area, buf, start_row);
+        for (screen_row, row) in self.visible_rows(area, start_row) {
+            let Some(end) = row.line_end else { continue };
+            let selected = range.contains(&end)
+                || (end == self.text.len()
+                    && next.is_some_and(|next| self.separator_after(next).contains('\n')));
+            let column = row.first_column
+                + row.tabs.column_for_offset(
+                    display_width(&self.text[row.source.clone()]),
+                    row.source.len(),
+                );
+            if selected && column < usize::from(self.width) {
+                buf[(area.x + column as u16, area.y + screen_row)]
+                    .set_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+        }
+    }
+
     /// Resolve the displayed link using the same destination policy as terminal OSC-8 output.
     pub(super) fn link_at(&self, row: usize, column: u16) -> Option<String> {
         let row = self.rows.get(row)?;
@@ -321,6 +353,9 @@ impl TextLayout {
                     .map(|span| span.content.as_ref()),
             );
             rows.extend(layout_line(line, start, width));
+            if let Some(row) = rows.last_mut() {
+                row.line_end = Some(text.len());
+            }
         }
         Self {
             logical,
@@ -405,6 +440,7 @@ fn layout_line(logical: &LogicalLine, text_start: usize, width: u16) -> Vec<Text
             TextRow {
                 line: wrapped,
                 source: range,
+                line_end: None,
                 content_width,
                 first_column: first_column + prefix_columns,
                 prefix_columns,
