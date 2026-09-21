@@ -1,4 +1,5 @@
 use crate::certs::ManagedMitmCa;
+use crate::config::NetworkMitmCaConfig;
 use crate::config::NetworkMode;
 use crate::mitm_hook::HookEvaluation;
 use crate::mitm_hook::MitmHookActions;
@@ -63,6 +64,7 @@ pub struct MitmState {
 
 pub(crate) struct MitmUpstreamConfig {
     pub(crate) allow_upstream_proxy: bool,
+    pub(crate) external_ca: Option<NetworkMitmCaConfig>,
 }
 
 #[derive(Clone)]
@@ -108,9 +110,14 @@ impl MitmState {
         // and host-specific hooks both need visibility after CONNECT is established. We
         // generate a process-local CA and issue per-host leaf certs so we can terminate TLS and
         // apply policy.
-        let ca = ManagedMitmCa::load_or_create()?;
-        let upstream_tls_root_store =
-            crate::certs::upstream_tls_root_store(&crate::certs::ca_env_from_process())?;
+        let ca = match config.external_ca.as_ref() {
+            Some(ca) => ManagedMitmCa::load_from_files(ca)?,
+            None => ManagedMitmCa::load_or_create()?,
+        };
+        let upstream_tls_root_store = crate::certs::upstream_tls_root_store_for_cert_path(
+            ca.certificate_path(),
+            &crate::certs::ca_env_from_process(),
+        )?;
 
         Ok(Self {
             ca,

@@ -1,24 +1,48 @@
 use super::parse_standalone_config;
+use codex_network_proxy::NetworkMitmCaConfig;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
 fn enables_mitm_for_limited_mode_and_hooks() {
-    for (network, expected_mitm) in [
-        (json!({"enabled": true, "mode": "full"}), false),
-        (json!({"enabled": true, "mode": "full", "mitm": true}), true),
-        (json!({"enabled": true, "mode": "limited"}), true),
+    for (network, expected_mitm, expected_ca) in [
+        (json!({"enabled": true, "mode": "full"}), false, None),
+        (
+            json!({"enabled": true, "mode": "full", "mitm": true}),
+            true,
+            None,
+        ),
+        (json!({"enabled": true, "mode": "limited"}), true, None),
         (
             json!({
                 "enabled": true,
                 "mitm_hooks": [{"host": "api.example.com"}]
             }),
             true,
+            None,
+        ),
+        (
+            json!({
+                "enabled": true,
+                "mode": "limited",
+                "mitm_ca": {
+                    "certificate_file": "/run/proxy/ca.pem",
+                    "private_key_file": "/run/proxy/key.pem"
+                }
+            }),
+            true,
+            Some(NetworkMitmCaConfig {
+                certificate_file: "/run/proxy/ca.pem".to_string(),
+                private_key_file: "/run/proxy/key.pem".to_string(),
+            }),
         ),
     ] {
         let bytes = serde_json::to_vec(&json!({"network": network})).unwrap();
         let config = parse_standalone_config(&bytes).unwrap();
-        assert_eq!(config.network.mitm, expected_mitm);
+        assert_eq!(
+            (config.network.mitm, config.network.mitm_ca),
+            (expected_mitm, expected_ca)
+        );
     }
 }
 

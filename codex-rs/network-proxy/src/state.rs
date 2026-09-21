@@ -82,6 +82,10 @@ pub fn build_config_state(
         !config.credential_broker || config.mitm,
         "network.credential_broker requires network.mitm = true"
     );
+    anyhow::ensure!(
+        config.mitm_ca.is_none() || config.mitm,
+        "network.mitm_ca requires network.mitm = true"
+    );
     let allowed_domains = config.allowed_domains().unwrap_or_default();
     let denied_domains = config.denied_domains().unwrap_or_default();
     validate_non_global_wildcard_domain_patterns("network.denied_domains", &denied_domains)
@@ -92,6 +96,7 @@ pub fn build_config_state(
     let mitm = if config.mitm {
         Some(Arc::new(MitmState::new(MitmUpstreamConfig {
             allow_upstream_proxy: config.allow_upstream_proxy,
+            external_ca: config.mitm_ca.clone(),
         })?))
     } else {
         None

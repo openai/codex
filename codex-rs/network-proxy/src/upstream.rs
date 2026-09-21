@@ -13,6 +13,7 @@ use rama_core::service::BoxService;
 use rama_http::Body;
 use rama_http::Request;
 use rama_http::Response;
+use rama_http::Version;
 use rama_http::layer::version_adapter::RequestVersionAdapter;
 use rama_http_backend::client::HttpClientService;
 use rama_http_backend::client::HttpConnector;
@@ -199,7 +200,6 @@ impl Service<Request<Body>> for UpstreamClient {
             req.extensions_mut().insert(proxy);
         }
 
-        let uri = req.uri().clone();
         let connect_started_at = Instant::now();
         let EstablishedClientConnection {
             input: mut req,
@@ -238,8 +238,7 @@ impl Service<Request<Body>> for UpstreamClient {
                     "HTTP upstream response headers failed (target={authority}, elapsed_ms={})",
                     request_started_at.elapsed().as_millis()
                 );
-                Err(OpaqueError::from_boxed(err)
-                    .context(format!("http request failure for uri: {uri}")))
+                Err(OpaqueError::from_boxed(err).context("HTTP upstream request failed"))
             }
         }
     }
@@ -264,7 +263,7 @@ fn build_http_connector(
     let tls = TlsConnectorLayer::auto()
         .with_connector_data(tls_config)
         .into_layer(proxy);
-    let tls = RequestVersionAdapter::new(tls);
+    let tls = RequestVersionAdapter::new(tls).with_default_version(Version::HTTP_11);
     let connector = HttpConnector::new(tls);
     connector.boxed()
 }

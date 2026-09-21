@@ -104,7 +104,8 @@ standalone JSON file:
 }
 ```
 
-HTTPS MITM is enabled automatically for limited mode or configured `mitm_hooks`. Set `mitm` to
+`mitm` defaults to `false`. `mitm_ca` defaults to `None` and is omitted from serialized JSON when
+unset. HTTPS MITM is enabled automatically for limited mode or configured `mitm_hooks`. Set `mitm` to
 `true` to enable it explicitly. The proxy requires `network.enabled = true` and rejects unknown
 fields, including fields nested inside MITM hooks.
 

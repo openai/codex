@@ -5,6 +5,7 @@ use super::RemoteNetworkProxyLaunchConfig;
 use crate::LocalBindingPolicy::DefaultFalse;
 use crate::LocalBindingPolicy::RequireTrue;
 use crate::MitmHookConfig;
+use crate::NetworkMitmCaConfig;
 use crate::NetworkMode;
 use crate::NetworkProxy;
 use crate::NetworkProxyAuditMetadata;
@@ -164,6 +165,26 @@ fn accepts_unsupported_configuration_when_proxy_is_disabled() {
         .expect("disabled proxy configuration does not cross the executor boundary");
 
     assert!(!remote.enabled);
+}
+
+#[test]
+fn rejects_external_ca_even_when_proxy_is_disabled() {
+    for (enabled, mitm_enabled) in [(false, false), (false, true), (true, false), (true, true)] {
+        let config = NetworkProxyConfig {
+            enabled,
+            mitm: mitm_enabled,
+            mitm_ca: Some(NetworkMitmCaConfig {
+                certificate_file: "/run/proxy/ca.pem".to_string(),
+                private_key_file: "/run/proxy/key.pem".to_string(),
+            }),
+            ..NetworkProxyConfig::default()
+        };
+
+        assert!(
+            RemoteNetworkProxyConfig::from_effective_config(&config).is_err(),
+            "external CA configuration must not cross the remote executor boundary (proxy enabled={enabled}, MITM enabled={mitm_enabled})"
+        );
+    }
 }
 
 #[test]
