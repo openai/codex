@@ -319,13 +319,14 @@ macro_rules! client_request_definitions {
             pub fn into_jsonrpc_parts(
                 self,
             ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
-                match self {
+                let (request_id, response) = match self {
                     $(
                         Self::$variant { request_id, response } => {
-                            serde_json::to_value(response).map(|result| (request_id, result))
+                            (request_id, ClientResponsePayload::$variant(response))
                         }
                     )*
-                }
+                };
+                serde_json::to_value(response).map(|result| (request_id, result))
             }
         }
 
@@ -363,16 +364,7 @@ macro_rules! client_request_definitions {
                 &self,
                 request_id: RequestId,
             ) -> std::result::Result<(RequestId, crate::Result), serde_json::Error> {
-                match self {
-                    $(
-                        Self::$variant(response) => {
-                            serde_json::to_value(response).map(|result| (request_id, result))
-                        }
-                    )*
-                    Self::InterruptConversation(response) => {
-                        serde_json::to_value(response).map(|result| (request_id, result))
-                    }
-                }
+                serde_json::to_value(self).map(|result| (request_id, result))
             }
         }
 
