@@ -7,4 +7,12 @@ export type ThreadItemEntry = {
 /**
  * Turn containing this item.
  */
-turnId: string, item: ThreadItem, };
+turnId: string, item: ThreadItem,
+/**
+ * Unix timestamp (milliseconds) when the item started, if recorded by the producer.
+ */
+startedAtMs: number | null,
+/**
+ * Unix timestamp (milliseconds) when the item completed, if recorded by the producer.
+ */
+completedAtMs: number | null, };

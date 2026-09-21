@@ -854,6 +854,8 @@ async fn execute_inner(
                                             .map(|item| ThreadItemEntry {
                                                 turn_id: turn.id.clone(),
                                                 item,
+                                                started_at_ms: None,
+                                                completed_at_ms: None,
                                             })
                                             .collect(),
                                     )

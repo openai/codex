@@ -120,12 +120,16 @@ SELECT
     first_user.rollout_ordinal AS summary_first_user_rollout_ordinal,
     first_user.updated_at_ordinal AS summary_first_user_updated_at_ordinal,
     first_user.created_at_ms AS summary_first_user_created_at_ms,
+    first_user.started_at_ms AS summary_first_user_started_at_ms,
+    first_user.completed_at_ms AS summary_first_user_completed_at_ms,
     first_user.item_json AS summary_first_user_item_json,
     final_agent.turn_id AS summary_final_agent_turn_id,
     final_agent.item_id AS summary_final_agent_item_id,
     final_agent.rollout_ordinal AS summary_final_agent_rollout_ordinal,
     final_agent.updated_at_ordinal AS summary_final_agent_updated_at_ordinal,
     final_agent.created_at_ms AS summary_final_agent_created_at_ms,
+    final_agent.started_at_ms AS summary_final_agent_started_at_ms,
+    final_agent.completed_at_ms AS summary_final_agent_completed_at_ms,
     final_agent.item_json AS summary_final_agent_item_json
 FROM page_turns
 LEFT JOIN thread_items AS first_user
@@ -245,7 +249,7 @@ pub(super) async fn page_item_rows(
         }
         let mut query = QueryBuilder::<Sqlite>::new(
             r#"
-SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
+SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, started_at_ms, completed_at_ms, item_json
 FROM thread_items
 WHERE thread_id =
             "#,
@@ -294,7 +298,7 @@ async fn page_updated_item_rows(
     )?;
     let mut query = QueryBuilder::<Sqlite>::new(
         r#"
-SELECT turn_id, item_id, updated_at_ordinal AS rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
+SELECT turn_id, item_id, updated_at_ordinal AS rollout_ordinal, updated_at_ordinal, created_at_ms, started_at_ms, completed_at_ms, item_json
 FROM thread_items
 WHERE thread_id =
         "#,

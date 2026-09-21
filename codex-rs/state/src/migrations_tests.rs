@@ -546,6 +546,13 @@ async fn realtime_items_preserve_older_thread_history_writers() {
             ("older-writer-item".to_string(), "turn-1".to_string()),
         ]
     );
+    let lifecycle_timestamps = sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+        "SELECT started_at_ms, completed_at_ms FROM thread_items ORDER BY rollout_ordinal",
+    )
+    .fetch_all(&older_pool)
+    .await
+    .expect("old rows and older writers leave lifecycle timestamps unknown");
+    assert_eq!(lifecycle_timestamps, vec![(None, None), (None, None)]);
     sqlx::query("DELETE FROM thread_history_projection_state WHERE thread_id = ?")
         .bind("thread-1")
         .execute(&older_pool)

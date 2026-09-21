@@ -20052,8 +20052,24 @@
     },
     "ThreadItemEntry": {
       "properties": {
+        "completedAtMs": {
+          "description": "Unix timestamp (milliseconds) when the item completed, if recorded by the producer.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "item": {
           "$ref": "#/definitions/ThreadItem"
+        },
+        "startedAtMs": {
+          "description": "Unix timestamp (milliseconds) when the item started, if recorded by the producer.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "turnId": {
           "description": "Turn containing this item.",

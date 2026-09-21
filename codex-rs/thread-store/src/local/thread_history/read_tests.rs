@@ -1526,6 +1526,8 @@ fn expected_item(turn_id: &str, item_id: &str, rollout_ordinal: u64) -> StoredTh
         item_id: item_id.to_string(),
         updated_at_ordinal: rollout_ordinal,
         created_at_ms: i64::try_from(rollout_ordinal).expect("fixture ordinal fits i64") * 1_000,
+        started_at_ms: None,
+        completed_at_ms: None,
         item_json: fixture_item(item_id).1.into_bytes(),
     }
 }

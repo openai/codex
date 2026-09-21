@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemEntry;
 use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadListParams;
@@ -2008,9 +2009,19 @@ async fn paginated_history_lists_and_legacy_reads_use_projected_turns_and_items(
         SortDirection::Asc,
     )
     .await?;
-    assert_eq!(first_items_page.data.len(), 1);
-    assert_eq!(first_items_page.data[0].turn_id, "turn-1");
-    assert_eq!(first_items_page.data[0].item.id(), "user-1");
+    assert_eq!(
+        first_items_page.data,
+        vec![ThreadItemEntry {
+            turn_id: "turn-1".to_string(),
+            item: ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                client_id: None,
+                content: Vec::new(),
+            },
+            started_at_ms: Some(0),
+            completed_at_ms: Some(1),
+        }]
+    );
     let second_items_page = read_items_page(
         &mut mcp,
         thread_id,

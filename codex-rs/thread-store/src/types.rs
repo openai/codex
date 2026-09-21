@@ -510,6 +510,10 @@ pub struct StoredThreadItem {
     pub updated_at_ordinal: u64,
     /// Unix timestamp (milliseconds) when this logical item was first projected.
     pub created_at_ms: i64,
+    /// Exact lifecycle start time in Unix milliseconds, when recorded by the producer.
+    pub started_at_ms: Option<i64>,
+    /// Exact lifecycle completion time in Unix milliseconds, when recorded by the producer.
+    pub completed_at_ms: Option<i64>,
     /// Serialized app-server ThreadItem snapshot.
     pub item_json: Vec<u8>,
 }
