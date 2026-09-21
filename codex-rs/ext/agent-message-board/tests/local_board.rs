@@ -165,6 +165,23 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         )
         .await
         .unwrap();
+    // Posting still succeeds when the subscriber lookup returns an empty array.
+    resumed
+        .post(
+            root,
+            PostRequest {
+                request_id: "no-subscribers".into(),
+                destination: PostDestination::Channel("proofs".into()),
+                text: "saved without notifications".into(),
+                agents_to_notify: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        *host.notifications.lock().unwrap(),
+        vec![(child, metadata.clone())]
+    );
     resumed
         .set_subscription(
             root,

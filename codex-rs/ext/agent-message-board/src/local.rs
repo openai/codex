@@ -248,14 +248,17 @@ impl LocalAgentMessageBoard {
                 )
             }
         };
+        // Return one JSON array to avoid handing each subscriber row across
+        // SQLite's worker thread while the write transaction is held.
         let subscribed = sqlx::query_scalar::<_, String>(
-            "SELECT agent FROM subscriptions WHERE board=? AND target=?",
+            "SELECT json_group_array(agent) FROM subscriptions WHERE board=? AND target=?",
         )
         .bind(self.identity.to_string())
         .bind(target_key(&target)?)
-        .fetch_all(&mut *tx)
+        .fetch_one(&mut *tx)
         .await
         .map_err(storage_error)?;
+        let subscribed: Vec<String> = serde_json::from_str(&subscribed).map_err(storage_error)?;
         for recipient in subscribed {
             recipients.insert(ThreadId::from_string(&recipient).map_err(storage_error)?);
         }
