@@ -590,3 +590,189 @@ async fn queries_page_discussions_and_search_unicode() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn tools_validate_arguments_deduplicate_calls_and_bound_unicode_results() {
+    use codex_tools::ConversationHistory;
+    use codex_tools::NoopTurnItemEmitter;
+    use codex_tools::ToolCall;
+    use codex_tools::ToolCallSource;
+    use codex_tools::ToolName;
+    use codex_tools::ToolPayload;
+    use codex_utils_output_truncation::TruncationPolicy;
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let child_path = AgentPath::root().join("worker").unwrap();
+    let host = Arc::new(Host {
+        fail_notifications: AtomicBool::new(false),
+        members: [(root, AgentPath::root()), (child, child_path)].into(),
+        clock: AtomicI64::default(),
+        active: AtomicBool::new(true),
+        notifications: Mutex::default(),
+    });
+    let board = Arc::new(
+        LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone())
+            .await
+            .unwrap(),
+    );
+    let tools = message_board_tools(board.clone(), root, AgentPath::root());
+    let call = |name: &str, args: serde_json::Value| ToolCall {
+        turn_id: "turn-1".into(),
+        call_id: name.into(),
+        tool_name: ToolName::namespaced("collaboration", name),
+        model: "test".into(),
+        codex_turn_metadata: None,
+        truncation_policy: TruncationPolicy::Bytes(20_000),
+        source: ToolCallSource::Direct,
+        conversation_history: ConversationHistory::default(),
+        turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+        environments: vec![],
+        payload: ToolPayload::Function {
+            arguments: args.to_string(),
+        },
+    };
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.tool_name() == ToolName::namespaced("collaboration", name))
+            .unwrap()
+    };
+    for (name, args) in [
+        (
+            "post",
+            json!({"new_channel_name":"low-budget","text":"must not be stored"}),
+        ),
+        ("create_channel", json!({"channel_name":"low-budget"})),
+    ] {
+        let mut limited = call(name, args);
+        limited.truncation_policy = TruncationPolicy::Bytes(1);
+        assert!(tool(name).handle(limited).await.is_err());
+    }
+    assert!(
+        tool("post")
+            .handle(call(
+                "post",
+                json!({"text":"invalid","channel_name":"a","new_channel_name":"b"})
+            ))
+            .await
+            .is_err()
+    );
+    assert!(
+        tool("get_channels")
+            .handle(call("get_channels", json!({"limit":0})))
+            .await
+            .is_err()
+    );
+    assert!(
+        tool("get_channels")
+            .handle(call("get_channels", json!({"typo":true})))
+            .await
+            .is_err()
+    );
+    assert!(
+        board
+            .list_channels(
+                root,
+                ChannelQuery {
+                    query: None,
+                    direction: SortDirection::NewestFirst,
+                    page: PageRequest::default()
+                }
+            )
+            .await
+            .unwrap()
+            .results
+            .is_empty()
+    );
+
+    let post_call = call(
+        "post",
+        json!({"text":"🦀".repeat(8000),"new_channel_name":"work","agents_to_notify":["worker"]}),
+    );
+    let result = tool("post").handle(post_call.clone()).await.unwrap();
+    let metadata: PostMetadata = serde_json::from_str(&result.log_output()).unwrap();
+    assert_eq!(
+        tool("post").handle(post_call).await.unwrap().log_output(),
+        result.log_output()
+    );
+    assert_eq!(host.notifications.lock().unwrap().len(), 1);
+    let preview = tool("search_posts")
+        .handle(call("search_posts", json!({"query":"🦀"})))
+        .await
+        .unwrap();
+    let preview: Page<PostPreview> = serde_json::from_str(&preview.log_output()).unwrap();
+    assert_eq!(
+        preview,
+        Page {
+            results: vec![PostPreview {
+                metadata: metadata.clone(),
+                text_preview: "🦀".repeat(1000),
+                n_chars: 8000,
+                truncated: true,
+            }],
+            next_cursor: None,
+        }
+    );
+    let read_call = call("read_post", json!({"message_id":metadata.message_id}));
+    let result = tool("read_post").handle(read_call.clone()).await.unwrap();
+    assert!(result.contains_external_context());
+    assert!(result.log_output().len() <= 8000);
+    let first: PostContent = serde_json::from_str(&result.log_output()).unwrap();
+    assert_eq!(first.text, "🦀".repeat(first.next_offset_chars));
+    assert_eq!(first.n_chars, 8000);
+    let result = tool("read_post").handle(call("read_post", json!({"message_id":metadata.message_id,"offset_chars":first.next_offset_chars,"limit_chars":2}))).await.unwrap();
+    let second: PostContent = serde_json::from_str(&result.log_output()).unwrap();
+    assert_eq!(second.text, "🦀🦀");
+    assert_eq!(second.next_offset_chars, first.next_offset_chars + 2);
+
+    let mut nested = call(
+        "post",
+        json!({"text":"reply","thread_id":metadata.thread_id}),
+    );
+    nested.source = ToolCallSource::CodeMode {
+        cell_id: "cell-1".into(),
+        runtime_tool_call_id: "nested-1".into(),
+    };
+    let first_nested = tool("post")
+        .handle(nested.clone())
+        .await
+        .unwrap()
+        .log_output();
+    nested.source = ToolCallSource::CodeMode {
+        cell_id: "cell-1".into(),
+        runtime_tool_call_id: "nested-2".into(),
+    };
+    assert_ne!(
+        tool("post").handle(nested).await.unwrap().log_output(),
+        first_nested
+    );
+    let result = tool("search_posts")
+        .handle(call(
+            "search_posts",
+            json!({"query":"reply","author":"/root"}),
+        ))
+        .await
+        .unwrap();
+    let page: Page<PostPreview> = serde_json::from_str(&result.log_output()).unwrap();
+    assert_eq!(page.results.len(), 2);
+    assert!(page.results.iter().all(|post| post.text_preview == "reply"));
+
+    let mut nested_read = read_call;
+    nested_read.source = ToolCallSource::CodeMode {
+        cell_id: "cell-1".into(),
+        runtime_tool_call_id: "nested-3".into(),
+    };
+    assert!(
+        tool("read_post")
+            .handle(nested_read)
+            .await
+            .unwrap()
+            .log_output()
+            .len()
+            <= 8000
+    );
+}

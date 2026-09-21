@@ -2104,6 +2104,8 @@ dependencies = [
  "chrono",
  "codex-protocol",
  "codex-state",
+ "codex-tools",
+ "codex-utils-output-truncation",
  "futures",
  "pretty_assertions",
  "serde",
