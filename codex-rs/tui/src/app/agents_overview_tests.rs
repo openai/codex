@@ -285,7 +285,8 @@ fn overview_thread(
 #[tokio::test]
 async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Result<()> {
     let mut app = make_test_app().await;
-    let app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
     let [retained, archived, deleted, created] = std::array::from_fn(|_| ThreadId::new());
     let [
         mut retained_thread,
@@ -305,9 +306,6 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
     app.agents_overview.request_id = Some(request_id);
     // The seed is still in flight and the command center has never been opened.
     for notification in [
-        ServerNotification::ThreadStarted(ThreadStartedNotification {
-            thread: created_thread.clone(),
-        }),
         ServerNotification::ThreadNameUpdated(ThreadNameUpdatedNotification {
             thread_id: retained.to_string(),
             thread_name: Some("New name".to_string()),
@@ -328,6 +326,35 @@ async fn shared_overview_keeps_rows_and_replays_changes_over_stale_reads() -> Re
         )
         .await;
     }
+    // Tool responses can arrive without thread/started or after newer updates/removals.
+    for thread in [
+        retained_thread.clone(),
+        created_thread.clone(),
+        archived_thread.clone(),
+        deleted_thread.clone(),
+    ] {
+        let (registered, registration) = tokio::sync::oneshot::channel();
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut app_server,
+            AppEvent::DynamicToolThreadStarted {
+                thread,
+                task_tools_available: false,
+                registered,
+            },
+        ))
+        .await?;
+        registration.await?;
+    }
+    assert_eq!(
+        app.agents_overview.threads,
+        HashMap::from([
+            (retained, Some(retained_thread.clone())),
+            (created, Some(created_thread.clone())),
+        ])
+    );
+    // A successful read supersedes registration; queued notifications supersede the read.
+    retained_thread.preview = "Fresh preview from the read".to_string();
     app.apply_agents_overview_thread_refresh(
         &app_server,
         request_id,

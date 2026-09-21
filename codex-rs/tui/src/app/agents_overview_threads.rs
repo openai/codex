@@ -74,11 +74,13 @@ impl App {
                 if started.thread.ephemeral {
                     return;
                 }
+                self.agents_overview.removed_threads.remove(&thread_id);
                 let mut thread = started.thread.clone();
                 thread.turns.clear();
                 self.agents_overview.threads.insert(thread_id, Some(thread));
             }
             ServerNotification::ThreadArchived(_) | ServerNotification::ThreadDeleted(_) => {
+                self.agents_overview.removed_threads.insert(thread_id);
                 self.agents_overview
                     .selected_permission_profiles
                     .remove(&thread_id);
@@ -87,6 +89,9 @@ impl App {
                 self.agents_overview.usage.remove(&thread_id);
                 self.agents_overview.threads.remove(&thread_id);
                 self.agents_overview.refresh_thread_ids.remove(&thread_id);
+            }
+            ServerNotification::ThreadUnarchived(_) => {
+                self.agents_overview.removed_threads.remove(&thread_id);
             }
             ServerNotification::ThreadClosed(_) => {
                 self.agents_overview.activity.remove(&thread_id);

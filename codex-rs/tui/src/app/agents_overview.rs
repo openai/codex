@@ -34,6 +34,8 @@ pub(crate) const AGENTS_OVERVIEW_VIEW_ID: &str = "agents-overview";
 pub(super) struct AgentsOverviewState {
     /// Missing metadata records a local resume until the next metadata refresh.
     pub(super) threads: HashMap<ThreadId, Option<Thread>>,
+    /// Lifecycle removals take precedence over delayed tool registration responses.
+    pub(super) removed_threads: HashSet<ThreadId>,
     /// Local visibility only; activity and metadata refreshes never reveal hidden roots.
     pub(super) hidden_threads: HashSet<ThreadId>,
     pub(super) last_messages: HashMap<ThreadId, String>,

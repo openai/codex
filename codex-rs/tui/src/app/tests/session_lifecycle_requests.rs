@@ -1314,13 +1314,14 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         }
     };
     let AppEvent::DynamicToolThreadStarted {
-        thread_id: child_thread_id,
+        thread,
         task_tools_available,
         registered,
     } = registration
     else {
         panic!("expected the MCP-created task to register")
     };
+    let child_thread_id = ThreadId::from_string(&thread.id)?;
     assert!(task_tools_available);
     assert!(registered.send(()).is_ok());
     let created = creation.await??;
@@ -1335,14 +1336,34 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         child["config"]["mcp_servers.codex_tui"],
         starts[0]["config"]["mcp_servers.codex_tui"]
     );
-    let forked = call_tool(
-        3,
-        "fork_thread",
-        serde_json::json!({"threadId": delegation_source}),
-    )
-    .send()
-    .await?;
+    // Fork another task: this synthetic MCP call has no active turn to cut before.
+    let fork_source =
+        create_history_rollout(&app.config, ThreadHistoryMode::Legacy, "Task to fork")?;
+    let forked = tokio::spawn(
+        call_tool(
+            3,
+            "fork_thread",
+            serde_json::json!({"threadId": fork_source}),
+        )
+        .send(),
+    );
+    let registration = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), events.recv())
+        .await?
+        .expect("fork registration event");
+    let AppEvent::DynamicToolThreadStarted { thread, .. } = &registration else {
+        panic!("expected the MCP fork to register")
+    };
+    let forked_thread_id = ThreadId::from_string(&thread.id)?;
+    let expected_thread = thread.clone();
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    Box::pin(app.handle_event(&mut tui, &mut app_server, registration)).await?;
+    assert_eq!(
+        app.agents_overview.threads[&forked_thread_id],
+        Some(expected_thread)
+    );
+    let forked = forked.await??;
     assert!(forked.status().is_success());
+    assert!(forked.text().await?.contains(&forked_thread_id.to_string()));
     let forked = recorded_params(&requests, "thread/fork")
         .pop()
         .expect("MCP-created fork request");
@@ -1763,7 +1784,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             .await?
             .expect("background task registration event");
     let AppEvent::DynamicToolThreadStarted {
-        thread_id: created_thread_id,
+        thread,
         task_tools_available,
         registered,
     } = registration
@@ -1771,16 +1792,22 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
         panic!("expected background task registration before its first turn: {registration:?}")
     };
     assert!(recorded_params(&requests, "turn/start").is_empty());
+    let created_thread_id = ThreadId::from_string(&thread.id)?;
+    let expected_thread = thread.clone();
     Box::pin(app.handle_event(
         &mut tui,
         &mut app_server,
         AppEvent::DynamicToolThreadStarted {
-            thread_id: created_thread_id,
+            thread,
             task_tools_available,
             registered,
         },
     ))
     .await?;
+    assert_eq!(
+        app.agents_overview.threads[&created_thread_id],
+        Some(expected_thread)
+    );
     assert!(
         app.agents_overview
             .dispatched_requests
@@ -1848,7 +1875,7 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
         },
     );
     let AppEvent::DynamicToolThreadStarted {
-        thread_id: continued_thread_id,
+        thread,
         task_tools_available,
         registered,
     } = tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), events.recv())
@@ -1857,13 +1884,13 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     else {
         panic!("expected follow-up task registration before its next turn")
     };
-    assert_eq!(continued_thread_id, creation_source);
+    assert_eq!(ThreadId::from_string(&thread.id)?, creation_source);
     assert_eq!(recorded_params(&requests, "turn/start").len(), 1);
     Box::pin(app.handle_event(
         &mut tui,
         &mut app_server,
         AppEvent::DynamicToolThreadStarted {
-            thread_id: continued_thread_id,
+            thread,
             task_tools_available,
             registered,
         },

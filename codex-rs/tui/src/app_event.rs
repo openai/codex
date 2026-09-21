@@ -518,9 +518,9 @@ pub(crate) enum AppEvent {
         result: color_eyre::Result<AppServerStartedThread>,
     },
 
-    /// Register a dynamically created background thread before its first turn starts.
+    /// Register a tool-created or resumed background thread and its overview metadata.
     DynamicToolThreadStarted {
-        thread_id: ThreadId,
+        thread: Thread,
         task_tools_available: bool,
         registered: tokio::sync::oneshot::Sender<()>,
     },

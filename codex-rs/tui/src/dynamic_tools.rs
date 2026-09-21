@@ -643,8 +643,8 @@ async fn execute_inner(
                 )
                 .await
                 .map_err(|error| error.to_string())?;
-            let thread_id = started.thread.id;
-            register_background_thread(app_event_tx, &thread_id, task_tools_available).await?;
+            let thread_id = started.thread.id.clone();
+            register_background_thread(app_event_tx, started.thread, task_tools_available).await?;
             if let Some(title) = arguments.title
                 && let Err(error) = request::<ThreadSetNameResponse>(&handle, |request_id| {
                     ClientRequest::ThreadSetName {
@@ -735,10 +735,17 @@ async fn execute_inner(
                 },
             )
             .await?;
+            let forked_thread_id = response.thread.id.clone();
+            register_background_thread(
+                app_event_tx,
+                response.thread,
+                /*task_tools_available*/ false,
+            )
+            .await?;
             Ok(json!({
                 "environment": {"type": "same-directory"},
                 "sourceThreadId": thread_id,
-                "threadId": response.thread.id,
+                "threadId": forked_thread_id,
                 "continuation": "The fork contains completed history only. If the source thread was running, the active turn and unfinished response are not in the child. Send a follow-up message to threadId only if the task requires work to continue there."
             }))
         }
@@ -752,7 +759,7 @@ async fn execute_inner(
             validate_prompt(&prompt, MAX_DELEGATED_INPUT_BYTES)?;
             let thread = read_thread(&handle, &arguments.thread_id).await?;
             let exclude_turns = thread.history_mode == ThreadHistoryMode::Paginated;
-            let _: ThreadResumeResponse = request_with_history_fallback(
+            let resumed: ThreadResumeResponse = request_with_history_fallback(
                 &handle,
                 exclude_turns,
                 |request_id, exclude_turns| ClientRequest::ThreadResume {
@@ -768,7 +775,7 @@ async fn execute_inner(
             .await?;
             register_background_thread(
                 app_event_tx,
-                &arguments.thread_id,
+                resumed.thread,
                 /*task_tools_available*/ false,
             )
             .await?;
@@ -1209,13 +1216,14 @@ fn same_thread_id(first: &str, second: &str) -> bool {
 
 async fn register_background_thread(
     app_event_tx: Option<&AppEventSender>,
-    thread_id: &str,
+    mut thread: Thread,
     task_tools_available: bool,
 ) -> Result<(), String> {
     if let Some(app_event_tx) = app_event_tx {
+        thread.turns.clear();
         let (registered, registration) = tokio::sync::oneshot::channel();
         app_event_tx.send(AppEvent::DynamicToolThreadStarted {
-            thread_id: ThreadId::from_string(thread_id).map_err(|error| error.to_string())?,
+            thread,
             task_tools_available,
             registered,
         });
