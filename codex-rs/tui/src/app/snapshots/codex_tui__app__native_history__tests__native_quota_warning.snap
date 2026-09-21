@@ -1,0 +1,7 @@
+---
+source: tui/src/app/native_history_tests.rs
+assertion_line: 31
+expression: "inserted.iter().map(|line|\nline.line.to_string()).collect::<Vec<_>>().join(\"\\n\")"
+---
+⚠ Heads up, you have less than 25% of your 5h limit left. Run /status for a
+  breakdown.

@@ -1,0 +1,40 @@
+---
+source: tui/src/app/composer_hints_tests.rs
+assertion_line: 87
+expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
+---
+80 columns, running=false
+Conversation
+
+⚠ Heads up, you have less than 10% of your 5h limit left. Run /status for a
+  breakdown.
+                                                  ⚠ 5h limit: 8% left · /status
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts                                      ⚠ 1 warning · f2 to view
+
+32 columns, running=true
+  5% of your 5h limit left.
+  Run /status for a breakdown.
+      ⚠ 5h limit: only <1% left
+• Working (0s • esc to interrup…
+
+
+› draft stays
+
+  GPT-5.6-Sol default · /tmp/pr…
+  tab to queue message
+
+18 columns, running=true
+  Run /status for
+  a breakdown.
+     ⚠ 5h 5% left
+• Working (0s • e…
+
+
+› draft stays
+
+  GPT-5.6-Sol def…
+  tab to queue mes

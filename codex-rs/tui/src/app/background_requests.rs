@@ -75,7 +75,7 @@ impl App {
     /// Recovery requests are coalesced and bounded by the reset-request timeout. The origin
     /// also identifies command-specific completion work, such as finalizing a `/status` card,
     /// without confusing sparse inference notifications with authoritative usage responses.
-    pub(super) fn refresh_rate_limits(
+    pub(crate) fn refresh_rate_limits(
         &mut self,
         app_server: &AppServerSession,
         origin: RateLimitRefreshOrigin,
@@ -93,6 +93,7 @@ impl App {
         else {
             return;
         };
+        self.chat_widget.start_usage_notice_read(request_id);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {

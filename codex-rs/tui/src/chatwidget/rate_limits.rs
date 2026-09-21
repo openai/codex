@@ -50,10 +50,11 @@ impl RateLimitWarningState {
                 && secondary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index]
             {
                 let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.secondary_index];
-                if threshold != 50.0
-                    || (matches!(plan_type, Some(PlanType::Plus | PlanType::Team))
-                        && secondary_window_minutes
-                            .is_some_and(|minutes| is_approximate_window(minutes, 5 * 60)))
+                if threshold
+                    >= f64::from(usage_notice::warning_threshold(
+                        plan_type,
+                        secondary_window_minutes,
+                    ))
                 {
                     highest_secondary = Some(threshold);
                 }
@@ -75,10 +76,11 @@ impl RateLimitWarningState {
                 && primary_used_percent >= RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index]
             {
                 let threshold = RATE_LIMIT_WARNING_THRESHOLDS[self.primary_index];
-                if threshold != 50.0
-                    || (matches!(plan_type, Some(PlanType::Plus | PlanType::Team))
-                        && primary_window_minutes
-                            .is_some_and(|minutes| is_approximate_window(minutes, 5 * 60)))
+                if threshold
+                    >= f64::from(usage_notice::warning_threshold(
+                        plan_type,
+                        primary_window_minutes,
+                    ))
                 {
                     highest_primary = Some(threshold);
                 }
@@ -137,7 +139,7 @@ pub(crate) fn fallback_limit_label(is_secondary: bool) -> &'static str {
     }
 }
 
-fn is_approximate_window(minutes: i64, expected_minutes: i64) -> bool {
+pub(super) fn is_approximate_window(minutes: i64, expected_minutes: i64) -> bool {
     let minutes = minutes as f64;
     let expected_minutes = expected_minutes as f64;
     minutes >= expected_minutes * 0.95 && minutes <= expected_minutes * 1.05
@@ -176,7 +178,7 @@ pub(super) fn is_app_server_cyber_policy_error(info: &AppServerCodexErrorInfo) -
 }
 
 #[derive(Clone, Copy)]
-enum RateLimitSnapshotSource {
+pub(super) enum RateLimitSnapshotSource {
     AccountUsage,
     RollingUpdate,
 }
@@ -252,11 +254,21 @@ impl ChatWidget {
         snapshot: Option<RateLimitSnapshot>,
         source: RateLimitSnapshotSource,
     ) {
+        let usage_notice_blocked = self.codex_rate_limit_reached_type.is_some()
+            || self.codex_spend_control_reached == Some(true);
         if let Some(mut snapshot) = snapshot {
             let limit_id = snapshot
                 .limit_id
                 .clone()
                 .unwrap_or_else(|| "codex".to_string());
+            let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
+            if is_codex_limit
+                && self
+                    .usage_notice_state
+                    .update(&snapshot, source, self.plan_type)
+            {
+                self.request_redraw();
+            }
             if matches!(source, RateLimitSnapshotSource::RollingUpdate)
                 && snapshot.credits.is_none()
             {
@@ -272,7 +284,6 @@ impl ChatWidget {
             }
             self.plan_type = snapshot.plan_type.or(self.plan_type);
 
-            let is_codex_limit = limit_id.eq_ignore_ascii_case("codex");
             if is_codex_limit
                 && (matches!(source, RateLimitSnapshotSource::AccountUsage)
                     || snapshot.spend_control_reached.is_some())
@@ -375,7 +386,7 @@ impl ChatWidget {
 
             if !warnings.is_empty() {
                 for warning in warnings {
-                    self.add_to_history(history_cell::new_warning_event(warning));
+                    self.add_to_history(history_cell::new_usage_warning_event(warning));
                 }
                 self.request_redraw();
             }
@@ -383,6 +394,12 @@ impl ChatWidget {
             self.rate_limit_snapshots_by_limit_id.clear();
             self.codex_rate_limit_reached_type = None;
             self.codex_spend_control_reached = None;
+        }
+        if usage_notice_blocked
+            != (self.codex_rate_limit_reached_type.is_some()
+                || self.codex_spend_control_reached == Some(true))
+        {
+            self.request_redraw();
         }
         self.refresh_status_line();
     }

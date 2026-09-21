@@ -80,11 +80,11 @@ impl App {
             "esc latest"
         };
         self.sync_owned_transcript(screen_size.width);
-        let composer_tip = self.composer_tip();
+        let transcript_width = self.chat_widget.history_wrap_width(screen_size.width);
+        let composer_hint = self.composer_hint(transcript_width.saturating_sub(/*rhs*/ 2));
         let mut prompt_footer =
             self.prompt_navigation_footer(screen_size.width.saturating_sub(/*rhs*/ 2));
         let chat_widget = &self.chat_widget;
-        let transcript_width = chat_widget.history_wrap_width(screen_size.width);
         let view = &mut self.transcript_view;
         let active_key = chat_widget.active_cell_transcript_key();
         view.sync_history_tail(&self.transcript_cells);
@@ -153,7 +153,7 @@ impl App {
                     )
                 });
             feedback_tick =
-                view.render_composer_gap(follow_area, composer_tip.as_ref(), frame.buffer);
+                view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer);
             // Rendering resolves whether new activity is still hidden. Paint that result in
             // this frame so a revision change cannot flash a stale activity hint.
             let mut footer =

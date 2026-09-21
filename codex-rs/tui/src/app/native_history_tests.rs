@@ -1,9 +1,49 @@
-//! Native tool completion is emitted once, before output queued behind it.
+//! Native output preserves ordering, quota warning visibility, and replay consistency.
 
 use super::*;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
 use codex_app_server_protocol::DynamicToolCallStatus;
 use pretty_assertions::assert_eq;
+
+#[tokio::test]
+async fn quota_warnings_are_emitted_once_and_survive_native_replay() -> Result<()> {
+    for initial_replay in [false, true] {
+        let (mut app, mut events, _ops) = crate::app::tests::make_test_app_with_channels().await;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        if initial_replay {
+            app.begin_initial_history_replay_buffer();
+        }
+        app.insert_history_cell(
+            &mut tui,
+            Box::new(history_cell::new_warning_event("Hidden diagnostic".into())),
+        );
+        let quota: codex_app_server_protocol::RateLimitSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "primary": {"usedPercent": 80, "windowDurationMins": 300},
+            }))?;
+        for _ in 0..2 {
+            app.chat_widget.on_rate_limit_snapshot(Some(quota.clone()));
+            while let Ok(event) = events.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = event {
+                    app.insert_history_cell(&mut tui, cell);
+                }
+            }
+        }
+        app.finish_initial_history_replay_buffer(&mut tui);
+        let inserted = tui.pending_history_lines_for_test();
+        insta::allow_duplicates! {
+            insta::assert_snapshot!("native_quota_warning", inserted.iter().map(|line| line.line.to_string()).collect::<Vec<_>>().join("\n"));
+        }
+        assert_eq!(
+            app.render_transcript_lines_for_reflow(/*width*/ 80).lines,
+            inserted
+        );
+        app.flush_native_history(&mut tui);
+        assert_eq!(tui.pending_history_lines_for_test(), inserted);
+        assert_eq!(history_cell::warning_count(&app.transcript_cells), 2);
+    }
+    Ok(())
+}
 
 #[tokio::test]
 async fn settled_tool_precedes_queued_output_and_is_not_emitted_twice() -> Result<()> {

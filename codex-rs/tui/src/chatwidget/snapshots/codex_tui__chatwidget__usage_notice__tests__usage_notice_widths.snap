@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/usage_notice_tests.rs
+assertion_line: 35
+expression: "lines.join(\"\\n\")"
+---
+47 columns: ⚠ 5h limit: 8% left · resets at 13:00 · /status
+46 columns: ⚠ 5h limit: 8% left · /status
+28 columns: ⚠ 5h limit: 8% left
+18 columns: ⚠ 5h 8% left
+12 columns: ⚠ 5h 8% left
+11 columns:
