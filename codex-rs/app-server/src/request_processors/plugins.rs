@@ -157,10 +157,7 @@ fn load_shared_plugin_ids_by_local_path(
 }
 
 fn remote_plugin_service_config(config: &Config) -> RemotePluginServiceConfig {
-    RemotePluginServiceConfig::new(
-        config.chatgpt_base_url.clone(),
-        config.http_client_factory(),
-    )
+    config.plugins_config_input().remote_plugin_service_config()
 }
 
 fn share_context_for_source(

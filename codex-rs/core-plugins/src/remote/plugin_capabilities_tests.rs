@@ -119,6 +119,7 @@ async fn capabilities_union_cached_versions_and_sync_reports_removal() -> anyhow
     let config = RemotePluginServiceConfig::new(
         format!("{}/backend-api", server.uri()),
         crate::test_support::test_http_client_factory(),
+        /*product_sku*/ None,
     );
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     Mock::given(method("GET"))

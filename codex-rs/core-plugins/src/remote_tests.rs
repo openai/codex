@@ -276,6 +276,7 @@ fn catalog_cache_invalidation_clears_global_collections_and_preserves_other_scop
     let config = RemotePluginServiceConfig::new(
         "https://chatgpt.com/backend-api".to_string(),
         crate::test_support::test_http_client_factory(),
+        /*product_sku*/ None,
     );
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     for scope in [RemotePluginScope::Global, RemotePluginScope::Workspace] {

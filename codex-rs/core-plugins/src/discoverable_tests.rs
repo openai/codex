@@ -956,6 +956,7 @@ plugins = true
         &RemotePluginServiceConfig::new(
             plugins.chatgpt_base_url.clone(),
             crate::test_support::test_http_client_factory(),
+            /*product_sku*/ None,
         ),
         Some(&auth),
     )

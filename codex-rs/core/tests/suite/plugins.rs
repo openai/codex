@@ -68,6 +68,7 @@ use test_case::test_case;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -999,11 +1000,13 @@ async fn legacy_plugin_skill_prompt_remains_complete() -> Result<()> {
     Ok(())
 }
 
-#[test_case(true, true, (true, false); "enabled remote supersedes bundled")]
-#[test_case(false, true, (false, false); "disabled remote does not reactivate bundled")]
-#[test_case(true, false, (false, true); "missing remote bundle preserves bundled")]
+#[test_case(None, true, true, (true, false); "enabled remote supersedes bundled")]
+#[test_case(Some("tpp"), true, true, (true, false); "configured work sku")]
+#[test_case(None, false, true, (false, false); "disabled remote does not reactivate bundled")]
+#[test_case(None, true, false, (false, true); "missing remote bundle preserves bundled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn sites_compatibility_guard_in_agent_turn(
+    product_sku: Option<&str>,
     remote_enabled: bool,
     cache_remote_sites: bool,
     expected_skills: (bool, bool),
@@ -1017,6 +1020,7 @@ async fn sites_compatibility_guard_in_agent_turn(
     .await;
     Mock::given(method("GET"))
         .and(path("/ps/plugins/installed"))
+        .and(header("OAI-Product-Sku", product_sku.unwrap_or("codex")))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "plugins": [{
                 "id": "plugins~plugin_connector_1p_689987207de08191979cf68eca2941c6",
@@ -1073,11 +1077,15 @@ enabled = true
     }
 
     let chatgpt_base_url = server.uri();
+    let product_sku = product_sku.map(str::to_owned);
     let mut builder = test_codex()
         .with_home(codex_home)
         .with_extensions(skills_extensions())
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| config.chatgpt_base_url = chatgpt_base_url);
+        .with_config(move |config| {
+            config.chatgpt_base_url = chatgpt_base_url;
+            config.apps_mcp_product_sku = product_sku;
+        });
     let test = builder.build_with_auto_env(&server).await?;
 
     let auth = test.thread_manager.auth_manager().auth().await;

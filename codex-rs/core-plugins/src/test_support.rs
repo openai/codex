@@ -339,6 +339,7 @@ pub(crate) fn recording_remote_plugin_service_config(
     (
         RemotePluginServiceConfig {
             chatgpt_base_url,
+            product_sku: crate::remote::CODEX_PRODUCT_SKU.to_string(),
             http_clients,
         },
         selected_urls,
@@ -497,6 +498,7 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
         ),
         "https://chatgpt.com/backend-api/".to_string(),
         test_http_client_factory(),
+        /*product_sku*/ None,
     )
 }
 

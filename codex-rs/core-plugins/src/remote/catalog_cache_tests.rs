@@ -51,6 +51,7 @@ fn global_catalog_cache_reuses_legacy_cache_file() {
     let config = RemotePluginServiceConfig::new(
         "https://chatgpt.com/backend-api".to_string(),
         crate::test_support::test_http_client_factory(),
+        /*product_sku*/ None,
     );
     let auth = CodexAuth::Headers(AuthHeaders::new(http::HeaderMap::new()));
     let legacy_cache_path = codex_home
@@ -96,6 +97,7 @@ fn header_auth_does_not_cache_private_catalogs_without_a_stable_identity() {
     let config = RemotePluginServiceConfig::new(
         "https://chatgpt.com/backend-api".to_string(),
         crate::test_support::test_http_client_factory(),
+        /*product_sku*/ None,
     );
     let auth = CodexAuth::Headers(AuthHeaders::new(http::HeaderMap::new()));
 

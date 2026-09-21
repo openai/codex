@@ -60,7 +60,11 @@ pub async fn search_remote_plugins(
     }
 
     let url = url.to_string();
-    let request = authenticated_request(config.http_request(Method::GET, &url), auth);
+    let request = authenticated_request(
+        config.http_request(Method::GET, &url),
+        auth,
+        &config.product_sku,
+    );
     let response: RemotePluginListResponse = send_and_decode(request, &url_for_error)
         .await
         .map_err(|error| match error {

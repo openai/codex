@@ -157,6 +157,7 @@ pub struct PluginsConfigInput {
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
     pub chatgpt_base_url: String,
+    pub product_sku: Option<String>,
     http_client_factory: HttpClientFactory,
 }
 
@@ -168,6 +169,7 @@ impl PluginsConfigInput {
         remote_plugin_enabled: bool,
         chatgpt_base_url: String,
         http_client_factory: HttpClientFactory,
+        product_sku: Option<String>,
     ) -> Self {
         Self {
             config_layer_stack,
@@ -176,6 +178,7 @@ impl PluginsConfigInput {
             remote_plugin_enabled,
             chatgpt_base_url,
             http_client_factory,
+            product_sku,
         }
     }
 
@@ -184,6 +187,7 @@ impl PluginsConfigInput {
         RemotePluginServiceConfig::new(
             self.chatgpt_base_url.clone(),
             self.http_client_factory.clone(),
+            self.product_sku.clone(),
         )
     }
 }
