@@ -62,7 +62,7 @@ impl MessageBoardHost for Host {
     fn notify(
         &self,
         recipient: ThreadId,
-        post: PostMetadata,
+        post: PostPreview,
     ) -> BoxFuture<'_, Result<NotificationDelivery>> {
         Box::pin(async move {
             if self.fail_notifications.load(Ordering::SeqCst) {
@@ -76,7 +76,7 @@ impl MessageBoardHost for Host {
             self.notifications
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((recipient, post));
+                .push((recipient, post.metadata));
             Ok(NotificationDelivery::Accepted)
         })
     }

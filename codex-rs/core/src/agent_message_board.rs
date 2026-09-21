@@ -15,7 +15,7 @@ use codex_agent_message_board_extension::AgentMessageBoard;
 use codex_agent_message_board_extension::LocalAgentMessageBoard;
 use codex_agent_message_board_extension::MessageBoardHost;
 use codex_agent_message_board_extension::NotificationDelivery;
-use codex_agent_message_board_extension::PostMetadata;
+use codex_agent_message_board_extension::PostPreview;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -24,6 +24,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result;
+use codex_protocol::protocol::InterAgentCommunication;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -141,14 +142,14 @@ impl MessageBoardHost for LocalBoardHost {
 
     fn notify(
         &self,
-        recipient: ThreadId,
-        post: PostMetadata,
+        recipient_id: ThreadId,
+        post: PostPreview,
     ) -> BoxFuture<'_, Result<NotificationDelivery>> {
         Box::pin(async move {
             let Some(manager) = self.manager.upgrade() else {
                 return Ok(NotificationDelivery::SkippedInactive);
             };
-            let recipient = match manager.get_thread(recipient).await {
+            let recipient = match manager.get_thread(recipient_id).await {
                 Ok(thread) => thread,
                 Err(error) if matches!(error.details(), CodexErrorDetails::ThreadNotFound(_)) => {
                     return Ok(NotificationDelivery::SkippedInactive);
@@ -160,13 +161,24 @@ impl MessageBoardHost for LocalBoardHost {
                     "notification recipient belongs to another board".into(),
                 ));
             }
-            let notice = AgentMessageBoardNotification {
-                message_id: post.message_id,
-                thread_id: post.thread_id,
-            };
+            let recipient_path = recipient
+                .session
+                .services
+                .agent_control
+                .ensure_agent_known(recipient_id)?
+                .agent_path
+                .ok_or_else(|| CodexErr::InvalidRequest("agent has no tree path".into()))?;
+            let notice = AgentMessageBoardNotification(post);
+            let communication = InterAgentCommunication::new(
+                notice.0.metadata.author.clone(),
+                recipient_path,
+                Vec::new(),
+                notice.render(),
+                /*trigger_turn*/ false,
+            );
             Ok(
                 match recipient
-                    .inject_if_running(vec![ContextualUserFragment::into(notice)])
+                    .inject_if_running(vec![communication.to_model_input_item()])
                     .await
                 {
                     Ok(()) => NotificationDelivery::Accepted,

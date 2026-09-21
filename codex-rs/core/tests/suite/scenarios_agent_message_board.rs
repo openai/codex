@@ -163,13 +163,32 @@ async fn board_active_notice_and_reads_reach_model_context() -> anyhow::Result<(
             .expect("search result"),
     )?;
     assert_eq!(result["results"][0]["text_preview"], "A shared decision.");
-    let notice = requests[1]
-        .message_input_texts("user")
-        .into_iter()
-        .find(|text| text.contains("<agent_message_board_notification>"))
-        .expect("active notification");
-    assert!(notice.contains(post["message_id"].as_str().expect("post id")));
-    assert!(!notice.contains("A shared decision."));
+    let input = requests[1].body_json();
+    let notices = input["input"]
+        .as_array()
+        .context("request input")?
+        .iter()
+        .filter(|item| item["type"] == "agent_message")
+        .map(|item| {
+            (
+                item["author"].clone(),
+                item["recipient"].clone(),
+                item["content"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let message_id = post["message_id"].as_str().context("message ID")?;
+    assert_eq!(
+        notices,
+        vec![(
+            json!("/root"),
+            json!("/root"),
+            json!([{
+                "type": "input_text",
+                "text": format!("Message Type: CHANNEL_POST\nSender: /root\nChannel: design\nMessage ID: {message_id}\nThread ID: {message_id}\nPayload:\nA shared decision."),
+            }])
+        )]
+    );
     // Cargo and Bazel can enable different serde_json ordering features. Normalize only
     // the snapshot copies so the assertion compares JSON content, not object key order.
     let mut bodies = requests
@@ -189,7 +208,7 @@ async fn board_active_notice_and_reads_reach_model_context() -> anyhow::Result<(
     insta::assert_snapshot!(
         "agent_message_board_context",
         context_snapshot::format_context_snapshot(
-            "An active agent posts a shared decision, receives an ID-only notice, and fetches the text.",
+            "An active agent posts a shared decision, receives an attributed preview, and fetches the text.",
             &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
@@ -287,7 +306,7 @@ async fn board_is_shared_with_children_survives_resume_and_skips_idle_notices() 
     assert!(
         read.requests()
             .iter()
-            .all(|request| !request.body_contains_text("<agent_message_board_notification>"))
+            .all(|request| !request.body_contains_text("Message Type: CHANNEL_POST"))
     );
     let output = read.requests()[1]
         .function_call_output_text("root-read")

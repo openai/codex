@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::NotificationDelivery;
+use crate::PostPreview;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_ne;
 
@@ -23,7 +24,7 @@ impl MessageBoardHost for UnusedHost {
     fn notify(
         &self,
         _recipient: ThreadId,
-        _post: PostMetadata,
+        _post: PostPreview,
     ) -> BoxFuture<'_, Result<NotificationDelivery>> {
         unreachable!("pool tests do not invoke host capabilities")
     }

@@ -1,34 +1,42 @@
-//! Fixed-size discussion notices. Post text is fetched through bounded tools.
+//! Attributed discussion notices with bounded previews.
 
 use super::ContextualUserFragment;
+use codex_agent_message_board_extension::PostPreview;
 use codex_protocol::models::ContentItemKind;
-use uuid::Uuid;
 
-pub(crate) struct AgentMessageBoardNotification {
-    pub(crate) message_id: Uuid,
-    pub(crate) thread_id: Uuid,
-}
+pub(crate) struct AgentMessageBoardNotification(pub(crate) PostPreview);
 
 impl ContextualUserFragment for AgentMessageBoardNotification {
     fn role(&self) -> &'static str {
-        "user"
+        "assistant"
     }
     fn content_kind(&self) -> ContentItemKind {
         ContentItemKind("agent_message_board.notification".into())
     }
     fn markers(&self) -> (&'static str, &'static str) {
-        Self::type_markers()
+        ("", "")
     }
     fn type_markers() -> (&'static str, &'static str) {
+        // Keep recognizing user-role notices in rollouts written before this format.
         (
             "<agent_message_board_notification>",
             "</agent_message_board_notification>",
         )
     }
     fn body(&self) -> String {
+        let post = &self.0;
+        let suffix = if post.truncated {
+            "\n[Use read_post for the rest.]"
+        } else {
+            ""
+        };
         format!(
-            "\nNew post {} in discussion {}. Use read_post or read_thread to read it.\n",
-            self.message_id, self.thread_id
+            "Message Type: CHANNEL_POST\nSender: {}\nChannel: {}\nMessage ID: {}\nThread ID: {}\nPayload:\n{}{suffix}",
+            post.metadata.author,
+            post.metadata.channel_name,
+            post.metadata.message_id,
+            post.metadata.thread_id,
+            post.text_preview,
         )
     }
 }

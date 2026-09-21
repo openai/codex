@@ -283,11 +283,12 @@ impl LocalAgentMessageBoard {
         tx.commit().await.map_err(storage_error)?;
 
         // A committed post succeeds even if a best-effort notice cannot be delivered.
+        let notice = paging::preview(post.clone(), /*max_chars*/ 150);
         futures::stream::iter(recipients)
             .for_each_concurrent(/*limit*/ 16, |recipient| {
-                let metadata = post.metadata.clone();
+                let notice = notice.clone();
                 async move {
-                    if let Err(error) = self.host.notify(recipient, metadata).await {
+                    if let Err(error) = self.host.notify(recipient, notice).await {
                         tracing::warn!(%recipient, %error, "Failed to deliver message-board notification");
                     }
                 }
