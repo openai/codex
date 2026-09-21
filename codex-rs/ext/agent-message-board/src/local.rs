@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS posts (
 );
 CREATE INDEX IF NOT EXISTS posts_board_channel ON posts(board,channel,seq);
 CREATE INDEX IF NOT EXISTS posts_board_channel_timestamp ON posts(board,channel,timestamp,seq);
+CREATE INDEX IF NOT EXISTS posts_roots_created ON posts(board,channel,timestamp,seq) WHERE id=root;
 CREATE INDEX IF NOT EXISTS posts_board_root ON posts(board,root,seq);
 CREATE INDEX IF NOT EXISTS posts_board_root_timestamp ON posts(board,root,timestamp,seq);
 CREATE INDEX IF NOT EXISTS posts_board_timestamp ON posts(board,timestamp,seq);
