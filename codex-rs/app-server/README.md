@@ -1,3 +1,12 @@
+# Model catalog provider requirements
+
+`model/list` and periodic model catalog refreshes check the startup provider against
+current managed provider requirements before using the catalog. If that provider no longer
+complies, `model/list` returns JSON-RPC error `-32600` asking the client to restart Codex,
+and background refreshes skip the old endpoint. Requirement load failures also block these
+operations. Checks apply even when the catalog is cached. Existing startup provider selection
+and caching behavior remain in effect while the provider satisfies current requirements.
+
 # MCP App UI
 
 `mcpToolCall.mcpAppUi` records the invoked descriptor's `resourceUri`

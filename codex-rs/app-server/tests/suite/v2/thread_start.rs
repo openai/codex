@@ -52,6 +52,7 @@ use serde_json::json;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -1416,8 +1417,12 @@ async fn thread_start_does_not_wait_for_optional_http_mcp_auth_discovery() -> Re
     Ok(())
 }
 
+#[test_case("thread/start"; "thread_start")]
+#[test_case("model/list"; "model_list")]
 #[tokio::test]
-async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
+async fn config_requests_surface_cloud_config_bundle_load_errors(
+    request_method: &str,
+) -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/wham/config/bundle"))
@@ -1468,9 +1473,13 @@ async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
         .build_initialized()
         .await?;
 
-    let req_id = mcp
-        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
-        .await?;
+    let req_id = if request_method == "thread/start" {
+        mcp.send_thread_start_request_with_auto_env(ThreadStartParams::default())
+            .await?
+    } else {
+        mcp.send_raw_request(request_method, Some(json!({})))
+            .await?
+    };
 
     let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
