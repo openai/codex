@@ -582,6 +582,8 @@ pub struct ToolMessages {
     pub send_user_message_async: Option<ToolMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent: Option<MultiAgentToolMessages>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_mode: Option<CodeModeToolMessages>,
 }
 
 /// Model-owned messages for a built-in tool.
@@ -591,7 +593,7 @@ pub struct ToolMessage {
     /// text without disabling the tool. Tool-owned runtime guidance is retained.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// Complete JSON Schema encoded as a string. Consumed by Multi-Agent V2 tools only.
+    /// Complete JSON Schema encoded as a string. Consumed by Multi-Agent V2 tools and Code Mode wait.
     /// Uses the harness's supported schema subset; unrecognized keywords are ignored.
     /// Missing, null, invalid or unsupported structures, or a root without `type: "object"`
     /// retains the harness parameters. Schema semantics must remain API-compatible.
@@ -618,6 +620,28 @@ pub struct MultiAgentToolMessages {
     pub interrupt_agent: Option<ToolMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list_agents: Option<ToolMessage>,
+}
+
+/// Model-owned instructions for Code Mode's exec and wait tools.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct CodeModeToolMessages {
+    /// Instructional template supporting `{{ default_exec_yield_time_ms }}` and `{{ image_helper }}`.
+    /// Runtime tool declarations are appended. Unknown placeholders remain literal.
+    /// Exec accepts raw JavaScript; `parameters` is not consumed and its grammar is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<ToolMessage>,
+    /// Complete description and JSON parameter schema, selected independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<ToolMessage>,
+    /// Literal guidance appended when deferred nested tools exist.
+    /// Missing or null uses bundled text; an empty string omits the section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_nested_tools_guidance: Option<String>,
+    /// Literal shared TypeScript definitions, emitted when Code Mode Only exposes MCP results.
+    /// Missing or null uses bundled definitions; an empty string omits the section.
+    /// Custom definitions must remain compatible with the generated tool declarations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_typescript_preamble: Option<String>,
 }
 
 /// Model-owned defaults for the context-window token-budget feature.
@@ -1416,6 +1440,7 @@ mod tests {
                     }),
                     ..Default::default()
                 }),
+                ..Default::default()
             }),
             instructions_template: None,
             instructions_variables: None,

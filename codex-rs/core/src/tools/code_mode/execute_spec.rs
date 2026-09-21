@@ -1,5 +1,6 @@
 use codex_code_mode::ImageDetailVisibility;
 use codex_code_mode::ToolDefinition as CodeModeToolDefinition;
+use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_tools::FreeformTool;
 use codex_tools::FreeformToolFormat;
 use codex_tools::ToolSpec;
@@ -12,6 +13,7 @@ pub(crate) fn create_code_mode_tool(
     default_exec_yield_time_ms: u64,
     code_mode_only: bool,
     image_detail_visibility: ImageDetailVisibility,
+    messages: Option<&CodeModeToolMessages>,
 ) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
@@ -32,6 +34,7 @@ SOURCE: /[\s\S]+/
             default_exec_yield_time_ms,
             code_mode_only,
             image_detail_visibility,
+            messages,
         ),
         defer_loading: None,
         format: FreeformToolFormat {
@@ -67,6 +70,7 @@ mod tests {
                 codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                 /*code_mode_only*/ true,
                 ImageDetailVisibility::Visible,
+                /*messages*/ None,
             ),
             ToolSpec::Freeform(FreeformTool {
                 name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
@@ -77,6 +81,7 @@ mod tests {
                     codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
                     /*code_mode_only*/ true,
                     ImageDetailVisibility::Visible,
+                    /*messages*/ None,
                 ),
                 defer_loading: None,
                 format: FreeformToolFormat {

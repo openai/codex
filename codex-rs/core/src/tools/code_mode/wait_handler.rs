@@ -20,7 +20,9 @@ use super::telemetry::CodeModeToolCallGuard;
 use super::telemetry::trace_id;
 use super::wait_spec::create_wait_tool;
 
-pub struct CodeModeWaitHandler;
+pub struct CodeModeWaitHandler {
+    spec: ToolSpec,
+}
 
 #[derive(Debug, Deserialize)]
 struct ExecWaitArgs {
@@ -52,7 +54,7 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_wait_tool()
+        self.spec.clone()
     }
 
     fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
@@ -64,6 +66,15 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
 }
 
 impl CodeModeWaitHandler {
+    pub(crate) fn new(
+        description_override: Option<&str>,
+        parameters_override: Option<&str>,
+    ) -> Self {
+        Self {
+            spec: create_wait_tool(description_override, parameters_override),
+        }
+    }
+
     // Default to interrupted if this future is dropped; telemetry::CodeModeToolCallGuard::finish
     // overwrites this handler's captured span on explicit success or failure, including early errors.
     #[tracing::instrument(

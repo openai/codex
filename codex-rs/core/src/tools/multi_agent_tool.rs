@@ -13,7 +13,6 @@ use codex_tools::ToolName;
 use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
-use serde_json::Value;
 use std::sync::Arc;
 
 pub(crate) const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str =
@@ -26,13 +25,7 @@ pub(super) fn multi_agent_v2_handler(
     parameters_override: Option<&str>,
 ) -> Arc<dyn CoreToolRuntime> {
     let parameters_override = parameters_override.map(|parameters| -> Result<JsonSchema, &str> {
-        let parameters: Value =
-            serde_json::from_str(parameters).map_err(|_| "schema is not valid JSON")?;
-        if !parameters.is_object() || parameters["type"] != "object" {
-            return Err("schema must declare an object type");
-        }
-        let mut parameters: JsonSchema = serde_json::from_value(parameters)
-            .map_err(|_| "schema uses unsupported JSON Schema structures")?;
+        let mut parameters = super::catalog_parameters::parse(parameters)?;
         if let ToolSpec::Function(tool) = handler.spec()
             && let Some(properties) = tool.parameters.properties
         {

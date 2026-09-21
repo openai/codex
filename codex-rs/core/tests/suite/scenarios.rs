@@ -32,6 +32,9 @@ use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::items::AgentMessageDelivery;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ImageReference;
+use codex_protocol::openai_models::CodeModeToolMessages;
+use codex_protocol::openai_models::ToolMessage;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -62,6 +65,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_mcp_server;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::oneshot;
@@ -770,6 +774,100 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
             "Astra receives host and handler timings on completed and failed code-mode calls.",
             &mock.requests(),
             &ContextSnapshotOptions::default(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_catalog_messages() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps =
+        core_test_support::apps_test_server::AppsTestServer::mount_searchable(&server).await?;
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.chatgpt_base_url = apps.chatgpt_base_url;
+            config.features.enable(Feature::Apps).expect("enable apps");
+            config.workspace_roots = vec![config.cwd.clone()];
+            config.code_mode.disable_in_process_fallback = true;
+            config.code_mode.default_exec_yield_time_ms = 1234;
+            config.features.enable(Feature::CodeModeHost).expect("enable the code-mode host");
+            let model = config.model_catalog.as_mut().expect("scenario model catalog")
+                .models.iter_mut().find(|model| model.slug == "gpt-6-astra")
+                .expect("Astra model");
+            model.tool_mode = Some(ToolMode::CodeModeOnly);
+            model.use_responses_lite = false;
+            model.supports_search_tool = true;
+            model.model_messages.as_mut().expect("model messages").tools
+                .get_or_insert_with(Default::default).code_mode = Some(CodeModeToolMessages {
+                    exec: Some(ToolMessage {
+                        description: Some("Catalog exec instructions. Default yield: {{ default_exec_yield_time_ms }} ms.\n{{ image_helper }}".to_string()),
+                        ..Default::default()
+                    }),
+                    wait: Some(ToolMessage {
+                        description: Some("Catalog wait instructions: resume the yielded cell.".to_string()),
+                        parameters: Some(json!({
+                            "type": "object",
+                            "properties": {
+                                "cell_id": {"type": "string", "description": "Catalog cell identifier returned by exec."},
+                                "yield_time_ms": {"type": "number", "description": "Catalog wait duration in milliseconds."},
+                                "max_tokens": {"type": "number", "description": "Catalog output token limit."},
+                                "terminate": {"type": "boolean", "description": "Catalog switch to terminate the cell."}
+                            },
+                            "required": ["cell_id"],
+                            "additionalProperties": false
+                        }).to_string()),
+                    }),
+                    deferred_nested_tools_guidance: Some("Catalog discovery: find nested tools by name and description in ALL_TOOLS.".to_string()),
+                    mcp_typescript_preamble: Some("type CallToolResult<T = unknown> = { content: unknown[]; structuredContent?: T; isError?: boolean };".to_string()),
+                });
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("exec-response"),
+                ev_custom_tool_call(
+                    "exec-call",
+                    "exec",
+                    "text('started'); yield_control(); text('finished');",
+                ),
+                ev_completed("exec-response"),
+            ]),
+            sse(vec![
+                ev_response_created("wait-response"),
+                ev_function_call_with_namespace(
+                    "wait-call",
+                    "functions",
+                    "wait",
+                    r#"{"cell_id":"1"}"#,
+                ),
+                ev_completed("wait-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message("final", "The cell started, yielded, and finished."),
+                ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+    test.submit_turn("Start a code cell, yield its initial output, then wait for its completion.")
+        .await?;
+    let requests = mock.requests();
+    assert!(requests[0].body_contains_text("Catalog discovery: find nested tools"));
+    assert!(requests[0].body_contains_text("type CallToolResult<T = unknown>"));
+    insta::assert_snapshot!(
+        "code_mode_catalog_messages",
+        context_snapshot::format_request_history_snapshot(
+            "Catalog Code Mode instructions and wait parameter descriptions accompany a yielded cell through completion.",
+            &requests,
+            &ContextSnapshotOptions::default().include_request_settings(),
         )
     );
     Ok(())
