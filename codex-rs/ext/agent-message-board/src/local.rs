@@ -1,6 +1,7 @@
 //! SQLite-backed boards. The tree ID scopes every read and write.
 //!
 //! Immediate transactions serialize mutations across independently opened handles.
+//! Live handles in this process share one connection pool per database path.
 //! Accepted posts survive runtime unload and process restart, but cannot recreate
 //! a board after its root has been permanently deleted.
 
@@ -31,18 +32,31 @@ use serde::Serialize;
 use sqlx::Row;
 use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Weak;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 mod lifecycle;
 mod paging;
 mod queries;
 
+#[cfg(test)]
+#[path = "local/pools_tests.rs"]
+mod pools_tests;
+
 const MAX_POST_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
 const DATABASE_FILE: &str = "agent_message_board_1.sqlite";
+
+// Weak entries let the last board handle release its pool. Initialization and
+// recovery share one lock so concurrent starts cannot open duplicate or stale pools.
+static POOLS: LazyLock<Mutex<HashMap<PathBuf, Weak<SqlitePool>>>> = LazyLock::new(Mutex::default);
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS deleted_boards (board TEXT PRIMARY KEY NOT NULL);
@@ -70,7 +84,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 #[derive(Clone)]
 pub struct LocalAgentMessageBoard {
     identity: SessionId,
-    pool: SqlitePool,
+    pool: Arc<SqlitePool>,
     host: Arc<dyn MessageBoardHost>,
 }
 
@@ -83,20 +97,40 @@ struct StoredPost {
 impl LocalAgentMessageBoard {
     /// Reopens the same board for a root, child or resumed runtime. The shared
     /// SQLite configuration preserves the host's connection and journal policy.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "pool creation and schema initialization stay serialized to avoid duplicate pools"
+    )]
     pub async fn open(
         sqlite: &SqliteConfig,
         identity: SessionId,
         host: Arc<dyn MessageBoardHost>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(sqlite.home()).await?;
-        let pool = sqlite
-            .open_read_write_pool(&sqlite.home().join(DATABASE_FILE))
-            .await
-            .map_err(storage_error)?;
-        sqlx::raw_sql(SCHEMA)
-            .execute(&pool)
-            .await
-            .map_err(storage_error)?;
+        let path = tokio::fs::canonicalize(sqlite.home())
+            .await?
+            .join(DATABASE_FILE);
+        let mut pools = POOLS.lock().await;
+        pools.retain(|_, pool| pool.strong_count() > 0);
+        let pool = if let Some(pool) = pools
+            .get(&path)
+            .and_then(Weak::upgrade)
+            .filter(|pool| !pool.is_closed())
+        {
+            pool
+        } else {
+            let pool = sqlite
+                .open_read_write_pool(&path)
+                .await
+                .map_err(storage_error)?;
+            sqlx::raw_sql(SCHEMA)
+                .execute(&pool)
+                .await
+                .map_err(storage_error)?;
+            let pool = Arc::new(pool);
+            pools.insert(path, Arc::downgrade(&pool));
+            pool
+        };
         Ok(Self {
             identity,
             pool,

@@ -8,7 +8,6 @@ version.workspace = true
 name = "codex_agent_message_board_extension"
 path = "src/lib.rs"
 doctest = false
-test = false
 
 [lints]
 workspace = true

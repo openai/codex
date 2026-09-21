@@ -1,10 +1,12 @@
 //! Permanent board deletion, serialized with writes across all open handles.
 //!
 //! Keep only a root ID tombstone so delayed writes cannot resurrect deleted data.
-//! If corruption prevents opening the database, back it up before recreating it.
+//! Recovery closes the cached pool before backing up and recreating the database,
+//! and excludes new handles until the replacement's deletion tombstones are saved.
 
 use super::DATABASE_FILE;
 use super::LocalAgentMessageBoard;
+use super::POOLS;
 use super::SCHEMA;
 use super::invalid;
 use super::storage_error;
@@ -13,17 +15,26 @@ use codex_protocol::error::Result;
 use codex_state::SqliteConfig;
 use sqlx::Sqlite;
 use sqlx::Transaction;
+use std::sync::Weak;
 
 impl LocalAgentMessageBoard {
     /// Permanently removes boards owned by these roots, including their posts and subscriptions.
     /// A child's ID does not match its parent's board. Unload and archive must not call this.
     /// Safe to retry and independent of whether the feature is currently enabled.
     /// Recovering an unopenable corrupt database resets all boards, retaining a backup.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "recovery excludes new handles until replacement deletion tombstones are saved"
+    )]
     pub async fn delete_boards(sqlite: &SqliteConfig, roots: &[SessionId]) -> Result<()> {
         let path = sqlite.home().join(DATABASE_FILE);
         if roots.is_empty() || !tokio::fs::try_exists(&path).await? {
             return Ok(());
         }
+        let path = tokio::fs::canonicalize(sqlite.home())
+            .await?
+            .join(DATABASE_FILE);
+        let mut pools = POOLS.lock().await;
         let pool = match sqlite.open_read_write_pool(&path).await {
             Ok(pool) => pool,
             Err(error) => {
@@ -31,6 +42,10 @@ impl LocalAgentMessageBoard {
                 if !codex_state::is_sqlite_corruption_error(&error) {
                     return Err(storage_error(error));
                 }
+                if let Some(pool) = pools.get(&path).and_then(Weak::upgrade) {
+                    pool.close().await;
+                }
+                pools.remove(&path);
                 let backups = codex_state::backup_runtime_db_for_fresh_start(&path).await?;
                 tracing::warn!(
                     database = %path.display(),
