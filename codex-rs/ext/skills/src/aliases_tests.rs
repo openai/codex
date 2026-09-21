@@ -49,7 +49,7 @@ fn shortens_filesystem_and_skill_resource_locators() {
             "skill://executor/workspace/skills/alpha/SKILL.md",
             "e0/alpha/SKILL.md",
         ),
-        ("o", "skill://plugin", "skill://plugin/alpha", "o0/alpha"),
+        ("c", "skill://plugin", "skill://plugin/alpha", "c0/alpha"),
     ] {
         let plan = AliasPlan::build(prefix, &[root, root]).expect("alias plan should build");
 

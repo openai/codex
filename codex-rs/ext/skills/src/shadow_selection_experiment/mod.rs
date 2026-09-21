@@ -90,10 +90,10 @@ impl ShadowSelectionExperiment {
             .filter(|(_, entry)| {
                 entry.is_model_visible()
                     // Invocation observation currently exists only for host shell use and
-                    // orchestrator reads. Keep the candidate set aligned with that universe.
+                    // cloud reads. Keep the candidate set aligned with that universe.
                     && matches!(
                         &entry.authority.kind,
-                        SkillSourceKind::Host | SkillSourceKind::Orchestrator
+                        SkillSourceKind::Host | SkillSourceKind::Cloud
                     )
                     && !explicitly_selected_skill_resources
                         .contains(&normalize_skill_resource(entry.main_prompt.as_str()))
@@ -209,7 +209,7 @@ impl ShadowSelectionExperiment {
             entry.is_model_visible()
                 && matches!(
                     &entry.authority.kind,
-                    SkillSourceKind::Host | SkillSourceKind::Orchestrator
+                    SkillSourceKind::Host | SkillSourceKind::Cloud
                 )
         }) {
             task_context.record(

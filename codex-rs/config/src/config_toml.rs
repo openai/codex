@@ -140,14 +140,23 @@ of strings; comma-separated strings are not supported. Use \
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct OrchestratorToml {
-    pub skills: Option<OrchestratorFeatureToml>,
-    pub mcp: Option<OrchestratorFeatureToml>,
+    /// Legacy no-op setting retained for compatibility. Use `cloud.skills` to configure cloud skills.
+    pub skills: Option<FeatureToggleToml>,
+    pub mcp: Option<FeatureToggleToml>,
 }
 
-/// Settings for a feature owned by the orchestrator.
+/// Cloud-owned feature settings.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-pub struct OrchestratorFeatureToml {
+pub struct CloudToml {
+    /// Cloud skills are permitted by default; the host must supply a cloud provider.
+    pub skills: Option<FeatureToggleToml>,
+}
+
+/// Optional enablement of a configured feature.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct FeatureToggleToml {
     pub enabled: Option<bool>,
 }
 
@@ -408,6 +417,9 @@ pub struct ConfigToml {
 
     /// Orchestrator-owned feature settings.
     pub orchestrator: Option<OrchestratorToml>,
+
+    /// Cloud-owned feature settings.
+    pub cloud: Option<CloudToml>,
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,

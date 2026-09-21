@@ -1,17 +1,20 @@
-//! Exercises installed-metadata refreshes against live MCP and skill caches.
+//! Exercises installed-metadata refreshes against live MCP and bundled plugin skills.
 
 use super::*;
 use axum::Json;
 use axum::routing::get;
 use codex_app_server_protocol::PluginInstalledResponse;
 use codex_app_server_protocol::PluginReconcileResponse;
+use codex_app_server_protocol::SkillMetadata;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use pretty_assertions::assert_eq;
 use tokio::sync::RwLock;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn signed_image_renewal_preserves_live_mcp_and_skills() -> Result<()> {
+async fn signed_image_renewal_preserves_live_mcp_and_plugin_skills() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let base_url = format!("http://{}", listener.local_addr()?);
@@ -33,13 +36,17 @@ async fn signed_image_renewal_preserves_live_mcp_and_skills() -> Result<()> {
         },
         "enabled": true,
     })));
-    let manifest = br#"{"name":"demo-plugin"}"#;
     let mut archive = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
-    let mut header = tar::Header::new_gnu();
-    header.set_size(manifest.len() as u64);
-    header.set_mode(/*mode*/ 0o644);
-    header.set_cksum();
-    archive.append_data(&mut header, ".codex-plugin/plugin.json", &manifest[..])?;
+    for (path, contents) in [
+        (".codex-plugin/plugin.json", r#"{"name":"demo-plugin"}"#),
+        ("skills/deploy/SKILL.md", SKILL_CONTENTS),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(/*mode*/ 0o644);
+        header.set_cksum();
+        archive.append_data(&mut header, path, contents.as_bytes())?;
+    }
     let bundle = archive.into_inner()?.finish()?;
 
     let calls = Arc::new(ResourceAppsMcpCalls::default());
@@ -49,9 +56,9 @@ async fn signed_image_renewal_preserves_live_mcp_and_skills() -> Result<()> {
     let mcp_service = StreamableHttpService::new(
         move || {
             server_sessions.fetch_add(1, Ordering::SeqCst);
-            Ok(MetadataMcpServer(ResourceAppsMcpServer {
+            Ok(ResourceAppsMcpServer {
                 calls: Arc::clone(&server_calls),
-            }))
+            })
         },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
@@ -103,7 +110,7 @@ async fn signed_image_renewal_preserves_live_mcp_and_skills() -> Result<()> {
         .build_initialized()
         .await?;
     refresh_and_expect_logo(&mut app_server, original_logo).await?;
-    // Hosted skills are exposed without a local executor, as in the other resource tests.
+    // MCP resource reads do not require an executor or a registered cloud-skill provider.
     let request_id = app_server
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.5".to_string()),
@@ -114,39 +121,56 @@ async fn signed_image_renewal_preserves_live_mcp_and_skills() -> Result<()> {
     let ThreadStartResponse { thread, .. } =
         timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
 
-    read_skill_in_turn(&mut app_server, &responses_server, &thread.id).await?;
+    read_mcp_skill_resource(&mut app_server, &thread.id).await?;
     let warm_sessions = sessions.load(Ordering::SeqCst);
     assert!(warm_sessions > 0);
-    let warm_calls = calls.snapshot();
-    assert_eq!(warm_calls.list_resources, 1);
-    assert_eq!(warm_calls.main_prompt_reads, 1);
+    let warm_skills = list_plugin_skills(&mut app_server, codex_home.path()).await?;
+    assert_eq!(warm_skills.len(), 1);
+    assert_eq!(warm_skills[0].name, SKILL_NAME);
+    assert_eq!(
+        warm_skills[0].description,
+        "Deploy through the orchestrator."
+    );
+    assert!(warm_skills[0].enabled);
+    assert_eq!(
+        std::fs::read_to_string(warm_skills[0].path.as_path())?,
+        SKILL_CONTENTS
+    );
 
     installed.write().await["release"]["interface"]["logo_url"] = json!(renewed_logo);
     refresh_and_expect_logo(&mut app_server, renewed_logo).await?;
-    read_skill_in_turn(&mut app_server, &responses_server, &thread.id).await?;
+    read_mcp_skill_resource(&mut app_server, &thread.id).await?;
     assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
-    assert_eq!(calls.snapshot(), warm_calls);
+    assert_eq!(
+        list_plugin_skills(&mut app_server, codex_home.path()).await?,
+        warm_skills
+    );
 
     installed.write().await["release"]["interface"]["capabilities"] =
         json!(["Updated store badge"]);
     refresh_and_expect_logo(&mut app_server, renewed_logo).await?;
-    read_skill_in_turn(&mut app_server, &responses_server, &thread.id).await?;
+    read_mcp_skill_resource(&mut app_server, &thread.id).await?;
     assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
-    assert_eq!(calls.snapshot(), warm_calls);
-
-    // A policy change must invalidate both caches without rewriting any bundle files.
-    installed.write().await["release"]["interface"]["logo_url"] = json!(changed_logo);
-    installed.write().await["authentication_policy"] = json!("ON_INSTALL");
-    refresh_and_expect_logo(&mut app_server, changed_logo).await?;
-    read_skill_in_turn(&mut app_server, &responses_server, &thread.id).await?;
-    // Core may retain the HTTP connection, but the callback must invalidate resources.
     assert_eq!(
-        calls.snapshot(),
-        ResourceAppsMcpCallCounts {
-            list_resources: 2,
-            main_prompt_reads: 2,
-            reference_reads: 0,
-        }
+        list_plugin_skills(&mut app_server, codex_home.path()).await?,
+        warm_skills
+    );
+
+    // Runtime metadata must update the cached skill catalog without changing the bundle.
+    installed.write().await["release"]["interface"]["logo_url"] = json!(changed_logo);
+    installed.write().await["enabled"] = json!(false);
+    refresh_and_expect_logo(&mut app_server, changed_logo).await?;
+    assert!(
+        list_plugin_skills(&mut app_server, codex_home.path())
+            .await?
+            .is_empty()
+    );
+    read_mcp_skill_resource(&mut app_server, &thread.id).await?;
+    assert_eq!(sessions.load(Ordering::SeqCst), warm_sessions);
+    assert_eq!(calls.snapshot().main_prompt_reads, 4);
+    assert_eq!(
+        std::fs::read_to_string(warm_skills[0].path.as_path())?,
+        SKILL_CONTENTS
     );
     server_handle.abort();
     Ok(())
@@ -198,87 +222,51 @@ async fn refresh_and_expect_logo(app_server: &mut TestAppServer, logo: &str) -> 
     Ok(())
 }
 
-async fn read_skill_in_turn(
+async fn list_plugin_skills(
     app_server: &mut TestAppServer,
-    responses_server: &wiremock::MockServer,
-    thread_id: &str,
-) -> Result<()> {
-    let response_mock = responses::mount_sse_sequence(
-        responses_server,
-        vec![
-            responses::sse(vec![
-                responses::ev_function_call_with_namespace(
-                    "read-main",
-                    "skills",
-                    "read",
-                    &json!({"package": SKILL_RESOURCE_URI}).to_string(),
-                ),
-                responses::ev_completed("read"),
-            ]),
-            responses::sse(vec![responses::ev_completed("done")]),
-        ],
-    )
-    .await;
-    let completed = timeout(
-        DEFAULT_READ_TIMEOUT,
-        app_server.start_turn_and_wait_for_completion(TurnStartParams {
-            thread_id: thread_id.to_string(),
-            input: vec![UserInput::Text {
-                text: "Read the deployment skill.".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        }),
-    )
-    .await??;
-    assert_eq!(completed.turn.status, TurnStatus::Completed);
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(
-        requests[0]
-            .message_input_texts("developer")
-            .iter()
-            .any(|text| text.contains(SKILL_NAME))
-    );
-    let output = requests[1]
-        .function_call_output_text("read-main")
-        .context("skill read should reach the model")?;
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&output)?,
-        json!({"resource": SKILL_MAIN_PROMPT_URI, "contents": SKILL_CONTENTS, "next_cursor": null})
-    );
-    Ok(())
+    cwd: &Path,
+) -> Result<Vec<SkillMetadata>> {
+    let request = app_server
+        .send_skills_list_request(SkillsListParams {
+            cwds: vec![cwd.to_path_buf()],
+            force_reload: false,
+        })
+        .await?;
+    let response: SkillsListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await??;
+    assert_eq!(response.data.len(), 1);
+    assert!(response.data[0].errors.is_empty());
+    Ok(response
+        .data
+        .into_iter()
+        .flat_map(|entry| entry.skills)
+        .filter(|skill| skill.plugin_id.as_deref() == Some("demo-plugin@openai-curated-remote"))
+        .collect())
 }
 
-// Reuse the resource-read fixture with a healthy, single-page skills catalog.
-struct MetadataMcpServer(ResourceAppsMcpServer);
-
-impl ServerHandler for MetadataMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        self.0.get_info()
-    }
-
-    async fn list_resources(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
-        self.0.calls.list_resources.fetch_add(1, Ordering::Relaxed);
-        Ok(ListResourcesResult::with_all_items(vec![skill_resource(
-            SKILL_RESOURCE_URI,
-            "plugin_demo/deploy",
-            RAW_SKILL_DESCRIPTION,
-            "mcp/skill",
-            "demo-plugin",
-            "deploy",
-        )]))
-    }
-
-    async fn read_resource(
-        &self,
-        request: ReadResourceRequestParams,
-        context: RequestContext<RoleServer>,
-    ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
-        self.0.read_resource(request, context).await
-    }
+async fn read_mcp_skill_resource(app_server: &mut TestAppServer, thread_id: &str) -> Result<()> {
+    let request = app_server
+        .send_mcp_resource_read_request(McpResourceReadParams {
+            thread_id: Some(thread_id.to_string()),
+            origin_call_id: None,
+            server: "codex_apps".to_string(),
+            uri: SKILL_MAIN_PROMPT_URI.to_string(),
+            connector_id: None,
+        })
+        .await?;
+    let response: McpResourceReadResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request)).await??;
+    assert_eq!(
+        response,
+        McpResourceReadResponse {
+            contents: vec![McpResourceContent::Text {
+                uri: SKILL_MAIN_PROMPT_URI.to_string(),
+                mime_type: Some("text/markdown".to_string()),
+                text: SKILL_CONTENTS.to_string(),
+                meta: None,
+            }],
+            origin_call_id: None,
+        }
+    );
+    Ok(())
 }

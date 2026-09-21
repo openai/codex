@@ -81,7 +81,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
 
             let mut selected_skill = None;
             for selector in [
-                super::SkillToolAuthoritySelector::Orchestrator,
+                super::SkillToolAuthoritySelector::Cloud,
                 super::SkillToolAuthoritySelector::Executor,
             ] {
                 let catalog = self.context.catalog(&call.turn_id, selector).await;
@@ -215,7 +215,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                             "skill provider returned a different resource".to_string(),
                         ));
                     }
-                    if output_authority == super::SkillToolAuthoritySelector::Orchestrator
+                    if output_authority == super::SkillToolAuthoritySelector::Cloud
                         && let Some(state) = self
                             .context
                             .thread_state

@@ -29,6 +29,7 @@ use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnInputContext;
+use codex_extension_api::TurnStartInput;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_models_manager::model_info::model_info_from_slug;
@@ -89,7 +90,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 mod shadow_task_context_tests;
 
 static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
-const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `orchestrator package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
+const SKILLS_INTRO_WITH_ABSOLUTE_PATHS: &str = "A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that can be used. Each entry includes a name, description, and source locator. `file` locators are on the host filesystem, `executor package` locators are owned by their execution environment, `cloud package` locators are opaque package identifiers, and `custom resource` locators use their provider's access mechanism.";
 const DEMO_SKILL_CONTENTS: &str =
     "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n";
 
@@ -144,10 +145,39 @@ async fn skill_world_state_fragments(
     let executor = world_state_section(&sections, "skills")
         .render_diff(PreviousWorldStateSection::Absent)
         .ok_or("executor skills should render through world state")?;
-    let orchestrator = world_state_section(&sections, "orchestrator_skills")
+    let cloud = world_state_section(&sections, "cloud_skills")
         .render_diff(PreviousWorldStateSection::Absent)
-        .ok_or("orchestrator skills should render through world state")?;
-    Ok((executor, orchestrator))
+        .ok_or("cloud skills should render through world state")?;
+    Ok((executor, cloud))
+}
+
+async fn start_registered_turn(
+    registry: &codex_extension_api::ExtensionRegistry<TestConfig>,
+    session_store: &ExtensionData,
+    thread_store: &ExtensionData,
+    turn_id: &str,
+) {
+    let turn_store = ExtensionData::new(turn_id);
+    let mode = codex_protocol::config_types::CollaborationMode {
+        mode: codex_protocol::config_types::ModeKind::Default,
+        settings: codex_protocol::config_types::Settings {
+            model: "test".to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+    for contributor in registry.turn_lifecycle_contributors() {
+        contributor
+            .on_turn_start(TurnStartInput {
+                turn_id,
+                collaboration_mode: &mode,
+                token_usage_at_turn_start: None,
+                session_store,
+                thread_store,
+                turn_store: &turn_store,
+            })
+            .await;
+    }
 }
 
 #[tokio::test]
@@ -482,7 +512,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
 }
 
 #[tokio::test]
-async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> TestResult {
+async fn executor_cloud_and_host_share_catalog_world_state_flow() -> TestResult {
     let provider = |entry: SkillCatalogEntry| {
         Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
@@ -501,11 +531,11 @@ async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> Test
             "executor/executor-skill",
             "skill://executor/executor-skill/SKILL.md",
         )))
-        .with_orchestrator_provider(provider(test_entry(
-            SkillSourceKind::Orchestrator,
+        .with_cloud_provider(provider(test_entry(
+            SkillSourceKind::Cloud,
             "codex_apps",
-            "orchestrator/orchestrator-skill",
-            "skill://orchestrator/orchestrator-skill/SKILL.md",
+            "cloud/cloud-skill",
+            "skill://cloud/cloud-skill/SKILL.md",
         )))
         .with_host_provider(provider(
             test_entry(
@@ -533,6 +563,7 @@ async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> Test
             thread_store: &thread_store,
         })
         .await;
+    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
 
     let selected_roots = [SelectedCapabilityRoot {
         id: "skills".to_string(),
@@ -566,7 +597,7 @@ async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> Test
             .iter()
             .map(WorldStateSectionContribution::id)
             .collect::<Vec<_>>(),
-        vec!["skills", "orchestrator_skills", "host_skills"]
+        vec!["skills", "cloud_skills", "host_skills"]
     );
     assert!(metrics.samples().is_empty());
 
@@ -576,8 +607,8 @@ async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> Test
             "- executor-skill: Fix lint errors. (executor package: executor/executor-skill)",
         ),
         (
-            "orchestrator_skills",
-            "- orchestrator-skill: Fix lint errors. (orchestrator package: orchestrator/orchestrator-skill)",
+            "cloud_skills",
+            "- cloud-skill: Fix lint errors. (cloud package: cloud/cloud-skill)",
         ),
         (
             "host_skills",
@@ -592,7 +623,7 @@ async fn executor_orchestrator_and_host_share_catalog_world_state_flow() -> Test
 
     let expected_metrics = [
         "executor_world_state",
-        "orchestrator_world_state",
+        "cloud_world_state",
         "host_world_state",
     ]
     .into_iter()
@@ -1268,13 +1299,13 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
         "skill://executor/executor-long-description/SKILL.md",
     );
     executor_entry.description = description.clone();
-    let mut orchestrator_entry = test_entry(
-        SkillSourceKind::Orchestrator,
+    let mut cloud_entry = test_entry(
+        SkillSourceKind::Cloud,
         "codex_apps",
-        "orchestrator/orchestrator-long-description",
-        "skill://orchestrator/orchestrator-long-description/SKILL.md",
+        "cloud/cloud-long-description",
+        "skill://cloud/cloud-long-description/SKILL.md",
     );
-    orchestrator_entry.description = description.clone();
+    cloud_entry.description = description.clone();
     let providers = SkillProviders::new()
         .with_executor_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
@@ -1285,9 +1316,9 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
             list_calls: None,
             fail_first_list: false,
         }))
-        .with_orchestrator_provider(Arc::new(StaticSkillProvider {
+        .with_cloud_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
-                entries: vec![orchestrator_entry],
+                entries: vec![cloud_entry],
                 warnings: Vec::new(),
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1313,16 +1344,13 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
             thread_store: &thread_store,
         })
         .await;
+    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
 
-    let (executor, orchestrator) =
+    let (executor, cloud) =
         skill_world_state_fragments(&registry, &session_store, &thread_store, "turn-1").await?;
     assert!(executor.body().contains("- executor-long-description:"));
-    assert!(
-        orchestrator
-            .body()
-            .contains("- orchestrator-long-description:")
-    );
-    for rendered in [executor.body(), orchestrator.body()] {
+    assert!(cloud.body().contains("- cloud-long-description:"));
+    for rendered in [executor.body(), cloud.body()] {
         assert!(rendered.contains(&("x".repeat(1_021) + "...")));
         assert!(!rendered.contains(&"x".repeat(1_024)));
         assert!(!rendered.contains(&description));
@@ -1347,11 +1375,11 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
             entry
         })
         .collect();
-    let orchestrator_entries = (0..5)
+    let cloud_entries = (0..5)
         .map(|index| {
-            let package_id = format!("orchestrator/orchestrator-skill-{index:02}");
+            let package_id = format!("cloud/cloud-skill-{index:02}");
             let mut entry = test_entry(
-                SkillSourceKind::Orchestrator,
+                SkillSourceKind::Cloud,
                 "codex_apps",
                 &package_id,
                 &format!("skill://{package_id}/SKILL.md"),
@@ -1370,9 +1398,9 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
             list_calls: None,
             fail_first_list: false,
         }))
-        .with_orchestrator_provider(Arc::new(StaticSkillProvider {
+        .with_cloud_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
-                entries: orchestrator_entries,
+                entries: cloud_entries,
                 warnings: Vec::new(),
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1398,35 +1426,33 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
             thread_store: &thread_store,
         })
         .await;
+    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
 
-    let (executor, orchestrator) =
+    let (executor, cloud) =
         skill_world_state_fragments(&registry, &session_store, &thread_store, "turn-1").await?;
-    let description_lengths = [
-        ("executor", executor.body()),
-        ("orchestrator", orchestrator.body()),
-    ]
-    .into_iter()
-    .flat_map(|(source, rendered)| (0..5).map(move |index| (source, rendered, index)))
-    .map(|(source, rendered, index)| {
-        let name = format!("{source}-skill-{index:02}");
-        let package_id = format!("{source}/{name}");
-        let line_prefix = format!("- {name}: ");
-        let line_suffix = if source == "executor" {
-            format!(" (executor package: {package_id})")
-        } else {
-            format!(" (orchestrator package: {package_id})")
-        };
-        rendered
-            .lines()
-            .find_map(|line| {
-                line.strip_prefix(&line_prefix)
-                    .and_then(|line| line.strip_suffix(&line_suffix))
-            })
-            .unwrap_or_else(|| panic!("rendered catalog should include {name}"))
-            .chars()
-            .count()
-    })
-    .collect::<Vec<_>>();
+    let description_lengths = [("executor", executor.body()), ("cloud", cloud.body())]
+        .into_iter()
+        .flat_map(|(source, rendered)| (0..5).map(move |index| (source, rendered, index)))
+        .map(|(source, rendered, index)| {
+            let name = format!("{source}-skill-{index:02}");
+            let package_id = format!("{source}/{name}");
+            let line_prefix = format!("- {name}: ");
+            let line_suffix = if source == "executor" {
+                format!(" (executor package: {package_id})")
+            } else {
+                format!(" (cloud package: {package_id})")
+            };
+            rendered
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix(&line_prefix)
+                        .and_then(|line| line.strip_suffix(&line_suffix))
+                })
+                .unwrap_or_else(|| panic!("rendered catalog should include {name}"))
+                .chars()
+                .count()
+        })
+        .collect::<Vec<_>>();
     let shortest_description = *description_lengths
         .iter()
         .min()
@@ -1438,7 +1464,7 @@ async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
     assert!(shortest_description > 0);
     assert!(longest_description < 1_024);
     assert!(longest_description.abs_diff(shortest_description) <= 1);
-    for rendered in [executor.body(), orchestrator.body()] {
+    for rendered in [executor.body(), cloud.body()] {
         assert!(!rendered.contains("additional skills omitted from this bounded skills list"));
         assert!(!rendered.contains(&"x".repeat(1_021)));
     }
@@ -1461,16 +1487,16 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
             entry
         })
         .collect();
-    let orchestrator_entries = (0..160)
+    let cloud_entries = (0..160)
         .map(|index| {
-            let package_id = format!("orchestrator/orchestrator-skill-{index:03}");
+            let package_id = format!("cloud/cloud-skill-{index:03}");
             let mut entry = test_entry(
-                SkillSourceKind::Orchestrator,
+                SkillSourceKind::Cloud,
                 "codex_apps",
                 &package_id,
                 &format!("skill://{package_id}/SKILL.md"),
             );
-            entry.description = format!("orchestrator-description-{index:03}");
+            entry.description = format!("cloud-description-{index:03}");
             entry
         })
         .collect();
@@ -1484,9 +1510,9 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
             list_calls: None,
             fail_first_list: false,
         }))
-        .with_orchestrator_provider(Arc::new(StaticSkillProvider {
+        .with_cloud_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
-                entries: orchestrator_entries,
+                entries: cloud_entries,
                 warnings: Vec::new(),
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1514,42 +1540,39 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
             thread_store: &thread_store,
         })
         .await;
+    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
 
-    let (executor, orchestrator) =
+    let (executor, cloud) =
         skill_world_state_fragments(&registry, &session_store, &thread_store, "turn-1").await?;
     let included_executor_count = executor
         .body()
         .lines()
         .filter(|line| line.starts_with("- executor-skill-"))
         .count();
-    let included_orchestrator_count = orchestrator
+    let included_cloud_count = cloud
         .body()
         .lines()
-        .filter(|line| line.starts_with("- orchestrator-skill-"))
+        .filter(|line| line.starts_with("- cloud-skill-"))
         .count();
     assert_eq!(40, included_executor_count);
-    assert!(included_orchestrator_count > 0);
-    assert!(included_orchestrator_count < 160);
+    assert!(included_cloud_count > 0);
+    assert!(included_cloud_count < 160);
     assert!(
         executor
             .body()
             .contains("- executor-skill-039: (executor package:")
     );
-    assert!(
-        orchestrator
-            .body()
-            .contains("- orchestrator-skill-000: (orchestrator package:")
-    );
-    assert!(!orchestrator.body().contains("- orchestrator-skill-159:"));
-    for rendered in [executor.body(), orchestrator.body()] {
+    assert!(cloud.body().contains("- cloud-skill-000: (cloud package:"));
+    assert!(!cloud.body().contains("- cloud-skill-159:"));
+    for rendered in [executor.body(), cloud.body()] {
         assert!(!rendered.contains("description-"));
     }
     assert!(
-        orchestrator
+        cloud
             .body()
             .contains("additional skills omitted from this bounded skills list")
     );
-    let omitted_count = 200 - included_executor_count - included_orchestrator_count;
+    let omitted_count = 200 - included_executor_count - included_cloud_count;
     let warning = event_rx.try_recv()?.into_warning();
     assert_eq!(warning.thread_id, "thread");
     assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
@@ -1567,20 +1590,20 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
 #[tokio::test]
 async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult {
     const OVERSIZED_WARNING: &str = "Some skills were omitted because their metadata is too large.";
-    const PROVIDER_WARNING: &str = "Some orchestrator skills could not be discovered because the provider disconnected before returning the complete catalog.";
+    const PROVIDER_WARNING: &str = "Some cloud skills could not be discovered because the provider disconnected before returning the complete catalog.";
 
     let supplementary_warning = "w".repeat(256);
     let opaque_suffix = "\\".repeat(1_500);
     let mut entry = test_entry(
-        SkillSourceKind::Orchestrator,
+        SkillSourceKind::Cloud,
         "codex_apps",
-        &format!("orchestrator/{opaque_suffix}"),
-        &format!("skill://orchestrator/{opaque_suffix}/SKILL.md"),
+        &format!("cloud/{opaque_suffix}"),
+        &format!("skill://cloud/{opaque_suffix}/SKILL.md"),
     );
     entry.description = "x".repeat(1_025);
     let [first_entry, mut middle_entry, mut final_entry] = ["p0", "p1", "p2"].map(|name| {
         test_entry(
-            SkillSourceKind::Orchestrator,
+            SkillSourceKind::Cloud,
             "codex_apps",
             name,
             &format!("skill://{name}/SKILL.md"),
@@ -1588,33 +1611,32 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
     });
     middle_entry.description = "d".repeat(110);
     final_entry.description = "d".repeat(50);
-    let providers =
-        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
-            catalog: SkillCatalog {
-                entries: vec![
-                    entry,
-                    first_entry,
-                    middle_entry,
-                    final_entry,
-                    test_entry(
-                        SkillSourceKind::Orchestrator,
-                        "codex_apps",
-                        "orchestrator/hidden",
-                        "skill://orchestrator/hidden/SKILL.md",
-                    )
-                    .hidden_from_prompt(),
-                ],
-                warnings: vec![
-                    PROVIDER_WARNING.to_string(),
-                    supplementary_warning.clone(),
-                    supplementary_warning.clone(),
-                    supplementary_warning.clone(),
-                ],
-            },
-            read_requests: Arc::new(Mutex::new(Vec::new())),
-            list_calls: None,
-            fail_first_list: false,
-        }));
+    let providers = SkillProviders::new().with_cloud_provider(Arc::new(StaticSkillProvider {
+        catalog: SkillCatalog {
+            entries: vec![
+                entry,
+                first_entry,
+                middle_entry,
+                final_entry,
+                test_entry(
+                    SkillSourceKind::Cloud,
+                    "codex_apps",
+                    "cloud/hidden",
+                    "skill://cloud/hidden/SKILL.md",
+                )
+                .hidden_from_prompt(),
+            ],
+            warnings: vec![
+                PROVIDER_WARNING.to_string(),
+                supplementary_warning.clone(),
+                supplementary_warning.clone(),
+                supplementary_warning.clone(),
+            ],
+        },
+        read_requests: Arc::new(Mutex::new(Vec::new())),
+        list_calls: None,
+        fail_first_list: false,
+    }));
     let mut builder = ExtensionRegistryBuilder::new();
     install_with_providers(&mut builder, providers, skills_extension_config);
     let registry = builder.build();
@@ -1634,6 +1656,7 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
             thread_store: &thread_store,
         })
         .await;
+    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
 
     let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
     let list_tool = tools
@@ -1641,7 +1664,7 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
         .find(|tool| tool.tool_name().name == "list")
         .ok_or("skills.list tool should be registered")?;
     let payload = ToolPayload::Function {
-        arguments: serde_json::json!({"authority": {"kind": "orchestrator"}}).to_string(),
+        arguments: serde_json::json!({"authority": {"kind": "cloud"}}).to_string(),
     };
     let call = ToolCall {
         turn_id: "turn-1".to_string(),
@@ -1709,7 +1732,7 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
     {
         let payload = ToolPayload::Function {
             arguments: serde_json::json!({
-                "authority": {"kind": "orchestrator"},
+                "authority": {"kind": "cloud"},
                 "cursor": cursor,
             })
             .to_string(),
@@ -1754,7 +1777,7 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
                 .ok_or("cursor should include its budget")?;
             let legacy_payload = ToolPayload::Function {
                 arguments: serde_json::json!({
-                    "authority": {"kind": "orchestrator"},
+                    "authority": {"kind": "cloud"},
                     "cursor": legacy_cursor,
                 })
                 .to_string(),
@@ -1798,7 +1821,7 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
     // The resource fits the 2400-byte budget before escaping, but not after.
     let insufficient_budget_payload = ToolPayload::Function {
         arguments: serde_json::json!({
-            "package": format!("orchestrator/{opaque_suffix}"),
+            "package": format!("cloud/{opaque_suffix}"),
         })
         .to_string(),
     };
@@ -1829,109 +1852,79 @@ async fn skills_list_only_returns_model_visible_bounded_metadata() -> TestResult
 }
 
 #[tokio::test]
-async fn orchestrator_catalog_snapshot_caches_failure() -> TestResult {
-    const PROVIDER_WARNING: &str =
-        "orchestrator skills unavailable: temporary orchestrator failure";
-
-    let list_calls = Arc::new(AtomicUsize::new(0));
-    let providers =
-        SkillProviders::new().with_orchestrator_provider(Arc::new(StaticSkillProvider {
-            catalog: SkillCatalog {
-                entries: vec![test_entry(
-                    SkillSourceKind::Orchestrator,
-                    "codex_apps",
-                    "orchestrator/first",
-                    "skill://orchestrator/first/SKILL.md",
-                )],
-                warnings: Vec::new(),
-            },
+async fn cloud_discovery_is_gated_and_reports_failures() -> TestResult {
+    for cloud_skill_enabled in [false, true] {
+        let list_calls = Arc::new(AtomicUsize::new(0));
+        let providers = SkillProviders::new().with_cloud_provider(Arc::new(StaticSkillProvider {
+            catalog: SkillCatalog::default(),
             read_requests: Arc::new(Mutex::new(Vec::new())),
             list_calls: Some(Arc::clone(&list_calls)),
             fail_first_list: true,
         }));
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
-    let mut builder =
-        ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
-    install_with_providers(&mut builder, providers, skills_extension_config);
-    let registry = builder.build();
-    let session_store = ExtensionData::new("session");
-    let thread_store = ExtensionData::new("thread");
-    let session_source = SessionSource::Cli;
-    let config = default_config();
-    registry.thread_lifecycle_contributors()[0]
-        .on_thread_start(ThreadStartInput {
-            config: &config,
-            session_source: &session_source,
-            persistent_thread_state_available: true,
-            environments: &[],
-            mcp_resource_client: None,
-            extension_metrics: None,
-            session_store: &session_store,
-            thread_store: &thread_store,
-        })
-        .await;
-
-    let initial_fragments = registry.context_contributors()[0]
-        .contribute_thread_context(&session_store, &thread_store)
-        .await;
-    assert!(initial_fragments.is_empty());
-    assert!(event_rx.try_recv().is_err());
-
-    for turn_id in ["turn-1", "turn-2"] {
-        let fragments = registry.turn_input_contributors()[0]
-            .contribute(
-                TurnInputContext {
-                    turn_id: turn_id.to_string(),
-                    user_input: vec![UserInput::Text {
-                        text: "$first".to_string(),
-                        text_elements: Vec::new(),
-                    }],
-                    environments: Vec::new(),
-                },
-                /*extension_metrics*/ None,
-                &session_store,
-                &thread_store,
-                &ExtensionData::new(turn_id),
-            )
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let mut builder =
+            ExtensionRegistryBuilder::with_event_sink(Arc::new(ChannelEventSink(event_tx)));
+        install_with_providers(&mut builder, providers, skills_extension_config);
+        let registry = builder.build();
+        let session_store = ExtensionData::new("session");
+        let thread_store = ExtensionData::new("thread");
+        let session_source = SessionSource::Cli;
+        let config = TestConfig {
+            cloud_skill_enabled,
+            ..default_config()
+        };
+        registry.thread_lifecycle_contributors()[0]
+            .on_thread_start(ThreadStartInput {
+                config: &config,
+                session_source: &session_source,
+                persistent_thread_state_available: true,
+                environments: &[],
+                mcp_resource_client: None,
+                extension_metrics: None,
+                session_store: &session_store,
+                thread_store: &thread_store,
+            })
             .await;
-        assert!(fragments.is_empty());
+
+        assert_eq!(
+            registry
+                .turn_lifecycle_contributors()
+                .iter()
+                .map(|contributor| contributor.turn_start_phase(&thread_store))
+                .collect::<Vec<_>>(),
+            vec![
+                codex_extension_api::TurnStartPhase::BeforeTaskRegistration,
+                if cloud_skill_enabled {
+                    codex_extension_api::TurnStartPhase::RegularTaskStart
+                } else {
+                    codex_extension_api::TurnStartPhase::BeforeTaskRegistration
+                },
+            ]
+        );
+        assert_eq!(
+            registry
+                .turn_lifecycle_contributors()
+                .iter()
+                .map(|contributor| contributor.requires_mcp_runtime(&thread_store))
+                .collect::<Vec<_>>(),
+            vec![false, cloud_skill_enabled]
+        );
+        start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
+        assert_eq!(
+            list_calls.load(Ordering::Relaxed),
+            usize::from(cloud_skill_enabled)
+        );
+        if !cloud_skill_enabled {
+            assert!(event_rx.try_recv().is_err());
+            let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
+            assert!(tools.iter().all(|tool| tool.tool_name().name != "list"));
+            continue;
+        }
         let warning = event_rx.try_recv()?.into_warning();
         assert_eq!(warning.thread_id, thread_store.level_id());
-        assert_eq!(warning.turn_id.as_deref(), Some(turn_id));
-        assert_eq!(warning.message, PROVIDER_WARNING);
+        assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
+        assert!(warning.message.contains("temporary cloud failure"));
     }
-
-    let tools = registry.tool_contributors()[0].tools(&session_store, &thread_store);
-    let list_tool = tools
-        .iter()
-        .find(|tool| tool.tool_name().name == "list")
-        .ok_or("skills.list tool should be registered")?;
-    assert_eq!(
-        list_tool
-            .handle(ToolCall {
-                turn_id: "turn-1".to_string(),
-                call_id: "unavailable-skills".to_string(),
-                tool_name: list_tool.tool_name(),
-                model: "gpt-test".to_string(),
-                codex_turn_metadata: None,
-                truncation_policy: TruncationPolicy::Bytes(64),
-                source: ToolCallSource::Direct,
-                conversation_history: ConversationHistory::default(),
-                turn_item_emitter: Arc::new(NoopTurnItemEmitter),
-                environments: Vec::new(),
-                payload: ToolPayload::Function {
-                    arguments: serde_json::json!({"authority": {"kind": "orchestrator"}})
-                        .to_string(),
-                },
-            })
-            .await
-            .err(),
-        Some(FunctionCallError::RespondToModel(
-            "skills.list response budget leaves no room for discovery warnings".to_string()
-        ))
-    );
-    assert_eq!(1, list_calls.load(Ordering::Relaxed));
-
     Ok(())
 }
 
@@ -2044,13 +2037,13 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
 }
 
 #[tokio::test]
-async fn model_context_window_scales_executor_and_orchestrator_catalogs() -> TestResult {
-    let orchestrator_entries = (0..40)
+async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult {
+    let cloud_entries = (0..40)
         .map(|index| {
             test_entry(
-                SkillSourceKind::Orchestrator,
-                "orchestrator",
-                &format!("orchestrator/skill-{index:02}"),
+                SkillSourceKind::Cloud,
+                "cloud",
+                &format!("cloud/skill-{index:02}"),
                 &format!("skill-{index:02}/SKILL.md"),
             )
         })
@@ -2066,9 +2059,9 @@ async fn model_context_window_scales_executor_and_orchestrator_catalogs() -> Tes
         })
         .collect();
     let providers = SkillProviders::new()
-        .with_orchestrator_provider(Arc::new(StaticSkillProvider {
+        .with_cloud_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
-                entries: orchestrator_entries,
+                entries: cloud_entries,
                 warnings: Vec::new(),
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
@@ -2105,6 +2098,7 @@ async fn model_context_window_scales_executor_and_orchestrator_catalogs() -> Tes
             thread_store: &thread_store,
         })
         .await;
+    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
     let mut model_info = model_info_from_slug("test-model");
     model_info.context_window = Some(10_000);
 
@@ -2157,14 +2151,10 @@ async fn model_context_window_scales_executor_and_orchestrator_catalogs() -> Tes
         .render_diff(PreviousWorldStateSection::Absent)
         .ok_or("bounded executor catalog should render")?;
     assert!(!executor_fragment.body().contains("skill-39"));
-    let orchestrator_fragment = world_state_section(&sections, "orchestrator_skills")
+    let cloud_fragment = world_state_section(&sections, "cloud_skills")
         .render_diff(PreviousWorldStateSection::Absent)
-        .ok_or("bounded orchestrator catalog should render")?;
-    assert!(
-        orchestrator_fragment
-            .body()
-            .contains("additional skills omitted")
-    );
+        .ok_or("bounded cloud catalog should render")?;
+    assert!(cloud_fragment.body().contains("additional skills omitted"));
     let warnings = event_rx
         .try_iter()
         .map(CapturedExtensionEvent::into_warning)
@@ -2594,7 +2584,7 @@ impl SkillProvider for StaticSkillProvider {
         let catalog = self.catalog.clone();
         Box::pin(async move {
             if fail {
-                Err(SkillProviderError::new("temporary orchestrator failure"))
+                Err(SkillProviderError::new("temporary cloud failure"))
             } else {
                 Ok(catalog)
             }
@@ -2648,7 +2638,7 @@ fn test_entry(
 struct TestConfig {
     include_instructions: bool,
     bundled_skills_enabled: bool,
-    orchestrator_skills_enabled: bool,
+    cloud_skill_enabled: bool,
     shadow_selection_enabled: bool,
 }
 
@@ -2656,7 +2646,7 @@ fn default_config() -> TestConfig {
     TestConfig {
         include_instructions: true,
         bundled_skills_enabled: true,
-        orchestrator_skills_enabled: true,
+        cloud_skill_enabled: true,
         shadow_selection_enabled: false,
     }
 }
@@ -2666,7 +2656,7 @@ fn skills_extension_config(config: &TestConfig) -> SkillsExtensionConfig {
         include_instructions: config.include_instructions,
         max_context_tokens: None,
         bundled_skills_enabled: config.bundled_skills_enabled,
-        orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+        cloud_skill_enabled: config.cloud_skill_enabled,
         shadow_selection_enabled: config.shadow_selection_enabled,
     }
 }

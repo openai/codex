@@ -10735,6 +10735,49 @@ apps_mcp_product_sku = "tpp"
 }
 
 #[tokio::test]
+async fn config_loads_cloud_skills_with_legacy_noop() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    for (settings, expected) in [
+        ("", true),
+        ("[cloud.skills]", true),
+        ("[cloud.skills]\nenabled = false", false),
+        ("[cloud.skills]\nenabled = true", true),
+        ("[orchestrator.skills]\nenabled = false", true),
+        ("[orchestrator.skills]\nenabled = true", true),
+        (
+            "[orchestrator.skills]\nenabled = false\n[cloud.skills]",
+            true,
+        ),
+        (
+            "[orchestrator.skills]\nenabled = true\n[cloud.skills]\nenabled = false",
+            false,
+        ),
+        (
+            "[orchestrator.skills]\nenabled = false\n[cloud.skills]\nenabled = true",
+            true,
+        ),
+    ] {
+        let cfg: ConfigToml = toml::from_str(&format!(
+            "model = \"gpt-5.4\"\n{settings}\n[orchestrator.mcp]\nenabled = false"
+        ))
+        .expect("cloud skill settings should deserialize");
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+
+        assert_eq!(
+            (config.cloud_skill_enabled, config.orchestrator_mcp_enabled),
+            (expected, false),
+            "{settings}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn config_loads_orchestrator_settings_from_toml() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg: ConfigToml = toml::from_str(
@@ -10758,11 +10801,8 @@ enabled = false
     .await?;
 
     assert_eq!(
-        (
-            config.orchestrator_skills_enabled,
-            config.orchestrator_mcp_enabled
-        ),
-        (false, false)
+        (config.cloud_skill_enabled, config.orchestrator_mcp_enabled),
+        (true, false)
     );
     Ok(())
 }

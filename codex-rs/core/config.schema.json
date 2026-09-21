@@ -505,6 +505,21 @@
       },
       "type": "object"
     },
+    "CloudToml": {
+      "additionalProperties": false,
+      "description": "Cloud-owned feature settings.",
+      "properties": {
+        "skills": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/FeatureToggleToml"
+            }
+          ],
+          "description": "Cloud skills are permitted by default; the host must supply a cloud provider."
+        }
+      },
+      "type": "object"
+    },
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -1385,6 +1400,16 @@
           "default": {},
           "description": "Tracks which project paths have opted out of external config migration prompts.",
           "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "FeatureToggleToml": {
+      "additionalProperties": false,
+      "description": "Optional enablement of a configured feature.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3091,25 +3116,20 @@
         }
       ]
     },
-    "OrchestratorFeatureToml": {
-      "additionalProperties": false,
-      "description": "Settings for a feature owned by the orchestrator.",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "OrchestratorToml": {
       "additionalProperties": false,
       "description": "Orchestrator-owned feature settings.",
       "properties": {
         "mcp": {
-          "$ref": "#/definitions/OrchestratorFeatureToml"
+          "$ref": "#/definitions/FeatureToggleToml"
         },
         "skills": {
-          "$ref": "#/definitions/OrchestratorFeatureToml"
+          "allOf": [
+            {
+              "$ref": "#/definitions/FeatureToggleToml"
+            }
+          ],
+          "description": "Legacy no-op setting retained for compatibility. Use `cloud.skills` to configure cloud skills."
         }
       },
       "type": "object"
@@ -6453,6 +6473,14 @@
       ],
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
+    },
+    "cloud": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CloudToml"
+        }
+      ],
+      "description": "Cloud-owned feature settings."
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",

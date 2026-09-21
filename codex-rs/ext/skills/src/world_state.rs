@@ -8,14 +8,14 @@ use serde_json::json;
 use crate::render::SkillRenderReport;
 
 pub(crate) const SKILLS_WORLD_STATE_ID: &str = "skills";
-pub(crate) const ORCHESTRATOR_SKILLS_WORLD_STATE_ID: &str = "orchestrator_skills";
+pub(crate) const CLOUD_SKILLS_WORLD_STATE_ID: &str = "cloud_skills";
 pub(crate) const HOST_SKILLS_WORLD_STATE_ID: &str = "host_skills";
 const NO_EXECUTOR_SKILLS_BODY: &str =
     "\n## Skills update\nNo selected-environment skills are currently available.\n";
 const HIDDEN_EXECUTOR_SKILLS_BODY: &str = "\n## Skills update\nSelected-environment skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n";
-const NO_ORCHESTRATOR_SKILLS_BODY: &str =
-    "\n## Orchestrator skills update\nNo orchestrator skills are currently available.\n";
-const HIDDEN_ORCHESTRATOR_SKILLS_BODY: &str = "\n## Orchestrator skills update\nOrchestrator skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n";
+const NO_CLOUD_SKILLS_BODY: &str =
+    "\n## Cloud skills update\nNo cloud skills are currently available.\n";
+const HIDDEN_CLOUD_SKILLS_BODY: &str = "\n## Cloud skills update\nCloud skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n";
 const NO_HOST_SKILLS_BODY: &str =
     "\n## Host skills update\nNo host skills are currently available.\n";
 const HIDDEN_HOST_SKILLS_BODY: &str = "\n## Host skills update\nHost skills are not listed automatically. Explicit skill mentions can still be resolved when available.\n";
@@ -44,22 +44,22 @@ pub(crate) fn executor_skills_world_state_section(
     })
 }
 
-pub(crate) fn orchestrator_skills_world_state_section(
+pub(crate) fn cloud_skills_world_state_section(
     body: Option<String>,
     include_instructions: bool,
     enabled: bool,
     on_render: CatalogRenderCallback,
 ) -> WorldStateSectionContribution {
     skills_world_state_section(
-        ORCHESTRATOR_SKILLS_WORLD_STATE_ID,
+        CLOUD_SKILLS_WORLD_STATE_ID,
         body,
         include_instructions,
         Some(enabled),
-        NO_ORCHESTRATOR_SKILLS_BODY,
+        NO_CLOUD_SKILLS_BODY,
         if enabled {
-            HIDDEN_ORCHESTRATOR_SKILLS_BODY
+            HIDDEN_CLOUD_SKILLS_BODY
         } else {
-            NO_ORCHESTRATOR_SKILLS_BODY
+            NO_CLOUD_SKILLS_BODY
         },
         on_render,
     )

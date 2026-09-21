@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -7,42 +6,46 @@ use std::sync::Weak;
 use codex_exec_server::Environment;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::ExtensionMetrics;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
-use codex_mcp::McpResourceServerCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use tokio::sync::OnceCell;
 
 use crate::SkillsExtensionConfig;
+use crate::SkillsExtensionState;
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillPackageId;
+use crate::catalog::SkillProviderError;
 use crate::catalog::SkillProviderResult;
 use crate::catalog::SkillReadResult;
-use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
 use crate::shadow_selection_experiment::RecentSkillInvocations;
 use crate::shadow_selection_experiment::ShadowSelectionTurnState;
 use crate::shadow_selection_experiment::ShadowTaskContext;
+use crate::skills_extension_state::CachedExecutorCatalog;
+use crate::skills_extension_state::CachedExecutorDiscoveryCatalog;
+use crate::skills_extension_state::CloudResourceCache;
+use crate::skills_extension_state::CloudSkillGeneration;
+use crate::skills_extension_state::ExecutorCatalogSelection;
+use crate::skills_extension_state::SkillReadCacheKey;
 use crate::sources::SkillProviders;
 
-const MAX_CACHED_ORCHESTRATOR_RESOURCES: usize = 100;
-const MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(test)]
+#[path = "cloud_cache_tests.rs"]
+mod cloud_cache_tests;
 
 pub(crate) struct SkillsSessionState {
     pub(crate) mcp_resources: Option<Arc<McpResourceClient>>,
     pub(crate) extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
-pub(crate) struct SkillsThreadState {
+/// Thread-owned skill configuration and caches; consumers can only read catalog snapshots.
+pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
-    orchestrator_skills_available: bool,
-    executor_cache: Mutex<Vec<CachedExecutorCatalog>>,
-    executor_discovery_cache: Mutex<Option<CachedExecutorDiscoveryCatalog>>,
-    orchestrator_cache: Mutex<Option<Arc<OrchestratorGenerationCache>>>,
+    cloud_skills_available: bool,
+    skills_extension_state: Mutex<SkillsExtensionState>,
     shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) executor_read_snapshot: Mutex<Option<ExecutorReadSnapshot>>,
     pub(crate) recent_skill_invocations: Arc<RecentSkillInvocations>,
@@ -50,13 +53,11 @@ pub(crate) struct SkillsThreadState {
 }
 
 impl SkillsThreadState {
-    pub(crate) fn new(config: SkillsExtensionConfig, orchestrator_skills_available: bool) -> Self {
+    pub(crate) fn new(config: SkillsExtensionConfig, cloud_skills_available: bool) -> Self {
         Self {
             config: Mutex::new(config),
-            orchestrator_skills_available,
-            executor_cache: Mutex::new(Vec::new()),
-            executor_discovery_cache: Mutex::new(None),
-            orchestrator_cache: Mutex::new(None),
+            cloud_skills_available,
+            skills_extension_state: Mutex::new(SkillsExtensionState::default()),
             shadow_selection_turn: Mutex::new(None),
             executor_read_snapshot: Mutex::new(None),
             recent_skill_invocations: Arc::new(RecentSkillInvocations::default()),
@@ -72,14 +73,22 @@ impl SkillsThreadState {
     }
 
     pub(crate) fn set_config(&self, config: SkillsExtensionConfig) {
-        *self
+        let mut previous = self
             .config
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if previous.cloud_skill_enabled != config.cloud_skill_enabled {
+            let mut catalogs = self
+                .skills_extension_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            catalogs.cloud_cache = None;
+        }
+        *previous = config;
     }
 
-    pub(crate) fn orchestrator_skills_enabled(&self) -> bool {
-        self.orchestrator_skills_available && self.config().orchestrator_skills_enabled
+    pub(crate) fn cloud_skill_enabled(&self) -> bool {
+        self.cloud_skills_available && self.config().cloud_skill_enabled
     }
 
     pub(crate) fn replace_shadow_selection_turn(
@@ -109,173 +118,116 @@ impl SkillsThreadState {
             .map(|turn| Arc::clone(&turn.state))
     }
 
-    /// Returns catalogs for stable selected roots.
-    ///
-    /// Successful catalogs, including empty or warning-bearing catalogs, remain cached until
-    /// this thread state is dropped. Catalogs backed by failed discovery are not cached, so
-    /// later steps can recover. There is no filesystem watcher because selected roots are stable.
+    /// Refreshes the current step's executor catalog in the existing caches.
     #[tracing::instrument(
-        name = "skills.executor.catalog_snapshot",
+        name = "skills.executor.refresh_executor_catalog",
         level = "info",
         skip_all,
         fields(root_count = query.executor_roots.len())
     )]
-    pub(crate) async fn executor_catalog_snapshot(
+    pub(crate) async fn refresh_executor_catalog(
         &self,
         providers: &SkillProviders,
         mut query: SkillListQuery,
-    ) -> SkillCatalog {
-        if query.executor_capability_discovery.is_some() {
-            return self
-                .executor_discovery_catalog_snapshot(providers, query)
+    ) {
+        let selection = if query.executor_capability_discovery.is_some() {
+            // High-level discovery is enabled: reuse or project its discovery snapshot.
+            self.executor_discovery_catalog_snapshot(providers, query)
                 .await;
-        }
-        let roots = std::mem::take(&mut query.executor_roots);
-        let mut catalog = SkillCatalog::default();
-        for root in roots {
-            query.executor_roots = vec![root.clone()];
-            catalog.extend(
-                self.executor_root_catalog(providers, root, query.clone())
-                    .await,
-            );
-        }
-        catalog
+            ExecutorCatalogSelection::Discovery
+        } else {
+            // High-level discovery is not enabled: retain the legacy per-root cache path.
+            let roots = std::mem::take(&mut query.executor_roots);
+            for root in &roots {
+                query.executor_roots = vec![root.clone()];
+                self.executor_root_catalog(providers, root.clone(), query.clone())
+                    .await;
+            }
+            ExecutorCatalogSelection::Roots(roots)
+        };
+        self.skills_extension_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .executor_catalog_selection = selection;
     }
 
+    /// Reads the most recently refreshed selection without invoking providers.
+    pub fn executor_catalog_snapshot(&self) -> SkillCatalog {
+        let state = self
+            .skills_extension_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &state.executor_catalog_selection {
+            ExecutorCatalogSelection::Discovery => state
+                .executor_discovery_cache
+                .as_ref()
+                .map(|cached| cached.catalog.clone())
+                .unwrap_or_default(),
+            ExecutorCatalogSelection::Roots(roots) => {
+                let mut catalog = SkillCatalog::default();
+                for root in roots {
+                    if let Some(cached) = state
+                        .executor_cache
+                        .iter()
+                        .find(|cached| &cached.root == root)
+                    {
+                        catalog.extend(cached.catalog.clone());
+                    }
+                }
+                catalog
+            }
+        }
+    }
+
+    /// Reuses matching successful discovery or retains a fresh result for snapshot reads.
     async fn executor_discovery_catalog_snapshot(
         &self,
         providers: &SkillProviders,
         query: SkillListQuery,
     ) -> SkillCatalog {
-        let discovery_failed = query
-            .executor_capability_discovery
-            .as_ref()
-            .is_some_and(|discovery| discovery.roots().iter().any(|root| root.result.is_err()));
-        let sandbox_contexts = query
-            .executor_capability_discovery
-            .as_ref()
-            .map(|discovery| discovery.sandbox_contexts().clone())
-            .unwrap_or_default();
-        if let Some(cached) = self
-            .executor_discovery_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .filter(|cached| {
-                cached.roots == query.executor_roots && cached.sandbox_contexts == sandbox_contexts
+        let discovery = query.executor_capability_discovery.clone();
+        let discovery_failed = discovery.as_ref().is_some_and(|discovery| {
+            discovery.roots().iter().any(|root| {
+                root.result
+                    .as_ref()
+                    .ok()
+                    .is_none_or(|discovered| discovered.error.is_some())
             })
+        });
+        if !discovery_failed
+            && let Some(cached) = self
+                .skills_extension_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .executor_discovery_cache
+                .as_ref()
+                .filter(|cached| {
+                    cached.matches(
+                        &query.executor_roots,
+                        discovery.as_ref(),
+                        query.include_bundled_skills,
+                    )
+                })
         {
             return cached.catalog.clone();
         }
+
         let roots = query.executor_roots.clone();
+        let include_bundled_skills = query.include_bundled_skills;
         let discovered = providers.list_executor_for_turn(query).await;
-        if discovery_failed {
-            return discovered;
-        }
-        let mut cache = self
-            .executor_discovery_cache
+        let mut state = self
+            .skills_extension_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(cached) = cache
-            .as_ref()
-            .filter(|cached| cached.roots == roots && cached.sandbox_contexts == sandbox_contexts)
-        {
-            return cached.catalog.clone();
-        }
-        *cache = Some(CachedExecutorDiscoveryCatalog {
-            roots,
-            sandbox_contexts,
-            catalog: discovered.clone(),
-        });
+        // Retain failures for read-only snapshots; discovery_failed above prevents reuse.
+        state.executor_discovery_cache =
+            discovery.map(|discovery| CachedExecutorDiscoveryCatalog {
+                roots,
+                discovery,
+                include_bundled_skills,
+                catalog: discovered.clone(),
+            });
         discovered
-    }
-
-    #[tracing::instrument(
-        name = "skills.orchestrator.catalog_snapshot",
-        level = "info",
-        skip_all
-    )]
-    pub(crate) async fn orchestrator_catalog_snapshot(
-        &self,
-        providers: &SkillProviders,
-        query: SkillListQuery,
-    ) -> SkillCatalog {
-        if !query.include_orchestrator_skills {
-            return SkillCatalog::default();
-        }
-
-        let cache = self.orchestrator_cache(query.mcp_resources.as_deref());
-        cache
-            .catalog
-            .get_or_init(|| async {
-                providers
-                    .list_orchestrator_for_turn(query)
-                    .await
-                    .unwrap_or_else(|err| SkillCatalog {
-                        warnings: vec![err.message],
-                        ..Default::default()
-                    })
-            })
-            .await
-            .clone()
-    }
-
-    pub(crate) async fn read_skill(
-        &self,
-        providers: &SkillProviders,
-        request: SkillReadRequest<'_>,
-    ) -> SkillProviderResult<SkillReadResult> {
-        if request.authority.kind != SkillSourceKind::Orchestrator {
-            return providers.read(request).await;
-        }
-
-        let cache = self.orchestrator_cache(request.mcp_resources.as_deref());
-        let cache_key = SkillReadCacheKey::from(&request);
-        if let Some(result) = cache
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&cache_key)
-        {
-            return Ok(result);
-        }
-
-        let result = providers.read(request).await?;
-        if result.resource != cache_key.resource {
-            return Ok(result);
-        }
-
-        Ok(cache
-            .resources
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(cache_key, result))
-    }
-
-    fn orchestrator_cache(
-        &self,
-        mcp_resources: Option<&McpResourceClient>,
-    ) -> Arc<OrchestratorGenerationCache> {
-        let mut cache = self
-            .orchestrator_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cache_key =
-            mcp_resources.and_then(|client| client.server_cache_key(CODEX_APPS_MCP_SERVER_NAME));
-        if let Some(cache) = cache
-            .as_ref()
-            .filter(|cache| cache.mcp_cache_key == cache_key)
-        {
-            return Arc::clone(cache);
-        }
-
-        let next_cache = Arc::new(OrchestratorGenerationCache {
-            mcp_cache_key: cache_key,
-            catalog: OnceCell::new(),
-            resources: Mutex::new(OrchestratorResourceCache::default()),
-        });
-        *cache = Some(Arc::clone(&next_cache));
-        next_cache
     }
 
     #[tracing::instrument(name = "skills.executor.catalog_root", level = "info", skip_all)]
@@ -286,9 +238,10 @@ impl SkillsThreadState {
         query: SkillListQuery,
     ) -> SkillCatalog {
         if let Some(cached) = self
-            .executor_cache
+            .skills_extension_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .executor_cache
             .iter()
             .find(|cached| cached.root == root)
         {
@@ -296,10 +249,11 @@ impl SkillsThreadState {
         }
 
         let discovered = providers.list_executor_for_turn(query).await;
-        let mut cache = self
-            .executor_cache
+        let mut state = self
+            .skills_extension_state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache = &mut state.executor_cache;
         if let Some(cached) = cache.iter().find(|cached| cached.root == root) {
             return cached.catalog.clone();
         }
@@ -308,6 +262,158 @@ impl SkillsThreadState {
             catalog: discovered.clone(),
         });
         discovered
+    }
+
+    /// Reads the last authorized turn-start catalog without discovery or retries.
+    /// Same-auth failures may retain it; disabled or invalidated catalogs are empty.
+    pub fn cloud_catalog_snapshot(&self) -> SkillCatalog {
+        let config = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !config.cloud_skill_enabled || !self.cloud_skills_available {
+            return SkillCatalog::default();
+        }
+        self.skills_extension_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cloud_cache
+            .as_ref()
+            .filter(|cache| cache.is_current())
+            .and_then(|cache| cache.catalog.clone())
+            .unwrap_or_default()
+    }
+
+    fn cloud_cache(&self, mcp_resources: Option<&McpResourceClient>) -> Arc<CloudSkillGeneration> {
+        let mut state = self
+            .skills_extension_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cache_key = mcp_resources
+            .map(|client| client.auth_cache_key_for_server(codex_mcp::CODEX_APPS_MCP_SERVER_NAME));
+        if let Some(cache) = state
+            .cloud_cache
+            .as_ref()
+            .filter(|cache| cache.auth_cache_key == cache_key)
+        {
+            return Arc::clone(cache);
+        }
+
+        let next_cache = Arc::new(CloudSkillGeneration {
+            auth_cache_key: cache_key,
+            mcp_resources: mcp_resources.cloned(),
+            catalog: None,
+            resources: Mutex::new(CloudResourceCache::default()),
+        });
+        state.cloud_cache = Some(Arc::clone(&next_cache));
+        next_cache
+    }
+
+    /// The serialized turn-start lifecycle is the only discovery writer.
+    /// Attempt once per turn; readers never retry, including after a failed refresh.
+    #[tracing::instrument(name = "skills.cloud.refresh_cloud_catalog", level = "info", skip_all)]
+    pub(crate) async fn refresh_cloud_catalog(
+        &self,
+        providers: &SkillProviders,
+        query: SkillListQuery,
+    ) -> SkillProviderResult<()> {
+        if !self.cloud_skill_enabled() {
+            return Ok(());
+        }
+        // Switch generations before the fallible lookup; only same-auth-scope failures
+        // may retain previously authorized metadata and contents.
+        let cache = self.cloud_cache(query.mcp_resources.as_deref());
+        let mut catalog = providers.list_cloud_for_turn(query).await?;
+        catalog.entries.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        let mut catalogs = self
+            .skills_extension_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !cache.is_current()
+            || !catalogs
+                .cloud_cache
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &cache))
+        {
+            return Err(SkillProviderError::new(
+                "cloud skill cache changed during discovery",
+            ));
+        }
+        catalogs.cloud_cache = Some(Arc::new(CloudSkillGeneration {
+            auth_cache_key: cache.auth_cache_key.clone(),
+            mcp_resources: cache.mcp_resources.clone(),
+            catalog: Some(catalog),
+            resources: Mutex::new(CloudResourceCache::default()),
+        }));
+        Ok(())
+    }
+
+    pub(crate) async fn read_skill(
+        &self,
+        providers: &SkillProviders,
+        request: SkillReadRequest<'_>,
+    ) -> SkillProviderResult<SkillReadResult> {
+        if request.authority.kind != SkillSourceKind::Cloud {
+            return providers.read(request).await;
+        }
+
+        let cache = self.cloud_cache(request.mcp_resources.as_deref());
+        let cache_key = SkillReadCacheKey::from(&request);
+        {
+            let config = self
+                .config
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !config.cloud_skill_enabled || !self.cloud_skills_available {
+                return Err(SkillProviderError::new("cloud skills are disabled"));
+            }
+            let catalogs = self
+                .skills_extension_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !cache.is_current()
+                || !catalogs
+                    .cloud_cache
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &cache))
+            {
+                return Err(SkillProviderError::new(
+                    "cloud skill cache changed before read",
+                ));
+            }
+            if let Some(result) = cache
+                .resources
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&cache_key)
+            {
+                return Ok(result);
+            }
+        }
+
+        let result = providers.read(request).await?;
+        let catalogs = self
+            .skills_extension_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !cache.is_current()
+            || !catalogs
+                .cloud_cache
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &cache))
+        {
+            return Err(SkillProviderError::new(
+                "cloud skill cache changed during read",
+            ));
+        }
+        if result.resource != cache_key.resource {
+            return Ok(result);
+        }
+        Ok(cache
+            .resources
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(cache_key, result))
     }
 }
 
@@ -325,72 +431,6 @@ pub(crate) struct ExecutorReadSnapshot {
 struct ShadowSelectionTurn {
     turn_id: String,
     state: Arc<ShadowSelectionTurnState>,
-}
-
-struct CachedExecutorCatalog {
-    root: SelectedCapabilityRoot,
-    catalog: SkillCatalog,
-}
-
-struct CachedExecutorDiscoveryCatalog {
-    roots: Vec<SelectedCapabilityRoot>,
-    sandbox_contexts: HashMap<String, FileSystemSandboxContext>,
-    catalog: SkillCatalog,
-}
-
-struct OrchestratorGenerationCache {
-    mcp_cache_key: Option<McpResourceServerCacheKey>,
-    catalog: OnceCell<SkillCatalog>,
-    resources: Mutex<OrchestratorResourceCache>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SkillReadCacheKey {
-    authority: SkillAuthority,
-    package: SkillPackageId,
-    resource: SkillResourceId,
-}
-
-impl From<&SkillReadRequest<'_>> for SkillReadCacheKey {
-    fn from(request: &SkillReadRequest<'_>) -> Self {
-        Self {
-            authority: request.authority.clone(),
-            package: request.package.clone(),
-            resource: request.resource.clone(),
-        }
-    }
-}
-
-#[derive(Default)]
-struct OrchestratorResourceCache {
-    entries: HashMap<SkillReadCacheKey, SkillReadResult>,
-    contents_bytes: usize,
-}
-
-impl OrchestratorResourceCache {
-    fn get(&self, key: &SkillReadCacheKey) -> Option<SkillReadResult> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: SkillReadCacheKey, result: SkillReadResult) -> SkillReadResult {
-        if let Some(cached) = self.entries.get(&key) {
-            return cached.clone();
-        }
-
-        let contents_bytes = result.contents.len();
-        let Some(next_contents_bytes) = self.contents_bytes.checked_add(contents_bytes) else {
-            return result;
-        };
-        if self.entries.len() >= MAX_CACHED_ORCHESTRATOR_RESOURCES
-            || next_contents_bytes > MAX_CACHED_ORCHESTRATOR_CONTENT_BYTES
-        {
-            return result;
-        }
-
-        self.contents_bytes = next_contents_bytes;
-        self.entries.insert(key, result.clone());
-        result
-    }
 }
 
 #[derive(Default)]

@@ -325,7 +325,7 @@ async fn user_turn_selects_symlinked_skill_by_advertised_discovery_path() -> Res
         include_instructions: config.include_skill_instructions,
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: false,
-        orchestrator_skills_enabled: false,
+        cloud_skill_enabled: false,
         shadow_selection_enabled: false,
     });
     let mut builder = test_codex()

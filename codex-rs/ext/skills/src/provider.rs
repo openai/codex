@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 mod executor;
 mod host;
-mod orchestrator;
 
 use crate::HostSkillsSnapshot;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
@@ -25,7 +24,6 @@ use crate::catalog::SkillSearchResult;
 pub use executor::ExecutorSkillProvider;
 pub(crate) use executor::attribute_executor_plugins;
 pub use host::HostSkillProvider;
-pub use orchestrator::OrchestratorSkillProvider;
 
 pub(crate) const MAX_SKILL_RESOURCE_CONTENT_BYTES: usize = 1024 * 1024;
 
@@ -37,7 +35,7 @@ pub struct SkillListQuery {
     pub host_snapshot: Option<Arc<HostSkillsSnapshot>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
-    pub include_orchestrator_skills: bool,
+    pub include_cloud_skills: bool,
     pub mcp_resources: Option<Arc<McpResourceClient>>,
     /// Present only when the opt-in high-level executor discovery path is selected.
     pub executor_capability_discovery: Option<ExecutorCapabilityDiscoverySnapshot>,

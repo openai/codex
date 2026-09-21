@@ -11,7 +11,7 @@ use crate::render::truncate_main_prompt_contents;
 /// Host skill prompts already supplied or superseded by an extension.
 ///
 /// Core preserves its host skill invocation lifecycle while avoiding duplicate
-/// prompts and retaining executor/orchestrator skill precedence.
+/// prompts and retaining executor/cloud skill precedence.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InjectedHostSkillPrompts {
     paths: HashSet<String>,

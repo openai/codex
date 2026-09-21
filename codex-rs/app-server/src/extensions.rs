@@ -103,9 +103,6 @@ pub(crate) fn thread_extensions(
     });
     let skill_providers = codex_skills_extension::SkillProviders::new()
         .with_executor_provider(executor_skill_provider)
-        .with_orchestrator_provider(Arc::new(
-            codex_skills_extension::OrchestratorSkillProvider::new(),
-        ))
         .with_host_provider(Arc::new(codex_skills_extension::HostSkillProvider::new()));
     codex_skills_extension::install_with_providers_and_metrics(
         &mut builder,
@@ -115,7 +112,7 @@ pub(crate) fn thread_extensions(
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: config.bundled_skills_enabled(),
-            orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+            cloud_skill_enabled: config.cloud_skill_enabled,
             shadow_selection_enabled: config
                 .features
                 .enabled(codex_features::Feature::SkillSearch),

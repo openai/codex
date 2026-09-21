@@ -11,8 +11,8 @@ pub enum SkillSourceKind {
     Host,
     /// Skills owned by an execution environment.
     Executor,
-    /// Skills owned by the orchestrator rather than an execution environment.
-    Orchestrator,
+    /// Skills owned by the cloud rather than an execution environment.
+    Cloud,
     /// Extension-private source kind for future providers that do not fit an
     /// existing transport category.
     Custom(String),
@@ -27,7 +27,7 @@ impl SkillSourceKind {
         match self {
             Self::Host => "host",
             Self::Executor => "executor",
-            Self::Orchestrator => "orchestrator",
+            Self::Cloud => "cloud",
             Self::Custom(kind) => kind,
         }
     }
@@ -178,9 +178,9 @@ pub struct SkillCatalogEntry {
     pub short_description: Option<String>,
     pub main_prompt: SkillResourceId,
     pub display_path: Option<String>,
-    pub(crate) canonical_skill_id: Option<String>,
-    pub(crate) plugin_id: Option<String>,
-    pub(crate) analytics_scope: Option<SkillScope>,
+    pub canonical_skill_id: Option<String>,
+    pub plugin_id: Option<String>,
+    pub analytics_scope: Option<SkillScope>,
     alias_root: Option<String>,
     alias_root_order: Option<usize>,
     prompt_scope: Option<SkillScope>,

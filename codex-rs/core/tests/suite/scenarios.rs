@@ -80,7 +80,7 @@ fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
         include_instructions: config.include_skill_instructions,
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
-        orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+        cloud_skill_enabled: config.cloud_skill_enabled,
         shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
     });
     Arc::new(extensions.build())
@@ -186,7 +186,7 @@ fn configure_scenario_catalog(config: &mut Config) {
     )
     .expect("fixture config layers");
     config.model_catalog = Some(bundled_models_response().expect("bundled model catalog"));
-    config.orchestrator_skills_enabled = false;
+    config.cloud_skill_enabled = false;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -463,7 +463,7 @@ async fn astra_omits_disabled_executor_skills_from_model_context() -> Result<()>
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
-            orchestrator_skills_enabled: false,
+            cloud_skill_enabled: false,
             shadow_selection_enabled: false,
         },
     );
