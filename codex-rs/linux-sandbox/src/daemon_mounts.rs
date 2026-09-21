@@ -1,4 +1,4 @@
-//! Reject host mount aliases that would bypass the privileged socket directory mask.
+//! Find host mount aliases that need the privileged socket directory mask.
 //! Mount roots describe filesystem identity; canonical paths alone miss bind mounts.
 
 use rustix::fs::AtFlags;
@@ -13,10 +13,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) fn reject_daemon_mount_aliases(
+pub(crate) fn daemon_socket_mask_paths(
     directory: &Path,
     masked_root: Option<&Path>,
-) -> io::Result<()> {
+) -> io::Result<BTreeSet<PathBuf>> {
     let directory_file = fs::File::open(directory)?;
     let device = directory_file.metadata()?.dev();
     let mount_id = fs::read_to_string(format!("/proc/self/fdinfo/{}", directory_file.as_raw_fd()))
@@ -51,7 +51,7 @@ fn check_mounts(
     mount_id: Option<&str>,
     mountinfo: &[u8],
     masked_root: Option<&Path>,
-) -> io::Result<()> {
+) -> io::Result<BTreeSet<PathBuf>> {
     let invalid = || io::Error::other("cannot establish app-server socket mount isolation");
     let mut mounts = Vec::new();
     for line in mountinfo
@@ -125,33 +125,37 @@ fn check_mounts(
         }
         (locations.into_iter().next().ok_or_else(invalid)?, None)
     };
+    let mut mask_paths = BTreeSet::from([directory.to_path_buf()]);
     for (id, _, _, root, destination) in &mounts {
         // Nested mounts can introduce another filesystem (or an individual socket) under the mask.
         let nested = destination != directory && destination.starts_with(directory);
         let alias = if let Some(root) = root {
             if let Ok(relative) = location.strip_prefix(root) {
-                Some(destination.join(relative))
+                Some((destination.join(relative), !relative.as_os_str().is_empty()))
             } else if root.starts_with(&location) {
-                Some(destination.clone())
+                Some((destination.clone(), false))
             } else {
                 None
             }
         } else {
             None
         };
+        let exposed_alias = alias.filter(|(path, _)| {
+            // An ancestor's path beneath this mount is hidden by it. Keep
+            // checking other mounts, including aliases mounted beneath it.
+            let hidden = containing_mount.is_some_and(|(mount_id, containing_mount)| {
+                *id != mount_id.as_bytes()
+                    && containing_mount.starts_with(destination)
+                    && path.starts_with(containing_mount)
+            });
+            !path.starts_with(directory)
+                && !masked_root.is_some_and(|root| path.starts_with(root))
+                && !hidden
+        });
         if nested
-            || alias.is_some_and(|path| {
-                // An ancestor's path beneath this mount is hidden by it. Keep
-                // checking other mounts, including aliases mounted beneath it.
-                let hidden = containing_mount.is_some_and(|(mount_id, containing_mount)| {
-                    *id != mount_id.as_bytes()
-                        && containing_mount.starts_with(destination)
-                        && path.starts_with(containing_mount)
-                });
-                !path.starts_with(directory)
-                    && !masked_root.is_some_and(|root| path.starts_with(root))
-                    && !hidden
-            })
+            || exposed_alias
+                .as_ref()
+                .is_some_and(|(_, can_mask)| !can_mask)
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -161,8 +165,14 @@ fn check_mounts(
                 ),
             ));
         }
+        if let Some((path, _)) = exposed_alias {
+            // An alias of an ancestor exposes the whole directory, so apply the
+            // same mask there. Direct directory/socket aliases and nested mounts
+            // remain unsupported because a later bind could reopen the mask.
+            mask_paths.insert(path);
+        }
     }
-    Ok(())
+    Ok(mask_paths)
 }
 
 fn mount_path(encoded: &[u8]) -> io::Result<PathBuf> {

@@ -72,39 +72,10 @@ fn inserts_bwrap_argv0_before_command_separator() {
         /*supports_argv0*/ true,
         "/tmp/codex-arg0-session/codex-linux-sandbox".to_string(),
     );
-    let daemon_directory = codex_uds::shared_daemon_socket_directory()
-        .unwrap()
-        .display()
-        .to_string();
+    let separator = argv.iter().position(|arg| arg == "--").unwrap();
     assert_eq!(
-        argv,
-        vec![
-            "bwrap".to_string(),
-            "--new-session".to_string(),
-            "--die-with-parent".to_string(),
-            "--ro-bind".to_string(),
-            "/".to_string(),
-            "/".to_string(),
-            "--dev".to_string(),
-            "/dev".to_string(),
-            "--perms".to_string(),
-            "000".to_string(),
-            "--tmpfs".to_string(),
-            daemon_directory.clone(),
-            "--remount-ro".to_string(),
-            daemon_directory,
-            "--unshare-user".to_string(),
-            "--unshare-pid".to_string(),
-            "--unshare-ipc".to_string(),
-            "--proc".to_string(),
-            "/proc".to_string(),
-            "--cap-drop".to_string(),
-            "ALL".to_string(),
-            "--argv0".to_string(),
-            "codex-linux-sandbox".to_string(),
-            "--".to_string(),
-            "/bin/true".to_string(),
-        ]
+        &argv[separator - 2..],
+        ["--argv0", "codex-linux-sandbox", "--", "/bin/true"]
     );
 }
 
