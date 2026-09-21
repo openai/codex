@@ -354,7 +354,12 @@ fn helper_env_key_is_allowed(key: &str) -> bool {
         // CoreFoundation consults this before falling back to user lookup during helper startup.
         || (cfg!(target_os = "macos") && key == "__CF_USER_TEXT_ENCODING")
         || bazel_bwrap_env_key_is_allowed(key)
-        || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
+        // MXC needs SystemDrive to resolve platform directories and LOCALAPPDATA
+        // to create the sandboxed helper process.
+        || (cfg!(windows)
+            && ["PATH", "SystemDrive", "LOCALAPPDATA"]
+                .iter()
+                .any(|allowed| key.eq_ignore_ascii_case(allowed)))
 }
 
 #[cfg(debug_assertions)]
@@ -685,10 +690,12 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn helper_env_preserves_windows_path_key_for_system_bwrap_discovery() {
+    fn helper_env_preserves_windows_runtime_variables_without_leaking_secrets() {
         let env = helper_env_from_vars(
             [
                 ("Path", r"C:\Windows\System32"),
+                ("LocalAppData", r"C:\Users\test\AppData\Local"),
+                ("SystemDrive", "C:"),
                 ("PATH_INJECTION", "bad"),
                 ("OPENAI_API_KEY", "secret"),
             ]
@@ -697,7 +704,14 @@ mod tests {
 
         assert_eq!(
             env,
-            HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())])
+            HashMap::from([
+                ("Path".to_string(), r"C:\Windows\System32".to_string()),
+                (
+                    "LocalAppData".to_string(),
+                    r"C:\Users\test\AppData\Local".to_string()
+                ),
+                ("SystemDrive".to_string(), "C:".to_string()),
+            ])
         );
     }
 
