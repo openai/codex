@@ -9,6 +9,7 @@ use anyhow::Context;
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::RequestId;
+use codex_config::loader::project_trust_key;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -202,7 +203,8 @@ fn doctor_reports_only_safe_config_error_metadata() -> Result<()> {
     let fixture = Fixture::new()?;
     let user_config_file = fixture.home.join("config.toml");
     let original = std::fs::read_to_string(&user_config_file)?;
-    let project_key = toml::Value::String(fixture.workspace.display().to_string());
+    // macOS temp directories can use a symlinked path; trust the canonical workspace.
+    let project_key = toml::Value::String(project_trust_key(&fixture.workspace));
     let original = format!("{original}\n[projects.{project_key}]\ntrust_level = \"trusted\"\n");
     let project_config_dir = fixture.workspace.join(".codex");
     std::fs::create_dir(&project_config_dir)?;
