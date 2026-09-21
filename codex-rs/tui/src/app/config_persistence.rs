@@ -851,6 +851,7 @@ impl App {
             Ok(response) => response,
             Err(err) => {
                 tracing::error!(error = %err, "failed to persist memory settings");
+                self.app_event_tx.send(AppEvent::FollowTranscript);
                 self.chat_widget
                     .add_error_message(format!("Failed to save memory settings: {err}"));
                 return false;
@@ -862,6 +863,7 @@ impl App {
                 message,
                 "memory settings config write was overridden by effective config"
             );
+            self.app_event_tx.send(AppEvent::FollowTranscript);
             self.chat_widget.add_error_message(format!(
                 "Memory setting changes were saved but not applied: {message}"
             ));
@@ -912,6 +914,7 @@ impl App {
 
         if let Err(err) = app_server.thread_memory_mode_set(thread_id, mode).await {
             tracing::error!(error = %err, %thread_id, "failed to update thread memory mode");
+            self.app_event_tx.send(AppEvent::FollowTranscript);
             self.chat_widget.add_error_message(format!(
                 "Saved memory settings, but failed to update the current thread: {err}"
             ));
@@ -922,6 +925,7 @@ impl App {
         &mut self,
         app_server: &mut AppServerSession,
     ) {
+        self.app_event_tx.send(AppEvent::FollowTranscript);
         if let Err(err) = app_server.memory_reset().await {
             tracing::error!(error = %err, "failed to reset memories");
             self.chat_widget

@@ -1,6 +1,7 @@
 //! Apply backend-authorized fallback and task-local Reserve settings without saving defaults.
 
 use super::App;
+use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::chatwidget::AutomaticModelSwitchReason;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
@@ -25,6 +26,7 @@ impl App {
         {
             return;
         }
+        self.app_event_tx.send(AppEvent::FollowTranscript);
         let mut mode = self.chat_widget.effective_collaboration_mode();
         mode.settings.reasoning_effort = effort.clone();
         let params = ThreadSettingsUpdateParams {

@@ -40,14 +40,20 @@ impl App {
                     "{label} setting saved on the server for new threads. This thread is unchanged. Project or task settings may override it."
                 )))
             }
-            Ok(response) => Box::new(history_cell::new_error_event(format!(
-                "{label} setting was saved but is overridden: {}",
-                overridden_write_message(&response)
-            ))),
-            Err(err) => Box::new(history_cell::new_error_event(format!(
-                "Failed to save {label} setting: {}",
-                crate::config_update::format_config_error(&err)
-            ))),
+            Ok(response) => {
+                self.transcript_view.jump_to_latest();
+                Box::new(history_cell::new_error_event(format!(
+                    "{label} setting was saved but is overridden: {}",
+                    overridden_write_message(&response)
+                )))
+            }
+            Err(err) => {
+                self.transcript_view.jump_to_latest();
+                Box::new(history_cell::new_error_event(format!(
+                    "Failed to save {label} setting: {}",
+                    crate::config_update::format_config_error(&err)
+                )))
+            }
         };
         self.insert_history_cell(tui, notice);
     }
