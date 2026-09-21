@@ -1,26 +1,46 @@
-Use /compact when the conversation gets long to summarize history and free up context.
-Start a fresh idea with /new; the previous session stays in history.
-Use /feedback to send logs to the maintainers when something looks off.
-Switch models or reasoning effort quickly with /model.
-Use /permissions to control when Codex asks for confirmation.
-Run /review to get a code review of your current changes.
-Use /skills to list available skills or ask Codex to use one.
-Use /status to see the current model, approvals, and token usage.
-Use /statusline to configure which items appear in the status line.
-Use /fork to branch the current chat into a new thread.
-Use /side to start a side conversation in a temporary fork without polluting the main thread.
-Use /init to create an AGENTS.md with project-specific guidance.
-Use /mcp to list configured MCP tools.
-Use /rename to rename your threads for easier thread resuming.
+# Tips support Markdown: **emphasis**, `code`, and [label](https://example.com) links.
+# Tips may use {key:context.action} to insert the configured primary key or chord.
+# A tip is skipped if any referenced action is unbound or unavailable.
+Start a fresh idea with **/new**; the previous session stays in history.
+Use **/feedback** to send logs to the maintainers when something looks off.
+Switch models or reasoning effort quickly with **/model**.
+Use **/permissions** to control when Codex asks for confirmation.
+Run **/review** to get a code review of your current changes.
+Use **/skills** to list available skills or ask Codex to use one.
+Use **/status** to see the current model, approvals, and token usage.
+Use **/statusline** to configure which items appear in the status line.
+Use **/fork** to branch the current chat into a new thread.
+Use **/side** to start a side conversation in a temporary fork without polluting the main thread.
+Use **/init** to create an `AGENTS.md` with project-specific guidance.
+Use **/mcp** to list configured MCP tools.
+Use **/rename** to rename your threads for easier thread resuming.
 Use the OpenAI docs MCP for API questions; enable it with `codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp`.
-Join the OpenAI community Discord: http://discord.gg/openai
-Visit the Codex community forum: https://community.openai.com/c/codex/37
+Visit the [Codex community forum](https://community.openai.com/c/codex/37).
 You can run any shell command from Codex using `!` (e.g. `!ls`)
-Type / to open the command popup; Tab autocompletes slash commands.
-When the composer is empty, press Esc to step back and edit your last message; Enter confirms.
-Press Tab to queue a message when a task is running; otherwise it sends immediately (except `!`).
-[tui.keymap] in ~/.codex/config.toml lets you rebind supported shortcuts.
-See the Codex keymap documentation for supported actions and examples.
-Paste an image with Ctrl+V to attach it to your next message.
+Type `/` to open the command popup; `Tab` autocompletes slash commands.
+When the composer is empty, press `Esc` to step back and edit your last message; `Enter` confirms.
+Press {key:composer.queue} to queue a message when a task is running; otherwise it sends immediately (except `!`).
+Use **/keymap** to configure keyboard shortcuts.
+Paste an image with `Ctrl+V` to attach it to your next message.
 You can resume a previous conversation by running `codex resume`
-Use /copy or press Ctrl+O to copy the latest agent response as Markdown.
+Use **/copy** or press {key:global.copy} to copy the latest agent response as Markdown.
+Use **/vim** to toggle Vim editing in the composer.
+Moving from Claude Code? Use **/import** to bring over your setup, project, and recent chats.
+Use **/hooks** to view and manage lifecycle hooks.
+Use **/archive** to archive the current session.
+When worktree support is available, use **/worktree** to start or continue a conversation in a separate Git worktree.
+Coming back to a conversation? Use **/recap** to summarize it.
+When voice is available, use **/voice** to start or stop a voice conversation, or **/voice settings** to choose a voice.
+When goals are enabled, use **/goal** to set or inspect the objective for a long-running task.
+Use **/agents** to open the agent command center.
+Use **/subagents** to switch between this session’s subagents.
+Use **/export** to save your conversation as Markdown.
+When signed in with ChatGPT, use **/usage** to check your account usage and access available usage limit resets.
+Use **/title** to choose what appears in your terminal’s title.
+Use **/theme** to choose a syntax highlighting theme.
+When plugins are enabled, use **/plugins** to browse plugins.
+Press {key:global.open_transcript} to open the full transcript.
+Press {key:global.find_transcript} to search this conversation.
+Press {key:global.open_external_editor} to edit your current draft in an external editor.
+Press {key:composer.history_search_previous} to search previously entered prompts.
+For models with adjustable reasoning, press {key:chat.increase_reasoning_effort} to increase reasoning effort or {key:chat.decrease_reasoning_effort} to decrease it.

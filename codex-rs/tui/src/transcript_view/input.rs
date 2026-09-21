@@ -181,6 +181,21 @@ impl TranscriptView {
         if let Some(action) = self.handle_follow_control_mouse(event) {
             return Some(action);
         }
+        if event.kind == MouseEventKind::Down(MouseButton::Left)
+            && event
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER)
+            && let Some((area, tip)) = &self.composer_tip
+            && area.contains(ScreenPosition::new(event.column, event.row))
+        {
+            let column = usize::from(event.column - area.x);
+            return tip
+                .hyperlinks
+                .iter()
+                .find(|link| link.columns.contains(&column))?
+                .terminal_destination()
+                .map(ViewAction::OpenLink);
+        }
         let inside = self
             .area
             .contains(ScreenPosition::new(event.column, event.row));

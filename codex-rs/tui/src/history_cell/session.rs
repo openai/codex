@@ -86,20 +86,22 @@ impl HistoryCell for TooltipHistoryCell {
     }
 
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         let indent = "  ";
         let indent_width = display_width(indent);
         let wrap_width = usize::from(width.max(1))
             .saturating_sub(indent_width)
             .max(1);
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        append_markdown(
-            &format!("**Tip:** {}", self.tip),
-            Some(wrap_width),
-            Some(self.cwd.as_path()),
-            &mut lines,
-        );
+        let lines = crate::tooltips::render_tooltip_lines(&self.tip, wrap_width, &self.cwd);
 
-        prefix_lines(lines, indent.into(), indent.into())
+        prefix_hyperlink_lines(lines, indent.into(), indent.into())
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -133,12 +135,20 @@ impl HistoryCell for SessionInfoCell {
         self.0.display_lines(width)
     }
 
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.0.display_hyperlink_lines(width)
+    }
+
     fn desired_height(&self, width: u16) -> u16 {
         self.0.desired_height(width)
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.0.transcript_lines(width)
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.0.transcript_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -213,7 +223,9 @@ pub(crate) fn new_session_info(
     } else {
         if local_settings.tui.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| tooltips::get_tooltip(auth_plan, show_fast_status))
+                .or_else(|| {
+                    tooltips::get_tooltip(auth_plan, show_fast_status, &local_settings.tui.keymap)
+                })
                 .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));

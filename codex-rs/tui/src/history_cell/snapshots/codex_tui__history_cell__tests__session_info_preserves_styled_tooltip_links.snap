@@ -1,0 +1,11 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 824
+expression: "rendered.join(\"\\n\")"
+---
+  Tip: Use /copy or ctrl+y;
+  visit the Codex community
+    link 12..27: Codex community -> https://example.com
+  forum (https://example.com).
+    link 2..7: forum -> https://example.com
+    link 9..28: https://example.com -> https://example.com

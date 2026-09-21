@@ -195,6 +195,11 @@ async fn empty_state_animation_preserves_header_cursor_and_footer() -> Result<()
             ["example".to_string()],
             /*failure_reason*/ None,
         )));
+    crate::app::test_support::select_catalog_tip(
+        &mut app,
+        size.width,
+        "Tip: Start a fresh idea with /new; the previous session stays in history.",
+    );
     let before_bottom = draw(&mut app, &mut tui, size)?;
     let history_len = app.transcript_cells.len();
     let before = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();

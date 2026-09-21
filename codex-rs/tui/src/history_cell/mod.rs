@@ -23,7 +23,6 @@ use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
 use crate::live_wrap::take_prefix_by_width;
-use crate::markdown::append_markdown;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;

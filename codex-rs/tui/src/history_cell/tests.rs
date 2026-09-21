@@ -779,6 +779,58 @@ async fn session_info_availability_nux_tooltip_snapshot() {
 }
 
 #[tokio::test]
+async fn session_info_preserves_styled_tooltip_links() {
+    let config = test_config().await;
+    let cell = new_session_info(
+        &config,
+        &crate::local_settings::LocalSettings::from(&config),
+        "gpt-5",
+        "gpt-5",
+        &session_configured_event("gpt-5"),
+        /*is_first_event*/ false,
+        Some(
+            "Use **/copy** or `ctrl+y`; visit the [Codex community forum](https://example.com)."
+                .to_string(),
+        ),
+        Some(PlanType::Free),
+        /*show_fast_status*/ false,
+    );
+
+    let lines = cell.transcript_hyperlink_lines(/*width*/ 30);
+    assert_eq!(lines, cell.display_hyperlink_lines(/*width*/ 30));
+    assert_eq!(
+        visible_lines(lines.clone()),
+        cell.transcript_lines(/*width*/ 30)
+    );
+    let tip_start = lines
+        .iter()
+        .position(|line| line.line.to_string().starts_with("  Tip:"))
+        .unwrap();
+    let tip_lines = &lines[tip_start..];
+    let command = tip_lines
+        .iter()
+        .flat_map(|line| &line.line.spans)
+        .find(|span| span.content == "/copy")
+        .unwrap();
+    assert!(command.style.add_modifier.contains(Modifier::BOLD));
+    let mut rendered = Vec::new();
+    for line in tip_lines {
+        let text = line.line.to_string();
+        rendered.push(text.clone());
+        for link in &line.hyperlinks {
+            // This ASCII fixture makes byte offsets equal to terminal columns.
+            rendered.push(format!(
+                "    link {:?}: {} -> {}",
+                link.columns,
+                &text[link.columns.clone()],
+                link.destination,
+            ));
+        }
+    }
+    insta::assert_snapshot!(rendered.join("\n"));
+}
+
+#[tokio::test]
 async fn session_info_first_event_suppresses_tooltips_and_nux() {
     let config = test_config().await;
     let cell = new_session_info(

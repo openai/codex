@@ -1,0 +1,5 @@
+---
+source: tui/src/app/composer_hints_tests.rs
+expression: rendered.trim_end()
+---
+     Tip: Visit the Codex community forum (https://community.openai.com/c/codex/37).

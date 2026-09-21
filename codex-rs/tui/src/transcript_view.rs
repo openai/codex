@@ -86,6 +86,7 @@ pub(crate) struct TranscriptView {
     position: Position,
     follow_control: follow_control::FollowControl,
     copy_feedback: Option<composer_gap::CopyFeedback>,
+    composer_tip: Option<(Rect, HyperlinkLine)>,
     cache: LayoutCache,
     live: Option<Arc<TextLayout>>,
     live_separated: Option<Arc<TextLayout>>,
@@ -115,6 +116,7 @@ impl Default for TranscriptView {
             position: Position::Latest,
             follow_control: follow_control::FollowControl::default(),
             copy_feedback: None,
+            composer_tip: None,
             cache: LayoutCache::default(),
             live: None,
             live_separated: None,
@@ -142,6 +144,7 @@ impl Default for TranscriptView {
 
 impl TranscriptView {
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
+        self.composer_tip = None;
         self.cache.begin_frame();
         self.sync_history_tail(cells);
         let current_cells = cells;

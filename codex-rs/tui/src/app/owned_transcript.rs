@@ -81,7 +81,7 @@ impl App {
         };
         self.sync_owned_transcript(screen_size.width);
         let transcript_width = self.chat_widget.history_wrap_width(screen_size.width);
-        let composer_hint = self.composer_hint(transcript_width.saturating_sub(/*rhs*/ 2));
+        let composer_hint = self.composer_hint(transcript_width);
         let mut prompt_footer =
             self.prompt_navigation_footer(screen_size.width.saturating_sub(/*rhs*/ 2));
         let chat_widget = &self.chat_widget;

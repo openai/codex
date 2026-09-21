@@ -1,9 +1,11 @@
-//! Share the existing composer gap between transient copy feedback and reading controls.
-//! Feedback wins while visible; controls release their pointer targets when replaced.
+//! Share the composer gap between copy feedback, reading controls, and linked tips.
+//! Feedback wins while visible; controls and tips release their pointer targets when replaced.
 
 use super::*;
 use crate::clipboard_copy::CopyStatus;
 use crate::footer_hint::first_fitting_line;
+use crate::terminal_hyperlinks::HyperlinkParagraph;
+use ratatui::style::Style;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -29,9 +31,10 @@ impl TranscriptView {
     pub(crate) fn render_composer_gap(
         &mut self,
         area: Option<Rect>,
-        hint: Option<&Line<'static>>,
+        hint: Option<&HyperlinkLine>,
         buffer: &mut Buffer,
     ) -> Option<Duration> {
+        self.composer_tip = None;
         if self
             .copy_feedback
             .as_ref()
@@ -65,10 +68,10 @@ impl TranscriptView {
             && let Some(hint) = hint.filter(|hint| hint.width() + 2 <= usize::from(area.width))
         {
             let width = hint.width() as u16;
-            hint.render(
-                Rect::new(area.right() - width - 1, area.y, width, /*height*/ 1),
-                buffer,
-            );
+            let target = Rect::new(area.right() - width - 1, area.y, width, /*height*/ 1);
+            HyperlinkParagraph::new(std::slice::from_ref(hint), Style::default())
+                .render(target, buffer);
+            self.composer_tip = Some((target, hint.clone()));
         }
         None
     }
