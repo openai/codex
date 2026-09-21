@@ -58,6 +58,7 @@ members = [
     "exec-server/tests/support",
     "execpolicy",
     "ext/agent",
+    "ext/agent-message-board",
     "ext/connectors",
     "ext/extension-api",
     "ext/goal",

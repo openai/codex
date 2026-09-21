@@ -2087,6 +2087,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-message-board-extension"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "codex-protocol",
+ "futures",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "codex-agent-roles"
 version = "0.0.0"
 dependencies = [
