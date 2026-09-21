@@ -87,6 +87,16 @@ pub(crate) fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionC
     }
 }
 
+/// Keeps V2 request validation distinct from a dropped local manager.
+pub(crate) fn collab_v2_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
+    match err.details() {
+        CodexErrorDetails::UnsupportedOperation(message) if message != "thread manager dropped" => {
+            FunctionCallError::RespondToModel(message.clone())
+        }
+        _ => collab_agent_error(agent_id, err),
+    }
+}
+
 pub(crate) fn thread_spawn_source(
     parent_thread_id: ThreadId,
     parent_session_source: &SessionSource,

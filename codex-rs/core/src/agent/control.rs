@@ -67,14 +67,13 @@ use tracing::warn;
 use uuid::Uuid;
 
 use self::execution::AgentExecutionLimiter;
-pub(crate) use self::interrupt::AgentInterruptError;
-pub(crate) use self::interrupt::AgentInterruptOutcome;
 use self::residency::V2Residency;
 
 mod budget;
 mod completion;
 mod delivery;
 mod execution;
+mod inspection;
 mod interrupt;
 mod legacy;
 mod residency;
@@ -430,13 +429,10 @@ impl LocalAgentControl {
         &self,
         agent_id: ThreadId,
     ) -> Option<ThreadConfigSnapshot> {
-        let Ok(state) = self.upgrade() else {
-            return None;
-        };
-        let Ok(thread) = state.get_thread(agent_id).await else {
-            return None;
-        };
-        Some(thread.config_snapshot().await)
+        match self.inspect_agent(agent_id).await.ok()? {
+            crate::agent::api::AgentInfo::Loaded { config, .. } => Some(*config),
+            crate::agent::api::AgentInfo::Unloaded(_) => None,
+        }
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.

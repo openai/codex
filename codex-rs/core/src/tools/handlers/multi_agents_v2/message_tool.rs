@@ -12,7 +12,6 @@ use crate::agent::api::SendRequest;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::types::MessageDeliveryMode;
 use crate::tools::context::FunctionToolOutput;
-use codex_protocol::error::CodexErrorDetails;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,14 +79,7 @@ pub(super) async fn handle_message_string_tool(
             },
         })
         .await
-        .map_err(|err| match err.details() {
-            CodexErrorDetails::UnsupportedOperation(message)
-                if message != "thread manager dropped" =>
-            {
-                FunctionCallError::RespondToModel(message.clone())
-            }
-            _ => collab_agent_error(receiver_thread_id, err),
-        })?;
+        .map_err(|err| collab_v2_agent_error(receiver_thread_id, err))?;
     let receiver_agent_path = receipt.metadata.agent_path.ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
