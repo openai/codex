@@ -9,9 +9,9 @@ use std::time::Duration;
 use anyhow::Context;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
-use codex_extension_api::AllowedTools;
 use codex_extension_api::SessionIsolation;
 use codex_extension_api::ToolName;
+use codex_extension_api::ToolPolicy;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::ThreadStoreError;
@@ -270,9 +270,10 @@ async fn startup_allowlist_controls_advertising_and_execution(
     options
         .thread_extension_init
         .insert(SessionIsolation::Isolated);
-    options
-        .thread_extension_init
-        .insert(AllowedTools(tools.clone()));
+    options.thread_extension_init.insert(ToolPolicy {
+        allowed_tools: Some(tools.clone()),
+        ..Default::default()
+    });
     let cancelled = CancellationToken::new();
     let tasks = TaskTracker::new();
     let agent = fixture
@@ -280,10 +281,10 @@ async fn startup_allowlist_controls_advertising_and_execution(
         .start_thread_until(options, cancelled.clone().cancelled_owned(), &tasks)
         .await?;
     // Replacing extension state after startup must not change the captured ceiling.
-    agent
-        .thread
-        .thread_extension_data()
-        .insert(AllowedTools(vec![ToolName::plain("exec_command")]));
+    agent.thread.thread_extension_data().insert(ToolPolicy {
+        allowed_tools: Some(vec![ToolName::plain("exec_command")]),
+        ..Default::default()
+    });
     let response = responses::mount_sse_sequence(
         &server,
         vec![
@@ -339,6 +340,101 @@ async fn startup_allowlist_controls_advertising_and_execution(
             "unsupported call: update_plan"
         } else {
             "Plan updated"
+        }
+    );
+    cancelled.cancel();
+    tasks.close();
+    tasks.wait().await;
+    fixture.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[test_case(None, Some(codex_guardian_reviewer::reviewer_tool_policy()), false; "explicit_policy")]
+#[test_case(None, None, true; "ordinary_defaults")]
+#[test_case(Some(codex_protocol::protocol::SessionSource::Internal(
+    codex_protocol::protocol::InternalSessionSource::Guardian)), None, false; "internal_guardian_fallback")]
+#[test_case(Some(codex_protocol::protocol::SessionSource::SubAgent(
+    codex_protocol::protocol::SubAgentSource::Other("guardian".to_owned()))), None, false; "legacy_guardian_fallback")]
+#[test_case(Some(codex_protocol::protocol::SessionSource::Internal(
+    codex_protocol::protocol::InternalSessionSource::Guardian)), Some(ToolPolicy::default()), true; "explicit_policy_overrides_identity")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_tool_policy_controls_additional_permission_parameters(
+    source: Option<codex_protocol::protocol::SessionSource>,
+    policy: Option<ToolPolicy>,
+    expose_additional_permissions: bool,
+) -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let fixture = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .disable(codex_features::Feature::CodeMode)
+                .expect("disable Code Mode for direct-tool assertions");
+            config
+                .features
+                .enable(codex_features::Feature::ExecPermissionApprovals)
+                .expect("enable additional-permission schema for startup assertions");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let mut options = StartThreadOptions::new(fixture.config.clone());
+    options.environments = Some(fixture.codex.environment_selections().await);
+    options
+        .thread_extension_init
+        .insert(SessionIsolation::Isolated);
+    if let Some(policy) = policy {
+        options.thread_extension_init.insert(policy);
+    }
+    options.session_source = source;
+    let cancelled = CancellationToken::new();
+    let tasks = TaskTracker::new();
+    let agent = fixture
+        .thread_manager
+        .start_thread_until(options, cancelled.clone().cancelled_owned(), &tasks)
+        .await?;
+    // The policy is captured at startup, not read back from mutable extension state.
+    agent
+        .thread
+        .thread_extension_data()
+        .insert(ToolPolicy::default());
+    let response = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("done")]),
+    )
+    .await;
+    agent
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Inspect available tools".to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&agent.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let body = response.single_request().body_json();
+    let properties = &body["tools"]
+        .as_array()
+        .expect("tool list")
+        .iter()
+        .find(|tool| tool["name"] == "exec_command")
+        .expect("shell tool")["parameters"]["properties"];
+    assert_eq!(
+        properties.get("additional_permissions").is_some(),
+        expose_additional_permissions
+    );
+    assert_eq!(
+        properties["sandbox_permissions"]["enum"],
+        if expose_additional_permissions {
+            json!([
+                "use_default",
+                "with_additional_permissions",
+                "require_escalated"
+            ])
+        } else {
+            json!(["use_default", "require_escalated"])
         }
     );
     cancelled.cancel();

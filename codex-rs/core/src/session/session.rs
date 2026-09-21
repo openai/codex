@@ -72,7 +72,7 @@ pub(crate) struct Session {
     pub(super) features: ManagedFeatures,
     pub(crate) guardian_context_mode: GuardianContextMode,
     pub(super) isolation: codex_extension_api::SessionIsolation,
-    pub(crate) allowed_tools: Option<Arc<codex_extension_api::AllowedTools>>,
+    pub(crate) tool_policy: Arc<codex_extension_api::ToolPolicy>,
     pub(crate) windows_sandbox_proxy_settings_mode:
         codex_sandboxing::WindowsSandboxProxySettingsMode,
     pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
@@ -959,12 +959,15 @@ impl Session {
         // Publish the already resolved model before extensions make startup decisions.
         // Turn construction refreshes this attachment when the selected model changes.
         thread_extension_init.insert(model_info);
-        let allowed_tools = thread_extension_init
-            .get::<codex_extension_api::AllowedTools>()
-            .or_else(|| {
-                // Older reviewer rollouts predate the explicit startup setting.
-                crate::guardian::is_basic_session_source(&session_configuration.session_source)
-                    .then(|| Arc::new(codex_guardian_reviewer::reviewer_allowed_tools()))
+        let tool_policy = thread_extension_init
+            .get::<codex_extension_api::ToolPolicy>()
+            .unwrap_or_else(|| {
+                // Older reviewer rollouts predate the explicit startup policy.
+                if crate::guardian::is_basic_session_source(&session_configuration.session_source) {
+                    Arc::new(codex_guardian_reviewer::reviewer_tool_policy())
+                } else {
+                    Arc::default()
+                }
             });
         let mcp_thread_init = thread_extension_init.clone();
         let thread_extension_data = codex_extension_api::ExtensionData::new_with_init(
@@ -1740,7 +1743,7 @@ impl Session {
                 features: config.features.clone(),
                 guardian_context_mode,
                 isolation,
-                allowed_tools,
+                tool_policy,
                 windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
                 mcp_refresh: McpRefresh::new(),

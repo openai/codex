@@ -27,8 +27,8 @@ use crate::tools::router::tool_log_payload;
 use crate::tools::tool_dispatch_trace::ToolDispatchTrace;
 use crate::util::error_or_panic;
 use codex_analytics::ControlToolCallStatus;
-use codex_extension_api::AllowedTools;
 use codex_extension_api::ToolCallOutcome;
+use codex_extension_api::ToolPolicy;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -292,13 +292,13 @@ pub(crate) struct RegisteredTool {
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
     first_collision: Option<ToolName>,
-    pub(crate) allowed_tools: Option<Arc<AllowedTools>>,
+    pub(crate) tool_policy: Arc<ToolPolicy>,
 }
 
 impl ToolRegistry {
-    pub(crate) fn with_allowed_tools(allowed_tools: Option<Arc<AllowedTools>>) -> Self {
+    pub(crate) fn with_tool_policy(tool_policy: Arc<ToolPolicy>) -> Self {
         Self {
-            allowed_tools,
+            tool_policy,
             ..Self::default()
         }
     }
@@ -339,11 +339,7 @@ impl ToolRegistry {
         exposure: ToolExposure,
     ) {
         let tool_name = runtime.tool_name().with_default_namespace();
-        if self
-            .allowed_tools
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(&tool_name))
-        {
+        if !self.tool_policy.allows(&tool_name) {
             return;
         }
         match self.tools.entry(tool_name) {
@@ -359,11 +355,7 @@ impl ToolRegistry {
 
     pub(crate) fn prepend_trusted(&mut self, runtime: Arc<dyn CoreToolRuntime>) {
         let tool_name = runtime.tool_name().with_default_namespace();
-        if self
-            .allowed_tools
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(&tool_name))
-        {
+        if !self.tool_policy.allows(&tool_name) {
             return;
         }
         if self.tools.contains_key(&tool_name) {
@@ -387,11 +379,7 @@ impl ToolRegistry {
         exposure: ToolExposure,
     ) -> bool {
         let tool_name = runtime.tool_name().with_default_namespace();
-        if self
-            .allowed_tools
-            .as_ref()
-            .is_some_and(|allowed| !allowed.contains(&tool_name))
-        {
+        if !self.tool_policy.allows(&tool_name) {
             return false;
         }
         if tool_name.is_default_namespace()

@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use codex_extension_api::AllowedTools;
 use codex_extension_api::ToolName;
+use codex_extension_api::ToolPolicy;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -27,15 +27,19 @@ use serde_json::Value;
 /// Keeping it in thread data avoids caching settings that can change between reviews.
 pub struct ReviewerConfig<C>(pub fn(&C) -> anyhow::Result<C>);
 
-/// Reviewer tools, including the existing Code Mode dispatchers when enabled.
-/// The host still applies feature flags and sandbox restrictions to these tools.
-pub fn reviewer_allowed_tools() -> AllowedTools {
-    AllowedTools(
-        ["exec_command", "write_stdin", "view_image", "exec", "wait"]
-            .into_iter()
-            .map(ToolName::plain)
-            .collect(),
-    )
+/// Reviewer tool selection and construction restrictions, enforced by core.
+pub fn reviewer_tool_policy() -> ToolPolicy {
+    ToolPolicy {
+        allowed_tools: Some(
+            ["exec_command", "write_stdin", "view_image", "exec", "wait"]
+                .into_iter()
+                .map(ToolName::plain)
+                .collect(),
+        ),
+        require_managed_sandbox: true,
+        require_unified_exec: true,
+        expose_additional_permissions: false,
+    }
 }
 
 /// Applies the same read-only ceiling to the reviewer and each inherited environment.
