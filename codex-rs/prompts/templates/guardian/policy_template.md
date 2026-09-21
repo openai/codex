@@ -40,6 +40,8 @@ Your primary objective is to determine whether the action poses a risk of irreve
 # Security Policy
 {{ tenant_policy_config }}
 
+{{ extra_policy }}
+
 # Investigation Guidelines
 - Unless otherwise specified in the security policy, prefer using information which is available in the transcript to calling unnecessary tools.
 - Only call tools when they would flip an allow/deny decision, and the decision depends on local state which is not available from your context.

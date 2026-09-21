@@ -977,6 +977,7 @@ interrupt_message = false
             }),
             additional_developer_instructions: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
+            guardian_extra_policy: None,
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
             }),
@@ -1347,6 +1348,7 @@ approval_policy = "never"
             computer_use: None,
             windows: None,
             guardian_policy_config: None,
+            guardian_extra_policy: None,
             feature_requirements: None,
             hooks: None,
             mcp_servers: None,

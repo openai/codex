@@ -657,6 +657,7 @@ async fn guardian_review_session_config_resolves_policy_and_template(
         Some(
             GuardianPolicyInstructions::new(
                 expected_policy,
+                "",
                 expected_template,
                 guardian_output_contract_prompt(),
             )

@@ -12,11 +12,53 @@ use super::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use super::GuardianV2Config;
 
 fn rendered_classifier_text(config: &GuardianV2Config, policy: &str) -> String {
-    let (_, content) = config.render_classifier_instructions(policy).into_parts();
+    let (_, content) = config
+        .render_classifier_instructions(policy, "")
+        .into_parts();
     let (ContentItem::InputText { text }, _) = content.into_parts() else {
         panic!("classifier instructions must be text");
     };
     text
+}
+
+#[test]
+fn extra_policy_reaches_templated_and_legacy_classifier_instructions() {
+    let policy = "Tenant policy.";
+    for (template, expected) in [
+        (
+            "Classify: {{ tenant_policy_config }}",
+            "Classify: Tenant policy.",
+        ),
+        (
+            "Legacy classifier.",
+            "Legacy classifier.\n\n# Security Policy\nTenant policy.",
+        ),
+    ] {
+        let config = GuardianV2Config::from_overrides(GuardianV2ConfigToml {
+            classifier_instructions: Some(template.to_owned()),
+            ..Default::default()
+        })
+        .unwrap();
+        for (extra_policy, suffix) in [
+            ("", ""),
+            (" \n\t", ""),
+            (
+                " Extra {{ tenant_policy_config }} and {{ extra_policy }}. ",
+                "\n\nExtra {{ tenant_policy_config }} and {{ extra_policy }}.",
+            ),
+        ] {
+            let (_, content) = config
+                .render_classifier_instructions(policy, extra_policy)
+                .into_parts();
+            let (ContentItem::InputText { text }, _) = content.into_parts() else {
+                panic!("classifier instructions must be text");
+            };
+            assert_eq!(
+                text,
+                format!("{expected}{suffix}\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}")
+            );
+        }
+    }
 }
 
 #[test]

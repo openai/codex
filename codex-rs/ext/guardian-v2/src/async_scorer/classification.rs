@@ -263,7 +263,8 @@ impl Classification {
                 .map(ResolvedModelMessages::from_model)
                 .unwrap_or_else(ResolvedModelMessages::bundled);
             let policy = config.resolve_guardian_policy(model_messages);
-            let instructions = guardian_config.render_classifier_instructions(policy);
+            let extra_policy = config.guardian_extra_policy.as_deref().unwrap_or_default();
+            let instructions = guardian_config.render_classifier_instructions(policy, extra_policy);
             let output = match sampler
                 .sample(LunaSamplingRequest {
                     parent_response_id,

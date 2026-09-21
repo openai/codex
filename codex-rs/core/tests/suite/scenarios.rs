@@ -75,6 +75,9 @@ const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ
 #[path = "scenarios_agent_message_board.rs"]
 mod agent_message_board;
 
+#[path = "scenarios_guardian_extra_policy.rs"]
+mod guardian_extra_policy;
+
 #[path = "scenarios_shared_instructions.rs"]
 mod shared_instructions;
 

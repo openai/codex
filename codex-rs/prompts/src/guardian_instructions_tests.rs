@@ -21,13 +21,64 @@ fn reviewer_policy_substitution_preserves_template_layout_and_appends_contract()
             "",
             "Policy: \n\nReview contract.\n",
         ),
+        (
+            "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
+            "Tenant policy.",
+            "Tenant: Tenant policy.\nAdditional: \n\nReview contract.\n",
+        ),
         ("", "Tenant policy.", "\n\nReview contract.\n"),
     ] {
         assert_eq!(
-            GuardianPolicyInstructions::new(policy, template, "Review contract.").render(),
+            GuardianPolicyInstructions::new(policy, "", template, "Review contract.").render(),
             expected,
         );
     }
+}
+
+#[test]
+fn reviewer_extra_policy_substitution_preserves_tenant_policy() {
+    for (template, extra_policy, expected) in [
+        (
+            "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}\nAgain: {{ extra_policy }}",
+            " \nAdditional policy.\n ",
+            "Tenant: Tenant policy.\nAdditional: Additional policy.\nAgain: Additional policy.\n\nReview contract.\n",
+        ),
+        (
+            "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
+            " \n\t",
+            "Tenant: Tenant policy.\nAdditional: \n\nReview contract.\n",
+        ),
+        (
+            "Tenant: {{ tenant_policy_config }}",
+            "Additional policy.",
+            "Tenant: Tenant policy.\n\nReview contract.\n",
+        ),
+    ] {
+        assert_eq!(
+            GuardianPolicyInstructions::new(
+                "Tenant policy.",
+                extra_policy,
+                template,
+                "Review contract.",
+            )
+            .render(),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn reviewer_policy_substitution_keeps_inserted_policy_text_literal() {
+    assert_eq!(
+        GuardianPolicyInstructions::new(
+            "Tenant says {{ tenant_policy_config }} and {{ extra_policy }}.",
+            "Additional says {{ tenant_policy_config }} and {{ extra_policy }}.",
+            "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
+            "Review contract.",
+        )
+        .render(),
+        "Tenant: Tenant says {{ tenant_policy_config }} and {{ extra_policy }}.\nAdditional: Additional says {{ tenant_policy_config }} and {{ extra_policy }}.\n\nReview contract.\n",
+    );
 }
 
 #[test]

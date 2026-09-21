@@ -3930,6 +3930,7 @@ async fn guardian_review_session_config_isolates_parent_customizations() {
         Some(
             GuardianPolicyInstructions::new(
                 defaults.policy,
+                "",
                 defaults.policy_template,
                 guardian_output_contract_prompt(),
             )
@@ -4049,6 +4050,7 @@ async fn guardian_review_session_config_uses_requirements_guardian_policy_config
         Some(
             GuardianPolicyInstructions::new(
                 "Use the workspace-managed guardian policy.",
+                "",
                 ResolvedModelMessages::bundled()
                     .auto_review()
                     .policy_template,

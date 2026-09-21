@@ -394,6 +394,10 @@
           "description": "Experimental full Guardian prompt template containing the tenant policy placeholder.",
           "type": "string"
         },
+        "extra_policy": {
+          "description": "Additional policy text inserted into the Guardian template's `{{ extra_policy }}` slot.",
+          "type": "string"
+        },
         "policy": {
           "description": "Additional policy instructions inserted into the guardian prompt.",
           "type": "string"

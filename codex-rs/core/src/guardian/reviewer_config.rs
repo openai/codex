@@ -28,6 +28,10 @@ pub fn build_guardian_review_session_config(
     guardian_config.personality = personality;
     let auto_review = model_messages.auto_review();
     let tenant_policy_config = guardian_config.resolve_guardian_policy(model_messages);
+    let extra_policy = guardian_config
+        .guardian_extra_policy
+        .as_deref()
+        .unwrap_or_default();
     let policy_template = guardian_config
         .guardian_policy_template
         .as_deref()
@@ -35,6 +39,7 @@ pub fn build_guardian_review_session_config(
     guardian_config.base_instructions = Some(
         GuardianPolicyInstructions::new(
             tenant_policy_config,
+            extra_policy,
             policy_template,
             guardian_output_contract_prompt(),
         )

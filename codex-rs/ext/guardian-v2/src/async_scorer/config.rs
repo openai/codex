@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use codex_config::GuardianPolicyLoader;
 use codex_context_fragments::ContextualUserFragment;
 use codex_context_fragments::RenderedFragment;
@@ -285,10 +287,19 @@ impl GuardianV2Config {
         })
     }
 
-    pub(crate) fn render_classifier_instructions(&self, policy: &str) -> RenderedFragment {
+    pub(crate) fn render_classifier_instructions(
+        &self,
+        policy: &str,
+        extra_policy: &str,
+    ) -> RenderedFragment {
+        // Include both policies before the classifier's existing template substitution and truncation.
+        let policy = match extra_policy.trim() {
+            "" => Cow::Borrowed(policy),
+            extra_policy => Cow::Owned(format!("{policy}\n\n{extra_policy}")),
+        };
         GuardianClassifierInstructions::new(
             &self.classifier_instructions,
-            policy,
+            &policy,
             CLASSIFICATION_OUTPUT_INSTRUCTIONS,
             self.max_classifier_instruction_tokens,
         )

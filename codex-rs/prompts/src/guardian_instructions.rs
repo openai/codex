@@ -6,11 +6,13 @@ use codex_guardian_context::truncate_text;
 use codex_protocol::models::ContentItemKind;
 
 const TENANT_POLICY_CONFIG_PLACEHOLDER: &str = "{{ tenant_policy_config }}";
+const EXTRA_POLICY_PLACEHOLDER: &str = "{{ extra_policy }}";
 
 /// Reviewer base instructions composed from the effective policy and caller-owned output contract.
 #[derive(Debug, Clone, Copy)]
 pub struct GuardianPolicyInstructions<'a> {
     tenant_policy_config: &'a str,
+    extra_policy: &'a str,
     policy_template: &'a str,
     output_contract: &'a str,
 }
@@ -18,11 +20,13 @@ pub struct GuardianPolicyInstructions<'a> {
 impl<'a> GuardianPolicyInstructions<'a> {
     pub fn new(
         tenant_policy_config: &'a str,
+        extra_policy: &'a str,
         policy_template: &'a str,
         output_contract: &'a str,
     ) -> Self {
         Self {
             tenant_policy_config,
+            extra_policy,
             policy_template,
             output_contract,
         }
@@ -49,13 +53,17 @@ impl ContextualUserFragment for GuardianPolicyInstructions<'_> {
     fn body(&self) -> String {
         let Self {
             tenant_policy_config,
+            extra_policy,
             policy_template,
             output_contract,
         } = *self;
-        let prompt = policy_template.trim_end().replace(
-            TENANT_POLICY_CONFIG_PLACEHOLDER,
-            tenant_policy_config.trim(),
-        );
+        // Substitute only template text, leaving placeholder-like text in either policy literal.
+        let prompt = policy_template
+            .trim_end()
+            .split(TENANT_POLICY_CONFIG_PLACEHOLDER)
+            .map(|part| part.replace(EXTRA_POLICY_PLACEHOLDER, extra_policy.trim()))
+            .collect::<Vec<_>>()
+            .join(tenant_policy_config.trim());
         format!("{prompt}\n\n{output_contract}\n")
     }
 }

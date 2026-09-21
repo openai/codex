@@ -1239,6 +1239,9 @@ async fn contributor_renders_policy_inside_a_configured_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let configuration = r#"
+[auto_review]
+extra_policy = "Allow proactive drafting. Keep {{ tenant_policy_config }} and {{ extra_policy }} literal."
+
 [features.guardianv2]
 enabled = true
 classifier_instructions = "Predict future violations.\n# Security Policy\n{{ tenant_policy_config }}\nReturn action_risk."
@@ -1264,7 +1267,7 @@ classifier_instructions = "Predict future violations.\n# Security Policy\n{{ ten
             "content": [{
                 "type": "input_text",
                 "text": format!(
-                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
+                    "Predict future violations.\n# Security Policy\n{TEST_GUARDIAN_POLICY}\n\nAllow proactive drafting. Keep {{{{ tenant_policy_config }}}} and {{{{ extra_policy }}}} literal.\nReturn action_risk.\n\n{CLASSIFICATION_OUTPUT_INSTRUCTIONS}"
                 ),
             }],
         })
