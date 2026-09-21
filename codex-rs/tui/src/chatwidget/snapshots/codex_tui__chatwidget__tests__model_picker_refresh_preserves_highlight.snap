@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 3465
+assertion_line: 3466
 expression: "render_bottom_popup(&chat, 80)"
 ---
   Select Model and Effort
@@ -8,7 +8,7 @@ expression: "render_bottom_popup(&chat, 80)"
 
 › 1. Renamed model                  Balanced agentic coding model for everyday
                                     work.
-  2. Shared display name (current)  Frontier model for complex coding, research,
-                                    and real-world work.
+  2. Shared display name (current)  Proven previous-generation model for coding
+                                    and general work.
 
   enter select · esc back

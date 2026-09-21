@@ -1,16 +1,16 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 3309
+assertion_line: 3310
 expression: popup
 ---
   Select Model and Effort
 
 
   1. GPT-6-Astra (default)  Our most capable model for complex, demanding work.
-  2. GPT-5.6-Sol            Latest frontier agentic coding model.
+  2. GPT-5.6-Sol            Reliable agentic workhorse for everyday tasks.
   3. GPT-5.6-Terra          Balanced agentic coding model for everyday work.
   4. GPT-5.6-Luna           Fast and affordable agentic coding model.
-› 5. GPT-5.5 (current)      Frontier model for complex coding, research, and
-                            real-world work.
+› 5. GPT-5.5 (current)      Proven previous-generation model for coding and
+                            general work.
 
   enter select · esc back
