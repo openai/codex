@@ -125,8 +125,8 @@ toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-syntect = "5"
-two-face = { version = "0.5", default-features = false, features = ["syntect-default-onig"] }
+syntect = { version = "5", default-features = false, features = ["parsing", "plist-load", "regex-onig"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }

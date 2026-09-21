@@ -18,7 +18,7 @@ flate2 = { workspace = true }
 http = { workspace = true }
 httpdate = { workspace = true }
 mime_guess = { workspace = true }
-sentry = { version = "0.46" }
+sentry = { version = "0.46", default-features = false }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
