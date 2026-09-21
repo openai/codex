@@ -161,6 +161,7 @@ fn sample_skill_track_event(thread_id: &str, plugin_id: Option<&str>) -> TrackEv
 fn sample_artifact_operation_event(thread_id: &str) -> TrackEventRequest {
     TrackEventRequest::ArtifactOperation(codex_artifact_operation_event_request(
         TrackEventsContext {
+            turn_metadata: None,
             model_slug: "gpt-5.1-codex".to_string(),
             thread_id: thread_id.to_string(),
             turn_id: "turn-1".to_string(),
@@ -922,6 +923,7 @@ async fn flush_is_noop_when_analytics_is_disabled() {
 fn app_used_preserves_first_classification_and_emits_again_next_turn() {
     let (client, mut receiver) = client_with_receiver();
     let tracking = TrackEventsContext {
+        turn_metadata: None,
         model_slug: "gpt-5".to_string(),
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),

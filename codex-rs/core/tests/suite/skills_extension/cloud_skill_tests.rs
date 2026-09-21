@@ -4,6 +4,9 @@ use super::*;
 use pretty_assertions::assert_eq;
 use tokio::sync::Mutex;
 
+#[path = "yielded_skill_tests.rs"]
+mod yielded_skill_tests;
+
 struct FakeCloudSkillProvider {
     catalog: SkillCatalog,
     resources: std::collections::HashMap<String, String>,

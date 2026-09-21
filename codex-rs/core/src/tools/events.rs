@@ -149,6 +149,7 @@ async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommand
                     ctx.session.thread_id.to_string(),
                     ctx.turn.sub_id.clone(),
                     ctx.turn.originator.clone(),
+                    /*turn_metadata*/ None,
                 ),
                 ArtifactOperation {
                     item_id: ctx.call_id.to_string(),

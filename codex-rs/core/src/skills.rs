@@ -203,6 +203,7 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
                 sess.thread_id.to_string(),
                 turn_context.sub_id.clone(),
                 turn_context.originator.clone(),
+                Some(turn_context.turn_metadata_state.clone()),
             ),
             vec![invocation],
         );

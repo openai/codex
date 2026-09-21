@@ -46,6 +46,7 @@ use crate::sources::SkillProviders;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::telemetry::ActiveSkillTurnMetrics;
+use crate::telemetry::SkillTurnMetrics;
 
 mod list;
 mod read;
@@ -99,7 +100,7 @@ pub(crate) fn skill_tools(
 pub(crate) struct SkillAnalytics {
     client: AnalyticsEventsClient,
     metrics: Option<Arc<dyn ExtensionMetrics>>,
-    active_turn: Arc<ActiveSkillTurnMetrics>,
+    turn_metrics: Option<Arc<SkillTurnMetrics>>,
     thread_id: String,
     product_client_id: String,
 }
@@ -117,7 +118,13 @@ impl SkillAnalytics {
             metrics: session_store
                 .get::<SkillsSessionState>()
                 .and_then(|state| state.extension_metrics.clone()),
-            active_turn: thread_store.get_or_init(ActiveSkillTurnMetrics::default),
+            // Code-mode callbacks retain these tools after another turn becomes active.
+            turn_metrics: thread_store
+                .get_or_init(ActiveSkillTurnMetrics::default)
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .upgrade(),
             thread_id: thread_store.level_id().to_string(),
             product_client_id: originator.0.clone(),
         })
@@ -131,11 +138,8 @@ impl SkillAnalytics {
         invocation_type: InvocationType,
     ) {
         let turn_metrics = self
-            .active_turn
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .upgrade()
+            .turn_metrics
+            .as_ref()
             .filter(|turn| turn.turn_id == turn_id);
         if let Some(turn_metrics) = &turn_metrics {
             turn_metrics.record_plugin(skill.plugin_id.as_deref());
@@ -172,6 +176,7 @@ impl SkillAnalytics {
                 self.thread_id.clone(),
                 turn_id,
                 self.product_client_id.clone(),
+                turn_metrics.and_then(|turn| turn.turn_metadata.clone()),
             ),
             vec![SkillInvocation {
                 skill_name: skill.name.clone(),

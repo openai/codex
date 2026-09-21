@@ -230,6 +230,7 @@ impl RequestPluginInstallHandler {
                         session.thread_id.to_string(),
                         turn.sub_id.clone(),
                         turn.originator.clone(),
+                        /*turn_metadata*/ None,
                     ),
                     PluginInstallRequested {
                         suggestion_id: suggestion_id.clone(),

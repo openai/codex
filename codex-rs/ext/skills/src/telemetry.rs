@@ -25,6 +25,7 @@ pub fn record_plugin_turn_usage(turn_store: &ExtensionData, plugin_id: Option<&s
 
 pub(crate) struct SkillTurnMetrics {
     pub(crate) turn_id: String,
+    pub(crate) turn_metadata: Option<Arc<dyn codex_analytics::TurnAnalyticsMetadata>>,
     model_slug: String,
     pub(crate) reasoning_effort: String,
     started_at: Instant,
@@ -111,6 +112,10 @@ impl TurnLifecycleContributor for SkillTelemetry {
                 .unwrap_or_else(|| "default".to_string());
             input.turn_store.insert(SkillTurnMetrics {
                 turn_id: input.turn_id.to_string(),
+                turn_metadata: input
+                    .turn_store
+                    .get::<Arc<dyn codex_analytics::TurnAnalyticsMetadata>>()
+                    .map(|metadata| metadata.as_ref().clone()),
                 model_slug: sanitize_metric_tag_value(input.collaboration_mode.model()),
                 reasoning_effort,
                 started_at: Instant::now(),

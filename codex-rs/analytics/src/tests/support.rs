@@ -92,6 +92,7 @@ pub(super) fn test_tracking_context(thread_id: &str, turn_id: &str) -> TrackEven
         thread_id: thread_id.to_string(),
         turn_id: turn_id.to_string(),
         product_client_id: TEST_PRODUCT_CLIENT_ID.to_string(),
+        turn_metadata: None,
     }
 }
 

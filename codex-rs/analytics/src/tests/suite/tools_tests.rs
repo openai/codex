@@ -657,11 +657,24 @@ async fn mcp_elicitation_classification_survives_turn_completion_and_preserves_c
         &mut reducer,
         &mut events,
         /*include_initialize*/ true,
-        /*include_resolved_config*/ true,
+        /*include_resolved_config*/ false,
         /*include_started*/ true,
         /*include_token_usage*/ false,
     )
     .await;
+
+    let turn_metadata = test_turn_metadata(/*root_turn_id*/ None);
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnResolvedConfig(Box::new(
+                TurnResolvedConfigFact {
+                    turn_metadata,
+                    ..sample_turn_resolved_config("thread-2", "turn-2")
+                },
+            ))),
+            &mut events,
+        )
+        .await;
 
     let mut items = Vec::new();
     for (item_id, connector_id, elicitation_type) in [
