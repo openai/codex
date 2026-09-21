@@ -64,8 +64,8 @@ impl ExternalWriterNotice {
         ]
         .into();
         let retry: Line<'static> = vec![
-            Span::styled("R", crate::style::accent_style()),
-            " to Retry".into(),
+            Span::styled("r", crate::style::accent_style()),
+            " to retry".into(),
         ]
         .into();
         let mut lines = word_wrap_lines(&[title], usize::from(width));

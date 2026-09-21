@@ -4,7 +4,7 @@ expression: "rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>().join(\"\\
 ---
 
 
-  🔒   This conversation is open in another app  R to Retry
+  🔒   This conversation is open in another app  r to retry
       Close it there and press R to continue here.
 
    r retry   esc/ctrl+c/q exit   ctrl+t transcript
