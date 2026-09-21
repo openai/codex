@@ -24,6 +24,7 @@ fn request() -> rpc::ServerRequestPayload {
         turn_id: None,
         server_name: "codex_apps".into(),
         request: rpc::McpServerElicitationRequest::UserVerification {
+            meta: None,
             title: "Approve".into(),
             description: String::new(),
             challenge: "AQ".into(),

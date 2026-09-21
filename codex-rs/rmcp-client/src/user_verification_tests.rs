@@ -16,11 +16,60 @@ fn user_verification_request_preserves_signed_bytes_and_display_text() {
         ))
         .unwrap(),
         Elicitation::UserVerification {
+            meta: None,
             title: "Approve purchase".to_string(),
             description: "Pay $200 to Example Store".to_string(),
             challenge: "AQID".to_string(),
         }
     );
+}
+
+#[test]
+fn user_verification_request_metadata_matches_mcp_elicitation() {
+    for meta in [
+        None,
+        Some(json!(null)),
+        Some(json!({})),
+        Some(json!({"example/display": {"label": "Operation", "details": [1, true, null]}})),
+        Some(json!(true)),
+        Some(json!(7)),
+        Some(json!("scalar")),
+        Some(json!([])),
+    ] {
+        let mut params = json!({
+            "mode": MODE,
+            "title": "Approve",
+            "description": "Review operation",
+            "challenge": "AQID",
+        });
+        let mut mcp_params = json!({
+            "mode": "form",
+            "message": "Approve",
+            "requestedSchema": {"type": "object", "properties": {}},
+        });
+        if let Some(meta) = &meta {
+            params["_meta"] = meta.clone();
+            mcp_params["_meta"] = meta.clone();
+        }
+        let mcp_request = serde_json::from_value::<rmcp::model::ElicitRequestParams>(mcp_params);
+        let expected = if mcp_request.is_ok() {
+            Ok(Elicitation::UserVerification {
+                meta: meta.filter(serde_json::Value::is_object),
+                title: "Approve".into(),
+                description: "Review operation".into(),
+                challenge: "AQID".into(),
+            })
+        } else {
+            Err(invalid_request())
+        };
+        assert_eq!(
+            parse_request(CustomRequest::new(
+                "openai/elicitation/create",
+                Some(params),
+            )),
+            expected,
+        );
+    }
 }
 
 #[test]

@@ -19,6 +19,7 @@ fn verification_request() -> ServerRequest {
             turn_id: None,
             server_name: "deployments".to_string(),
             request: McpServerElicitationRequest::UserVerification {
+                meta: None,
                 title: "Approve deployment?".to_string(),
                 description: "Deploy the reviewed change.".to_string(),
                 challenge: "AQID".to_string(),

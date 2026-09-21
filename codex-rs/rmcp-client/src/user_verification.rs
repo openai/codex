@@ -15,6 +15,8 @@ pub(crate) const MODE: &str = "openai/userVerification";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RequestParams {
     mode: String,
+    #[serde(rename = "_meta")]
+    meta: Option<serde_json::Map<String, serde_json::Value>>,
     title: String,
     description: String,
     challenge: String,
@@ -42,6 +44,7 @@ pub(crate) fn parse_request(request: CustomRequest) -> Result<Elicitation, rmcp:
         return Err(invalid_request());
     }
     Ok(Elicitation::UserVerification {
+        meta: params.meta.map(serde_json::Value::Object),
         title: params.title,
         description: params.description,
         challenge: params.challenge,

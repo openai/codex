@@ -99,6 +99,7 @@ impl ServerHandler for VerificationServer {
                     "title": "Approve purchase",
                     "description": "Pay $200 to Example Store",
                     "challenge": "AAECA_7_",
+                    "_meta": {"example/display": {"label": "Operation"}},
                 })),
             )))
             .await
@@ -182,6 +183,7 @@ async fn user_verification_mcp_round_trip_requires_proof_in_full_access() -> Res
     assert_eq!(
         request.request,
         ElicitationRequest::UserVerification {
+            meta: Some(json!({"example/display": {"label": "Operation"}})),
             title: "Approve purchase".into(),
             description: "Pay $200 to Example Store".into(),
             challenge: "AAECA_7_".into(),

@@ -604,6 +604,7 @@ async fn user_verification_requires_the_app_even_when_policy_would_approve_or_de
         let pending = tokio::spawn(sender(
             RequestId::Number(7),
             Elicitation::UserVerification {
+                meta: Some(json!({"example/display": {"label": "Operation"}})),
                 title: "Approve purchase".into(),
                 description: "Pay $200".into(),
                 challenge: "AQID".into(),
@@ -616,6 +617,7 @@ async fn user_verification_requires_the_app_even_when_policy_would_approve_or_de
         assert_eq!(
             request.request,
             ElicitationRequest::UserVerification {
+                meta: Some(json!({"example/display": {"label": "Operation"}})),
                 title: "Approve purchase".into(),
                 description: "Pay $200".into(),
                 challenge: "AQID".into(),
@@ -665,6 +667,7 @@ async fn user_verification_cancels_when_no_app_can_receive_the_request() {
         sender(
             RequestId::Number(7),
             Elicitation::UserVerification {
+                meta: None,
                 title: "Approve".into(),
                 description: String::new(),
                 challenge: "AQID".into(),
@@ -694,6 +697,7 @@ async fn user_verification_cancels_for_an_event_receiver_without_host_activation
         sender(
             RequestId::Number(7),
             Elicitation::UserVerification {
+                meta: None,
                 title: "Approve".into(),
                 description: String::new(),
                 challenge: "AQID".into(),
@@ -734,6 +738,7 @@ async fn user_verification_drops_pending_response_when_the_request_is_cancelled(
     let pending = tokio::spawn(sender(
         RequestId::Number(7),
         Elicitation::UserVerification {
+            meta: None,
             title: "Approve".into(),
             description: String::new(),
             challenge: "AQID".into(),
@@ -779,6 +784,7 @@ async fn user_verification_rejects_attached_servers_even_if_they_use_the_plugin_
             sender(
                 RequestId::Number(7),
                 Elicitation::UserVerification {
+                    meta: None,
                     title: "Approve".into(),
                     description: String::new(),
                     challenge: "AQID".into()

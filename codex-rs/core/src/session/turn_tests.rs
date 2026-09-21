@@ -95,6 +95,7 @@ fn realtime_user_verification_notice_excludes_request_payload() {
         server_name: "private-server-name".to_string(),
         id: codex_protocol::mcp::RequestId::String("private-request-id".to_string()),
         request: codex_protocol::approvals::ElicitationRequest::UserVerification {
+            meta: None,
             title: "private-title".to_string(),
             description: "private-description".to_string(),
             challenge: "private-challenge".to_string(),

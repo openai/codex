@@ -271,6 +271,7 @@ async fn hosted_apps_protocol_override_preserves_native_verification() -> anyhow
     assert_eq!(
         request.request,
         ElicitationRequest::UserVerification {
+            meta: None,
             title: "Verify action".into(),
             description: "Verify the requested operation".into(),
             challenge: "AQID".into(),

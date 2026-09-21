@@ -78,6 +78,7 @@ async fn user_verification_initialize_owns_advertisement_and_eligibility() -> Re
                         turn_id: None,
                         server_name: "codex_apps".into(),
                         request: rpc::McpServerElicitationRequest::UserVerification {
+                            meta: None,
                             challenge: "AQ".into(),
                             title: "Approve".into(),
                             description: String::new(),

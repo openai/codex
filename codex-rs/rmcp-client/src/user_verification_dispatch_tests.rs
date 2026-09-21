@@ -28,6 +28,51 @@ fn service() -> ElicitationClientService {
 }
 
 #[tokio::test]
+async fn user_verification_dispatch_preserves_context_metadata() -> anyhow::Result<()> {
+    let mut service = service();
+    service.send_elicitation = Arc::new(Box::new(|_, request| {
+        assert_eq!(
+            request,
+            Elicitation::UserVerification {
+                meta: Some(json!({"example/display": {"label": "Operation"}})),
+                title: "Approve".into(),
+                description: "Review operation".into(),
+                challenge: "AQID".into(),
+            }
+        );
+        Box::pin(async {
+            Ok(ElicitationResponse {
+                action: ElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            })
+        })
+    }));
+    let (client_transport, server_transport) = tokio::io::duplex(/*max_buf_size*/ 4096);
+    let client = serve_directly(service, client_transport, /*peer_info*/ None);
+    let mut server = IntoTransport::<RoleServer, _, _>::into_transport(server_transport);
+    server
+        .send(serde_json::from_value::<ServerJsonRpcMessage>(json!({
+            "jsonrpc": "2.0", "id": 1, "method": OPENAI_ELICITATION_METHOD,
+            "params": {
+                "mode": crate::user_verification::MODE,
+                "title": "Approve", "description": "Review operation", "challenge": "AQID",
+                "_meta": {"progressToken": 7, "example/display": {"label": "Operation"}}
+            }
+        }))?)
+        .await?;
+    let response = timeout(Duration::from_secs(/*secs*/ 5), server.receive())
+        .await?
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(response)?,
+        json!({"jsonrpc": "2.0", "id": 1, "result": {"action": "cancel"}})
+    );
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn user_verification_remembers_cancellation_before_request_handler_runs() -> anyhow::Result<()>
 {
     let service = service();

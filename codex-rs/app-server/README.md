@@ -96,6 +96,12 @@ Before sending verification requests to desktop sessions, deploy a GUI that
 handles the typed verification request, cancellation, and late proofs. The general
 `experimentalApi` opt-in does not identify a compatible GUI version.
 
+Native `openai/userVerification` elicitation requests preserve optional `_meta`
+JSON through MCP transport and `mcpServer/elicitation/request`. Clients may use
+this metadata for extension-specific presentation and must continue to accept
+requests without it. Metadata does not change the challenge bytes or the proof
+returned in the acceptance response.
+
 Local UI clients use five methods. They require the existing
 `experimentalApi` opt-in. The local provider reports
 `unavailable/providerUnavailable` on unsupported platforms or without the required

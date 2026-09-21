@@ -381,12 +381,13 @@ fn restore_context_meta(
     }
 
     match &mut request {
-        Elicitation::UserVerification { .. } => {}
         Elicitation::Mcp(request) => request
             .meta_mut()
             .get_or_insert_with(RequestMetaObject::new)
             .extend(context_meta),
-        Elicitation::OpenAiForm { meta, .. } | Elicitation::OpenAiElicitationForm { meta, .. } => {
+        Elicitation::OpenAiForm { meta, .. }
+        | Elicitation::OpenAiElicitationForm { meta, .. }
+        | Elicitation::UserVerification { meta, .. } => {
             let meta = meta
                 .get_or_insert_with(|| Value::Object(Map::new()))
                 .as_object_mut();

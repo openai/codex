@@ -9,6 +9,7 @@ fn user_verification_server_request(thread_id: ThreadId, request_id: i64) -> Ser
             turn_id: Some("turn-verification".to_string()),
             server_name: "deployments".to_string(),
             request: McpServerElicitationRequest::UserVerification {
+                meta: None,
                 title: "Approve deployment?".to_string(),
                 description: "Verify the production deployment.".to_string(),
                 challenge: "AQID".to_string(),

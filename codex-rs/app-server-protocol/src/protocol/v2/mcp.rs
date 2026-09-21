@@ -758,6 +758,9 @@ pub enum McpServerElicitationRequest {
     #[serde(rename = "openai/userVerification", rename_all = "camelCase")]
     #[ts(rename = "openai/userVerification", rename_all = "camelCase")]
     UserVerification {
+        #[serde(rename = "_meta")]
+        #[ts(rename = "_meta")]
+        meta: Option<JsonValue>,
         title: String,
         description: String,
         challenge: String,
@@ -808,10 +811,12 @@ impl TryFrom<CoreElicitationRequest> for McpServerElicitationRequest {
     fn try_from(value: CoreElicitationRequest) -> Result<Self, Self::Error> {
         match value {
             CoreElicitationRequest::UserVerification {
+                meta,
                 title,
                 description,
                 challenge,
             } => Ok(Self::UserVerification {
+                meta,
                 title,
                 description,
                 challenge,

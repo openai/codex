@@ -44,6 +44,7 @@ impl UserVerificationRequests {
             title,
             description,
             challenge,
+            ..
         } = &params.request
         {
             self.pending.insert(

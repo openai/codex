@@ -291,6 +291,7 @@ impl ElicitationRequestManager {
                     .ok()
                     .and_then(|authority| authority.clone());
                 if let Elicitation::UserVerification {
+                    meta,
                     title,
                     description,
                     challenge,
@@ -309,6 +310,7 @@ impl ElicitationRequestManager {
                         authority,
                         server_name,
                         ElicitationRequest::UserVerification {
+                            meta,
                             title,
                             description,
                             challenge,

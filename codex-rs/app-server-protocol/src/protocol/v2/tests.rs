@@ -2324,6 +2324,41 @@ fn mcp_server_elicitation_request_from_core_url_request() {
 }
 
 #[test]
+fn mcp_server_user_verification_metadata_round_trips_from_core() {
+    for meta in [
+        None,
+        Some(json!({"example/display": {"label": "Operation"}})),
+    ] {
+        let mut wire = json!({
+            "mode": "openai/userVerification",
+            "title": "Approve",
+            "description": "Review operation",
+            "challenge": "AQID",
+        });
+        if let Some(meta) = &meta {
+            wire["_meta"] = meta.clone();
+        }
+        let core: CoreElicitationRequest = serde_json::from_value(wire.clone()).unwrap();
+        let request = McpServerElicitationRequest::try_from(core).unwrap();
+        assert_eq!(
+            request,
+            McpServerElicitationRequest::UserVerification {
+                meta: meta.clone(),
+                title: "Approve".into(),
+                description: "Review operation".into(),
+                challenge: "AQID".into(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_value::<McpServerElicitationRequest>(wire.clone()).unwrap(),
+            request
+        );
+        wire["_meta"] = json!(meta);
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+    }
+}
+
+#[test]
 fn mcp_server_elicitation_request_from_core_form_request() {
     let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
         meta: None,

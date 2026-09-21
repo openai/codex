@@ -18,6 +18,7 @@ fn request(thread_id: ThreadId) -> ServerRequestPayload {
         turn_id: Some("turn-1".into()),
         server_name: "plugin-service".into(),
         request: McpServerElicitationRequest::UserVerification {
+            meta: None,
             title: "Approve".into(),
             description: String::new(),
             challenge: "AQID".into(),

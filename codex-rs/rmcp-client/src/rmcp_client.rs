@@ -319,6 +319,7 @@ pub enum Elicitation {
         requested_schema: serde_json::Value,
     },
     UserVerification {
+        meta: Option<serde_json::Value>,
         title: String,
         description: String,
         challenge: String,
@@ -329,10 +330,11 @@ impl Elicitation {
     pub fn meta(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
         match self {
             Self::Mcp(request) => request.meta().map(|meta| &meta.0.0),
-            Self::OpenAiForm { meta, .. } | Self::OpenAiElicitationForm { meta, .. } => {
+            Self::OpenAiForm { meta, .. }
+            | Self::OpenAiElicitationForm { meta, .. }
+            | Self::UserVerification { meta, .. } => {
                 meta.as_ref().and_then(serde_json::Value::as_object)
             }
-            Self::UserVerification { .. } => None,
         }
     }
 }
