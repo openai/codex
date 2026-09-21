@@ -62,7 +62,7 @@ pub(super) struct StoredTurnRow {
     pub summary_items: Vec<StoredThreadItem>,
 }
 
-#[derive(sqlx::FromRow)]
+#[derive(sqlx_macros::FromRow)]
 pub(super) struct StoredSummaryColumns {
     summary_first_user_turn_id: Option<String>,
     summary_first_user_item_id: Option<String>,

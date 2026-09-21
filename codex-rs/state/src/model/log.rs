@@ -1,5 +1,5 @@
 use serde::Serialize;
-use sqlx::FromRow;
+use sqlx_macros::FromRow;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LogEntry {
