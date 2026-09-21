@@ -8,6 +8,7 @@ mod value;
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
+use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 
@@ -65,14 +66,14 @@ pub(crate) enum RuntimeEvent {
         text: String,
     },
     Result {
-        stored_value_writes: HashMap<String, JsonValue>,
+        stored_value_writes: HashMap<String, Arc<JsonValue>>,
         error_text: Option<String>,
     },
     ThreadPanicked,
 }
 
 pub(crate) fn spawn_runtime(
-    stored_values: HashMap<String, JsonValue>,
+    stored_values: HashMap<String, Arc<JsonValue>>,
     request: ExecuteRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_mode: PendingRuntimeMode,
@@ -143,15 +144,15 @@ struct RuntimeConfig {
     tool_call_id: String,
     enabled_tools: Vec<EnabledToolMetadata>,
     source: String,
-    stored_values: HashMap<String, JsonValue>,
+    stored_values: HashMap<String, Arc<JsonValue>>,
 }
 
 pub(super) struct RuntimeState {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_tool_calls: HashMap<String, v8::Global<v8::PromiseResolver>>,
     pending_timeouts: HashMap<u64, timers::ScheduledTimeout>,
-    stored_values: HashMap<String, JsonValue>,
-    stored_value_writes: HashMap<String, JsonValue>,
+    stored_values: HashMap<String, Arc<JsonValue>>,
+    stored_value_writes: HashMap<String, Arc<JsonValue>>,
     enabled_tools: Vec<EnabledToolMetadata>,
     next_tool_call_id: u64,
     next_timeout_id: u64,
@@ -163,7 +164,7 @@ pub(super) struct RuntimeState {
 pub(super) enum CompletionState {
     Pending,
     Completed {
-        stored_value_writes: HashMap<String, JsonValue>,
+        stored_value_writes: HashMap<String, Arc<JsonValue>>,
         error_text: Option<String>,
     },
 }
@@ -321,7 +322,7 @@ fn capture_scope_send_error(
 
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    stored_value_writes: HashMap<String, JsonValue>,
+    stored_value_writes: HashMap<String, Arc<JsonValue>>,
     error_text: Option<String>,
 ) {
     let _ = event_tx.send(RuntimeEvent::Result {

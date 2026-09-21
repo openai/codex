@@ -43,7 +43,7 @@ impl CellHost for TestHost {
 
     async fn commit_completion(
         &self,
-        _stored_value_writes: HashMap<String, JsonValue>,
+        _stored_value_writes: HashMap<String, Arc<JsonValue>>,
         event: CellEvent,
         pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,
@@ -75,7 +75,7 @@ impl CellHost for RecordingHost {
 
     async fn commit_completion(
         &self,
-        _stored_value_writes: HashMap<String, JsonValue>,
+        _stored_value_writes: HashMap<String, Arc<JsonValue>>,
         event: CellEvent,
         pending_initial_yield_items: Option<Vec<OutputItem>>,
         cell_state: Arc<CellState>,

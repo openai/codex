@@ -114,7 +114,7 @@ async fn termination_rejects_a_waiting_store_commit_before_the_next_cell_can_loa
     let commit = host.commit_completion(
         HashMap::from([(
             "candidate".to_string(),
-            JsonValue::String("lost".to_string()),
+            Arc::new(JsonValue::String("lost".to_string())),
         )]),
         completion.clone(),
         /*pending_initial_yield_items*/ None,
