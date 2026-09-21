@@ -1,0 +1,50 @@
+---
+source: tui/src/app/tests/startup_warnings_tests.rs
+expression: "format!(\"{buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 12 },
+    content: [
+        "/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / / ",
+        "⚠ `transcript_v2` is deprecated.                                                ",
+        "Remove it from your configuration.                                              ",
+        "                                                                                ",
+        "                                                                                ",
+        "› Hello                                                                         ",
+        "  Please say hello.                                                             ",
+        "                                                                                ",
+        "Ctrl+Space select                                                               ",
+        " ↑/↓ to scroll · pgup/pgdn to page · home/end to jump                           ",
+        " q close · f3 find · esc browse prompts                                         ",
+        "                                                                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 0, y: 1, fg: Red, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 1, fg: Red, bg: Reset, underline: Reset, modifier: NONE,
+        x: 32, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 34, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 2, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 10, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 4, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 17, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 26, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 37, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 45, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 53, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 1, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 11, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 13, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 21, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 24, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 39, y: 10, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
