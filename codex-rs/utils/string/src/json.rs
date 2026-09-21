@@ -1,5 +1,4 @@
-//! JSON serialization helpers for output that must remain parseable as JSON
-//! while staying safe for ASCII-only transports.
+//! JSON serialization helpers for ASCII-only transports and bounded output.
 
 use std::io;
 
@@ -54,6 +53,43 @@ where
         .map_err(|err| serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, err)))
 }
 
+/// Serialize UTF-8 JSON while retaining at most `max_bytes` of output.
+pub fn to_json_string_bounded<T>(value: &T, max_bytes: usize) -> serde_json::Result<String>
+where
+    T: Serialize + ?Sized,
+{
+    struct BoundedBuffer {
+        bytes: Vec<u8>,
+        max_bytes: usize,
+    }
+
+    impl io::Write for BoundedBuffer {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > self.max_bytes.saturating_sub(self.bytes.len()) {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "JSON byte limit exceeded",
+                ));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut buffer = BoundedBuffer {
+        bytes: Vec::new(),
+        max_bytes,
+    };
+    let mut serializer = serde_json::Serializer::new(&mut buffer);
+    value.serialize(&mut serializer)?;
+    String::from_utf8(buffer.bytes)
+        .map_err(|err| serde_json::Error::io(io::Error::new(io::ErrorKind::InvalidData, err)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -65,6 +101,7 @@ mod tests {
     use serde_json::json;
 
     use super::to_ascii_json_string;
+    use super::to_json_string_bounded;
 
     #[test]
     fn to_ascii_json_string_escapes_non_ascii_strings() {
@@ -118,5 +155,15 @@ mod tests {
         assert!(!serialized.contains("🚀"));
         let parsed: Value = serde_json::from_str(&serialized).expect("serialized json");
         assert_eq!(parsed, expected_value);
+    }
+
+    #[test]
+    fn bounded_json_counts_utf8_output_bytes() {
+        assert_eq!(
+            to_json_string_bounded(&"é", /*max_bytes*/ 4).unwrap(),
+            r#""é""#
+        );
+        assert!(to_json_string_bounded(&"é", /*max_bytes*/ 3).is_err());
+        assert!(to_json_string_bounded(&"a".repeat(100_000), 16 * 1024).is_err());
     }
 }

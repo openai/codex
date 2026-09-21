@@ -14,7 +14,7 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
     let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
     assert!(!session.enabled(Feature::RetainClientDeveloperMessages));
 
-    let expected = ResponseItemEnvelope {
+    let mut expected = ResponseItemEnvelope {
         item: ResponseItem::ConfigurationUpdate {
             reasoning: ConfigurationReasoning {
                 effort: ReasoningEffort::High,
@@ -32,6 +32,13 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
             vec![expected.clone()],
         )
         .await;
+
+    expected.metadata.as_mut().unwrap().mcp_attribution = Some(
+        session
+            .services
+            .executed_tool_calls
+            .mcp_attribution_snapshot(),
+    );
 
     let recorded = session.clone_history().await.into_annotated_items();
     assert_eq!(recorded, vec![expected.clone()]);

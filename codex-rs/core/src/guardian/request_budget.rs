@@ -70,6 +70,7 @@ pub(crate) fn check_prompt(
         codex_protocol::config_types::ReasoningSummary::None,
         /*service_tier*/ None,
         metadata,
+        /*include_internal*/ true,
     )?;
     if estimate_request_tokens(&request)
         > effective_input_token_limit(model, config.model_context_window)

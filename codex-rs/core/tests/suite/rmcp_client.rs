@@ -670,7 +670,8 @@ async fn text_only_mcp_content_uses_content_items() -> anyhow::Result<()> {
     })
     .await;
 
-    let output = final_mock.single_request().function_call_output(call_id);
+    let request = final_mock.single_request();
+    let output = request.function_call_output(call_id);
     let header = output["output"][0]["text"]
         .as_str()
         .expect("first content item should contain the wall-time header");
@@ -687,6 +688,22 @@ async fn text_only_mcp_content_uses_content_items() -> anyhow::Result<()> {
                 "text": "content item fixture result",
             },
         ])
+    );
+
+    let first_turn_id = request.body_json()["client_metadata"]["turn_id"].clone();
+    assert!(first_turn_id.is_string());
+    assert_eq!(
+        serde_json::to_value(codex_core::test_support::mcp_attribution_snapshot(
+            &fixture.codex
+        ))?,
+        json!({
+            "status": "complete",
+            "sources": [{
+                "server_name": "rmcp",
+                "tool_name": "image_scenario",
+                "first_turn_id": first_turn_id,
+            }],
+        })
     );
 
     server.verify().await;

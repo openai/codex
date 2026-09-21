@@ -8,10 +8,12 @@ use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_git_utils::SanitizedGitUrl;
 use codex_protocol::ThreadId;
+use codex_protocol::mcp::McpAttribution;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_utils_string::to_ascii_json_string;
+use codex_utils_string::to_json_string_bounded;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
 use serde::Serialize;
@@ -40,6 +42,8 @@ pub(crate) const TOOL_NAMESPACES_INFO_KEY: &str = "tool_namespaces_info";
 pub(crate) const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 pub(crate) const HISTORY_INGEST_REQUESTED_KEY: &str = "history_ingest_requested";
 pub(crate) const ANALYTICS_ENABLED_KEY: &str = "analytics_enabled";
+pub(crate) const MCP_ATTRIBUTION_CLIENT_METADATA_KEY: &str = "mcp_attribution";
+pub(crate) const MAX_MCP_ATTRIBUTION_BYTES: usize = 16 * 1024;
 
 pub(crate) const FORKED_FROM_THREAD_ID_KEY: &str = "forked_from_thread_id";
 pub(crate) const FORKED_FROM_ORDINAL_EXCLUSIVE_KEY: &str = "forked_from_ordinal_exclusive";
@@ -60,6 +64,7 @@ pub(crate) const WORKSPACES_KEY: &str = "workspaces";
 // when submitting a turn, but they must not override fields owned by core.
 const RESERVED_METADATA_KEYS: &[&str] = &[
     "guardian_credits_requested",
+    MCP_ATTRIBUTION_CLIENT_METADATA_KEY,
     INSTALLATION_ID_KEY,
     X_CODEX_INSTALLATION_ID_HEADER,
     SESSION_ID_KEY,
@@ -95,6 +100,7 @@ const RESERVED_METADATA_KEYS: &[&str] = &[
     NODE_REPL_DISABLED_KEY,
     WORKSPACES_KEY,
 ];
+
 // These keys were previously valid user configuration. Accept existing configs while filtering
 // their values before constructing Core-owned request metadata.
 const BACKWARD_COMPATIBLE_RESERVED_METADATA_KEYS: &[&str] = &[
@@ -255,6 +261,8 @@ pub struct CodexResponsesMetadata {
     /// Selected session analytics client's collection state, independent of event eligibility or delivery.
     /// Absent when the request has no initialized session analytics context.
     pub(crate) analytics_enabled: Option<bool>,
+    /// Cumulative MCP attribution for this logical request; body-only and model-invisible.
+    pub(crate) mcp_attribution: Option<McpAttribution>,
     pub(crate) extra: BTreeMap<String, String>,
 }
 
@@ -296,6 +304,7 @@ impl CodexResponsesMetadata {
             turn_started_at_unix_ms: None,
             history_ingest_requested: None,
             analytics_enabled: None,
+            mcp_attribution: None,
             extra: BTreeMap::new(),
         }
     }
@@ -312,7 +321,7 @@ impl CodexResponsesMetadata {
         serde_json::to_value(self.turn_metadata_payload()).ok()
     }
 
-    pub(crate) fn client_metadata(&self) -> HashMap<String, String> {
+    pub(crate) fn client_metadata(&self, include_internal: bool) -> HashMap<String, String> {
         let mut client_metadata = HashMap::from([
             (
                 X_CODEX_INSTALLATION_ID_HEADER.to_string(),
@@ -347,6 +356,11 @@ impl CodexResponsesMetadata {
             && let Some(turn_metadata_json) = self.turn_metadata_json()
         {
             client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata_json);
+        }
+        if include_internal && let Some(attribution) = &self.mcp_attribution {
+            let serialized = to_json_string_bounded(attribution, MAX_MCP_ATTRIBUTION_BYTES)
+                .unwrap_or_else(|_| r#"{"status":"attribution_error"}"#.to_string());
+            client_metadata.insert(MCP_ATTRIBUTION_CLIENT_METADATA_KEY.to_string(), serialized);
         }
         client_metadata
     }

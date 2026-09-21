@@ -5940,6 +5940,41 @@ contentLength=0"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_records_mcp_completion_even_when_result_is_not_printed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (test, second_mock) = run_code_mode_turn_with_rmcp(
+        &server,
+        "call the rmcp echo tool without printing its result",
+        r#"await tools.mcp__rmcp__echo({ message: "discarded" }); text("done");"#,
+    )
+    .await?;
+    let request = second_mock.single_request();
+    assert_eq!(
+        custom_tool_output_body_and_success(&request, "call-1").0,
+        "done"
+    );
+
+    let first_turn_id = request.body_json()["client_metadata"]["turn_id"].clone();
+    assert!(first_turn_id.is_string());
+    assert_eq!(
+        serde_json::to_value(codex_core::test_support::mcp_attribution_snapshot(
+            &test.codex
+        ))?,
+        serde_json::json!({
+            "status": "complete",
+            "sources": [{
+                "server_name": "rmcp",
+                "tool_name": "echo",
+                "first_turn_id": first_turn_id,
+            }],
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case("node_repl"; "node_repl")]
 #[test_case("cua_repl"; "cua_repl")]
 async fn code_mode_node_repl_screenshots_can_be_captured_without_guardian_transcript_flags(

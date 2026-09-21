@@ -12,6 +12,8 @@ use std::sync::Arc;
 use codex_protocol::ThreadId;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::mcp::McpAttribution;
+use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::mcp::McpResourceOriginCheckpoint;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -83,9 +85,32 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherited_user_message: bool,
 
+    /// Cumulative MCP tools/call attribution checkpoint, never model-visible.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_mcp_attribution_checkpoint"
+    )]
+    pub mcp_attribution: Option<McpAttribution>,
+
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_user_messages: Option<Box<SenderUserMessages>>,
+}
+
+fn deserialize_mcp_attribution_checkpoint<'de, D>(
+    deserializer: D,
+) -> Result<Option<McpAttribution>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(Some(serde_json::from_value(value).unwrap_or_else(|_| {
+        McpAttribution {
+            status: McpAttributionStatus::AttributionError,
+            sources: Vec::new(),
+        }
+    })))
 }
 
 impl ResponseItemEnvelope {

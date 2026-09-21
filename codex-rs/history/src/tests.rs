@@ -162,6 +162,32 @@ fn response_item_envelope_accessors_preserve_item() {
 }
 
 #[test]
+fn mcp_checkpoint_handles_missing_or_unknown_identity() -> Result<()> {
+    let metadata: CodexHarnessMetadata = serde_json::from_value(json!({}))?;
+    assert_eq!(metadata.mcp_attribution, None);
+
+    let restored: CodexHarnessMetadata = serde_json::from_value(json!({
+        "mcp_attribution": {
+            "status": "complete",
+            "sources": [{
+                "server_name": "example",
+                "tool_name": "search",
+                "first_turn_id": "turn_1",
+                "future_identity": "unknown to this reader"
+            }]
+        }
+    }))?;
+    assert_eq!(
+        restored.mcp_attribution,
+        Some(McpAttribution {
+            status: McpAttributionStatus::AttributionError,
+            sources: Vec::new(),
+        })
+    );
+    Ok(())
+}
+
+#[test]
 /// Keeps legacy response-item rollout lines readable and byte-shape compatible.
 fn response_item_rollout_line_preserves_shape() -> Result<()> {
     let legacy_line = json!({

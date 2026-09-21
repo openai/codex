@@ -1493,6 +1493,28 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
     recorded_apps_tool_call_by_call_id(&server, read_call_id).await;
     recorded_apps_tool_call_by_call_id(&server, write_call_id).await;
 
+    let first_turn_id = responses.requests()[2].body_json()["client_metadata"]["turn_id"].clone();
+    assert!(first_turn_id.is_string());
+    assert_eq!(
+        serde_json::to_value(codex_core::test_support::mcp_attribution_snapshot(
+            &test.codex
+        ))?,
+        json!({
+            "status": "complete",
+            "sources": [{
+                "connector_id": "calendar",
+                "server_name": "codex_apps",
+                "tool_name": "calendar_list_events",
+                "first_turn_id": first_turn_id,
+            }, {
+                "connector_id": "calendar",
+                "server_name": "codex_apps",
+                "tool_name": "calendar_create_event",
+                "first_turn_id": first_turn_id,
+            }],
+        })
+    );
+
     test.codex.ensure_rollout_materialized().await;
     test.codex.flush_rollout().await?;
     let rollout_path = test.codex.rollout_path().expect("rollout path");

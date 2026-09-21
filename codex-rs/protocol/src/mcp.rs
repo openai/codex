@@ -52,6 +52,42 @@ pub fn is_node_repl_backed_tool(name: &str, namespace: Option<&str>) -> bool {
         .is_some_and(|(server, _)| is_node_repl_backed_server(server))
 }
 
+/// Producer-reported completeness of the thread's MCP tools/call attribution.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpAttributionStatus {
+    #[default]
+    None,
+    Complete,
+    AttributionError,
+}
+
+/// One source and the first runtime turn in which Codex recorded it.
+///
+/// Server and tool names are retained when no stable identifier is available;
+/// they are not guaranteed to be globally unique or independently authenticated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct McpAttributionSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    pub server_name: String,
+    pub tool_name: String,
+    pub first_turn_id: String,
+}
+
+/// Cumulative, model-invisible attribution reported on Responses API requests.
+/// This is provenance data, not a training-eligibility decision or attestation.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct McpAttribution {
+    pub status: McpAttributionStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<McpAttributionSource>,
+}
+
 /// Bounded app-resource provenance retained across a compaction checkpoint.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct McpResourceOriginCheckpoint {

@@ -12,6 +12,8 @@ use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
 use crate::responses_metadata::CodexResponsesMetadata;
+use crate::responses_metadata::MAX_MCP_ATTRIBUTION_BYTES;
+use crate::responses_metadata::MCP_ATTRIBUTION_CLIENT_METADATA_KEY;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use base64::Engine;
@@ -42,6 +44,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::mcp::McpAttribution;
+use codex_protocol::mcp::McpAttributionSource;
+use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ExecutedToolCall;
@@ -479,7 +484,7 @@ fn output_with_tool_result_metadata(metadata: ToolResultMetadata) -> ResponseIte
 }
 
 #[test]
-fn responses_request_limits_raw_tool_metadata_to_resolved_first_party_https_endpoint()
+fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endpoint()
 -> anyhow::Result<()> {
     let provider =
         ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
@@ -492,17 +497,28 @@ fn responses_request_limits_raw_tool_metadata_to_resolved_first_party_https_endp
         "private": { "resource": "raw-result-metadata" },
     })));
     let without_raw_metadata = output_with_tool_result_metadata(ToolResultMetadata::default());
+    let attribution = McpAttribution {
+        status: McpAttributionStatus::Complete,
+        sources: vec![McpAttributionSource {
+            connector_id: Some("connector_example".to_string()),
+            plugin_id: Some("example@openai-bundled".to_string()),
+            server_name: "codex_apps".to_string(),
+            tool_name: "search".to_string(),
+            first_turn_id: "turn_123".to_string(),
+        }],
+    };
     let prompt = Prompt {
         input: vec![output.clone()],
         ..Default::default()
     };
-    let responses_metadata = test_responses_metadata_for_client(
+    let mut responses_metadata = test_responses_metadata_for_client(
         &client,
         /*turn_id*/ None,
         format!("{}:0", client.state.thread_id),
         /*parent_thread_id*/ None,
         TestCodexResponsesRequestKind::Turn,
     );
+    responses_metadata.mcp_attribution = Some(attribution.clone());
     for (base_url, allowed) in [
         ("https://api.openai.com/v1", true),
         ("https://chatgpt.com/backend-api/codex", true),
@@ -515,18 +531,19 @@ fn responses_request_limits_raw_tool_metadata_to_resolved_first_party_https_endp
         ("not a URL", false),
     ] {
         api_provider.base_url = base_url.to_string();
+        let include_internal = super::is_internal_metadata_destination(&api_provider);
         for responses_lite in [false, true] {
             let mut model = test_model_info();
             model.use_responses_lite = responses_lite;
-            let mut request = client.build_responses_request(
+            let request = client.build_responses_request(
                 &prompt,
                 &model,
                 /*effort*/ None,
                 codex_protocol::config_types::ReasoningSummary::None,
                 /*service_tier*/ None,
                 &responses_metadata,
+                include_internal,
             )?;
-            ModelClient::filter_tool_result_metadata(&mut request.input, &api_provider);
             assert_eq!(
                 request.input.last(),
                 Some(if allowed {
@@ -536,9 +553,58 @@ fn responses_request_limits_raw_tool_metadata_to_resolved_first_party_https_endp
                 }),
                 "resolved endpoint: {base_url}, responses_lite: {responses_lite}",
             );
+            let expected_json = allowed
+                .then(|| serde_json::to_string(&attribution).map(serde_json::Value::String))
+                .transpose()?;
+            assert_eq!(
+                serde_json::to_value(&request)?
+                    .get("client_metadata")
+                    .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)),
+                expected_json.as_ref(),
+            );
+            let ws_client_metadata = client.build_ws_client_metadata(
+                &responses_metadata,
+                include_internal,
+                responses_lite,
+            );
+            let ws_request = codex_api::ResponseCreateWsRequest {
+                client_metadata: Some(ws_client_metadata),
+                ..codex_api::ResponseCreateWsRequest::from(&request)
+            };
+            assert_eq!(
+                serde_json::to_value(ws_request)?
+                    .get("client_metadata")
+                    .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)),
+                expected_json.as_ref(),
+            );
+            assert!(
+                serde_json::to_value(&request)?
+                    .get("mcp_attribution")
+                    .is_none()
+            );
             assert_eq!(prompt.input, vec![output.clone()]);
         }
     }
+    let mut oversized_attribution = attribution;
+    oversized_attribution.sources[0].tool_name = "a".repeat(MAX_MCP_ATTRIBUTION_BYTES);
+    responses_metadata.mcp_attribution = Some(oversized_attribution);
+    let request = client.build_responses_request(
+        &prompt,
+        &test_model_info(),
+        /*effort*/ None,
+        codex_protocol::config_types::ReasoningSummary::None,
+        /*service_tier*/ None,
+        &responses_metadata,
+        /*include_internal*/ true,
+    )?;
+    assert_eq!(
+        request.client_metadata.as_ref().and_then(|metadata| {
+            metadata
+                .get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)
+                .map(String::as_str)
+        }),
+        Some(r#"{"status":"attribution_error"}"#),
+    );
     Ok(())
 }
 
@@ -615,7 +681,9 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
             });
         previous_output.set_turn_id_if_missing("previous-turn");
         current_output.set_turn_id_if_missing("current-turn");
-        let mut previous = client.build_responses_request(
+        api_provider.base_url = base_url.to_string();
+        let include_internal = super::is_internal_metadata_destination(&api_provider);
+        let previous = client.build_responses_request(
             &Prompt {
                 input: vec![previous_output],
                 ..Default::default()
@@ -625,16 +693,24 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
             codex_protocol::config_types::ReasoningSummary::None,
             /*service_tier*/ None,
             &responses_metadata,
+            include_internal,
         )?;
         let follow_up = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
             call_id: "wait-call".to_string(),
             output: FunctionCallOutputPayload::from_text("done".to_string()),
         });
-        let mut current = previous.clone();
-        current.input = vec![current_output, follow_up.clone()];
-        api_provider.base_url = base_url.to_string();
-        ModelClient::filter_tool_result_metadata(&mut previous.input, &api_provider);
-        ModelClient::filter_tool_result_metadata(&mut current.input, &api_provider);
+        let current = client.build_responses_request(
+            &Prompt {
+                input: vec![current_output, follow_up.clone()],
+                ..Default::default()
+            },
+            &test_model_info(),
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &responses_metadata,
+            include_internal,
+        )?;
 
         let mut session = client.new_session();
         session.websocket_session.last_request = Some(previous);
@@ -760,6 +836,7 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
                 /*parent_thread_id*/ None,
                 TestCodexResponsesRequestKind::Turn,
             ),
+            /*include_internal*/ true,
         )
     };
 
@@ -834,6 +911,7 @@ fn websocket_continuation_reset_reason_survives_failed_reconnect_and_turn_bounda
                     /*parent_thread_id*/ None,
                     TestCodexResponsesRequestKind::Turn,
                 ),
+                /*include_internal*/ true,
             )
             .expect("build continuation request");
         let mut session = client.new_session();
@@ -880,6 +958,7 @@ fn reasoning_effort_in_request(
                 /*parent_thread_id*/ None,
                 TestCodexResponsesRequestKind::Turn,
             ),
+            /*include_internal*/ true,
         )
         .expect("build responses request")
         .reasoning
@@ -1173,8 +1252,11 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
         Some(parent_thread_id),
         TestCodexResponsesRequestKind::Turn,
     );
-    let client_metadata =
-        client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
+    let client_metadata = client.build_ws_client_metadata(
+        &responses_metadata,
+        /*include_internal*/ true,
+        /*use_responses_lite*/ false,
+    );
     let parent_thread_id = parent_thread_id.to_string();
     let turn_metadata: serde_json::Value = serde_json::from_str(
         client_metadata
