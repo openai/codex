@@ -255,7 +255,7 @@ pub(super) async fn run_main_inner(
             .and_then(|inner| inner.downcast_ref::<ConfigLoadError>())
         {
             std::io::Error::other(format!(
-                "Error loading config.toml:\n{}",
+                "loading config.toml:\n{}",
                 format_config_error_with_source(config_error.config_error())
             ))
         } else {
