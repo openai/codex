@@ -1,4 +1,4 @@
-//! Black-box coverage for diagnostics under a repository-controlled PATH.
+//! Black-box coverage for safe diagnostic execution and config error reporting.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -194,6 +194,79 @@ fn non_interactive_dumb_terminal_preserves_other_doctor_failures() -> Result<()>
     let report: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(report["checks"]["terminal.env"]["status"], "warning");
     assert_eq!(report["overallStatus"], "fail");
+    Ok(())
+}
+
+#[test]
+fn doctor_reports_only_safe_config_error_metadata() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let user_config_file = fixture.home.join("config.toml");
+    let original = std::fs::read_to_string(&user_config_file)?;
+    let project_key = toml::Value::String(fixture.workspace.display().to_string());
+    let original = format!("{original}\n[projects.{project_key}]\ntrust_level = \"trusted\"\n");
+    let project_config_dir = fixture.workspace.join(".codex");
+    std::fs::create_dir(&project_config_dir)?;
+    for (snapshot_name, config_file, config) in [
+        (
+            "doctor_config_error_location",
+            user_config_file.clone(),
+            "custom_header = \"doctor-test-credential\" trailing\n".to_string(),
+        ),
+        (
+            "doctor_config_invalid_data",
+            project_config_dir.join("config.toml"),
+            "custom_header = \"doctor-test-credential\" trailing\n".to_string(),
+        ),
+        (
+            "doctor_config_not_found",
+            user_config_file.clone(),
+            original.replace(
+                "model_provider = \"local\"",
+                "model_provider = \"doctor-test-credential\"",
+            ),
+        ),
+        (
+            "doctor_config_invalid_data",
+            user_config_file.clone(),
+            original.replace(
+                "wire_api = \"responses\"",
+                "wire_api = \"responses\"\nhttp_headers = \"sk-proj-ABC123example\"",
+            ),
+        ),
+    ] {
+        std::fs::write(&user_config_file, &original)?;
+        std::fs::write(&config_file, config)?;
+        for args in [
+            vec!["doctor", "--json"],
+            vec!["doctor", "--json", "--feedback"],
+        ] {
+            let output = fixture.command()?.args(args).output()?;
+            assert_eq!(output.status.code(), Some(1));
+            let report: Value = serde_json::from_slice(&output.stdout)?;
+            let mut check = report["checks"]["config.load"].clone();
+            check
+                .as_object_mut()
+                .expect("config check")
+                .remove("durationMs");
+            if let Some(file) = check["details"]["file"].as_str() {
+                check["details"]["file"] = Value::String(
+                    file.replace(
+                        &fixture.root.path().canonicalize()?.display().to_string(),
+                        "FIXTURE",
+                    )
+                    .replace(&fixture.root.path().display().to_string(), "FIXTURE")
+                    .replace('\\', "/"),
+                );
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(!stdout.contains("doctor-test-credential"));
+            assert!(!stdout.contains("sk-proj-ABC123example"));
+            // Keep snapshots stable across serde_json feature sets in Cargo and Bazel.
+            check.sort_all_objects();
+            insta::assert_snapshot!(snapshot_name, serde_json::to_string_pretty(&check)?);
+        }
+        std::fs::remove_file(config_file)?;
+    }
     Ok(())
 }
 

@@ -32,6 +32,7 @@ use codex_api::ApiError;
 use codex_api::ResponsesWebsocketClient;
 use codex_api::is_azure_responses_provider;
 use codex_arg0::Arg0DispatchPaths;
+use codex_config::ConfigLoadError;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
@@ -525,14 +526,38 @@ async fn build_report(
             ) = tokio::join!(
                 async {
                     run_sync_check("config", progress.clone(), || {
-                        DoctorCheck::new(
+                        let check = DoctorCheck::new(
                             "config.load",
                             "config",
                             CheckStatus::Fail,
                             "config could not be loaded",
                         )
-                        .detail(err.to_string())
-                        .remediation("Fix the reported config error, then rerun codex doctor.")
+                        .remediation("Fix the reported config error, then rerun codex doctor.");
+                        // Error messages can echo config values. Report only typed metadata,
+                        // including errors wrapped by io::Error, whose source skips the wrapper.
+                        let config_error = err.chain().find_map(|cause| {
+                            cause.downcast_ref::<ConfigLoadError>().or_else(|| {
+                                cause
+                                    .downcast_ref::<std::io::Error>()?
+                                    .get_ref()?
+                                    .downcast_ref::<ConfigLoadError>()
+                            })
+                        });
+                        if let Some(error) = config_error {
+                            let error = error.config_error();
+                            return check
+                                .detail("error: invalid configuration")
+                                .detail(format!("file: {}", error.path.display()))
+                                .detail(format!("line: {}", error.range.start.line))
+                                .detail(format!("column: {}", error.range.start.column));
+                        }
+                        let io_error = err
+                            .chain()
+                            .find_map(|cause| cause.downcast_ref::<std::io::Error>());
+                        match io_error {
+                            Some(error) => check.detail(format!("error: {}", error.kind())),
+                            None => check.detail("error: configuration load failed"),
+                        }
                     })
                 },
                 async {

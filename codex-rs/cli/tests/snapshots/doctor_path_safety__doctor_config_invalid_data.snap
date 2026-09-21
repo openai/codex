@@ -1,0 +1,14 @@
+---
+source: cli/tests/doctor_path_safety.rs
+expression: "serde_json::to_string_pretty(&check)?"
+---
+{
+  "category": "config",
+  "details": {
+    "error": "invalid data"
+  },
+  "id": "config.load",
+  "remediation": "Fix the reported config error, then rerun codex doctor.",
+  "status": "fail",
+  "summary": "config could not be loaded"
+}
