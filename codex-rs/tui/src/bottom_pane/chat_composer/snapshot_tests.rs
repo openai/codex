@@ -1,9 +1,61 @@
-//! Snapshot coverage for draft text and live voice controls in the composer.
+//! Snapshot coverage for draft text, shortcuts, and live voice controls in the composer.
 
 use super::tests::new_test_composer;
+use super::tests::snapshot_composer_state_with_width;
+use crate::bottom_pane::footer::FooterMode;
+use crate::key_hint;
+use crate::key_hint::ShortcutHint;
+use crate::keymap::RuntimeKeymap;
 use crate::render::renderable::Renderable;
+use crossterm::event::KeyCode;
+use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+
+#[test]
+fn shortcut_footer_displays_configured_chords() {
+    use codex_config::types::KeybindingSpec;
+    use codex_config::types::KeybindingsSpec;
+    use codex_config::types::TuiKeymap;
+
+    let mut config = TuiKeymap::default();
+    config.global.open_external_editor = Some(KeybindingsSpec::One(KeybindingSpec(
+        "ctrl-g ctrl-g".to_string(),
+    )));
+    config.editor.insert_newline = Some(KeybindingsSpec::One(KeybindingSpec(
+        "ctrl-x enter".to_string(),
+    )));
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid composer chords");
+    let (mut composer, _rx) = new_test_composer();
+    composer.set_keymap_bindings(&keymap);
+    composer.footer.mode = FooterMode::ShortcutOverlay;
+
+    let hints = composer.footer_props().key_hints;
+    assert_eq!(
+        hints.external_editor,
+        Some(ShortcutHint::Chord {
+            prefix: key_hint::ctrl(KeyCode::Char('g')),
+            completion: key_hint::ctrl(KeyCode::Char('g')),
+        })
+    );
+    assert_eq!(
+        hints.insert_newline,
+        Some(ShortcutHint::Chord {
+            prefix: key_hint::ctrl(KeyCode::Char('x')),
+            completion: key_hint::plain(KeyCode::Enter),
+        })
+    );
+
+    snapshot_composer_state_with_width(
+        "footer_mode_configured_key_chords",
+        /*width*/ 100,
+        /*enhanced_keys_supported*/ false,
+        |composer| {
+            composer.set_keymap_bindings(&keymap);
+            composer.footer.mode = FooterMode::ShortcutOverlay;
+        },
+    );
+}
 
 #[test]
 fn draft_and_voice_composer_snapshots() {

@@ -226,6 +226,7 @@ pub(super) struct FooterState {
     pub(super) history_search_key: Option<ShortcutHint>,
     pub(super) reasoning_down_key: Option<ShortcutHint>,
     pub(super) reasoning_up_key: Option<ShortcutHint>,
+    pub(super) toggle_voice_key: Option<ShortcutHint>,
 }
 
 #[derive(Clone, Debug)]
