@@ -34,6 +34,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod paging;
+mod queries;
+
 const MAX_POST_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
@@ -52,6 +55,8 @@ CREATE TABLE IF NOT EXISTS posts (
 );
 CREATE INDEX IF NOT EXISTS posts_board_channel ON posts(board,channel,seq);
 CREATE INDEX IF NOT EXISTS posts_board_root ON posts(board,root,seq);
+CREATE INDEX IF NOT EXISTS posts_board_root_timestamp ON posts(board,root,timestamp,seq);
+CREATE INDEX IF NOT EXISTS posts_board_timestamp ON posts(board,timestamp,seq);
 CREATE TABLE IF NOT EXISTS subscriptions (
  board TEXT NOT NULL, target TEXT NOT NULL, agent TEXT NOT NULL,
  PRIMARY KEY(board,target,agent)

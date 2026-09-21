@@ -14,6 +14,7 @@ test = false
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 caseless = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-protocol = { workspace = true }

@@ -2099,6 +2099,7 @@ dependencies = [
 name = "codex-agent-message-board-extension"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "caseless",
  "chrono",
  "codex-protocol",

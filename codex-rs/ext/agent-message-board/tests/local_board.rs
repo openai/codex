@@ -5,6 +5,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use chrono::DateTime;
@@ -20,6 +21,7 @@ use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 
 struct Host {
+    clock: AtomicI64,
     members: HashMap<ThreadId, AgentPath>,
     active: AtomicBool,
     fail_notifications: AtomicBool,
@@ -46,10 +48,11 @@ impl MessageBoardHost for Host {
     }
 
     fn current_time(&self, _caller: ThreadId) -> BoxFuture<'_, Result<DateTime<Utc>>> {
-        Box::pin(async {
+        Box::pin(async move {
             Ok(DateTime::parse_from_rfc3339("2026-09-18T12:00:00Z")
                 .map_err(|error| CodexErr::Io(std::io::Error::other(error)))?
-                .with_timezone(&Utc))
+                .with_timezone(&Utc)
+                + chrono::Duration::seconds(self.clock.fetch_add(1, Ordering::SeqCst)))
         })
     }
 
@@ -84,6 +87,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
     let child = ThreadId::new();
     let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
+        clock: AtomicI64::default(),
         members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         fail_notifications: AtomicBool::new(false),
         active: AtomicBool::new(true),
@@ -218,6 +222,7 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
     let host = Arc::new(Host {
+        clock: AtomicI64::default(),
         members: [(root, AgentPath::root())].into(),
         fail_notifications: AtomicBool::new(false),
         active: AtomicBool::new(false),
@@ -272,5 +277,316 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
             n_chars: 30,
             next_offset_chars: 30,
         }
+    );
+}
+
+#[tokio::test]
+async fn queries_enforce_page_and_preview_caps() {
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let host = Arc::new(Host {
+        fail_notifications: AtomicBool::new(false),
+        clock: AtomicI64::default(),
+        members: [(root, AgentPath::root())].into(),
+        active: AtomicBool::new(false),
+        notifications: Mutex::default(),
+    });
+    let board = LocalAgentMessageBoard::open(&sqlite, root.into(), host)
+        .await
+        .unwrap();
+    board
+        .create_channel(
+            root,
+            CreateChannelRequest {
+                channel_name: "Straße".into(),
+                subscription: SubscriptionChange::Unsubscribe,
+            },
+        )
+        .await
+        .unwrap();
+    let text = format!("Straße{}", "x".repeat(1000));
+    for index in 0..51 {
+        board
+            .post(
+                root,
+                PostRequest {
+                    request_id: index.to_string(),
+                    destination: PostDestination::Channel("Straße".into()),
+                    text: text.clone(),
+                    agents_to_notify: vec![],
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let channels = board
+        .list_channels(
+            root,
+            ChannelQuery {
+                query: Some("STRASSE".into()),
+                direction: SortDirection::NewestFirst,
+                page: PageRequest::default(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(channels.results.len(), 1);
+    let query = PostQuery {
+        channel_name: None,
+        query: Some("STRASSE".into()),
+        after_message_id: None,
+        author: None,
+        page: PageRequest {
+            cursor: None,
+            limit: NonZeroU32::MAX,
+        },
+        max_chars_per_post: NonZeroU32::MAX,
+    };
+    let page = board.search_posts(root, query.clone()).await.unwrap();
+    assert_eq!(page.results.len(), 50);
+    assert_eq!(
+        page.results
+            .iter()
+            .map(|post| post.text_preview.chars().count())
+            .sum::<usize>(),
+        20_000
+    );
+    assert!(page.results.iter().all(|post| post.truncated));
+    let last = board
+        .search_posts(
+            root,
+            PostQuery {
+                page: PageRequest {
+                    cursor: page.next_cursor,
+                    limit: NonZeroU32::MAX,
+                },
+                ..query
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(last.results.len(), 1);
+    assert_eq!(last.next_cursor, None);
+}
+
+#[tokio::test]
+async fn queries_page_discussions_and_search_unicode() {
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let host = Arc::new(Host {
+        fail_notifications: AtomicBool::new(false),
+        clock: AtomicI64::default(),
+        members: [(root, AgentPath::root())].into(),
+        active: AtomicBool::new(true),
+        notifications: Mutex::default(),
+    });
+    let board: Arc<dyn AgentMessageBoard> = Arc::new(
+        LocalAgentMessageBoard::open(&sqlite, SessionId::from(root), host)
+            .await
+            .unwrap(),
+    );
+    let request = PostRequest {
+        request_id: "first".into(),
+        destination: PostDestination::NewChannel("work".into()),
+        text: "Éclair".into(),
+        agents_to_notify: vec![],
+    };
+    let first = board.post(root, request).await.unwrap();
+    let second = board
+        .post(
+            root,
+            PostRequest {
+                request_id: "second".into(),
+                destination: PostDestination::Channel("work".into()),
+                text: "second".into(),
+                agents_to_notify: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let one = NonZeroU32::new(1).unwrap();
+    let query = ThreadQuery {
+        channel_name: "work".into(),
+        sort: ThreadSort::Activity,
+        direction: SortDirection::OldestFirst,
+        page: PageRequest {
+            cursor: None,
+            limit: one,
+        },
+        max_chars_per_post: one,
+    };
+    let page = board.list_threads(root, query.clone()).await.unwrap();
+    assert_eq!(
+        page.results
+            .iter()
+            .map(|thread| thread.thread_id)
+            .collect::<Vec<_>>(),
+        vec![first.message_id]
+    );
+    let next = board
+        .list_threads(
+            root,
+            ThreadQuery {
+                page: PageRequest {
+                    cursor: page.next_cursor,
+                    limit: one,
+                },
+                ..query.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        next.results
+            .iter()
+            .map(|thread| thread.thread_id)
+            .collect::<Vec<_>>(),
+        vec![second.message_id]
+    );
+    assert_eq!(next.next_cursor, None);
+    let reply = board
+        .post(
+            root,
+            PostRequest {
+                request_id: "reply".into(),
+                destination: PostDestination::Thread(first.message_id),
+                text: "ÉCLAIR🦀".into(),
+                agents_to_notify: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    // A reply changes activity order without changing creation order.
+    let newest = ThreadQuery {
+        direction: SortDirection::NewestFirst,
+        ..query
+    };
+    assert_eq!(
+        board
+            .list_threads(root, newest.clone())
+            .await
+            .unwrap()
+            .results,
+        vec![ThreadSummary {
+            thread_id: first.message_id,
+            root_post: PostPreview {
+                metadata: first.clone(),
+                text_preview: "É".into(),
+                n_chars: 6,
+                truncated: true,
+            },
+            reply_count: 1,
+            last_activity_at: reply.created_at,
+            latest_reply: Some(PostPreview {
+                metadata: reply.clone(),
+                text_preview: "É".into(),
+                n_chars: 7,
+                truncated: true,
+            }),
+        }]
+    );
+    let created = board
+        .list_threads(
+            root,
+            ThreadQuery {
+                sort: ThreadSort::Created,
+                ..newest
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.results[0].thread_id, second.message_id);
+    let search = board
+        .search_posts(
+            root,
+            PostQuery {
+                channel_name: Some("work".into()),
+                query: Some("éclair".into()),
+                after_message_id: Some(first.message_id),
+                author: Some(AgentPath::root()),
+                page: PageRequest::default(),
+                max_chars_per_post: one,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        search,
+        Page {
+            results: vec![PostPreview {
+                metadata: reply.clone(),
+                text_preview: "É".into(),
+                n_chars: 7,
+                truncated: true
+            }],
+            next_cursor: None
+        }
+    );
+    let thread = board
+        .read_thread(
+            root,
+            ReadThreadRequest {
+                thread_id: first.message_id,
+                page: PageRequest::default(),
+                max_chars_per_post: one,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        thread,
+        ThreadPage {
+            root_post: PostPreview {
+                metadata: first,
+                text_preview: "É".into(),
+                n_chars: 6,
+                truncated: true
+            },
+            replies: search
+        }
+    );
+    let serialized = serde_json::to_value(thread).unwrap();
+    assert_eq!(serialized["n_returned"], 1);
+    assert_eq!(serialized["has_more"], false);
+    let channels = board
+        .list_channels(
+            root,
+            ChannelQuery {
+                query: Some("WORK".into()),
+                direction: SortDirection::NewestFirst,
+                page: PageRequest::default(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(channels.results[0].message_count, 3);
+    assert_eq!(channels.results[0].last_message_id, Some(reply.message_id));
+    assert!(
+        board
+            .read_thread(
+                root,
+                ReadThreadRequest {
+                    thread_id: reply.message_id,
+                    page: PageRequest::default(),
+                    max_chars_per_post: one
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        board
+            .list_channels(
+                ThreadId::new(),
+                ChannelQuery {
+                    query: None,
+                    direction: SortDirection::NewestFirst,
+                    page: PageRequest::default()
+                }
+            )
+            .await
+            .is_err()
     );
 }
