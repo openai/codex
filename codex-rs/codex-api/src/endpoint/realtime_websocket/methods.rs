@@ -22,11 +22,15 @@ use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::backoff;
+use codex_http_client::HttpClientFactory;
 use codex_http_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+use codex_websocket_client::WebSocketConnection;
+use codex_websocket_client::WebSocketConnector;
+use codex_websocket_client::WebSocketTlsMode;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -37,13 +41,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -78,7 +79,7 @@ enum WsCommand {
 
 impl WsStream {
     fn new(
-        inner: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        inner: WebSocketConnection,
     ) -> (Self, async_channel::Receiver<Result<Message, WsError>>) {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = async_channel::unbounded::<Result<Message, WsError>>();
@@ -106,7 +107,7 @@ impl WsStream {
                             }
                             WsCommand::Close { tx_result } => {
                                 info!("realtime websocket sending close");
-                                let result = inner.close(None).await;
+                                let result = inner.send(Message::Close(None)).await;
                                 if let Err(err) = &result {
                                     error!("realtime websocket close failed: {err}");
                                 }
@@ -803,6 +804,7 @@ fn contains_transcript_entry(entries: &[RealtimeTranscriptEntry], role: &str, te
 
 pub struct RealtimeWebsocketClient {
     provider: Provider,
+    http_client_factory: HttpClientFactory,
     webrtc_sideband_base_url: String,
 }
 
@@ -814,9 +816,10 @@ enum RealtimeSessionInitialization {
 }
 
 impl RealtimeWebsocketClient {
-    pub fn new(provider: Provider) -> Self {
+    pub fn new(provider: Provider, http_client_factory: HttpClientFactory) -> Self {
         Self {
             provider,
+            http_client_factory,
             webrtc_sideband_base_url: OPENAI_REALTIME_API_BASE_URL.to_string(),
         }
     }
@@ -998,28 +1001,29 @@ impl RealtimeWebsocketClient {
         info!("connecting realtime websocket: {ws_url}");
         // Realtime websocket TLS should honor the same custom-CA env vars as the rest of Codex's
         // outbound HTTPS and websocket traffic.
-        let connector = maybe_build_rustls_client_config_with_custom_ca()
-            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
-            .map(tokio_tungstenite::Connector::Rustls);
+        let tls_config = maybe_build_rustls_client_config_with_custom_ca()
+            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
         // A fresh Windows install may not have downloaded the server's trusted root yet.
         // Use platform validation only for system trust, preserving custom CA semantics.
         #[cfg(windows)]
-        let connector = match connector {
-            Some(connector) => Some(connector),
-            None => Some(tokio_tungstenite::Connector::Rustls(
+        let tls_config = match tls_config {
+            Some(tls_config) => Some(tls_config),
+            None => Some(
                 codex_http_client::build_windows_platform_tls_config().map_err(|err| {
                     ApiError::Stream(format!("failed to configure websocket TLS: {err}"))
                 })?,
-            )),
+            ),
         };
-        let (stream, response) = tokio_tungstenite::connect_async_tls_with_config(
-            request,
-            Some(websocket_config()),
-            false,
-            connector,
-        )
-        .await
-        .map_err(map_realtime_websocket_connect_error)?;
+        let tls_mode = match tls_config {
+            Some(tls_config) => WebSocketTlsMode::Rustls(tls_config),
+            None => WebSocketTlsMode::TungsteniteDefault,
+        };
+        let connector = WebSocketConnector::new_with_tls_mode(&self.http_client_factory, tls_mode)
+            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?;
+        let (stream, response) = connector
+            .connect(request, websocket_config())
+            .await
+            .map_err(map_realtime_websocket_connect_error)?;
         info!(
             ws_url = %ws_url,
             status = %response.status(),
@@ -1257,6 +1261,7 @@ mod tests {
     use super::*;
     use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
     use crate::provider::RetryConfig;
+    use codex_http_client::OutboundProxyPolicy;
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
     use codex_protocol::protocol::RealtimeNoopRequested;
@@ -2215,20 +2220,23 @@ mod tests {
 
     #[test]
     fn webrtc_frameless_sideband_ignores_provider_base_url() {
-        let client = RealtimeWebsocketClient::new(Provider {
-            name: "chatgpt".to_string(),
-            base_url: "https://chatgpt.com/backend-api/codex".to_string(),
-            query_params: None,
-            headers: HeaderMap::new(),
-            retry: RetryConfig {
-                max_attempts: 0,
-                base_delay: Duration::ZERO,
-                retry_429: false,
-                retry_5xx: false,
-                retry_transport: false,
+        let client = RealtimeWebsocketClient::new(
+            Provider {
+                name: "chatgpt".to_string(),
+                base_url: "https://chatgpt.com/backend-api/codex".to_string(),
+                query_params: None,
+                headers: HeaderMap::new(),
+                retry: RetryConfig {
+                    max_attempts: 0,
+                    base_delay: Duration::ZERO,
+                    retry_429: false,
+                    retry_5xx: false,
+                    retry_transport: false,
+                },
+                stream_idle_timeout: Duration::from_secs(/*secs*/ 5),
             },
-            stream_idle_timeout: Duration::from_secs(5),
-        });
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
 
         let url = client
             .webrtc_sideband_url(
@@ -2425,7 +2433,10 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         };
-        let client = RealtimeWebsocketClient::new(provider);
+        let client = RealtimeWebsocketClient::new(
+            provider,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let connection = client
             .connect(
                 RealtimeSessionConfig {
@@ -2751,7 +2762,10 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         };
-        let client = RealtimeWebsocketClient::new(provider);
+        let client = RealtimeWebsocketClient::new(
+            provider,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let connection = client
             .connect(
                 RealtimeSessionConfig {
@@ -2878,7 +2892,10 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         };
-        let client = RealtimeWebsocketClient::new(provider);
+        let client = RealtimeWebsocketClient::new(
+            provider,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let connection = client
             .connect(
                 RealtimeSessionConfig {
@@ -2984,7 +3001,10 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         };
-        let client = RealtimeWebsocketClient::new(provider);
+        let client = RealtimeWebsocketClient::new(
+            provider,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let connection = client
             .connect(
                 RealtimeSessionConfig {
@@ -3076,7 +3096,10 @@ mod tests {
             },
             stream_idle_timeout: Duration::from_secs(5),
         };
-        let client = RealtimeWebsocketClient::new(provider);
+        let client = RealtimeWebsocketClient::new(
+            provider,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
         let connection = client
             .connect(
                 RealtimeSessionConfig {

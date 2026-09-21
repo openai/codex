@@ -43,11 +43,13 @@ pub struct WebSocketConnector {
     tcp_nodelay: TcpNodelay,
 }
 
-/// Selects whether WebSocket TLS follows Codex custom-CA policy or Tungstenite defaults.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Selects the TLS configuration used for WebSocket connections.
+#[derive(Clone)]
 pub enum WebSocketTlsMode {
     /// Build an explicit TLS configuration from native roots and configured Codex custom CAs.
     ExplicitCodexTls,
+    /// Use an existing Rustls configuration.
+    Rustls(Arc<ClientConfig>),
     /// Let Tungstenite build its default TLS configuration when the target requires TLS.
     TungsteniteDefault,
 }
@@ -66,10 +68,10 @@ impl WebSocketConnector {
         Self::new_with_tls_mode(http_client_factory, WebSocketTlsMode::ExplicitCodexTls)
     }
 
-    /// Creates a connector with explicit Codex TLS or the transport's existing TLS defaults.
+    /// Creates a connector with the selected WebSocket TLS configuration.
     ///
-    /// HTTPS proxy connections still build Codex TLS configuration when they establish their
-    /// proxy tunnel; default-mode target connections otherwise remain entirely with Tungstenite.
+    /// With [`WebSocketTlsMode::TungsteniteDefault`], HTTPS proxy connections still build Codex
+    /// TLS configuration when they establish their proxy tunnel.
     pub fn new_with_tls_mode(
         http_client_factory: &HttpClientFactory,
         tls_mode: WebSocketTlsMode,
@@ -78,6 +80,7 @@ impl WebSocketConnector {
             WebSocketTlsMode::ExplicitCodexTls => {
                 Some(build_rustls_client_config_with_custom_ca()?)
             }
+            WebSocketTlsMode::Rustls(config) => Some(config),
             WebSocketTlsMode::TungsteniteDefault => None,
         };
         Ok(Self {
