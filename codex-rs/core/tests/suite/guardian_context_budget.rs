@@ -7,6 +7,7 @@ use codex_core::TurnInputRequest;
 use codex_core::config::Constrained;
 use codex_core::config::CurrentTimeReminderConfig;
 use codex_core::config::RolloutBudgetConfig;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
@@ -17,6 +18,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::user_input::UserInput;
+use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -49,7 +51,10 @@ async fn review_preserves_user_instructions_until_request_budgeting(
         "Guardian approval actions require host-native paths"
     );
     let server = responses::start_mock_server().await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
     let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_model_info_override("gpt-5.6-luna", move |model| {
             model.context_window = Some(window);
         })
@@ -110,6 +115,8 @@ async fn review_preserves_user_instructions_until_request_budgeting(
         "{padding}Run the requested echo command. You may edit scratch files only.{padding}"
     );
     test.submit_text_turn(&initial).await?;
+    // TurnComplete precedes active-turn cleanup; wait before injecting follow-up history.
+    ThreadIdle::wait(&test.codex).await;
     // This whole message exceeds the old transcript allowance. A following
     // restriction must still reach the reviewer, with the original source order.
     let followup = format!("{padding}{padding}Keep all files private.{padding}{padding}");
@@ -136,6 +143,7 @@ async fn review_preserves_user_instructions_until_request_budgeting(
             ])
             .await?;
         test.submit_text_turn(restriction).await?;
+        ThreadIdle::wait(&test.codex).await;
     }
     let (compact_requests, requests): (Vec<_>, Vec<_>) = responses
         .requests()
