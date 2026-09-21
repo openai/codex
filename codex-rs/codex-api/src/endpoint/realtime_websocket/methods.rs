@@ -603,8 +603,16 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::InputTranscriptDelta(RealtimeTranscriptDelta { delta, .. }) => {
                 let force_new = active_transcript.new_input_entry;
-                append_transcript_delta(&mut active_transcript.entries, "user", delta, force_new);
-                active_transcript.new_input_entry = false;
+                append_transcript_delta(
+                    &mut active_transcript.entries,
+                    "user",
+                    delta,
+                    force_new,
+                    self.event_parser,
+                );
+                if !delta.is_empty() || self.event_parser != RealtimeEventParser::FramelessBidi {
+                    active_transcript.new_input_entry = false;
+                }
             }
             RealtimeEvent::OutputTranscriptDelta(RealtimeTranscriptDelta { delta, .. }) => {
                 let force_new = active_transcript.new_output_entry;
@@ -613,8 +621,11 @@ impl RealtimeWebsocketEvents {
                     "assistant",
                     delta,
                     force_new,
+                    self.event_parser,
                 );
-                active_transcript.new_output_entry = false;
+                if !delta.is_empty() || self.event_parser != RealtimeEventParser::FramelessBidi {
+                    active_transcript.new_output_entry = false;
+                }
             }
             RealtimeEvent::InputTranscriptDone(done) => {
                 let force_new = active_transcript.new_input_entry;
@@ -623,8 +634,10 @@ impl RealtimeWebsocketEvents {
                     "user",
                     &done.text,
                     force_new,
+                    self.event_parser,
                 );
-                active_transcript.new_input_entry = false;
+                active_transcript.new_input_entry =
+                    self.event_parser == RealtimeEventParser::FramelessBidi;
             }
             RealtimeEvent::OutputTranscriptDone(done) => {
                 let force_new = active_transcript.new_output_entry;
@@ -633,8 +646,10 @@ impl RealtimeWebsocketEvents {
                     "assistant",
                     &done.text,
                     force_new,
+                    self.event_parser,
                 );
-                active_transcript.new_output_entry = false;
+                active_transcript.new_output_entry =
+                    self.event_parser == RealtimeEventParser::FramelessBidi;
             }
             RealtimeEvent::HandoffRequested(handoff) => {
                 append_handoff_input(&mut active_transcript.entries, &handoff.input_transcript);
@@ -704,15 +719,23 @@ fn append_transcript_delta(
     role: &str,
     delta: &str,
     force_new: bool,
+    event_parser: RealtimeEventParser,
 ) {
     if delta.is_empty() {
         return;
     }
 
-    if !force_new
-        && let Some(last_entry) = entries.last_mut()
-        && last_entry.role == role
-    {
+    // V3 interleaves the two speakers' transcripts. Legacy protocols retain
+    // adjacent speaker runs and their existing response lifecycle semantics.
+    let entry = match event_parser {
+        RealtimeEventParser::FramelessBidi => {
+            entries.iter_mut().rev().find(|entry| entry.role == role)
+        }
+        RealtimeEventParser::V1 | RealtimeEventParser::RealtimeV2 => {
+            entries.last_mut().filter(|entry| entry.role == role)
+        }
+    };
+    if !force_new && let Some(last_entry) = entry {
         last_entry.text.push_str(delta);
         return;
     }
@@ -728,16 +751,29 @@ fn apply_transcript_done(
     role: &str,
     text: &str,
     force_new: bool,
+    event_parser: RealtimeEventParser,
 ) {
     if text.is_empty() {
         return;
     }
 
-    if !force_new
-        && let Some(last_entry) = entries.last_mut()
-        && last_entry.role == role
-    {
-        last_entry.text = text.to_string();
+    // V3 interleaves the two speakers' transcripts. Legacy protocols retain
+    // adjacent speaker runs and their existing response lifecycle semantics.
+    let entry = match event_parser {
+        RealtimeEventParser::FramelessBidi => {
+            entries.iter_mut().rev().find(|entry| entry.role == role)
+        }
+        RealtimeEventParser::V1 | RealtimeEventParser::RealtimeV2 => {
+            entries.last_mut().filter(|entry| entry.role == role)
+        }
+    };
+    if !force_new && let Some(last_entry) = entry {
+        // A delayed V3 final can arrive after deltas from the next utterance.
+        // Preserve accumulated speech unless the final extends it.
+        if event_parser != RealtimeEventParser::FramelessBidi || text.starts_with(&last_entry.text)
+        {
+            last_entry.text = text.to_string();
+        }
         return;
     }
 
@@ -1211,6 +1247,10 @@ fn normalize_realtime_path(url: &mut Url, event_parser: RealtimeEventParser) {
         url.set_path(&format!("{path}realtime"));
     }
 }
+
+#[cfg(test)]
+#[path = "transcript_tests.rs"]
+mod transcript_tests;
 
 #[cfg(test)]
 mod tests {

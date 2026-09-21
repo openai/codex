@@ -109,6 +109,9 @@ const V2_HANDOFF_COMPLETE_ACKNOWLEDGEMENT: &str =
 const RESPONSE_ITEM_PREFIX: &str =
     "Use the following context to inform future responses, but do not speak it to the user.";
 
+#[path = "realtime_transcript_tests.rs"]
+mod transcript_tests;
+
 #[derive(Debug, Clone, Copy)]
 enum StartupContextConfig<'a> {
     Generated,
