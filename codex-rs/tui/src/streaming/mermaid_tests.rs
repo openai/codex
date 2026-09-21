@@ -107,7 +107,7 @@ fn mermaid_holdback_tracks_nested_blocks_after_normalized_markdown() {
                 /*inline_visualization_context*/ None,
             );
         }
-        assert_eq!(render.mermaid_start, Some(prefix.len()));
+        assert_eq!(render.mutable_fence_start, Some(prefix.len()));
         render.recompute(
             &source,
             Some(80),
@@ -115,7 +115,7 @@ fn mermaid_holdback_tracks_nested_blocks_after_normalized_markdown() {
             HistoryRenderMode::Rich,
             /*inline_visualization_context*/ None,
         );
-        assert_eq!(render.mermaid_start, Some(prefix.len()));
+        assert_eq!(render.mutable_fence_start, Some(prefix.len()));
         let continuation = "\nAfter.\n\n";
         source.push_str(continuation);
         render.append(
@@ -126,7 +126,7 @@ fn mermaid_holdback_tracks_nested_blocks_after_normalized_markdown() {
             HistoryRenderMode::Rich,
             /*inline_visualization_context*/ None,
         );
-        assert_eq!(render.mermaid_start, None);
+        assert_eq!(render.mutable_fence_start, None);
         render.recompute(
             &source,
             Some(80),
@@ -134,7 +134,7 @@ fn mermaid_holdback_tracks_nested_blocks_after_normalized_markdown() {
             HistoryRenderMode::Rich,
             /*inline_visualization_context*/ None,
         );
-        assert_eq!(render.mermaid_start, None);
+        assert_eq!(render.mutable_fence_start, None);
     }
 }
 

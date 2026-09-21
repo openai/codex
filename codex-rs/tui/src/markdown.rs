@@ -6,9 +6,9 @@
 //! - [`append_markdown`] -- general-purpose, used for plan blocks and history
 //!   cells that already hold pre-processed markdown (no fence unwrapping).
 //! - [`append_markdown_agent`] -- for agent responses.  Runs
-//!   [`unwrap_markdown_fences`] first so that `` ```md ``/`` ```markdown ``
+//!   [`normalize_markdown_for_rendering`] first so that `` ```md ``/`` ```markdown ``
 //!   fences containing tables are stripped and `pulldown-cmark` sees raw
-//!   table syntax instead of fenced code.
+//!   table syntax instead of fenced code, when `tui.rendering.tables` is enabled.
 //!
 //! ## Why fence unwrapping exists
 //!
@@ -65,7 +65,7 @@ pub(crate) fn append_markdown_agent(
     width: Option<usize>,
     lines: &mut Vec<Line<'static>>,
 ) {
-    let normalized = unwrap_markdown_fences(markdown_source);
+    let normalized = normalize_markdown_for_rendering(markdown_source);
     let rendered = crate::markdown_render::render_markdown_text_with_width_and_cwd(
         &normalized,
         width,
@@ -97,7 +97,7 @@ pub(crate) fn render_markdown_agent_with_list_spacing(
     list_spacing: ListSpacing,
 ) -> Vec<HyperlinkLine> {
     let rewritten = rewrite_inline_visualizations(markdown_source, inline_visualization_context);
-    let normalized = unwrap_markdown_fences(&rewritten.markdown);
+    let normalized = normalize_markdown_for_rendering(&rewritten.markdown);
     let is_hidden_link_destination = |destination: &str| {
         rewritten.trusted_file_links.contains_key(destination)
             || crate::markdown_render::hide_web_link_destination(destination)
@@ -129,7 +129,7 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
     cwd: Option<&Path>,
     list_spacing: ListSpacing,
 ) -> crate::markdown_render::StreamingMarkdownRender {
-    let normalized = unwrap_markdown_fences(markdown_source);
+    let normalized = normalize_markdown_for_rendering(markdown_source);
     let mut rendered = crate::markdown_render::render_streaming_markdown_lines_with_width_and_cwd(
         &normalized,
         width,
@@ -150,7 +150,7 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
             .last_top_level_block_start
             .and_then(|boundary| markdown_source.strip_suffix(&normalized[boundary..]))
             .map(str::len);
-        rendered.mermaid_start = rendered.mermaid_start.map(|boundary| {
+        rendered.mutable_fence_start = rendered.mutable_fence_start.map(|boundary| {
             markdown_source
                 .strip_suffix(&normalized[boundary..])
                 .map_or(0, str::len)
@@ -244,6 +244,15 @@ pub(crate) fn extract_copy_targets(markdown_source: &str) -> Vec<CopyTarget> {
     }
 
     targets
+}
+
+/// Apply table-fence normalization only when terminal table layouts are enabled.
+pub(crate) fn normalize_markdown_for_rendering(markdown_source: &str) -> Cow<'_, str> {
+    if crate::markdown_render::preferences::current().tables {
+        unwrap_markdown_fences(markdown_source)
+    } else {
+        Cow::Borrowed(markdown_source)
+    }
 }
 
 /// Strip `` ```md ``/`` ```markdown `` fences that contain tables, emitting their content as bare

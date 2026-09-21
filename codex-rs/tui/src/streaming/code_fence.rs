@@ -49,6 +49,12 @@ impl OpenCodeFence {
             .split([',', ' ', '\t'])
             .next()
             .filter(|language| !language.is_empty())?;
+        // Markdown fences may gain visible delimiters when a disabled table is recognized.
+        if !crate::markdown_render::preferences::current().tables
+            && crate::table_detect::is_markdown_fence_info(info, /*marker_len*/ 0)
+        {
+            return None;
+        }
         // Retain at most one bounded language token, never the streamed code itself.
         if language.len() > MAX_HIGHLIGHT_LINE_BYTES
             || has_possible_closing_line(code, marker, marker_len)

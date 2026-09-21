@@ -751,6 +751,9 @@ pub struct Config {
     /// Individual TUI effects, subordinate to the animation master switch.
     pub tui_effects: codex_config::types::TuiEffects,
 
+    /// Rich content rendering preferences, independent of animations.
+    pub tui_rendering: codex_config::types::TuiRendering,
+
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
@@ -4386,6 +4389,7 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             tui_effects: cfg.tui.as_ref().map(|t| t.effects).unwrap_or_default(),
+            tui_rendering: cfg.tui.as_ref().map(|t| t.rendering).unwrap_or_default(),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
             tui_show_server_version_notice: cfg
                 .tui

@@ -430,7 +430,7 @@ impl AgentsOverviewView {
             if let Some((message, cwd)) = &row.details.last_message {
                 details.extend([Line::default(), "Last message".dim().into()]);
                 crate::markdown::append_markdown(
-                    &crate::markdown::unwrap_markdown_fences(message),
+                    &crate::markdown::normalize_markdown_for_rendering(message),
                     Some(width),
                     Some(cwd.as_path()),
                     &mut details,

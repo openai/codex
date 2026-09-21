@@ -519,6 +519,7 @@ impl App {
             );
         }
         chat_widget.restore_kill_buffer_snapshot(self.chat_widget.take_kill_buffer_snapshot());
+        crate::markdown_render::preferences::init(chat_widget.local_settings.tui.rendering);
         self.chat_widget = chat_widget;
         self.sync_active_agent_label();
     }

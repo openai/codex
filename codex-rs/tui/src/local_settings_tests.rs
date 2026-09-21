@@ -104,6 +104,10 @@ terminal_resize_reflow_max_rows = 0
 session_picker_view = "comfortable"
 [tui.effects]
 shimmer = false
+[tui.rendering]
+mermaid = false
+math = false
+tables = false
 [history]
 persistence = "none"
 max_bytes = 4096
@@ -138,6 +142,11 @@ fast_default_opt_out = true
         if !config_text.is_empty() {
             expected.animations = false;
             expected.effects.shimmer = false;
+            expected.rendering = codex_config::types::TuiRendering {
+                mermaid: false,
+                math: false,
+                tables: false,
+            };
             expected.show_tooltips = false;
             expected.show_server_version_notice = false;
             expected.auto_recap = false;

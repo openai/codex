@@ -19,7 +19,8 @@
 //! agent and proposed-plan streams. Lines in `Outside` and `Markdown` fence
 //! contexts are scanned; lines inside non-markdown fences are skipped.
 //!
-//! Mermaid stays mutable while its containing top-level block is last. The closing fence replaces
+//! Transformable fences stay mutable while their containing top-level block is last. Markdown
+//! fences may gain literal delimiters when table rendering is disabled. For Mermaid, the closing fence replaces
 //! source with a diagram, and resizing can replace a diagram that no longer fits with its source.
 //! Once another block starts, the diagram enters scrollback so later prose does not grow the tail.
 //!
@@ -422,7 +423,7 @@ impl StreamCore {
         };
         [
             table_start,
-            self.render.mermaid_start,
+            self.render.mutable_fence_start,
             self.render.pending_math_start,
         ]
         .into_iter()
@@ -2081,3 +2082,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "rendering_preferences_tests.rs"]
+mod rendering_preferences_tests;

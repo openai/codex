@@ -3,6 +3,7 @@
 //! Agent streams with markdown tables keep the active table as mutable tail so
 //! adding a row can reflow earlier table rows instead of committing a stale
 //! render to scrollback.
+//! Literal tables only retain candidate headers until their delimiter arrives.
 //!
 //! The scanner is intentionally conservative: it only looks for enough
 //! structure to decide where the mutable tail should start. It does not try to
@@ -148,8 +149,10 @@ impl TableHoldbackScanner {
             && previous_line.is_header
             && is_delimiter
         {
-            self.confirmed_table_start
-                .get_or_insert(previous_line.source_start);
+            if crate::markdown_render::preferences::current().tables {
+                self.confirmed_table_start
+                    .get_or_insert(previous_line.source_start);
+            }
             self.pending_header_start = None;
             self.in_table = true;
         }

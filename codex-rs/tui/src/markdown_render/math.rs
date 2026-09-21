@@ -221,7 +221,7 @@ impl<'a> MathMarkdown<'a> {
                     continue;
                 }
             }
-            let rendered = if formula.len() < MAX_MATH_BYTES {
+            let rendered = if super::preferences::current().math && formula.len() < MAX_MATH_BYTES {
                 render::render(formula, display)
             } else {
                 None

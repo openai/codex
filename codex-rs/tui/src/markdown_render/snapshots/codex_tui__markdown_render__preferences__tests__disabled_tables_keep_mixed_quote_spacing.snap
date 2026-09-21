@@ -1,0 +1,13 @@
+---
+source: tui/src/markdown_render/preferences_tests.rs
+expression: rendered
+---
+> ```md
+> Intro
+> 
+> | A | B |
+> |---|---|
+> | a | b |
+> 
+> > literal
+> ```

@@ -104,3 +104,19 @@ fn memories_version_selects_pipeline_without_changing_other_defaults() {
     }
     assert!(toml::from_str::<MemoriesToml>("version = \"v3\"").is_err());
 }
+
+#[test]
+fn rendering_preferences_default_individually_and_ignore_animation_switch() {
+    for key in ["mermaid", "math", "tables"] {
+        let tui: Tui =
+            toml::from_str(&format!("animations = false\n[rendering]\n{key} = false\n")).unwrap();
+        assert_eq!(
+            tui.rendering,
+            TuiRendering {
+                mermaid: key != "mermaid",
+                math: key != "math",
+                tables: key != "tables",
+            }
+        );
+    }
+}

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 const PREVIEW_CHARS: usize = 512;
 
 pub(super) fn preview_agent_message(text: &str) -> String {
-    preview_markdown(&crate::markdown::unwrap_markdown_fences(text))
+    preview_markdown(&crate::markdown::normalize_markdown_for_rendering(text))
 }
 
 pub(super) fn preview_markdown(text: &str) -> String {

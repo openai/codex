@@ -3,7 +3,7 @@
 //! This module consumes `pulldown-cmark` events and emits styled `ratatui`
 //! lines, including table layout, Mermaid previews, width-aware wrapping, and local file-link
 //! display. It is the final rendering stage used by higher-level helpers in
-//! `markdown.rs`.
+//! `markdown.rs`. Launch-time `tui.rendering` preferences preserve disabled features as source.
 //!
 //! Local file-link parsing and display policy live in [`local_links`].
 //! List spacing stays a renderer policy: compact while streaming in an owned viewport, uniform
@@ -78,6 +78,8 @@ mod list_spacing;
 mod local_links;
 mod math;
 mod mermaid;
+pub(crate) mod preferences;
+mod source_tables;
 mod streaming;
 mod table_key_value;
 mod web_links;
@@ -366,9 +368,10 @@ pub(crate) fn render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
     let math = math::MathMarkdown::new(input, options, width);
-    let parser = DecodedTextMerge::new(
+    let parser = DecodedTextMerge::new(source_tables::preserve(
+        input,
         math.events(Parser::new_ext(&math.markdown, options).into_offset_iter()),
-    );
+    ));
     let mut w = Writer::new(input, parser, width, cwd, is_hidden_link_destination);
     w.run();
     w.text
@@ -956,7 +959,8 @@ where
         if let Some(lang) = self.code_block_lang.take() {
             let code = std::mem::take(&mut self.code_block_buffer);
             if !code.is_empty() {
-                let diagram = if lang == "mermaid"
+                let diagram = if preferences::current().mermaid
+                    && lang == "mermaid"
                     && mermaid::has_closing_fence(self.input, range, self.code_block_content_end)
                 {
                     let indent =

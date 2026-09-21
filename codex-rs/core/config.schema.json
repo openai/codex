@@ -4479,6 +4479,19 @@
           "description": "Start the TUI in raw scrollback mode for copy-friendly transcript output. Defaults to `false`.",
           "type": "boolean"
         },
+        "rendering": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiRendering"
+            }
+          ],
+          "default": {
+            "math": true,
+            "mermaid": true,
+            "tables": true
+          },
+          "description": "Rich content rendering. Independent of animations and visual effects."
+        },
         "resume_cwd": {
           "allOf": [
             {
@@ -5611,6 +5624,28 @@
           "type": "string"
         }
       ]
+    },
+    "TuiRendering": {
+      "additionalProperties": false,
+      "description": "Optional rich renderers. Disabled renderers preserve the original source.",
+      "properties": {
+        "math": {
+          "default": true,
+          "description": "Render math expressions using Unicode notation.",
+          "type": "boolean"
+        },
+        "mermaid": {
+          "default": true,
+          "description": "Render Mermaid code blocks as diagrams.",
+          "type": "boolean"
+        },
+        "tables": {
+          "default": true,
+          "description": "Render pipe tables, including tables inside Markdown fences.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
     },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,
