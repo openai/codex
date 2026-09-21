@@ -193,20 +193,23 @@ pub(crate) struct AnyToolResult {
 
 impl AnyToolResult {
     pub(crate) fn into_response(self) -> ResponseItemEnvelope {
+        let delivered_assistant_message = self.delivered_assistant_message();
         let Self {
             call_id,
             payload,
             result,
             ..
         } = self;
+        let history_truncation_token_limit = result.fallback_token_limit_override();
         ResponseItemEnvelope {
             item: result.to_response_item(&call_id, &payload).into(),
-            metadata: result
-                .fallback_token_limit_override()
-                .map(|limit| CodexHarnessMetadata {
-                    history_truncation_token_limit: Some(limit),
-                    ..Default::default()
-                }),
+            metadata: (history_truncation_token_limit.is_some()
+                || delivered_assistant_message.is_some())
+            .then_some(CodexHarnessMetadata {
+                history_truncation_token_limit,
+                delivered_assistant_message,
+                ..Default::default()
+            }),
         }
     }
 

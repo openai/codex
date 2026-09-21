@@ -977,8 +977,10 @@ impl LocalAgentControl {
                     .inherited_user_message = true;
             }
             if let Some(metadata) = &mut envelope.metadata
-                && metadata.sender_user_messages.take().is_some()
+                && (metadata.sender_user_messages.take().is_some()
+                    || !matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user"))
             {
+                // Assistant and tool positions belong to the parent counter, not the child.
                 metadata.user_input_order = None;
             }
             let response_item = &mut envelope.item;

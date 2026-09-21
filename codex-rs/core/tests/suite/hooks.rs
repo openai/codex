@@ -2835,11 +2835,11 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt(
             body: sse_event(ev_output_text_delta("first ")),
         },
         StreamingSseChunk {
-            gate: None,
+            gate: Some(gate_completed_rx),
             body: sse_event(ev_message_item_done("msg-1", "first response")),
         },
         StreamingSseChunk {
-            gate: Some(gate_completed_rx),
+            gate: None,
             body: sse_event(ev_completed("resp-1")),
         },
     ];
@@ -2907,7 +2907,10 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt(
     .into_iter()
     .collect::<Vec<_>>();
 
-    sleep(Duration::from_millis(100)).await;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
     assert_eq!(requests.len(), 2);
 
@@ -2942,7 +2945,9 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt(
     );
     assert_eq!(
         retained["next_order"],
-        json!(if thread_context_enabled { 3 } else { 0 })
+        // Three accepted input positions (including the blocked prompt), then
+        // the two completed assistant messages.
+        json!(if thread_context_enabled { 5 } else { 0 })
     );
 
     let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;

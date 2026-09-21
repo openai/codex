@@ -32,6 +32,87 @@ use test_case::test_case;
 use uuid::Uuid;
 
 #[tokio::test]
+async fn recorded_questions_share_queued_input_order_across_resume() {
+    let (mut session, turn) = make_session_and_context().await;
+    session.guardian_context_mode = GuardianContextMode::ThreadOwned;
+    session.state.lock().await.history = ContextManager::with_guardian_context_mode(
+        GuardianContextMode::ThreadOwned,
+        &SessionSource::default(),
+    );
+    let question = |call_id: &str| {
+        serde_json::from_value::<ResponseItem>(json!({
+            "type": "function_call", "call_id": call_id,
+            "namespace": "mcp__codex_apps", "name": "user_messaging_send_message",
+            "arguments": "{\"text\":\"Continue?\"}"
+        }))
+        .unwrap()
+    };
+    session
+        .record_conversation_items(&turn, turn.model_info(), &[question("first")])
+        .await;
+    let reply_order = session.reserve_user_input_order().await;
+    session
+        .record_conversation_items(&turn, turn.model_info(), &[question("second")])
+        .await;
+    // The accepted reply is recorded after a newer question, and the first send's
+    // result arrives last. Neither delay should move the first question's position.
+    session
+        .record_annotated_conversation_items(
+            &turn,
+            turn.model_info(),
+            vec![
+                ResponseItemEnvelope {
+                    item: user_message("Yes."),
+                    metadata: Some(codex_history::CodexHarnessMetadata {
+                        user_input_order: reply_order,
+                        ..Default::default()
+                    }),
+                },
+                ResponseItemEnvelope {
+                    item: serde_json::from_value(json!({
+                        "type": "function_call_output", "call_id": "first", "output": "Sent."
+                    }))
+                    .unwrap(),
+                    metadata: Some(codex_history::CodexHarnessMetadata {
+                        delivered_assistant_message: Some("Continue?".to_owned()),
+                        ..Default::default()
+                    }),
+                },
+            ],
+        )
+        .await;
+    let saved = session
+        .clone_history()
+        .await
+        .into_annotated_items()
+        .into_iter()
+        .map(RolloutItem::ResponseItem)
+        .collect::<Vec<_>>();
+    let saved = serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: session.thread_id,
+            history: Arc::new(saved),
+            rollout_path: None,
+        }))
+        .await;
+    let history = session.clone_history().await;
+    assert_eq!(
+        history
+            .annotated_items()
+            .iter()
+            .map(|item| {
+                item.metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.user_input_order)
+            })
+            .collect::<Vec<_>>(),
+        vec![Some(0), Some(2), Some(1), None]
+    );
+    assert_eq!(session.reserve_user_input_order().await, Some(3));
+}
+
+#[tokio::test]
 async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
     let (mut session, turn_context) = make_session_and_context().await;
     session.guardian_context_mode = GuardianContextMode::ThreadOwned;

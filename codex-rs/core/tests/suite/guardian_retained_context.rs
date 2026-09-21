@@ -25,7 +25,9 @@ use codex_history::GuardianHistoryCheckpoint;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_history::RetainedContext;
+use codex_history::RetainedContextEntry;
 use codex_history::RetainedContextEvent;
+use codex_history::RetainedContextOrder;
 use codex_history::RolloutItem;
 use codex_history::VerifiedAnswer;
 use codex_history::VerifiedQuestionAnswer;
@@ -113,7 +115,6 @@ async fn record_answer(
     server: &MockServer,
     call_id: &str,
     answer: &str,
-    acceptance_order: u64,
 ) -> Result<VerifiedAnswer> {
     let question = format!("May I publish {call_id}?");
     mount_sse_sequence(
@@ -172,6 +173,20 @@ async fn record_answer(
         }],
     };
     thread.ensure_rollout_materialized().await;
+    let history = thread.conversation_history_snapshot().await;
+    let acceptance_order = history
+        .retained_context()
+        .context("retained answer context")?
+        .ordered_entries()
+        .find_map(|(order, entry)| match (order, entry) {
+            (RetainedContextOrder::Local(order), RetainedContextEntry::VerifiedAnswer(answer))
+                if answer == &retained =>
+            {
+                Some(order)
+            }
+            _ => None,
+        })
+        .context("recorded answer order")?;
     let event = RolloutItem::RetainedContext(RetainedContextEvent::VerifiedAnswer {
         answer: retained.clone(),
         acceptance_order: Some(acceptance_order),
@@ -380,7 +395,7 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
     })
     .await;
     // Rebuild from source events before there is a compaction checkpoint. The answer
-    // was persisted first, but the accepted steering instruction must retain order 1.
+    // was persisted first, but the accepted steering instruction must still precede it.
     let thread = resume(&test, &test.codex).await?;
     assert_eq!(answers[0].turn_id, answers[1].turn_id);
     let requests = response_mock.requests();
@@ -400,10 +415,12 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
         }
     }
     let history = thread.conversation_history_snapshot().await;
-    let user_messages = [initial.as_str(), STEER]
+    // Shared order: initial input, first question, steer, first answer, second
+    // question, second answer. Recording the queued steer later must not move it.
+    let user_messages = [(0, initial.as_str()), (2, STEER)]
         .into_iter()
         .enumerate()
-        .map(|(index, text)| {
+        .map(|(index, (order, text))| {
             let message_id = history
                 .items()
                 .find(|item| {
@@ -419,7 +436,7 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
                 .and_then(ResponseItem::id)
                 .expect("original user-message identity");
             json!({
-                "order": index, "turn_id": answers[index].turn_id,
+                "order": order, "turn_id": answers[index].turn_id,
                 "message_id": message_id.as_str(),
                 "text": codex_guardian_context::truncate_text(text, /*max_tokens*/ 900),
                 "complete": index != 0 || matches!(instruction_size, InstructionSize::Normal),
@@ -428,16 +445,17 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
         .collect::<Vec<_>>();
     let ordered_answers = answers
         .iter()
-        .enumerate()
-        .map(|(index, answer)| {
+        .zip([3, 5])
+        .map(|(answer, order)| {
             let mut value = json!(answer);
-            value["order"] = json!(index + 2);
+            value["order"] = json!(order);
             value
         })
         .collect::<Vec<_>>();
+    let mut next_order = if thread_context_enabled { 6_u64 } else { 0 };
     let mut expected = json!({
         "user_messages": user_messages, "user_messages_incomplete": false,
-        "verified_answers": ordered_answers, "incomplete": false, "next_order": 4,
+        "verified_answers": ordered_answers, "incomplete": false, "next_order": next_order,
     });
     if !thread_context_enabled {
         expected = json!({
@@ -465,6 +483,9 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
             serde_json::Value::Null
         }
     );
+    // Each local compaction records one assistant summary in the shared sequence.
+    next_order += u64::from(thread_context_enabled);
+    expected["next_order"] = json!(next_order);
     assert_eq!(
         serde_json::to_value(compact_and_assert_answers(&test, &thread, &answers).await?)?,
         expected
@@ -510,6 +531,8 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
             .as_array_mut()
             .expect("expected retained verified answers")
             .clear();
+        // Rollback replay discards the prior compaction's position; its replacement
+        // summary consumes that position again, leaving the same next_order.
         assert_eq!(
             serde_json::to_value(compact_and_assert_answers(&test, &thread, &[]).await?)?,
             expected
@@ -664,6 +687,7 @@ async fn legacy_checkpoint_recovers_root_excerpt_before_discarding_backup(
         Some(&expected)
     );
     // The excerpt must survive another compaction and resume after the backup is gone.
+    expected.reserve_order(); // The compactor's assistant summary consumes a position.
     assert_eq!(
         compact_and_assert_answers(&test, &resumed, &[]).await?,
         expected
@@ -1109,14 +1133,7 @@ async fn standalone_fork_retains_inherited_user_instructions(
             ),
         ],
     );
-    let after = record_answer(
-        &fork.thread,
-        &server,
-        "root-action",
-        "Do not publish.",
-        /*acceptance_order*/ 2,
-    )
-    .await?;
+    let after = record_answer(&fork.thread, &server, "root-action", "Do not publish.").await?;
     let expected = fork
         .thread
         .conversation_history_snapshot()
@@ -1377,7 +1394,6 @@ async fn retained_answers_cross_real_session_boundaries(
         &server,
         "before-compact",
         "Only publish privately.",
-        /*acceptance_order*/ 1,
     )
     .await?;
     let thread = resume(&test, &test.codex).await?;
@@ -1388,7 +1404,6 @@ async fn retained_answers_cross_real_session_boundaries(
         &server,
         "after-compact",
         "Do not publish after all.",
-        /*acceptance_order*/ 3,
     )
     .await?;
     thread.flush_rollout().await?;
@@ -1423,7 +1438,7 @@ async fn retained_answers_cross_real_session_boundaries(
         events,
         vec![RetainedContextEvent::VerifiedAnswer {
             answer: after.clone(),
-            acceptance_order: Some(3)
+            acceptance_order: Some(5)
         }]
     );
     let thread = resume(&test, &thread).await?;
