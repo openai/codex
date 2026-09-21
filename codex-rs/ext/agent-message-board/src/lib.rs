@@ -4,6 +4,7 @@
 //! storage and notification fanout; tools and feature registration are separate.
 
 mod api;
+mod extension;
 mod host;
 mod local;
 mod tools;
@@ -24,6 +25,7 @@ pub use api::SubscriptionRequest;
 pub use api::SubscriptionTarget;
 pub use api::ThreadQuery;
 pub use api::ThreadSort;
+pub use extension::install;
 pub use host::MessageBoardHost;
 pub use host::NotificationDelivery;
 pub use local::LocalAgentMessageBoard;

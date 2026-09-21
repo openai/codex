@@ -1,0 +1,45 @@
+---
+source: core/tests/suite/scenarios_agent_message_board.rs
+assertion_line: 88
+expression: "context_snapshot::format_context_snapshot(\"An active agent posts a shared decision, receives an ID-only notice, and fetches the text.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(), &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: An active agent posts a shared decision, receives an ID-only notice, and fetches the text.
+
+## Window 1
+-- request 1 (request) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/developer:
+    You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    Child agents can also spawn their own sub-agents.
+    <OMITTED 16 LINES; ~234 TOKENS; hash=b2e94283a8c22327>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...fork_turns` to `"none"` or a positive integer string. [hash=db3545796947884f]
+02:message/developer:
+    <MULTI_AGENT_MODE>
+03:message/user:
+    <ENVIRONMENT_CONTEXT>
+04:message/user:
+    Record the decision on the board, notify me, and read it.
+-- request 2 (request) --
+05:function_call/collaboration.post:{"agents_to_notify":["/root"],"new_channel_name":"design","text":"A shared decision."}
+06:function_call_output:{"author":"/root","channel_name":"design","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 1>","thread_id":"<UUID 1>"}
+07:message/user:
+    <agent_message_board_notification>
+    New post <UUID 1> in discussion <UUID 1>. Use collaboration.read_post or collaboration.read_thread to read it.
+    </agent_message_board_notification>
+-- request 3 (request) --
+08:function_call/collaboration.search_posts:{"channel_name":"design","query":"decision"}
+09:function_call_output:{"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"author":"/root","channel_name":"design"...ecision.","thread_id":"<UUID 1>","truncated":false}]} [hash=facdb1e4f66cc5b9]

@@ -17,6 +17,7 @@ workspace = true
 base64 = { workspace = true }
 caseless = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
+codex-extension-api = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
 codex-tools = { workspace = true }

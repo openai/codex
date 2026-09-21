@@ -742,6 +742,7 @@ impl TestCodexBuilder {
             .or_else(|| codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").ok());
         let thread_manager = Arc::new_cyclic(|manager| {
             let mut extensions = self.extensions.to_builder();
+            codex_core::install_agent_message_board(&mut extensions, manager.clone());
             if config.features.enabled(Feature::GuardianV2) {
                 codex_guardian_v2::install(&mut extensions, auth_manager.clone(), manager.clone());
             } else {

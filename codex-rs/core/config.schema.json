@@ -646,6 +646,9 @@
           "default": null,
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
+            "agent_message_board": {
+              "type": "boolean"
+            },
             "analytics_plan_history": {
               "type": "boolean"
             },
@@ -6520,6 +6523,9 @@
       "default": null,
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
+        "agent_message_board": {
+          "type": "boolean"
+        },
         "analytics_plan_history": {
           "type": "boolean"
         },
