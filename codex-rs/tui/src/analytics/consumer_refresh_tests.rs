@@ -61,6 +61,41 @@ fn consumer_chats_keep_missing_rows_and_only_offer_known_metrics() {
         .unwrap()
         .amounts
         .weekly_limit_percent = Some(125.0);
+    chats.rows.push(Chat {
+        title: "Plan-covered task".into(),
+        task: Some(serde_json::from_value(json!({
+            "thread_id":"plan", "data_status":"available", "usage_source":"included_plan",
+            "weekly_limit_percent":12.1,"five_hour_limit_percent":null,"balance_usage_credits":"0E-10","groups":[]
+        })).unwrap()),
+    });
+    for (raw, expected) in [
+        ("0E-10", "0.00"),
+        ("0.0000000000", "0.00"),
+        ("-0e+10", "0.00"),
+        ("1e-1000", "1e-1000"),
+        ("-1e-1000", "-1e-1000"),
+        ("1e1000", "1e1000"),
+        ("12.3", "12.30"),
+        ("12.3400000000", "12.34"),
+        ("12.346", "12.35"),
+        ("2.675", "2.68"),
+        ("-2.675", "-2.68"),
+        ("1.005", "1.01"),
+        ("1.0049999999", "1.00"),
+        ("9.999", "10.00"),
+        ("0012.3", "12.30"),
+        ("1.23e2", "123.00"),
+        ("1234e-2", "12.34"),
+        ("9007199254740993", "9007199254740993"),
+        ("999999999999999999", "999999999999999999"),
+        ("141436", "141,436.00"),
+        ("0.01", "0.01"),
+        ("-0.000004", "-0.000004"),
+        ("1e-7", "1e-7"),
+    ] {
+        let amounts = serde_json::from_value(json!({"balance_usage_credits":raw})).unwrap();
+        assert_eq!(task_panel::amount(Some(&amounts), /*metric*/ 2), expected);
+    }
     assert_eq!(view.task_metrics(), vec![0, 1, 2]);
     insta::assert_snapshot!(
         "consumer_chat_all_metrics",
