@@ -3,7 +3,8 @@
 //! Existing rollout files are deleted before this operation reports success. A rollout file that
 //! vanishes after discovery counts as already deleted. Main state DB rows are deleted after every
 //! associated rollout is removed, under the same lifecycle lock, so queued artifact mutations cannot
-//! use deleted thread metadata.
+//! use deleted thread metadata. Host-owned data is cleaned after reference and writer checks,
+//! before removing rollouts, so cleanup failures remain retryable even without a state DB.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -73,6 +74,9 @@ pub(super) async fn delete_thread(
     let thread_rollouts = ThreadRollouts::from_index(&reference_index, thread_id);
     ensure_no_external_references(&reference_index, std::slice::from_ref(&thread_rollouts))?;
     let mut writer_guards = store.acquire_writer_locks(&[thread_id]).await?;
+    if let Some(cleanup) = &store.thread_data_cleanup {
+        cleanup(vec![thread_id]).await?;
+    }
     let found_rollout =
         match delete_thread_after_reference_check(store, thread_rollouts, &mut writer_guards).await
         {
@@ -117,6 +121,9 @@ pub(super) async fn delete_threads(
     ensure_no_external_references(&reference_index, thread_rollouts.as_slice())?;
 
     let mut writer_guards = store.acquire_writer_locks(&lock_thread_ids).await?;
+    if let Some(cleanup) = &store.thread_data_cleanup {
+        cleanup(thread_ids.clone()).await?;
+    }
     for thread_rollouts in thread_rollouts {
         match delete_thread_after_reference_check(store, thread_rollouts, &mut writer_guards).await
         {

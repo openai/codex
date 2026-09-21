@@ -1,7 +1,8 @@
 //! SQLite-backed boards. The tree ID scopes every read and write.
 //!
 //! Immediate transactions serialize mutations across independently opened handles.
-//! Accepted posts survive runtime unload and process restart.
+//! Accepted posts survive runtime unload and process restart, but cannot recreate
+//! a board after its root has been permanently deleted.
 
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
@@ -34,14 +35,17 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod lifecycle;
 mod paging;
 mod queries;
 
 const MAX_POST_BYTES: usize = 64 * 1024;
 const MAX_CHANNEL_BYTES: usize = 128;
 const MAX_READ_CHARS: usize = 20_000;
+const DATABASE_FILE: &str = "agent_message_board_1.sqlite";
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS deleted_boards (board TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS channels (
  board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL,
  PRIMARY KEY(board,name)
@@ -86,7 +90,7 @@ impl LocalAgentMessageBoard {
     ) -> Result<Self> {
         tokio::fs::create_dir_all(sqlite.home()).await?;
         let pool = sqlite
-            .open_read_write_pool(&sqlite.home().join("agent_message_board_1.sqlite"))
+            .open_read_write_pool(&sqlite.home().join(DATABASE_FILE))
             .await
             .map_err(storage_error)?;
         sqlx::raw_sql(SCHEMA)
@@ -108,11 +112,7 @@ impl LocalAgentMessageBoard {
         validate_channel(&request.channel_name)?;
         let author = self.host.agent_path(caller).await?;
         let now = self.host.current_time(caller).await?;
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(storage_error)?;
+        let mut tx = self.begin_write().await?;
         self.insert_channel(&mut tx, &request.channel_name, &author, now)
             .await?;
         if request.subscription == SubscriptionChange::Subscribe {
@@ -166,11 +166,7 @@ impl LocalAgentMessageBoard {
             recipients.insert(self.host.resolve_agent(path.clone()).await?);
         }
         let now = self.host.current_time(caller).await?;
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(storage_error)?;
+        let mut tx = self.begin_write().await?;
         if let Some(post) = self
             .existing_post(&mut tx, &request_id, &request_json)
             .await?
@@ -270,11 +266,7 @@ impl LocalAgentMessageBoard {
         let caller_path = self.host.agent_path(caller).await?;
         let target_path = request.target_agent.unwrap_or(caller_path);
         let target_agent = self.host.resolve_agent(target_path.clone()).await?;
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(storage_error)?;
+        let mut tx = self.begin_write().await?;
         let (channel, root, last) = match &request.target {
             SubscriptionTarget::Channel(name) => {
                 let summary = self.channel_summary(&mut tx, name).await?;

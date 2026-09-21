@@ -142,7 +142,10 @@ pub struct LocalThreadStore {
     writer_lock_coordinator: Arc<WriterLockCoordinator>,
     state_db: Option<StateDbHandle>,
     thread_history_db: Arc<OnceCell<sqlx::SqlitePool>>,
+    thread_data_cleanup: Option<Arc<ThreadDataCleanup>>,
 }
+
+type ThreadDataCleanup = dyn Fn(Vec<ThreadId>) -> ThreadStoreFuture<'static, ()> + Send + Sync;
 
 type WriterLockGuard = Arc<codex_rollout::WriterLockGuard>;
 
@@ -257,7 +260,19 @@ impl LocalThreadStore {
             writer_lock_coordinator,
             state_db,
             thread_history_db: Arc::new(OnceCell::new()),
+            thread_data_cleanup: None,
         }
+    }
+
+    /// Adds cleanup for host-owned durable data when threads are permanently deleted.
+    /// Runs after reference and writer checks, under the lifecycle locks, before deleting rollouts.
+    /// Cleanup must be idempotent: later deletion steps can fail and the caller may retry.
+    pub fn with_thread_data_cleanup(
+        mut self,
+        cleanup: impl Fn(Vec<ThreadId>) -> ThreadStoreFuture<'static, ()> + Send + Sync + 'static,
+    ) -> Self {
+        self.thread_data_cleanup = Some(Arc::new(cleanup));
+        self
     }
 
     /// Return the state DB handle used by local rollout writers.
