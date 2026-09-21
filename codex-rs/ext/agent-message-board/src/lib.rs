@@ -5,6 +5,7 @@
 
 mod api;
 mod host;
+mod local;
 mod types;
 
 pub use api::AgentMessageBoard;
@@ -24,6 +25,7 @@ pub use api::ThreadQuery;
 pub use api::ThreadSort;
 pub use host::MessageBoardHost;
 pub use host::NotificationDelivery;
+pub use local::LocalAgentMessageBoard;
 pub use types::ChannelSummary;
 pub use types::Page;
 pub use types::PostContent;
