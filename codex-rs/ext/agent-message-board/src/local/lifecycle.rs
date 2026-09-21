@@ -1,6 +1,7 @@
 //! Permanent board deletion, serialized with writes across all open handles.
 //!
 //! Keep only a root ID tombstone so delayed writes cannot resurrect deleted data.
+//! If corruption prevents opening the database, back it up before recreating it.
 
 use super::DATABASE_FILE;
 use super::LocalAgentMessageBoard;
@@ -17,15 +18,31 @@ impl LocalAgentMessageBoard {
     /// Permanently removes boards owned by these roots, including their posts and subscriptions.
     /// A child's ID does not match its parent's board. Unload and archive must not call this.
     /// Safe to retry and independent of whether the feature is currently enabled.
+    /// Recovering an unopenable corrupt database resets all boards, retaining a backup.
     pub async fn delete_boards(sqlite: &SqliteConfig, roots: &[SessionId]) -> Result<()> {
         let path = sqlite.home().join(DATABASE_FILE);
         if roots.is_empty() || !tokio::fs::try_exists(&path).await? {
             return Ok(());
         }
-        let pool = sqlite
-            .open_read_write_pool(&path)
-            .await
-            .map_err(storage_error)?;
+        let pool = match sqlite.open_read_write_pool(&path).await {
+            Ok(pool) => pool,
+            Err(error) => {
+                let error = error.into();
+                if !codex_state::is_sqlite_corruption_error(&error) {
+                    return Err(storage_error(error));
+                }
+                let backups = codex_state::backup_runtime_db_for_fresh_start(&path).await?;
+                tracing::warn!(
+                    database = %path.display(),
+                    ?backups,
+                    "Backed up corrupt agent message-board storage; recreating it for thread deletion. Existing data for all boards is unavailable."
+                );
+                sqlite
+                    .open_read_write_pool(&path)
+                    .await
+                    .map_err(storage_error)?
+            }
+        };
         // Also handles databases created before permanent deletion was supported.
         sqlx::raw_sql(SCHEMA)
             .execute(&pool)

@@ -423,6 +423,85 @@ async fn thread_delete_removes_persisted_board_even_with_feature_disabled() -> R
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_delete_recovers_only_corrupt_board_with_feature_disabled() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::AgentMessageBoard)
+        .write(home.path())?;
+    let thread_id = create_delete_test_rollout(home.path(), /*minute*/ 0, "Delete me")?;
+    let retained_id = create_delete_test_rollout(home.path(), /*minute*/ 1, "Keep me")?;
+    let corrupt = b"not a SQLite database";
+    let database = home.path().join("agent_message_board_1.sqlite");
+    std::fs::create_dir(&database)?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+
+    // An ordinary open failure must leave both storage and the thread intact.
+    let request_id = app
+        .send_thread_delete_request(ThreadDeleteParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32603);
+    assert!(database.is_dir());
+    assert!(!home.path().join("db-backups").exists());
+    assert!(
+        find_thread_path_by_id_str(home.path(), &thread_id, /*state_db_ctx*/ None)
+            .await?
+            .is_some()
+    );
+    std::fs::remove_dir(&database)?;
+    std::fs::write(&database, corrupt)?;
+
+    let _: ThreadDeleteResponse = app
+        .request(|request_id| ClientRequest::ThreadDelete {
+            request_id,
+            params: ThreadDeleteParams {
+                thread_id: thread_id.clone(),
+            },
+        })
+        .await?;
+    assert_eq!(
+        find_thread_path_by_id_str(home.path(), &thread_id, /*state_db_ctx*/ None).await?,
+        None
+    );
+    assert!(
+        find_thread_path_by_id_str(home.path(), &retained_id, /*state_db_ctx*/ None)
+            .await?
+            .is_some()
+    );
+    let backups =
+        std::fs::read_dir(home.path().join("db-backups"))?.collect::<std::io::Result<Vec<_>>>()?;
+    assert_eq!(backups.len(), 1);
+    assert_eq!(
+        std::fs::read(backups[0].path().join("agent_message_board_1.sqlite"))?,
+        corrupt
+    );
+    let sqlite = SqliteConfig::new_for_testing(home.path().abs());
+    let pool = sqlite
+        .open_read_only_pool(&database, /*busy_timeout*/ None)
+        .await?;
+    assert_eq!(board_counts(&pool).await?, (0, 0, 0));
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("SELECT board FROM deleted_boards")
+            .fetch_all(&pool)
+            .await?,
+        vec![thread_id]
+    );
+    pool.close().await;
+    app.shutdown_gracefully().await?;
+    Ok(())
+}
+
 async fn board_counts(pool: &sqlx::SqlitePool) -> Result<(i64, i64, i64)> {
     Ok(sqlx::query_as(
         "SELECT (SELECT COUNT(*) FROM channels),
