@@ -2,6 +2,7 @@
 //!
 //! Backend selection is a host concern. Startup failures leave tools unavailable
 //! and emit a warning; a disabled factory does not open storage.
+//! Tool namespaces follow the host's configuration at runtime startup.
 
 use crate::AgentMessageBoard;
 use crate::message_board_tools;
@@ -26,15 +27,19 @@ use std::sync::Arc;
 type BoardFactory<C> = dyn Fn(&C, SessionId, ThreadId) -> BoxFuture<'static, Result<Option<Arc<dyn AgentMessageBoard>>>>
     + Send
     + Sync;
+type NamespaceResolver<C> = dyn Fn(&C) -> Option<String> + Send + Sync;
 
 struct BoardExtension<C> {
     open: Box<BoardFactory<C>>,
+    tool_namespace: Box<NamespaceResolver<C>>,
+    namespace_description: &'static str,
     events: Arc<dyn ExtensionEventSink>,
 }
 struct Binding {
     board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     path: AgentPath,
+    namespace: Option<String>,
 }
 
 impl<C: Sync> ThreadLifecycleContributor<C> for BoardExtension<C> {
@@ -58,6 +63,7 @@ impl<C: Sync> ThreadLifecycleContributor<C> for BoardExtension<C> {
                     input.thread_store.insert(Binding {
                         board,
                         caller,
+                        namespace: (self.tool_namespace)(input.config),
                         path: input
                             .session_source
                             .get_agent_path()
@@ -86,7 +92,13 @@ impl<C: Sync> ToolContributor for BoardExtension<C> {
         thread_store
             .get::<Binding>()
             .map_or_else(Vec::new, |binding| {
-                message_board_tools(binding.board.clone(), binding.caller, binding.path.clone())
+                message_board_tools(
+                    binding.board.clone(),
+                    binding.caller,
+                    binding.path.clone(),
+                    binding.namespace.as_deref(),
+                    self.namespace_description,
+                )
             })
     }
 }
@@ -94,8 +106,12 @@ impl<C: Sync> ToolContributor for BoardExtension<C> {
 /// Installs message-board lifecycle and tool contributions. The factory selects
 /// a local or remote backend, or returns None when disabled. Configuration is
 /// read at runtime startup, including resume; no board is created by installation.
+/// The host supplies its shared namespace description and resolves the namespace
+/// name from the runtime's startup configuration.
 pub fn install<C: Sync + 'static>(
     registry: &mut ExtensionRegistryBuilder<C>,
+    namespace_description: &'static str,
+    tool_namespace: impl Fn(&C) -> Option<String> + Send + Sync + 'static,
     open: impl Fn(
         &C,
         SessionId,
@@ -107,6 +123,8 @@ pub fn install<C: Sync + 'static>(
 ) {
     let extension = Arc::new(BoardExtension {
         open: Box::new(open),
+        tool_namespace: Box::new(tool_namespace),
+        namespace_description,
         events: registry.event_sink(),
     });
     registry.thread_lifecycle_contributor(extension.clone());

@@ -630,7 +630,13 @@ async fn tools_cover_channel_discussions_subscriptions_and_escaped_previews() {
             .await
             .unwrap(),
     );
-    let tools = message_board_tools(board, root, AgentPath::root());
+    let tools = message_board_tools(
+        board,
+        root,
+        AgentPath::root(),
+        Some("collaboration"),
+        "Shared tools",
+    );
     let tool = |name: &str| {
         tools
             .iter()
@@ -821,7 +827,13 @@ async fn tools_validate_arguments_deduplicate_calls_and_bound_unicode_results() 
             .await
             .unwrap(),
     );
-    let tools = message_board_tools(board.clone(), root, AgentPath::root());
+    let tools = message_board_tools(
+        board.clone(),
+        root,
+        AgentPath::root(),
+        Some("collaboration"),
+        "Shared tools",
+    );
     let call = board_tool_call;
     let tool = |name: &str| {
         tools

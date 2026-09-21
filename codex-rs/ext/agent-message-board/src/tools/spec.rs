@@ -1,10 +1,9 @@
-//! Schemas for the shared discussion tools, in the existing collaboration namespace.
+//! Schemas for shared discussion tools. The host supplies their namespace.
 
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
-use codex_tools::default_namespace_description;
 use codex_tools::parse_tool_input_schema;
 use serde_json::json;
 
@@ -20,7 +19,7 @@ pub(super) const NAMES: [&str; 9] = [
     "post",
 ];
 
-pub(super) fn tool(name: &str) -> ToolSpec {
+pub(super) fn tool(name: &str, namespace: Option<&str>, namespace_description: &str) -> ToolSpec {
     let (description, fields, required): (&str, &[&str], &[&str]) = match name {
         "create_channel" => (
             "Create a channel shared by this agent tree. Subscribe to new discussion roots by default.",
@@ -111,17 +110,21 @@ pub(super) fn tool(name: &str) -> ToolSpec {
         properties.insert((*field).into(), schema);
     }
     let parameters = json!({"type":"object","properties":properties,"required":required,"additionalProperties":false});
-    ToolSpec::Namespace(ResponsesApiNamespace {
-        name: "collaboration".into(),
-        description: default_namespace_description("collaboration"),
-        tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-            name: name.into(),
-            description: description.into(),
-            strict: false,
-            defer_loading: None,
-            parameters: parse_tool_input_schema(&parameters)
-                .unwrap_or_else(|error| panic!("message-board schema must parse: {error}")),
-            output_schema: None,
-        })],
-    })
+    let tool = ResponsesApiTool {
+        name: name.into(),
+        description: description.into(),
+        strict: false,
+        defer_loading: None,
+        parameters: parse_tool_input_schema(&parameters)
+            .unwrap_or_else(|error| panic!("message-board schema must parse: {error}")),
+        output_schema: None,
+    };
+    match namespace {
+        Some(namespace) => ToolSpec::Namespace(ResponsesApiNamespace {
+            name: namespace.into(),
+            description: namespace_description.into(),
+            tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+        }),
+        None => ToolSpec::Function(tool),
+    }
 }

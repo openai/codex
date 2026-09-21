@@ -16,7 +16,8 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 use std::sync::Arc;
 
-const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
+pub(crate) const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str =
+    "Tools for spawning and managing sub-agents.";
 
 pub(super) fn multi_agent_v2_handler(
     handler: impl CoreToolRuntime + 'static,

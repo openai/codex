@@ -8,6 +8,7 @@ use crate::ThreadManager;
 use crate::config::Config;
 use crate::context::AgentMessageBoardNotification;
 use crate::context::ContextualUserFragment;
+use crate::tools::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_extension::AgentMessageBoard;
@@ -33,25 +34,30 @@ pub fn install_agent_message_board(
     registry: &mut ExtensionRegistryBuilder<Config>,
     manager: Weak<ThreadManager>,
 ) {
-    codex_agent_message_board_extension::install(registry, move |config: &Config, tree, caller| {
-        // MAv2 supplies tree paths; ephemeral runtimes must not open durable storage.
-        if !config.features.enabled(Feature::AgentMessageBoard)
-            || !config.features.enabled(Feature::MultiAgentV2)
-            || config.ephemeral
-        {
-            return Box::pin(async { Ok(None) });
-        }
-        let sqlite = config.sqlite_config().clone();
-        let host = Arc::new(LocalBoardHost {
-            manager: manager.clone(),
-            tree,
-            caller,
-        });
-        Box::pin(async move {
-            let board = LocalAgentMessageBoard::open(&sqlite, tree, host).await?;
-            Ok(Some(Arc::new(board) as Arc<dyn AgentMessageBoard>))
-        })
-    });
+    codex_agent_message_board_extension::install(
+        registry,
+        MULTI_AGENT_V2_NAMESPACE_DESCRIPTION,
+        |config: &Config| config.multi_agent_v2.tool_namespace.clone(),
+        move |config: &Config, tree, caller| {
+            // MAv2 supplies tree paths; ephemeral runtimes must not open durable storage.
+            if !config.features.enabled(Feature::AgentMessageBoard)
+                || !config.features.enabled(Feature::MultiAgentV2)
+                || config.ephemeral
+            {
+                return Box::pin(async { Ok(None) });
+            }
+            let sqlite = config.sqlite_config().clone();
+            let host = Arc::new(LocalBoardHost {
+                manager: manager.clone(),
+                tree,
+                caller,
+            });
+            Box::pin(async move {
+                let board = LocalAgentMessageBoard::open(&sqlite, tree, host).await?;
+                Ok(Some(Arc::new(board) as Arc<dyn AgentMessageBoard>))
+            })
+        },
+    );
 }
 
 struct LocalBoardHost {

@@ -27,7 +27,7 @@ impl ContextualUserFragment for AgentMessageBoardNotification {
     }
     fn body(&self) -> String {
         format!(
-            "\nNew post {} in discussion {}. Use collaboration.read_post or collaboration.read_thread to read it.\n",
+            "\nNew post {} in discussion {}. Use read_post or read_thread to read it.\n",
             self.message_id, self.thread_id
         )
     }

@@ -38,7 +38,7 @@ Scenario: An active agent posts a shared decision, receives an ID-only notice, a
 06:function_call_output:{"author":"/root","channel_name":"design","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 1>","thread_id":"<UUID 1>"}
 07:message/user:
     <agent_message_board_notification>
-    New post <UUID 1> in discussion <UUID 1>. Use collaboration.read_post or collaboration.read_thread to read it.
+    New post <UUID 1> in discussion <UUID 1>. Use read_post or read_thread to read it.
     </agent_message_board_notification>
 -- request 3 (request) --
 08:function_call/collaboration.search_posts:{"channel_name":"design","query":"decision"}

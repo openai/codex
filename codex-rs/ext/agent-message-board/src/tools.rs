@@ -39,10 +39,13 @@ const MAX_RESPONSE_BYTES: usize = 8_000;
 
 /// Creates tools without registering or enabling the extension.
 /// The caller and its path must come from the host's authoritative tree metadata.
+/// Namespace metadata must match the host's other multi-agent tools.
 pub fn message_board_tools(
     board: Arc<dyn AgentMessageBoard>,
     caller: ThreadId,
     caller_path: AgentPath,
+    namespace: Option<&str>,
+    namespace_description: &str,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
     spec::NAMES
         .into_iter()
@@ -52,6 +55,8 @@ pub fn message_board_tools(
                 caller,
                 caller_path: caller_path.clone(),
                 name,
+                namespace: namespace.map(str::to_owned),
+                namespace_description: namespace_description.to_owned(),
             }) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
         })
         .collect()
@@ -62,14 +67,20 @@ struct BoardTool {
     caller: ThreadId,
     caller_path: AgentPath,
     name: &'static str,
+    namespace: Option<String>,
+    namespace_description: String,
 }
 
 impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
     fn tool_name(&self) -> ToolName {
-        ToolName::namespaced("collaboration", self.name)
+        ToolName::new(self.namespace.clone(), self.name)
     }
     fn spec(&self) -> ToolSpec {
-        spec::tool(self.name)
+        spec::tool(
+            self.name,
+            self.namespace.as_deref(),
+            &self.namespace_description,
+        )
     }
     fn supports_parallel_tool_calls(&self) -> bool {
         matches!(
