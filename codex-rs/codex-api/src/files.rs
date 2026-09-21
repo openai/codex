@@ -184,7 +184,7 @@ pub async fn upload_openai_file(
     let upload_started_at = Instant::now();
     let upload_response = client_pool
         .put(&create_payload.upload_url)
-        .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+        .timeout(Duration::from_secs(5 * 60))
         .header("x-ms-blob-type", "BlockBlob")
         .header("x-ms-client-request-id", &azure_client_request_id)
         .header(CONTENT_LENGTH, file_size_bytes)
