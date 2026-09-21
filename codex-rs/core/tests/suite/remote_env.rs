@@ -1933,10 +1933,14 @@ async fn pending_attachment_installs_configuration_before_waiting_turn_resumes()
     let ready_request = response_mock
         .last_request()
         .context("waiting turn should resume")?;
-    let (_, wait_succeeded) = ready_request
+    let (wait_output, wait_succeeded) = ready_request
         .function_call_output_content_and_success(WAIT_CALL_ID)
         .context("wait_for_environment output should be model visible")?;
     assert_ne!(wait_succeeded, Some(false));
+    assert_eq!(
+        serde_json::from_str::<Value>(&wait_output.context("wait output should contain JSON")?)?,
+        json!({ "environment_id": selection.environment_id, "status": "ready" })
+    );
     let body = ready_request.body_json();
     let exec_command = body["tools"]
         .as_array()

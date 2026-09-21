@@ -3,9 +3,10 @@ use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::sync::PoisonError;
 
-use arc_swap::ArcSwap;
 use async_channel::Sender;
 use codex_exec_server::Environment;
 use codex_exec_server::EnvironmentConnectionState;
@@ -238,7 +239,7 @@ pub(crate) struct ThreadEnvironments {
     local_shell: Shell,
     shell_snapshot: ShellSnapshot,
     non_blocking_snapshots: bool,
-    environments: ArcSwap<Vec<SelectedTurnEnvironment>>,
+    environments: Mutex<Vec<SelectedTurnEnvironment>>,
     connection_event_tx: OnceLock<Sender<Event>>,
 }
 
@@ -304,7 +305,7 @@ impl ThreadEnvironments {
             local_shell,
             shell_snapshot,
             non_blocking_snapshots,
-            environments: ArcSwap::from_pointee(environments),
+            environments: Mutex::new(environments),
             connection_event_tx: OnceLock::new(),
         }
     }
@@ -344,7 +345,10 @@ impl ThreadEnvironments {
         environments: &[TurnEnvironmentSelection],
         thread_environment_config: &EnvironmentConfig,
     ) {
-        let previous = self.environments.load();
+        let mut current = self
+            .environments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut seen_environment_ids = HashSet::with_capacity(environments.len());
         let mut next = Vec::with_capacity(environments.len());
         for selected_environment in environments {
@@ -353,7 +357,7 @@ impl ThreadEnvironments {
             }
             let (selected_environment, config_origin) =
                 resolve_selection_config(selected_environment.clone(), thread_environment_config);
-            if let Some(environment) = previous.iter().find(|environment| {
+            if let Some(environment) = current.iter().find(|environment| {
                 let previous = &environment.selection;
                 previous.environment_id == selected_environment.environment_id
                     && previous.cwd == selected_environment.cwd
@@ -399,7 +403,7 @@ impl ThreadEnvironments {
                 continue;
             };
             // Connection state belongs to the environment instance, not its cwd or roots.
-            let connection_events_task = previous
+            let connection_events_task = current
                 .iter()
                 .find(|previous| {
                     previous.selection.environment_id.as_str() == environment_id.as_str()
@@ -444,7 +448,7 @@ impl ThreadEnvironments {
             };
             next.push(selected);
         }
-        let removed_connection_tasks = previous
+        let removed_connection_tasks = current
             .iter()
             .filter_map(|previous| {
                 let task = previous.connection_events_task.as_ref()?;
@@ -456,11 +460,10 @@ impl ThreadEnvironments {
                 .then(|| Arc::clone(task))
             })
             .collect::<Vec<_>>();
-        let next = Arc::new(next);
-        self.environments.store(Arc::clone(&next));
+        let previous = std::mem::replace(&mut *current, next);
 
         // Publish owner configuration before waking turns waiting on this attachment.
-        for environment in next.iter() {
+        for environment in current.iter() {
             let Some(completion) = &environment.pending_completion else {
                 continue;
             };
@@ -472,16 +475,17 @@ impl ThreadEnvironments {
             let _ = completion.try_send(result);
         }
 
-        // ArcSwap readers may retain removed selections, so abort at logical removal.
         for task in removed_connection_tasks {
             task.abort();
         }
+        drop(previous);
     }
 
     /// Projects canonical selections back to caller input form without losing config ownership.
     pub(crate) fn selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.environments
-            .load()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .map(|environment| {
                 environment
@@ -520,51 +524,45 @@ impl ThreadEnvironments {
 
     /// Refreshes attachments whose configuration is inferred from the thread.
     pub(crate) fn update_thread_config(&self, config: &EnvironmentConfig) {
-        let environments = self
+        let mut environments = self
             .environments
-            .load()
-            .iter()
-            .map(|environment| {
-                let mut environment = environment.clone();
-                let shell_settings_changed = environment.config_origin
-                    == EnvironmentConfigOrigin::Thread
-                    && matches!(
-                        &environment.selection.config,
-                        EnvironmentConfigState::Ready(previous)
-                            if previous.allow_login_shell != config.allow_login_shell
-                                || previous.shell_environment_policy != config.shell_environment_policy
-                    );
-                environment.refresh_thread_config(config);
-                if shell_settings_changed
-                    && !environment.environment.is_remote()
-                    && self.shell_snapshot.should_rebuild_inherited()
-                    && let Some(Ok(resolved)) = environment.resolution.clone().now_or_never()
-                {
-                    self.restart_shell_snapshot(&mut environment, resolved);
-                }
-                environment
-            })
-            .collect();
-        self.environments.store(Arc::new(environments));
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for environment in environments.iter_mut() {
+            let shell_settings_changed = environment.config_origin
+                == EnvironmentConfigOrigin::Thread
+                && matches!(
+                    &environment.selection.config,
+                    EnvironmentConfigState::Ready(previous)
+                        if previous.allow_login_shell != config.allow_login_shell
+                            || previous.shell_environment_policy != config.shell_environment_policy
+                );
+            environment.refresh_thread_config(config);
+            if shell_settings_changed
+                && !environment.environment.is_remote()
+                && self.shell_snapshot.should_rebuild_inherited()
+                && let Some(Ok(resolved)) = environment.resolution.clone().now_or_never()
+            {
+                self.restart_shell_snapshot(environment, resolved);
+            }
+        }
     }
 
     pub(crate) fn set_snapshot_credential_broker(&self, state: SnapshotCredentialBrokerState) {
+        let mut environments = self
+            .environments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         if !self.shell_snapshot.set_credential_broker(state) {
             return;
         }
 
-        let mut environments = Vec::clone(&self.environments.load());
-        let mut changed = false;
-        for selected in &mut environments {
+        for selected in environments.iter_mut() {
             if !selected.environment.is_remote()
                 && let Some(Ok(resolved)) = selected.resolution.clone().now_or_never()
             {
                 self.restart_shell_snapshot(selected, resolved);
-                changed = true;
             }
-        }
-        if changed {
-            self.environments.store(Arc::new(environments));
         }
     }
 
@@ -596,7 +594,10 @@ impl ThreadEnvironments {
         &self,
         thread_selected_capability_roots: &[SelectedCapabilityRoot],
     ) -> SelectedCapabilityRootsStatus {
-        let environments = self.environments.load();
+        let environments = self
+            .environments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut selected_capability_roots = combine_selected_capability_roots(
             thread_selected_capability_roots,
             environments.iter().filter_map(|environment| {
@@ -674,23 +675,20 @@ impl ThreadEnvironments {
     }
 
     pub(crate) fn start_connection_event_forwarding(&self, tx_event: Sender<Event>) {
+        let mut environments = self
+            .environments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let tx_event = self.connection_event_tx.get_or_init(|| tx_event);
-        let current = self.environments.load_full();
-        let environments = current
-            .iter()
-            .map(|selected| {
-                let mut selected = selected.clone();
-                if selected.connection_events_task.is_none() {
-                    selected.connection_events_task = Self::spawn_connection_event_listener(
-                        selected.environment.as_ref(),
-                        selected.selection.environment_id.clone(),
-                        tx_event.clone(),
-                    );
-                }
-                selected
-            })
-            .collect();
-        self.environments.store(Arc::new(environments));
+        for selected in environments.iter_mut() {
+            if selected.connection_events_task.is_none() {
+                selected.connection_events_task = Self::spawn_connection_event_listener(
+                    selected.environment.as_ref(),
+                    selected.selection.environment_id.clone(),
+                    tx_event.clone(),
+                );
+            }
+        }
     }
 
     #[tracing::instrument(
@@ -812,29 +810,32 @@ impl ThreadEnvironments {
     pub(crate) fn snapshot(
         &self,
     ) -> impl Future<Output = TurnEnvironmentSnapshot> + Send + 'static {
-        let selected = self.environments.load_full();
+        // Keep the startup results, but not the senders that would keep removed Pending work alive.
+        let selected = self
+            .environments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|environment| StartingTurnEnvironment {
+                selection: environment.selection.clone(),
+                config_origin: environment.config_origin,
+                resolution: environment.resolution.clone(),
+            })
+            .collect::<Vec<_>>();
         let non_blocking_snapshots = self.non_blocking_snapshots;
         async move {
             let mut environments = Vec::with_capacity(selected.len());
-            for environment in selected.iter() {
-                if let EnvironmentConfigState::Failed(error) = &environment.selection.config {
+            for starting in selected {
+                if let EnvironmentConfigState::Failed(error) = &starting.selection.config {
                     environments.push(TurnEnvironmentState::Failed {
-                        selection: environment
+                        selection: starting
                             .config_origin
-                            .into_input_selection(environment.selection.clone()),
+                            .into_input_selection(starting.selection.clone()),
                         error: error.clone(),
                     });
                     continue;
                 }
-                let pending = matches!(
-                    environment.selection.config,
-                    EnvironmentConfigState::Pending
-                );
-                let starting = StartingTurnEnvironment {
-                    selection: environment.selection.clone(),
-                    config_origin: environment.config_origin,
-                    resolution: environment.resolution.clone(),
-                };
+                let pending = matches!(starting.selection.config, EnvironmentConfigState::Pending);
                 let resolved = if non_blocking_snapshots || pending {
                     starting.resolution.clone().now_or_never()
                 } else {
@@ -1122,6 +1123,10 @@ impl TurnEnvironmentSnapshot {
 }
 
 #[cfg(test)]
+#[path = "environment_selection_snapshot_tests.rs"]
+mod snapshot_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
@@ -1156,7 +1161,7 @@ mod tests {
 
     use super::*;
 
-    fn test_environment_config() -> EnvironmentConfig {
+    pub(super) fn test_environment_config() -> EnvironmentConfig {
         EnvironmentConfig {
             allow_login_shell: true,
             workspace_roots: Vec::new(),
@@ -1641,11 +1646,10 @@ url = "ws://127.0.0.1:8765"
         );
         turn_environments
             .update_selections(std::slice::from_ref(&local), &test_environment_config());
-        turn_environments.environments.load()[0]
+        let resolution = turn_environments.environments.lock().unwrap()[0]
             .resolution
-            .clone()
-            .await
-            .expect("local environment should resolve");
+            .clone();
+        resolution.await.expect("local environment should resolve");
         turn_environments.update_selections(&[remote.clone(), local.clone()], &expected_config);
 
         let starting = turn_environments.snapshot().await;
@@ -1783,7 +1787,9 @@ url = "ws://127.0.0.1:8765"
         environments
             .update_selections(std::slice::from_ref(&selection), &test_environment_config());
         let starting = environments.snapshot().await;
-        let failed_resolution = environments.environments.load()[0].resolution.clone();
+        let failed_resolution = environments.environments.lock().unwrap()[0]
+            .resolution
+            .clone();
         let error = failed_resolution
             .clone()
             .await
@@ -1829,7 +1835,7 @@ url = "ws://127.0.0.1:8765"
         };
         environments.update_thread_config(&next_config);
         assert!(
-            failed_resolution.ptr_eq(&environments.environments.load()[0].resolution),
+            failed_resolution.ptr_eq(&environments.environments.lock().unwrap()[0].resolution),
             "updating environment config must not retry a failed environment"
         );
         environments.update_selections(std::slice::from_ref(&selection), &next_config);
