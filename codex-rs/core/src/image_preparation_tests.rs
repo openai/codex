@@ -100,6 +100,7 @@ async fn preparation_preserves_small_image_bytes_and_replaces_remote_urls() {
     });
 
     prepare_response_items(
+        "image-preparation-thread",
         &mut items,
         ImagePreparationMode::DetailBased,
         ImageResizeNoticeMode::Disabled,
@@ -185,6 +186,7 @@ async fn detail_policies_apply_the_expected_budgets() {
         }];
 
         let metadata = prepare_response_items(
+            "image-preparation-thread",
             &mut items,
             ImagePreparationMode::DetailBased,
             ImageResizeNoticeMode::Disabled,
@@ -238,6 +240,7 @@ async fn preparation_reports_tool_output_item_id() {
         internal_chat_message_metadata_passthrough: None,
     }];
     let metadata = prepare_response_items(
+        "image-preparation-thread",
         &mut items,
         ImagePreparationMode::DetailBased,
         ImageResizeNoticeMode::Disabled,
@@ -274,6 +277,7 @@ async fn upload_failure_keeps_resized_image_inline() {
     }];
 
     prepare_response_items(
+        "image-preparation-thread",
         &mut items,
         ImagePreparationMode::DetailBased,
         ImageResizeNoticeMode::Disabled,
@@ -374,6 +378,7 @@ async fn resize_notices_count_file_backed_images_and_skip_failed_images() {
     ];
 
     prepare_response_items(
+        "image-preparation-thread",
         &mut items,
         ImagePreparationMode::DetailBased,
         ImageResizeNoticeMode::Enabled,
@@ -561,6 +566,7 @@ async fn preparation_replaces_only_failed_tool_images_and_preserves_metadata() {
     }];
 
     prepare_response_items(
+        "image-preparation-thread",
         &mut items,
         ImagePreparationMode::DetailBased,
         ImageResizeNoticeMode::Disabled,

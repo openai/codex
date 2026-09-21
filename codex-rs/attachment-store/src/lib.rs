@@ -36,6 +36,8 @@ pub trait AttachmentStore: Send + Sync {
 /// Attachment data supplied to [`AttachmentStore::upload`].
 #[derive(Clone, Eq, PartialEq)]
 pub struct UploadRequest {
+    /// Thread receiving this attachment; storage backends may use it for placement.
+    pub thread_id: String,
     /// Optional name associated with the attachment.
     pub file_name: Option<String>,
     /// Attachment bytes to persist.
@@ -46,6 +48,7 @@ impl fmt::Debug for UploadRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("UploadRequest")
+            .field("thread_id", &self.thread_id)
             .field("file_name", &self.file_name)
             .field("data", &"<redacted>")
             .finish()

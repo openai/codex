@@ -1726,6 +1726,7 @@ impl Session {
         // inline bytes, while existing file references bypass preparation and remain unchanged.
         // Bound replay future size now that image preparation can await storage.
         let _ = Box::pin(prepare_image_response_items(
+            &self.thread_id.to_string(),
             &mut prepared_history,
             ImagePreparationMode::DetailBased,
             ImageResizeNoticeMode::Disabled,
@@ -3412,6 +3413,7 @@ impl Session {
         };
         // Keep nested image-upload futures out of every caller's future frame.
         let image_preparations = Box::pin(prepare_image_response_items(
+            &self.thread_id.to_string(),
             &mut items,
             image_preparation_mode,
             image_resize_notice_mode,

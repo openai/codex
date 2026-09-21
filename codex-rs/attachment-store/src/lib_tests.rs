@@ -6,6 +6,7 @@ use super::*;
 #[test]
 fn attachment_debug_output_redacts_bytes() {
     let request = UploadRequest {
+        thread_id: "thread-1".to_string(),
         file_name: Some("image.png".to_string()),
         data: b"secret".to_vec(),
     };
@@ -16,7 +17,7 @@ fn attachment_debug_output_redacts_bytes() {
     assert_eq!(
         (format!("{request:?}"), format!("{result:?}")),
         (
-            r#"UploadRequest { file_name: Some("image.png"), data: "<redacted>" }"#.to_string(),
+            r#"UploadRequest { thread_id: "thread-1", file_name: Some("image.png"), data: "<redacted>" }"#.to_string(),
             r#"Inline { bytes: "<redacted>" }"#.to_string(),
         )
     );
@@ -47,6 +48,7 @@ async fn inline_store_preserves_image_bytes() {
     for (file_name, data) in cases {
         let attachment = InlineAttachmentStore
             .upload(UploadRequest {
+                thread_id: "thread-1".to_string(),
                 file_name: Some(file_name.to_string()),
                 data: data.to_vec(),
             })

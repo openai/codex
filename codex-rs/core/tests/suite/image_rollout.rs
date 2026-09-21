@@ -680,6 +680,10 @@ async fn resumed_history_only_emits_resize_notices_for_new_images() -> anyhow::R
             panic!("only the new image should be uploaded");
         };
         assert_eq!(
+            upload.thread_id,
+            resumed.session_configured.thread_id.to_string(),
+        );
+        assert_eq!(
             image::load_from_memory(&upload.data)?.dimensions(),
             (2048, 768)
         );
