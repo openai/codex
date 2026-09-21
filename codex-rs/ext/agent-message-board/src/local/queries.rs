@@ -131,12 +131,11 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
             }
             let window = Window::new(&query.page)?;
             let order = direction(query.direction);
-            let mut sql = QueryBuilder::new("SELECT p.payload FROM posts p WHERE p.board=");
-            sql.push_bind(self.identity.to_string())
-                .push(" AND p.channel=")
-                .push_bind(query.channel_name)
-                .push(" AND p.id=p.root")
-                .push(" ORDER BY ");
+            // Select the page before looking up reply summaries, especially when
+            // activity sorting examines more roots than the page will return.
+            let mut sql = QueryBuilder::new(
+                "WITH page AS MATERIALIZED (SELECT p.board,p.id,p.payload,p.seq,",
+            );
             match query.sort {
                 ThreadSort::Created => {
                     sql.push("p.timestamp");
@@ -145,42 +144,39 @@ impl AgentMessageBoard for LocalAgentMessageBoard {
                     sql.push("(SELECT MAX(r.timestamp) FROM posts r WHERE r.board=p.board AND r.root=p.id)");
                 }
             }
-            sql.push(" ")
+            sql.push(" AS sort_timestamp FROM posts p WHERE p.board=")
+                .push_bind(self.identity.to_string())
+                .push(" AND p.channel=")
+                .push_bind(query.channel_name)
+                .push(" AND p.id=p.root ORDER BY sort_timestamp ")
                 .push(order)
                 .push(",p.seq ")
                 .push(order)
                 .push(" LIMIT ")
                 .push_bind((window.limit + 1) as i64)
                 .push(" OFFSET ")
-                .push_bind(window.offset());
-            let roots = decode_posts(
-                sql.build_query_scalar::<String>()
-                    .fetch_all(&mut *tx)
-                    .await
-                    .map_err(storage_error)?,
-            )?;
+                .push_bind(window.offset())
+                .push(
+                    ") SELECT p.payload,
+                     (SELECT COUNT(*) FROM posts r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root),
+                     (SELECT r.payload FROM posts r WHERE r.board=p.board AND r.root=p.id AND r.id<>r.root
+                      ORDER BY r.timestamp DESC,r.seq DESC LIMIT 1)
+                     FROM page p ORDER BY p.sort_timestamp ",
+                )
+                .push(order)
+                .push(",p.seq ")
+                .push(order);
+            let rows = sql
+                .build_query_as::<(String, i64, Option<String>)>()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(storage_error)?;
             let chars = (query.max_chars_per_post.get() as usize)
-                .min(MAX_READ_CHARS / (2 * roots.len().min(window.limit).max(1)));
-            let mut threads = Vec::with_capacity(roots.len());
-            for root in roots {
+                .min(MAX_READ_CHARS / (2 * rows.len().min(window.limit).max(1)));
+            let mut threads = Vec::with_capacity(rows.len());
+            for (root, count, last) in rows {
+                let root: StoredPost = serde_json::from_str(&root).map_err(storage_error)?;
                 let id = root.metadata.message_id;
-                let count: i64 = sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM posts WHERE board=? AND root=? AND id<>root",
-                )
-                .bind(self.identity.to_string())
-                .bind(id.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(storage_error)?;
-                let last: Option<String> = sqlx::query_scalar(
-                    "SELECT payload FROM posts WHERE board=? AND root=? AND id<>root
-                     ORDER BY timestamp DESC,seq DESC LIMIT 1",
-                )
-                .bind(self.identity.to_string())
-                .bind(id.to_string())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(storage_error)?;
                 let last: Option<StoredPost> = last
                     .map(|value| serde_json::from_str(&value))
                     .transpose()

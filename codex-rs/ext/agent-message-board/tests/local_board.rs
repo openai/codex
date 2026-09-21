@@ -436,11 +436,19 @@ async fn queries_page_discussions_and_search_unicode() {
     };
     let page = board.list_threads(root, query.clone()).await.unwrap();
     assert_eq!(
-        page.results
-            .iter()
-            .map(|thread| thread.thread_id)
-            .collect::<Vec<_>>(),
-        vec![first.message_id]
+        page.results,
+        vec![ThreadSummary {
+            thread_id: first.message_id,
+            root_post: PostPreview {
+                metadata: first.clone(),
+                text_preview: "É".into(),
+                n_chars: 6,
+                truncated: true,
+            },
+            reply_count: 0,
+            last_activity_at: first.created_at,
+            latest_reply: None,
+        }]
     );
     let next = board
         .list_threads(
@@ -456,11 +464,19 @@ async fn queries_page_discussions_and_search_unicode() {
         .await
         .unwrap();
     assert_eq!(
-        next.results
-            .iter()
-            .map(|thread| thread.thread_id)
-            .collect::<Vec<_>>(),
-        vec![second.message_id]
+        next.results,
+        vec![ThreadSummary {
+            thread_id: second.message_id,
+            root_post: PostPreview {
+                metadata: second.clone(),
+                text_preview: "s".into(),
+                n_chars: 6,
+                truncated: true,
+            },
+            reply_count: 0,
+            last_activity_at: second.created_at,
+            latest_reply: None,
+        }]
     );
     assert_eq!(next.next_cursor, None);
     let reply = board
