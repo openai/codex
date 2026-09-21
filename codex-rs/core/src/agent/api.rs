@@ -199,6 +199,8 @@ pub struct SendRequest {
 
 pub struct DeliveryReceipt {
     pub thread_id: ThreadId,
+    /// Recipient identity captured during delivery, for activity and tool output.
+    pub metadata: AgentMetadata,
     /// Acceptance identifier, not evidence that the recipient processed the input.
     pub submission_id: String,
 }

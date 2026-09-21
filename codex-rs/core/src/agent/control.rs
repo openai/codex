@@ -66,7 +66,6 @@ use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
 
-pub(crate) use self::delivery::MessageDeliveryError;
 use self::execution::AgentExecutionLimiter;
 pub(crate) use self::interrupt::AgentInterruptError;
 pub(crate) use self::interrupt::AgentInterruptOutcome;
@@ -82,6 +81,7 @@ mod residency;
 mod sender_context;
 mod service_tier;
 mod spawn;
+mod target;
 mod user_authorization;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
@@ -437,27 +437,6 @@ impl LocalAgentControl {
             return None;
         };
         Some(thread.config_snapshot().await)
-    }
-
-    pub(crate) async fn resolve_agent_reference(
-        &self,
-        _current_thread_id: ThreadId,
-        current_session_source: &SessionSource,
-        agent_reference: &str,
-    ) -> CodexResult<ThreadId> {
-        let current_agent_path = current_session_source
-            .get_agent_path()
-            .unwrap_or_else(AgentPath::root);
-        let agent_path = current_agent_path
-            .resolve(agent_reference)
-            .map_err(CodexErr::UnsupportedOperation)?;
-        if let Some(thread_id) = self.state.agent_id_for_path(&agent_path) {
-            return Ok(thread_id);
-        }
-        Err(CodexErr::UnsupportedOperation(format!(
-            "live agent path `{}` not found",
-            agent_path.as_str()
-        )))
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.

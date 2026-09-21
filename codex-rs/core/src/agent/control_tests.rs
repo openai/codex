@@ -1290,13 +1290,22 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
             .session
             .services
             .agent_control
-            .deliver_message(
-                parent_thread_id,
-                &turn,
-                target_thread_id,
-                AgentMessage::Plaintext("hello after resume".to_string()),
-                MessageDeliveryMode::QueueOnly,
-            )
+            .send(crate::SendRequest {
+                caller: parent_thread_id,
+                target: crate::AgentTarget::Id(target_thread_id),
+                resume_config: crate::agent::child_config::build_agent_resume_config(&turn)
+                    .expect("capture resume config"),
+                input: crate::AgentInput::Message {
+                    message: AgentMessage::Plaintext("hello after resume".to_string()),
+                    mode: MessageDeliveryMode::QueueOnly,
+                },
+                start_options: TurnStartOptions {
+                    root_turn_id: turn.turn_metadata_state.root_turn_id(),
+                    turn_trigger: turn.turn_metadata_state.current_turn_trigger(),
+                    cyber_access_program: turn.cyber_access_program,
+                    ..Default::default()
+                },
+            })
             .await
             .expect("message should reload the grandchild");
         assert_thread_not_loaded(&resumed_manager, worker_thread_id).await;
@@ -1406,13 +1415,22 @@ async fn v2_sibling_reload_preserves_shared_instructions_after_root_unloads(shar
         .session
         .services
         .agent_control
-        .deliver_message(
-            sender_id,
-            &sender_turn,
-            target_id,
-            AgentMessage::Plaintext("wake the sibling".to_string()),
-            MessageDeliveryMode::QueueOnly,
-        )
+        .send(crate::SendRequest {
+            caller: sender_id,
+            target: crate::AgentTarget::Id(target_id),
+            resume_config: crate::agent::child_config::build_agent_resume_config(&sender_turn)
+                .expect("capture resume config"),
+            input: crate::AgentInput::Message {
+                message: AgentMessage::Plaintext("wake the sibling".to_string()),
+                mode: MessageDeliveryMode::QueueOnly,
+            },
+            start_options: TurnStartOptions {
+                root_turn_id: sender_turn.turn_metadata_state.root_turn_id(),
+                turn_trigger: sender_turn.turn_metadata_state.current_turn_trigger(),
+                cyber_access_program: sender_turn.cyber_access_program,
+                ..Default::default()
+            },
+        })
         .await
         .expect("reload target from its sibling");
     let resumed = harness
