@@ -1522,6 +1522,8 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         ordinal: None,
         item: RolloutItem::SessionMeta(SessionMetaLine {
             meta: SessionMeta {
+                creator_user_id: None,
+                creator_account_id: None,
                 session_id: conversation_id.into(),
                 id: conversation_id,
                 forked_from_id: None,

@@ -117,6 +117,8 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        creator_user_id: Some("creator-user".to_string()),
+        creator_account_id: Some("creator-account".to_string()),
         session_id: id.into(),
         id,
         forked_from_id: None,
@@ -155,6 +157,21 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
     let json = serde_json::to_string(&rollout_line).expect("rollout json");
     let mut file = File::create(&path).expect("create rollout");
     writeln!(file, "{json}").expect("write rollout");
+    let mut parent = session_meta_line.clone();
+    parent.meta.id = ThreadId::new();
+    parent.meta.creator_user_id = Some("parent-user".to_string());
+    parent.meta.creator_account_id = Some("parent-account".to_string());
+    let parent_line = RolloutLine {
+        timestamp: rollout_line.timestamp.clone(),
+        ordinal: Some(1),
+        item: RolloutItem::SessionMeta(parent),
+    };
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&parent_line).expect("parent json")
+    )
+    .expect("write inherited metadata");
 
     let outcome = extract_metadata_from_rollout(&path, "openai")
         .await
@@ -167,6 +184,13 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
     expected.recency_at = expected.updated_at;
 
     assert_eq!(outcome.metadata, expected);
+    assert_eq!(
+        (
+            outcome.metadata.creator_user_id.as_deref(),
+            outcome.metadata.creator_account_id.as_deref()
+        ),
+        (Some("creator-user"), Some("creator-account")),
+    );
     assert_eq!(outcome.memory_mode, None);
     assert_eq!(outcome.parse_errors, 0);
 }
@@ -217,6 +241,8 @@ async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
         .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
 
     let session_meta = SessionMeta {
+        creator_user_id: None,
+        creator_account_id: None,
         session_id: id.into(),
         id,
         forked_from_id: None,
@@ -563,6 +589,8 @@ fn write_rollout_in_sessions_with_cwd(
     std::fs::create_dir_all(sessions_dir.as_path()).expect("create sessions dir");
     let path = sessions_dir.join(format!("rollout-{filename_ts}-{thread_uuid}.jsonl"));
     let session_meta = SessionMeta {
+        creator_user_id: None,
+        creator_account_id: None,
         session_id: id.into(),
         id,
         forked_from_id: None,

@@ -125,6 +125,10 @@ pub struct ExtractionOutcome {
 pub struct ThreadMetadata {
     /// Originator recorded at creation, if available.
     pub originator: Option<String>,
+    /// ChatGPT user that created the thread, if known.
+    pub creator_user_id: Option<String>,
+    /// ChatGPT account at creation, if known.
+    pub creator_account_id: Option<String>,
     /// The thread identifier.
     pub id: ThreadId,
     /// The absolute rollout path on disk.
@@ -196,6 +200,10 @@ pub struct ThreadMetadata {
 pub struct ThreadMetadataBuilder {
     /// Originator recorded at creation, if available.
     pub originator: Option<String>,
+    /// ChatGPT user that created the thread, if known.
+    pub creator_user_id: Option<String>,
+    /// ChatGPT account at creation, if known.
+    pub creator_account_id: Option<String>,
     /// The thread identifier.
     pub id: ThreadId,
     /// The absolute rollout path on disk.
@@ -253,6 +261,8 @@ impl ThreadMetadataBuilder {
             updated_at: None,
             recency_at: None,
             originator: None,
+            creator_user_id: None,
+            creator_account_id: None,
             source,
             history_mode: ThreadHistoryMode::Legacy,
             thread_source: None,
@@ -287,6 +297,8 @@ impl ThreadMetadataBuilder {
             .unwrap_or(updated_at);
         ThreadMetadata {
             originator: self.originator.clone(),
+            creator_user_id: self.creator_user_id.clone(),
+            creator_account_id: self.creator_account_id.clone(),
             id: self.id,
             rollout_path: self.rollout_path.clone(),
             created_at,
@@ -388,6 +400,12 @@ impl ThreadMetadata {
         if self.source != other.source {
             diffs.push("source");
         }
+        if self.creator_user_id != other.creator_user_id {
+            diffs.push("creator_user_id");
+        }
+        if self.creator_account_id != other.creator_account_id {
+            diffs.push("creator_account_id");
+        }
         if self.originator != other.originator {
             diffs.push("originator");
         }
@@ -474,6 +492,8 @@ fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
 #[derive(Debug)]
 pub(crate) struct ThreadRow {
     originator: Option<String>,
+    creator_user_id: Option<String>,
+    creator_account_id: Option<String>,
     id: String,
     rollout_path: String,
     created_at: i64,
@@ -514,6 +534,8 @@ impl ThreadRow {
     pub(crate) fn try_from_row(row: &SqliteRow) -> Result<Self> {
         Ok(Self {
             originator: row.try_get("originator")?,
+            creator_user_id: row.try_get("creator_user_id")?,
+            creator_account_id: row.try_get("creator_account_id")?,
             id: row.try_get("id")?,
             rollout_path: row.try_get("rollout_path")?,
             created_at: row.try_get("created_at")?,
@@ -558,6 +580,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
     fn try_from(row: ThreadRow) -> std::result::Result<Self, Self::Error> {
         let ThreadRow {
             originator,
+            creator_user_id,
+            creator_account_id,
             id,
             rollout_path,
             created_at,
@@ -617,6 +641,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
         Ok(Self {
             id: ThreadId::try_from(id)?,
             originator,
+            creator_user_id,
+            creator_account_id,
             rollout_path: PathBuf::from(rollout_path),
             created_at: epoch_millis_to_datetime(created_at)?,
             updated_at: epoch_millis_to_datetime(updated_at)?,
@@ -728,6 +754,8 @@ mod tests {
     fn thread_row(reasoning_effort: Option<&str>) -> ThreadRow {
         ThreadRow {
             originator: None,
+            creator_user_id: None,
+            creator_account_id: None,
             id: "00000000-0000-0000-0000-000000000123".to_string(),
             rollout_path: "/tmp/rollout-123.jsonl".to_string(),
             created_at: 1_700_000_000,
@@ -768,6 +796,8 @@ mod tests {
     fn expected_thread_metadata(reasoning_effort: Option<ReasoningEffort>) -> ThreadMetadata {
         ThreadMetadata {
             originator: None,
+            creator_user_id: None,
+            creator_account_id: None,
             id: ThreadId::from_string("00000000-0000-0000-0000-000000000123")
                 .expect("valid thread id"),
             rollout_path: PathBuf::from("/tmp/rollout-123.jsonl"),

@@ -108,6 +108,8 @@ pub enum RolloutRecorderParams {
         source: Box<SessionSource>,
         thread_source: Option<ThreadSource>,
         originator: String,
+        creator_user_id: Option<String>,
+        creator_account_id: Option<String>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
         selected_capability_roots: Vec<SelectedCapabilityRoot>,
@@ -212,6 +214,8 @@ impl RolloutRecorderParams {
             source: Box::new(source),
             thread_source,
             originator,
+            creator_user_id: None,
+            creator_account_id: None,
             base_instructions,
             dynamic_tools,
             selected_capability_roots: Vec::new(),
@@ -222,6 +226,20 @@ impl RolloutRecorderParams {
             subagent_history_start_ordinal: None,
             initial_window_id: None,
         }
+    }
+
+    /// Record the authenticated identity at thread creation, or preserve it on revert.
+    pub fn with_creator(mut self, user_id: Option<String>, account_id: Option<String>) -> Self {
+        if let Self::Create {
+            creator_user_id,
+            creator_account_id,
+            ..
+        } = &mut self
+        {
+            *creator_user_id = user_id;
+            *creator_account_id = account_id;
+        }
+        self
     }
 
     pub fn with_session_id(mut self, session_id: SessionId) -> Self {
@@ -889,6 +907,8 @@ impl RolloutRecorder {
                 source,
                 thread_source,
                 originator,
+                creator_user_id,
+                creator_account_id,
                 base_instructions,
                 dynamic_tools,
                 selected_capability_roots,
@@ -923,6 +943,8 @@ impl RolloutRecorder {
                     cwd: cwd.clone(),
                     runtime_workspace_roots,
                     originator,
+                    creator_user_id,
+                    creator_account_id,
                     cli_version: env!("CARGO_PKG_VERSION").to_string(),
                     agent_nickname: source.get_nickname(),
                     agent_role: source.get_agent_role(),

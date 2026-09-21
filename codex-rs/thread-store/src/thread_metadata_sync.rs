@@ -68,6 +68,8 @@ impl ThreadMetadataSync {
             updated_at: Some(created_at),
             source: Some(params.source.clone()),
             originator: (!params.originator.is_empty()).then(|| params.originator.clone()),
+            creator_user_id: params.creator_user_id.clone(),
+            creator_account_id: params.creator_account_id.clone(),
             thread_source: Some(params.thread_source.clone()),
             agent_nickname: Some(params.source.get_nickname()),
             agent_role: Some(params.source.get_agent_role()),
@@ -228,6 +230,8 @@ impl ThreadMetadataSync {
             match item {
                 RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == self.thread_id => {
                     update.created_at = parse_session_timestamp(meta_line.meta.timestamp.as_str());
+                    update.creator_user_id = meta_line.meta.creator_user_id.clone();
+                    update.creator_account_id = meta_line.meta.creator_account_id.clone();
                     update.source = Some(meta_line.meta.source.clone());
                     if !meta_line.meta.originator.is_empty() {
                         update.originator = Some(meta_line.meta.originator.clone());
@@ -386,6 +390,8 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.advance_recency_at.is_some()
         || update.source.is_some()
         || update.originator.is_some()
+        || update.creator_user_id.is_some()
+        || update.creator_account_id.is_some()
         || update.thread_source.is_some()
         || update.agent_nickname.is_some()
         || update.agent_role.is_some()
@@ -444,6 +450,8 @@ mod tests {
     async fn create_metadata_records_originator_without_project() {
         let thread_id = ThreadId::new();
         let sync = ThreadMetadataSync::for_create(&CreateThreadParams {
+            creator_user_id: None,
+            creator_account_id: None,
             session_id: thread_id.into(),
             thread_id,
             extra_config: None,

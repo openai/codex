@@ -3115,6 +3115,12 @@ pub struct HistoryPosition {
 /// and should be used when there is no config override.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
+    /// ChatGPT user that created this thread; absent when unavailable or for older threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_user_id: Option<String>,
+    /// ChatGPT account selected when this thread was created. Never updated on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator_account_id: Option<String>,
     /// session_id is equal to the root thread's ID.
     pub session_id: SessionId,
     pub id: ThreadId,
@@ -3189,6 +3195,8 @@ impl Default for SessionMeta {
     fn default() -> Self {
         let id = ThreadId::default();
         SessionMeta {
+            creator_user_id: None,
+            creator_account_id: None,
             session_id: id.into(),
             id,
             forked_from_id: None,

@@ -60,6 +60,145 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_creator_survives_resume_and_forks_use_current_auth() -> Result<()> {
+    use base64::Engine;
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    responses::sse(vec![ev_response_created("resp"), ev_completed("resp")]),
+                    "text/event-stream",
+                ),
+        )
+        .mount(&server)
+        .await;
+    let chatgpt_auth = |user_id: &str, account_id: &str| {
+        let claims = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            json!({"https://api.openai.com/auth": {"chatgpt_user_id": user_id}}).to_string(),
+        );
+        CodexAuth::from_external_chatgpt_tokens(
+            &format!("e30.{claims}.sig"),
+            account_id,
+            /*chatgpt_plan_type*/ None,
+        )
+    };
+    for auth in [
+        chatgpt_auth("creator-user", "creator-account")?,
+        CodexAuth::from_api_key("test"),
+    ] {
+        let expected_creator = (auth.get_chatgpt_user_id(), auth.get_account_id());
+        let mut builder = test_codex().with_auth(auth).with_config(|config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("enable SQLite");
+        });
+        let test = builder.build_with_auto_env(&server).await?;
+        test.submit_turn("persist creator").await?;
+        let thread_id = test.session_configured.thread_id;
+        let rollout_path = test.codex.rollout_path().expect("rollout path");
+        test.codex.shutdown_and_wait().await?;
+        let meta = codex_rollout::read_session_meta_line(&rollout_path)
+            .await?
+            .meta;
+        let stored = test
+            .codex
+            .state_db()
+            .expect("SQLite")
+            .get_thread(thread_id)
+            .await?
+            .expect("thread");
+        assert_eq!(
+            (meta.creator_user_id, meta.creator_account_id),
+            expected_creator
+        );
+        assert_eq!(
+            (stored.creator_user_id, stored.creator_account_id),
+            expected_creator
+        );
+
+        let mut resume_builder = test_codex()
+            .with_auth(chatgpt_auth("resuming-user", "resuming-account")?)
+            .with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::Sqlite)
+                    .expect("enable SQLite");
+            });
+        let resumed = resume_builder
+            .resume(&server, test.home.clone(), rollout_path.clone())
+            .await?;
+        resumed.submit_turn("resume under another account").await?;
+        resumed.codex.shutdown_and_wait().await?;
+        let meta = codex_rollout::read_session_meta_line(&rollout_path)
+            .await?
+            .meta;
+        let stored = resumed
+            .codex
+            .state_db()
+            .expect("SQLite")
+            .get_thread(thread_id)
+            .await?
+            .expect("thread");
+        assert_eq!(
+            (meta.creator_user_id, meta.creator_account_id),
+            expected_creator
+        );
+        assert_eq!(
+            (stored.creator_user_id, stored.creator_account_id),
+            expected_creator
+        );
+
+        let fork = resumed
+            .thread_manager
+            .fork_thread(
+                codex_core::ForkSnapshot::Interrupted,
+                StartThreadOptions::new(resumed.config.clone()),
+                rollout_path,
+            )
+            .await?;
+        fork.thread
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "persist fork".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
+        wait_for_event(&fork.thread, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+        let fork_path = fork.thread.rollout_path().expect("fork rollout");
+        fork.thread.shutdown_and_wait().await?;
+        let meta = codex_rollout::read_session_meta_line(&fork_path)
+            .await?
+            .meta;
+        let stored = fork
+            .thread
+            .state_db()
+            .expect("SQLite")
+            .get_thread(fork.thread_id)
+            .await?
+            .expect("fork");
+        let expected_fork = (
+            Some("resuming-user".to_string()),
+            Some("resuming-account".to_string()),
+        );
+        assert_eq!(
+            (meta.creator_user_id, meta.creator_account_id),
+            expected_fork
+        );
+        assert_eq!(
+            (stored.creator_user_id, stored.creator_account_id),
+            expected_fork
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
@@ -414,6 +553,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
             fs::create_dir_all(parent).expect("should create rollout directory");
             let session_meta_line = SessionMetaLine {
                 meta: SessionMeta {
+                    creator_user_id: None,
+                    creator_account_id: None,
                     session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: None,

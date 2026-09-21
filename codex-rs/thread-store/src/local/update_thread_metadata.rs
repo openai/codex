@@ -449,6 +449,8 @@ async fn apply_metadata_update(
                 metadata.source = enum_to_string(&source);
             }
             metadata.originator = metadata.originator.or(patch.originator);
+            metadata.creator_user_id = metadata.creator_user_id.or(patch.creator_user_id);
+            metadata.creator_account_id = metadata.creator_account_id.or(patch.creator_account_id);
             if let Some(thread_source) = patch.thread_source {
                 metadata.thread_source = thread_source;
             }
@@ -737,6 +739,8 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.created_at.is_some()
         || patch.source.is_some()
         || patch.originator.is_some()
+        || patch.creator_user_id.is_some()
+        || patch.creator_account_id.is_some()
         || patch.thread_source.is_some()
         || patch.agent_nickname.is_some()
         || patch.agent_role.is_some()

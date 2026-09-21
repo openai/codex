@@ -69,6 +69,14 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
         // e.g., forked rollouts that embed the source session metadata.
         return;
     }
+    metadata.creator_user_id = metadata
+        .creator_user_id
+        .take()
+        .or_else(|| meta_line.meta.creator_user_id.clone());
+    metadata.creator_account_id = metadata
+        .creator_account_id
+        .take()
+        .or_else(|| meta_line.meta.creator_account_id.clone());
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
     if metadata.originator.is_none() && !meta_line.meta.originator.is_empty() {
@@ -395,6 +403,8 @@ mod tests {
             &mut metadata,
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    creator_user_id: None,
+                    creator_account_id: None,
                     session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: Some(
@@ -667,6 +677,8 @@ mod tests {
             &mut metadata,
             &RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
+                    creator_user_id: None,
+                    creator_account_id: None,
                     session_id: thread_id.into(),
                     id: thread_id,
                     forked_from_id: None,
@@ -707,6 +719,8 @@ mod tests {
         let id = ThreadId::from_string(&Uuid::from_u128(42).to_string()).expect("thread id");
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
         ThreadMetadata {
+            creator_user_id: None,
+            creator_account_id: None,
             originator: None,
             id,
             rollout_path: PathBuf::from("/tmp/a.jsonl"),

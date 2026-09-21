@@ -983,6 +983,8 @@ impl Session {
         // - initialize thread persistence with new or resumed session info
         // - perform default shell discovery
         // - load history metadata (skipped for subagents)
+        let persistence_auth = futures::FutureExt::shared(auth_manager.auth());
+        let mcp_auth = persistence_auth.clone();
         let thread_persistence_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, LiveThreadInitGuard::new(/*live_thread*/ None)))
@@ -995,7 +997,10 @@ impl Session {
                 let guard = managed_guard.as_deref_mut().unwrap_or(&mut local_guard);
                 let live_thread = match &initial_history {
                     InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        let auth = persistence_auth.await;
                         let params = CreateThreadParams {
+                            creator_user_id: auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id),
+                            creator_account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
                             session_id,
                             thread_id,
                             extra_config: config.extra_config.clone(),
@@ -1099,7 +1104,6 @@ impl Session {
         ));
 
         let mut mcp_auth_changes = auth_manager.auth_change_receiver();
-        let auth_manager_clone = Arc::clone(&auth_manager);
         let plugins_manager_for_prewarm = Arc::clone(&plugins_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1114,7 +1118,7 @@ impl Session {
             .map(|cwd| cwd.to_path_buf())
             .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth().await;
+            let auth = mcp_auth.await;
             if config_for_mcp.features.plugin_recommendations_enabled() {
                 let plugins_config = config_for_mcp.plugins_config_input();
                 let auth_for_prewarm = auth.clone();

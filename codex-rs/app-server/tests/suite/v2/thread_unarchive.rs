@@ -246,6 +246,8 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
     let parent_thread_id = ThreadId::from_string("00000000-0000-4000-8000-000000000127")?;
     store
         .create_thread(CreateThreadParams {
+            creator_user_id: None,
+            creator_account_id: None,
             session_id: thread_id.into(),
             thread_id,
             extra_config: None,
