@@ -591,14 +591,216 @@ async fn queries_page_discussions_and_search_unicode() {
     );
 }
 
+fn board_tool_call(name: &str, args: serde_json::Value) -> codex_tools::ToolCall<'static> {
+    codex_tools::ToolCall {
+        turn_id: "turn-1".into(),
+        call_id: name.into(),
+        tool_name: codex_tools::ToolName::namespaced("collaboration", name),
+        model: "test".into(),
+        codex_turn_metadata: None,
+        truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(20_000),
+        source: codex_tools::ToolCallSource::Direct,
+        conversation_history: codex_tools::ConversationHistory::default(),
+        turn_item_emitter: Arc::new(codex_tools::NoopTurnItemEmitter),
+        environments: vec![],
+        payload: codex_tools::ToolPayload::Function {
+            arguments: args.to_string(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn tools_cover_channel_discussions_subscriptions_and_escaped_previews() {
+    use codex_tools::ToolName;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let child_path = AgentPath::root().join("worker").unwrap();
+    let host = Arc::new(Host {
+        fail_notifications: AtomicBool::new(false),
+        members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
+        clock: AtomicI64::default(),
+        active: AtomicBool::new(true),
+        notifications: Mutex::default(),
+    });
+    let board = Arc::new(
+        LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone())
+            .await
+            .unwrap(),
+    );
+    let tools = message_board_tools(board, root, AgentPath::root());
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|tool| tool.tool_name() == ToolName::namespaced("collaboration", name))
+            .unwrap()
+    };
+    let created = tool("create_channel")
+        .handle(board_tool_call(
+            "create_channel",
+            json!({"channel_name":"Workflow"}),
+        ))
+        .await
+        .unwrap();
+    let created: ChannelSummary = serde_json::from_str(&created.log_output()).unwrap();
+    let channels = tool("get_channels")
+        .handle(board_tool_call("get_channels", json!({"query":"WORK"})))
+        .await
+        .unwrap();
+    let channels: Page<ChannelSummary> = serde_json::from_str(&channels.log_output()).unwrap();
+    assert_eq!(
+        channels,
+        Page {
+            results: vec![created],
+            next_cursor: None
+        }
+    );
+    for (name, enabled) in [("subscribe", true), ("unsubscribe", false)] {
+        let result = tool(name)
+            .handle(board_tool_call(
+                name,
+                json!({"channel_name":"Workflow","target_agent":"worker"}),
+            ))
+            .await
+            .unwrap();
+        let state: SubscriptionState = serde_json::from_str(&result.log_output()).unwrap();
+        assert_eq!(
+            state,
+            SubscriptionState {
+                channel_name: "Workflow".into(),
+                thread_id: None,
+                target_agent: child_path.clone(),
+                enabled,
+                last_message_id: None,
+            }
+        );
+    }
+    let mut last = None;
+    let mut expected_roots = Vec::new();
+    for index in 0..7 {
+        let mut call = board_tool_call(
+            "post",
+            json!({"channel_name":"Workflow","text":"\u{1}".repeat(2000)}),
+        );
+        call.call_id = format!("root-{index}");
+        let posted = tool("post").handle(call).await.unwrap();
+        let post: PostMetadata = serde_json::from_str(&posted.log_output()).unwrap();
+        expected_roots.push(post.thread_id.to_string());
+        let mut call = board_tool_call(
+            "post",
+            json!({"thread_id":post.thread_id,"text":"\u{1}".repeat(2000)}),
+        );
+        call.call_id = format!("reply-{index}");
+        let replied = tool("post").handle(call).await.unwrap();
+        let reply: PostMetadata = serde_json::from_str(&replied.log_output()).unwrap();
+        last = Some((post, reply));
+    }
+    // Default create_channel subscribes the author to roots; post subscribes it
+    // to replies. The unsubscribed child receives neither.
+    assert_eq!(
+        host.notifications
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>(),
+        vec![root; 14]
+    );
+    let (last, last_reply) = last.unwrap();
+    assert!(
+        tool("subscribe")
+            .handle(board_tool_call(
+                "subscribe",
+                json!({"channel_name":"Workflow","thread_id":last.thread_id})
+            ))
+            .await
+            .is_err()
+    );
+    let subscribed = tool("subscribe")
+        .handle(board_tool_call(
+            "subscribe",
+            json!({"thread_id":last.thread_id,"target_agent":"worker"}),
+        ))
+        .await
+        .unwrap();
+    let subscribed: SubscriptionState = serde_json::from_str(&subscribed.log_output()).unwrap();
+    assert_eq!(
+        subscribed,
+        SubscriptionState {
+            channel_name: "Workflow".into(),
+            thread_id: Some(last.thread_id),
+            target_agent: child_path,
+            enabled: true,
+            last_message_id: Some(last_reply.message_id),
+        }
+    );
+    for (name, args) in [
+        ("list_threads", json!({"channel_name":"Workflow"})),
+        ("read_thread", json!({"thread_id":last.thread_id})),
+    ] {
+        let output = tool(name)
+            .handle(board_tool_call(name, args))
+            .await
+            .unwrap();
+        assert!(output.log_output().len() <= 8000);
+        let value: serde_json::Value = serde_json::from_str(&output.log_output()).unwrap();
+        if name == "list_threads" {
+            assert_eq!(value["results"][0]["thread_id"], json!(last.thread_id));
+            assert!(
+                value["results"][0]["root_post"]["truncated"]
+                    .as_bool()
+                    .unwrap()
+            );
+            assert!(
+                value["results"][0]["latest_reply"]["truncated"]
+                    .as_bool()
+                    .unwrap()
+            );
+            let mut page = value;
+            let mut roots = Vec::new();
+            loop {
+                let results = page["results"].as_array().unwrap();
+                assert!(!results.is_empty());
+                roots.extend(
+                    results
+                        .iter()
+                        .map(|thread| thread["thread_id"].as_str().unwrap().to_string()),
+                );
+                assert!(roots.len() <= expected_roots.len());
+                let Some(cursor) = page["next_cursor"].as_str() else {
+                    break;
+                };
+                let output = tool(name)
+                    .handle(board_tool_call(
+                        name,
+                        json!({"channel_name":"Workflow", "cursor":cursor}),
+                    ))
+                    .await
+                    .unwrap();
+                assert!(output.log_output().len() <= 8000);
+                page = serde_json::from_str(&output.log_output()).unwrap();
+            }
+            assert_eq!(
+                roots,
+                expected_roots.iter().rev().cloned().collect::<Vec<_>>()
+            );
+        } else {
+            assert_eq!(value["n_returned"], json!(1));
+            assert_eq!(value["root_post"]["message_id"], json!(last.message_id));
+            assert_eq!(
+                value["results"][0]["message_id"],
+                json!(last_reply.message_id)
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn tools_validate_arguments_deduplicate_calls_and_bound_unicode_results() {
-    use codex_tools::ConversationHistory;
-    use codex_tools::NoopTurnItemEmitter;
-    use codex_tools::ToolCall;
     use codex_tools::ToolCallSource;
     use codex_tools::ToolName;
-    use codex_tools::ToolPayload;
     use codex_utils_output_truncation::TruncationPolicy;
     use serde_json::json;
 
@@ -620,21 +822,7 @@ async fn tools_validate_arguments_deduplicate_calls_and_bound_unicode_results() 
             .unwrap(),
     );
     let tools = message_board_tools(board.clone(), root, AgentPath::root());
-    let call = |name: &str, args: serde_json::Value| ToolCall {
-        turn_id: "turn-1".into(),
-        call_id: name.into(),
-        tool_name: ToolName::namespaced("collaboration", name),
-        model: "test".into(),
-        codex_turn_metadata: None,
-        truncation_policy: TruncationPolicy::Bytes(20_000),
-        source: ToolCallSource::Direct,
-        conversation_history: ConversationHistory::default(),
-        turn_item_emitter: Arc::new(NoopTurnItemEmitter),
-        environments: vec![],
-        payload: ToolPayload::Function {
-            arguments: args.to_string(),
-        },
-    };
+    let call = board_tool_call;
     let tool = |name: &str| {
         tools
             .iter()
