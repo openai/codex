@@ -6,10 +6,13 @@ use app_test_support::create_fake_paginated_rollout;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
 use codex_protocol::ThreadId;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-async fn test_server() -> color_eyre::Result<(TempDir, AppServerSession, String, String)> {
+async fn test_server(
+    tool_arguments: Value,
+) -> color_eyre::Result<(TempDir, AppServerSession, String, String)> {
     let codex_home = tempfile::tempdir()?;
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -42,7 +45,8 @@ async fn test_server() -> color_eyre::Result<(TempDir, AppServerSession, String,
             "item": {
                 "type": "AgentMessage",
                 "id": "persisted-message",
-                "content": [{"type": "Text", "text": "Persisted assistant output".repeat(40)}]
+                "phase": "final_answer",
+                "content": [{"type": "Text", "text": "Persisted assistant output".repeat(120)}]
             },
             "completed_at_ms": 0
         }),
@@ -55,7 +59,7 @@ async fn test_server() -> color_eyre::Result<(TempDir, AppServerSession, String,
                 "id": "persisted-tool",
                 "namespace": "codex_tui",
                 "tool": "list_threads",
-                "arguments": {},
+                "arguments": tool_arguments,
                 "status": "completed",
                 "success": true
             },
@@ -136,127 +140,139 @@ fn response_json(response: DynamicToolCallResponse) -> Value {
     serde_json::from_str(text).expect("dynamic tool response should contain JSON")
 }
 
-#[test]
-fn oversized_responses_are_truncated_without_losing_identifiers() {
-    let response = success_response(json!({
-        "thread": {"threadId": "thread-1", "summary": "preview"},
-        "turns": [{"turnId": "turn-1", "items": [{
-            "type": "agentMessage", "id": "message-1",
-            "output": output_summary(&"🦀".repeat(MAX_RESPONSE_BYTES), MAX_RESPONSE_BYTES)
-        }]}]
-    }))
-    .expect("oversized responses should be shortened");
-    let [DynamicToolCallOutputContentItem::InputText { text }] = response.content_items.as_slice()
-    else {
-        panic!("expected one JSON text response")
-    };
-    assert!(text.len() <= MAX_RESPONSE_BYTES);
-    let value: Value = serde_json::from_str(text).expect("response remains valid JSON");
-    assert_eq!(value["thread"]["threadId"], "thread-1");
-    assert_eq!(value["turns"][0]["items"][0]["id"], "message-1");
-    assert_eq!(value["turns"][0]["items"][0]["output"]["truncated"], true);
-    assert_eq!(
-        value["turns"][0]["items"][0]["output"]["originalChars"],
-        MAX_RESPONSE_BYTES
-    );
-    assert_eq!(value["truncated"], true);
-}
-
-#[test]
-fn oversized_task_lists_are_bounded() {
-    let threads: Vec<_> = (0..10)
-        .map(|index| {
-            json!({
-                "id": format!("00000000-0000-0000-0000-{index:012}"),
-                "status": "active",
-                "title": "A task with a descriptive title",
-                "summary": "A task with a longer preview",
-                "cwd": "/tmp/project",
-                "updatedAt": 123
-            })
-        })
-        .collect();
-    let value = response_json(
-        success_response(json!({"threads": threads}))
-            .expect("oversized task lists should be shortened"),
-    );
-    let threads = value["threads"].as_array().expect("task summaries");
-    assert!(!threads.is_empty() && threads.len() < 10);
-    assert_eq!(value["truncated"], true);
-}
-
-#[test]
-fn oversized_wait_snapshots_preserve_all_targets() {
-    let polls: Vec<_> = (0..MAX_WAIT_TARGETS)
-        .map(|index| {
-            json!({
-                "schemaVersion": 1,
-                "thread": {
-                    "id": format!("00000000-0000-0000-0000-{index:012}"),
-                    "status": "idle"
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_read_preserves_answer_in_next_model_request() -> color_eyre::Result<()> {
+    let (_home, app_server, source, target) =
+        test_server(json!({"padding": "supporting tool arguments".repeat(4_000)})).await?;
+    let mock_server = responses::start_mock_server().await;
+    let call_id = "read-task";
+    let mock = responses::mount_sse_sequence(
+        &mock_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    NAMESPACE,
+                    "read_thread",
+                    &json!({"threadId": target}).to_string(),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let home = tempfile::tempdir()?;
+    let base_url = mock_server.uri();
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            r#"
+model = "gpt-5.5"
+model_provider = "readback-test"
+tool_output_token_limit = 2500
+[model_providers.readback-test]
+name = "Readback test"
+base_url = "{base_url}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )?;
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let mut model_server = crate::start_embedded_app_server_for_picker(&config).await?;
+    let started: codex_app_server_protocol::ThreadStartResponse =
+        request(&model_server.request_handle(), |request_id| {
+            ClientRequest::ThreadStart {
+                request_id,
+                params: ThreadStartParams {
+                    dynamic_tools: Some(tool_specs()),
+                    ..ThreadStartParams::default()
                 },
-                "cursor": format!("opaque-cursor-{index}-{}", "x".repeat(100)),
-                "revision": 123,
-                "changed": false,
-                "latestTurn": null,
-                "latestAssistantMessageId": null,
-                "latestAssistantMessage": null,
-                "latestToolMarkerId": null,
-                "latestToolMarker": null
-            })
+            }
         })
-        .collect();
-    let value = response_json(
-        success_response(json!({"timedOut": true, "wake": null, "polls": polls}))
-            .expect("all wait targets should fit a compact response"),
-    );
+        .await
+        .map_err(|error| color_eyre::eyre::eyre!(error))?;
+    let _: TurnStartResponse = request(&model_server.request_handle(), |request_id| {
+        ClientRequest::TurnStart {
+            request_id,
+            params: TurnStartParams {
+                thread_id: started.thread.id,
+                input: vec![UserInput::Text {
+                    text: "Read the completed task".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                ..TurnStartParams::default()
+            },
+        }
+    })
+    .await
+    .map_err(|error| color_eyre::eyre::eyre!(error))?;
+    let result = call_tool(
+        &app_server,
+        &source,
+        "read_thread",
+        json!({"threadId": target}),
+    )
+    .await;
+    let expected = response_json(result.clone());
+    assert_eq!(expected["truncated"], true);
     assert_eq!(
-        value["polls"].as_array().map(Vec::len),
-        Some(MAX_WAIT_TARGETS)
+        expected["turns"][0]["items"],
+        json!([{
+            "type": "agentMessage", "id": "persisted-message", "phase": "final_answer",
+            "text": "Persisted assistant output".repeat(120)
+        }])
     );
-    assert_eq!(value["truncated"], true);
-}
-
-#[test]
-fn oversized_read_pages_preserve_turns_and_pagination() {
-    let turns: Vec<_> = (0..10)
-        .map(|turn_index| {
-            json!({
-                "id": format!("turn-{turn_index}"),
-                "status": "completed",
-                "items": (0..20)
-                    .map(|item_index| json!({
-                        "id": format!("00000000-0000-0000-{turn_index:04}-{item_index:012}"),
-                        "type": "dynamicToolCall",
-                        "namespace": "codex_tui",
-                        "tool": "read_thread",
-                        "status": "completed"
-                    }))
-                    .collect::<Vec<_>>()
-            })
-        })
-        .collect();
-    let response = success_response(json!({
-        "thread": {"id": "thread-1"},
-        "page": {"nextCursor": "opaque-next-page"},
-        "turns": turns
-    }))
-    .expect("oversized read pages should be shortened");
-    let [DynamicToolCallOutputContentItem::InputText { text }] = response.content_items.as_slice()
-    else {
-        panic!("expected one JSON text response")
-    };
-    assert!(text.len() <= MAX_RESPONSE_BYTES);
-    let value: Value = serde_json::from_str(text).expect("response remains valid JSON");
-    let turns = value["turns"].as_array().expect("turns remain present");
-    assert_eq!(turns.len(), 10);
-    assert_eq!(value["page"]["nextCursor"], "opaque-next-page");
-    assert!(turns.iter().all(|turn| turn["items"].is_array()));
-    assert!(turns.iter().any(|turn| {
-        turn["items"]
-            .as_array()
-            .is_some_and(|items| items.len() < 20)
-    }));
+    assert_eq!(expected["page"]["order"], "newest_first");
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 30), async {
+        while let Some(event) = model_server.next_event().await {
+            match event {
+                codex_app_server_client::AppServerEvent::ServerRequest(request) => {
+                    if let codex_app_server_protocol::ServerRequest::DynamicToolCall {
+                        request_id,
+                        params,
+                    } = *request
+                    {
+                        assert_eq!(params.call_id, call_id);
+                        model_server
+                            .resolve_server_request(request_id, serde_json::to_value(&result)?)
+                            .await?;
+                    }
+                }
+                codex_app_server_client::AppServerEvent::ServerNotification(notification) => {
+                    if let codex_app_server_protocol::ServerNotification::TurnCompleted(_) =
+                        *notification
+                    {
+                        return Ok::<_, color_eyre::eyre::Report>(());
+                    }
+                }
+                codex_app_server_client::AppServerEvent::Lagged { .. }
+                | codex_app_server_client::AppServerEvent::Disconnected { .. } => {
+                    panic!("lost app-server events during the tool round trip");
+                }
+            }
+        }
+        panic!("app server disconnected before turn completion");
+    })
+    .await??;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let output = requests[1].function_call_output(call_id);
+    let text = output["output"].as_str().expect("text response");
+    assert!(text.len() > 999);
+    assert!(text.len() <= response::MAX_RESPONSE_BYTES);
+    assert_eq!(serde_json::from_str::<Value>(text)?, expected);
+    model_server.shutdown().await?;
+    Ok(())
 }
 
 #[test]
@@ -287,6 +303,7 @@ fn delegated_prompts_match_desktop_xml_contract() {
 
 #[test]
 fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Result<()> {
+    let assistant_text = "Working".repeat(400);
     let turn: Turn = serde_json::from_value(json!({
         "id": "turn-1",
         "status": "completed",
@@ -303,7 +320,7 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
                 {"type": "skill", "name": "debug", "path": "/tmp/SKILL.md"},
                 {"type": "mention", "name": "docs", "path": "app://docs"}
             ]},
-            {"type": "agentMessage", "id": "assistant-1", "text": "Working", "phase": "commentary"},
+            {"type": "agentMessage", "id": "assistant-1", "text": assistant_text, "phase": "commentary"},
             {"type": "webSearch", "id": "web-1", "query": "latest docs", "action": null},
             {"type": "sleep", "id": "sleep-1", "durationMs": 1000},
             {"type": "imageGeneration", "id": "image-1", "status": "completed",
@@ -314,7 +331,14 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
         ]
     }))?;
 
-    let summary = turn_summary(&turn, /*include_outputs*/ false, DEFAULT_OUTPUT_CHARS);
+    let summary = response_json(
+        success_response(turn_summary(
+            &turn,
+            /*include_outputs*/ false,
+            DEFAULT_OUTPUT_CHARS,
+        ))
+        .expect("task response"),
+    );
     assert_eq!(
         summary["items"],
         json!([
@@ -329,7 +353,7 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
                 {"type": "skill", "name": "debug", "path": "/tmp/SKILL.md"},
                 {"type": "mention", "name": "docs", "path": "app://docs"}
             ]},
-            {"type": "agentMessage", "id": "assistant-1", "text": "Working", "phase": "commentary"},
+            {"type": "agentMessage", "id": "assistant-1", "text": assistant_text, "phase": "commentary"},
             {"type": "webSearch", "id": "web-1", "query": "latest docs", "action": null},
             {"type": "sleep", "id": "sleep-1", "durationMs": 1000},
             {"type": "imageGeneration", "id": "image-1", "status": "completed",
@@ -363,7 +387,7 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
     let no_outputs = turn_summary(
         &turn, /*include_outputs*/ true, /*output_chars*/ 0,
     );
-    assert_eq!(no_outputs["items"][5]["text"], "Working");
+    assert_eq!(no_outputs["items"][5]["text"], assistant_text);
     assert_eq!(
         no_outputs["items"][1]["output"],
         json!({"text": "", "truncated": true, "originalChars": 14})
@@ -377,7 +401,7 @@ fn activity_metadata_is_retained_without_including_outputs() -> color_eyre::Resu
 
 #[tokio::test]
 async fn task_management_tools_use_existing_app_server_operations() -> color_eyre::Result<()> {
-    let (codex_home, server, source, target) = test_server().await?;
+    let (codex_home, server, source, target) = test_server(json!({})).await?;
 
     let listed = response_json(call_tool(&server, &source, "list_threads", json!({})).await);
     assert!(
@@ -401,7 +425,7 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
                 &server,
                 &source,
                 "read_thread",
-                json!({"threadId": thread_id}),
+                json!({"threadId": thread_id, "includeOutputs": true, "maxOutputCharsPerItem": 0}),
             )
             .await,
         );
@@ -409,6 +433,21 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
         assert_eq!(read["thread"]["id"], *thread_id);
         assert_eq!(read["page"]["order"], "newest_first");
         assert!(read["turns"].is_array());
+        if thread_id == &target {
+            let assistant = read["turns"][0]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["type"] == "agentMessage")
+                .expect("assistant reply");
+            assert_eq!(
+                assistant,
+                &json!({
+                    "type": "agentMessage", "id": "persisted-message",
+                    "text": "Persisted assistant output".repeat(120), "phase": "final_answer"
+                })
+            );
+        }
     }
 
     let renamed = response_json(
@@ -478,8 +517,15 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
         assert!(archived.success, "{archived:?}");
         expected_archived.push(archived_id);
     }
-    let mut archived_threads =
-        response_json(call_tool(&server, &source, "list_archived_threads", json!({})).await);
+    let mut archived_threads = response_json(
+        call_tool(
+            &server,
+            &source,
+            "list_archived_threads",
+            json!({"limit": 2}),
+        )
+        .await,
+    );
     assert!(
         archived_threads["threads"]
             .as_array()
@@ -527,8 +573,8 @@ async fn task_management_tools_use_existing_app_server_operations() -> color_eyr
 }
 
 #[tokio::test]
-async fn wait_threads_returns_bounded_snapshots_and_rejects_self_wait() -> color_eyre::Result<()> {
-    let (_codex_home, server, source, target) = test_server().await?;
+async fn wait_threads_preserves_snapshots_and_rejects_self_wait() -> color_eyre::Result<()> {
+    let (_codex_home, server, source, target) = test_server(json!({})).await?;
 
     let snapshot = response_json(
         call_tool(
@@ -553,20 +599,18 @@ async fn wait_threads_returns_bounded_snapshots_and_rejects_self_wait() -> color
         assistant["turnId"],
         snapshot["polls"][0]["latestTurn"]["id"]
     );
-    assert!(assistant["text"].as_str().is_some_and(|text| {
-        text.ends_with('…')
-            && "Persisted assistant output"
-                .repeat(40)
-                .starts_with(text.trim_end_matches('…'))
-    }));
+    assert_eq!(
+        assistant,
+        &json!({
+            "id": "persisted-message", "turnId": "persisted-turn",
+            "text": "Persisted assistant output".repeat(120), "phase": "final_answer"
+        })
+    );
     assert_eq!(
         snapshot["polls"][0]["latestToolMarker"],
         json!({
-            "id": "persisted-tool",
-            "turnId": "persisted-turn",
-            "type": "dynamicToolCall",
-            "name": "list_threads",
-            "status": "completed"
+            "id": "persisted-tool", "turnId": "persisted-turn", "type": "dynamicToolCall",
+            "name": "list_threads", "status": "completed"
         })
     );
     let cursor = snapshot["polls"][0]["cursor"]
@@ -622,7 +666,7 @@ async fn wait_threads_returns_bounded_snapshots_and_rejects_self_wait() -> color
 
 #[tokio::test]
 async fn task_creation_and_followup_start_background_turns() -> color_eyre::Result<()> {
-    let (_codex_home, server, source, target) = test_server().await?;
+    let (_codex_home, server, source, target) = test_server(json!({})).await?;
 
     for (tool, arguments) in [
         (
@@ -694,12 +738,12 @@ async fn task_creation_and_followup_start_background_turns() -> color_eyre::Resu
         &server,
         &source,
         "list_archived_threads",
-        json!({"cursor": "x".repeat(MAX_RESPONSE_BYTES + 1)}),
+        json!({"cursor": "x".repeat(MAX_ERROR_CHARS + 1)}),
     )
     .await;
     assert!(!oversized.success);
     assert!(
-        matches!(&oversized.content_items[..], [DynamicToolCallOutputContentItem::InputText { text }] if text.len() <= MAX_RESPONSE_BYTES)
+        matches!(&oversized.content_items[..], [DynamicToolCallOutputContentItem::InputText { text }] if text.chars().count() <= MAX_ERROR_CHARS)
     );
 
     server.shutdown().await?;
