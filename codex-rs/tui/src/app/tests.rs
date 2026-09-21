@@ -8366,7 +8366,7 @@ async fn prompt_edit_reverts_earlier_and_first_visible_prompts_in_place() -> Res
     let transcript = buffer
         .content()
         .chunks(usize::from(size.width))
-        .take(usize::from(bottom.y.saturating_sub(/*rhs*/ 1)))
+        .take(usize::from(bottom.y))
         .map(|row| {
             row.iter()
                 .map(ratatui::buffer::Cell::symbol)

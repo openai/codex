@@ -225,12 +225,7 @@ async fn beginning_navigation_holds_the_view_until_the_last_page_arrives() -> Re
         let render = |app: &mut App, tui: &mut tui::Tui| -> Result<Buffer> {
             tui.screen_size_for_event(&TuiEvent::Resize(size))?;
             let bottom = app.render_owned_transcript(tui, size)?;
-            let area = Rect::new(
-                /*x*/ 0,
-                /*y*/ 0,
-                size.width,
-                bottom.y.saturating_sub(/*rhs*/ 1),
-            );
+            let area = Rect::new(/*x*/ 0, /*y*/ 0, size.width, bottom.y);
             let mut buffer = Buffer::empty(area);
             app.transcript_view
                 .render(area, &mut buffer, &app.transcript_cells);

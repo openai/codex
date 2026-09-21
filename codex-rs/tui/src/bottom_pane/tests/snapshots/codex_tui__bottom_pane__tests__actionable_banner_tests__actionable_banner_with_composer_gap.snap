@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/tests/actionable_banner_tests.rs
+expression: rendered
+---
+                                                                      
+  Usage limit reached                                                 
+                                                                      
+› 1. View usage                                                       
+                                                                      
+  Press a number to choose · esc to dismiss · type to continue        
+                                                                      
+                                                                      
+› Ask Codex to do anything                                            
+                                                                      
+  esc esc to edit previous message

@@ -10,6 +10,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
+    app.local_settings.tui.animations = false;
     let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     tui.set_owned_screen(/*owned*/ true)?;
@@ -20,7 +21,27 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
             .map(|row| format!("transcript row {row}").into())
             .collect(),
     ))];
-    for width in [80, 40] {
+    for (width, running) in [(80, false), (40, false), (80, true)] {
+        if running {
+            app.chat_widget.handle_server_notification(
+                codex_app_server_protocol::ServerNotification::TurnStarted(
+                    codex_app_server_protocol::TurnStartedNotification {
+                        thread_id: ThreadId::new().to_string(),
+                        turn: codex_app_server_protocol::Turn {
+                            id: "turn".into(),
+                            items_view: codex_app_server_protocol::TurnItemsView::Full,
+                            items: Vec::new(),
+                            status: codex_app_server_protocol::TurnStatus::InProgress,
+                            error: None,
+                            started_at: None,
+                            completed_at: None,
+                            duration_ms: None,
+                        },
+                    },
+                ),
+                /*replay_kind*/ None,
+            );
+        }
         let size = Size::new(width, /*height*/ 12);
         tui.screen_size_for_event(&TuiEvent::Resize(size))?;
         app.transcript_view.jump_to_latest();
@@ -51,9 +72,19 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
             );
         }
         let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
-        let row = bottom.y - 1;
-        let column = (0..width)
-            .find(|column| buffer[(*column, row)].symbol() == "↓")
+        if running {
+            insta::assert_snapshot!(
+                "running_follow_control",
+                crate::chatwidget::tests::helpers::normalize_snapshot_paths(
+                    super::tests::buffer_text(buffer)
+                ),
+            );
+        }
+        let (column, row) = buffer
+            .content()
+            .iter()
+            .position(|cell| cell.symbol() == "↓")
+            .map(|index| buffer.pos_of(index))
             .expect("return control");
         for interrupted in [true, false] {
             for kind in [

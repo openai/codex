@@ -58,7 +58,7 @@ fn attach_thread(app: &mut App, thread_id: ThreadId) {
     });
 }
 
-fn buffer_text(buffer: &Buffer) -> String {
+pub(super) fn buffer_text(buffer: &Buffer) -> String {
     buffer
         .content()
         .chunks(usize::from(buffer.area.width))
@@ -235,7 +235,7 @@ async fn owned_transcript_reserves_a_row_above_the_composer() -> Result<()> {
             ));
             continue;
         }
-        let gap = Rect::new(/*x*/ 0, bottom.y - 1, width, /*height*/ 1);
+        let gap = Rect::new(/*x*/ 0, bottom.y, width, /*height*/ 1);
         let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
         let start = buffer.index_of(gap.x, gap.y);
         // Both scenarios show the current tail, including the paused detailed view.
@@ -375,6 +375,7 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
         .bottom_pane_renderable(
             /*footer*/ None,
             crate::bottom_pane::CommandPopupPlacement::Overlay,
+            Some(&crate::bottom_pane::ComposerGap::default()),
         )
         .cursor_pos(bottom_area)
         .expect("composer cursor");
@@ -1009,6 +1010,8 @@ async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer
         let before =
             crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
 
+        // Suggestions may cover the gap, but not the single-line composer's top padding.
+        let composer_y = cursor.y.saturating_sub(/*rhs*/ 1);
         // Changing the token reopens the menu dismissed above.
         app.chat_widget.apply_external_edit("/mo".to_string());
         app.chat_widget.apply_external_edit("/m".to_string());
@@ -1017,7 +1020,7 @@ async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer
         let open =
             crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal).clone();
         let open_text = buffer_text(&open);
-        if bottom.y > 0 {
+        if composer_y > 0 {
             let menu_y = open_text
                 .lines()
                 .position(|line| line.contains("› /model"))
@@ -1029,7 +1032,7 @@ async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer
             );
             assert_ne!(open, before);
         }
-        let composer_start = open.index_of(bottom.x, bottom.y);
+        let composer_start = open.index_of(bottom.x, composer_y);
         assert_eq!(
             &open.content()[composer_start..],
             &before.content()[composer_start..]
@@ -1046,9 +1049,9 @@ async fn slash_picker_overlays_history_without_moving_the_transcript_or_composer
         assert_eq!(
             filtered
                 .lines()
-                .take(usize::from(bottom.y))
+                .take(usize::from(composer_y))
                 .any(|line| line.contains("› /model")),
-            bottom.y > 0,
+            composer_y > 0,
             "a single command remains visible when the menu has room",
         );
         app.chat_widget.apply_external_edit("/m".to_string());

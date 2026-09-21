@@ -1,6 +1,7 @@
 //! Compose the owned transcript above the composer and route their selection gestures.
-//! Reserve a cleared row between transcript content and the composer. Slash suggestions overlay
-//! already-painted rows so opening or closing them leaves transcript geometry unchanged.
+//! Reserve a cleared row below activity and previews, immediately above the composer.
+//! Slash suggestions overlay already-painted rows so opening or closing them leaves transcript
+//! geometry unchanged.
 //! Plain Enter returns an empty composer to latest after transcript interactions and prompt editing.
 
 use super::*;
@@ -82,6 +83,9 @@ impl App {
         self.sync_owned_transcript(screen_size.width);
         let transcript_width = self.chat_widget.history_wrap_width(screen_size.width);
         let composer_hint = self.composer_hint(transcript_width);
+        let composer_gap = (!self.chat_widget.has_active_view()
+            && !self.chat_widget.is_external_writer_view())
+        .then(crate::bottom_pane::ComposerGap::default);
         let mut prompt_footer =
             self.prompt_navigation_footer(screen_size.width.saturating_sub(/*rhs*/ 2));
         let chat_widget = &self.chat_widget;
@@ -106,6 +110,7 @@ impl App {
             } else {
                 crate::bottom_pane::CommandPopupPlacement::Overlay
             },
+            composer_gap.as_ref(),
         );
         let dashboard_visible = chat_widget
             .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID)
@@ -138,22 +143,11 @@ impl App {
                     /*x*/ 0,
                     /*y*/ 0,
                     transcript_width,
-                    available.saturating_sub(/*rhs*/ 1),
+                    available.saturating_sub(u16::from(composer_gap.is_none())),
                 ),
                 frame.buffer,
                 &self.transcript_cells,
             );
-            let follow_area =
-                (available > 0 && chat_widget.no_modal_or_popup_active()).then(|| {
-                    Rect::new(
-                        /*x*/ 0,
-                        available - 1,
-                        transcript_width,
-                        /*height*/ 1,
-                    )
-                });
-            feedback_tick =
-                view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer);
             // Rendering resolves whether new activity is still hidden. Paint that result in
             // this frame so a revision change cannot flash a stale activity hint.
             let mut footer =
@@ -176,6 +170,7 @@ impl App {
                 } else {
                     crate::bottom_pane::CommandPopupPlacement::Overlay
                 },
+                composer_gap.as_ref(),
             );
             footer_height_changed = !dashboard_visible
                 && bottom
@@ -183,6 +178,24 @@ impl App {
                     .min(screen_size.height)
                     != bottom_height;
             bottom.render(bottom_area, frame.buffer);
+            let follow_area = if let Some(gap) = composer_gap.as_ref() {
+                Some(Rect {
+                    width: transcript_width,
+                    ..gap.area.get()
+                })
+            } else {
+                (available > 0).then(|| {
+                    Rect::new(
+                        /*x*/ 0,
+                        available - 1,
+                        transcript_width,
+                        /*height*/ 1,
+                    )
+                })
+            }
+            .filter(|_| chat_widget.no_modal_or_popup_active());
+            feedback_tick =
+                view.render_composer_gap(follow_area, composer_hint.as_ref(), frame.buffer);
             chat_widget.note_rendered_width(screen_size.width);
             rendered_cursor = bottom.cursor_pos(bottom_area);
             if let Some(position) = rendered_cursor {

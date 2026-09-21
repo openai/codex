@@ -86,6 +86,7 @@ async fn owned_bottom_pane_preserves_draft_cursor_and_read_only_notice() {
         let bottom = widget.bottom_pane_renderable(
             /*footer*/ None,
             crate::bottom_pane::CommandPopupPlacement::Overlay,
+            /*composer_gap*/ None,
         );
         let mut buffer = Buffer::empty(area);
         bottom.render(area, &mut buffer);

@@ -26,16 +26,29 @@ fn quota(used_percent: i32) -> RateLimitSnapshot {
 #[tokio::test]
 async fn usage_notice_preserves_composer_geometry_and_restores_tip_on_recovery() -> Result<()> {
     let mut snapshots = Vec::new();
-    for (width, running, used_percent) in [(80, false, 92), (32, true, 101), (18, true, 95)] {
+    for (width, height, running, queued, used_percent) in [
+        (80, 10, false, false, 92),
+        (80, 12, true, false, 98),
+        (32, 10, true, false, 101),
+        (18, 10, true, false, 95),
+        (80, 18, true, true, 98),
+        (80, 11, true, true, 98),
+        (80, 6, true, false, 98),
+    ] {
         let (mut app, mut events, _ops) = crate::app::tests::make_test_app_with_channels().await;
         app.local_settings.tui.show_tooltips = !running;
         app.local_settings.tui.animations = false;
         app.transcript_cells
-            .push(Arc::new(crate::history_cell::PlainHistoryCell::new(vec![
-                "Conversation".into(),
-            ])));
+            .push(Arc::new(crate::history_cell::PlainHistoryCell::new(
+                if running {
+                    (0..20)
+                        .map(|row| format!("Conversation row {row}").into())
+                        .collect()
+                } else {
+                    vec!["Conversation".into()]
+                },
+            )));
         if running {
-            app.chat_widget.apply_external_edit("draft stays".into());
             app.chat_widget.handle_server_notification(
                 ServerNotification::TurnStarted(TurnStartedNotification {
                     thread_id: ThreadId::new().to_string(),
@@ -53,10 +66,28 @@ async fn usage_notice_preserves_composer_geometry_and_restores_tip_on_recovery()
                 /*replay_kind*/ None,
             );
             assert!(app.chat_widget.is_user_turn_pending_or_running());
+            if queued {
+                app.keymap.chat.edit_queued_message = vec![crate::key_hint::shift(KeyCode::Left)];
+                app.chat_widget
+                    .apply_keymap_update(Default::default(), &app.keymap);
+                app.chat_widget
+                    .apply_external_edit("queued follow-up".into());
+                app.chat_widget
+                    .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                assert_eq!(
+                    app.chat_widget.queued_user_message_texts(),
+                    vec!["queued follow-up"],
+                );
+            }
+            app.chat_widget.apply_external_edit(if queued {
+                "draft stays\nsecond line".into()
+            } else {
+                "draft stays".into()
+            });
         }
         let mut tui = crate::tui::test_support::make_test_tui()?;
         tui.set_owned_screen(/*owned*/ true)?;
-        let size = Size::new(width, /*height*/ 10);
+        let size = Size::new(width, height);
         tui.terminal.resize(size)?;
         let before = app.render_owned_transcript(&mut tui, size)?;
         let cursor = tui.terminal.last_known_cursor_pos;
@@ -83,7 +114,9 @@ async fn usage_notice_preserves_composer_geometry_and_restores_tip_on_recovery()
             })
             .collect::<Vec<_>>()
             .join("\n");
-        snapshots.push(format!("{width} columns, running={running}\n{screen}"));
+        snapshots.push(format!(
+            "{width} columns, {height} rows, running={running}, queued={queued}\n{screen}"
+        ));
         app.chat_widget
             .on_rate_limit_snapshot(Some(quota(/*used_percent*/ 10)));
         assert_eq!(app.composer_hint(width), tip);
@@ -388,7 +421,7 @@ async fn hints_render_clickable_links_and_release_them_when_disabled() -> Result
     tui.screen_size_for_event(&TuiEvent::Resize(size))?;
     let bottom = app.render_owned_transcript(&mut tui, size)?;
     let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
-    let row = bottom.y - 1;
+    let row = bottom.y;
     let rendered = (0..size.width)
         .map(|column| strip_osc8(buffer[(column, row)].symbol()))
         .collect::<String>();
