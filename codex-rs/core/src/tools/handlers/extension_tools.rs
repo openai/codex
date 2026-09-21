@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::Weak;
 
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -164,8 +165,17 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
 }
 
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall<'_> {
-    let conversation_history =
-        ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
+    let history = invocation
+        .session
+        .clone_history()
+        .await
+        .into_shared_annotated_items();
+    let conversation_history = ConversationHistory::new_deferred(move || {
+        Arc::unwrap_or_clone(history)
+            .into_iter()
+            .map(ResponseItemEnvelope::into_item)
+            .collect()
+    });
     let settings = &invocation.step_context.settings;
     let codex_turn_metadata = invocation
         .turn

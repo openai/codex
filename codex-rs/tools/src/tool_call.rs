@@ -9,26 +9,50 @@ use codex_protocol::protocol::EventMsg;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::with_serialization_allowance;
+use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 /// Raw response history snapshot available when an extension tool is invoked.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct ConversationHistory {
-    items: Arc<[ResponseItem]>,
+    items: Arc<LazyLock<Box<[ResponseItem]>, HistoryLoader>>,
 }
+
+type HistoryLoader = Box<dyn FnOnce() -> Box<[ResponseItem]> + Send + Sync>;
 
 impl ConversationHistory {
     pub fn new(items: Vec<ResponseItem>) -> Self {
+        Self::new_deferred(move || items)
+    }
+
+    /// Materializes an invocation-time snapshot only when a tool reads its history.
+    /// The loader must capture that snapshot rather than querying mutable session state.
+    pub fn new_deferred(load: impl FnOnce() -> Vec<ResponseItem> + Send + Sync + 'static) -> Self {
         Self {
-            items: items.into(),
+            items: Arc::new(LazyLock::new(Box::new(move || load().into_boxed_slice()))),
         }
     }
 
     pub fn items(&self) -> &[ResponseItem] {
         &self.items
+    }
+}
+
+impl Default for ConversationHistory {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl fmt::Debug for ConversationHistory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConversationHistory")
+            .finish_non_exhaustive()
     }
 }
 

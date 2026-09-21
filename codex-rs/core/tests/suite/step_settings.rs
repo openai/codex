@@ -30,6 +30,7 @@ use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::mcp::ClientMcpExtensions;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -57,6 +58,7 @@ use codex_protocol::protocol::CONTEXT_WINDOW_GUIDANCE_OPEN_TAG;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SafetyBufferingEvent;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
@@ -64,6 +66,7 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
+use codex_tools::ConversationHistory;
 use codex_tools::JsonToolOutput;
 use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
@@ -106,6 +109,7 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use test_case::test_case;
 
 use super::rmcp_client::remote_aware_environment_id;
@@ -2898,7 +2902,8 @@ async fn captured_step_controls_mcp_output_limit(supports_images: bool) -> Resul
     Ok(())
 }
 
-struct SettingsEcho;
+#[derive(Clone)]
+struct SettingsEcho(Arc<Mutex<Option<ConversationHistory>>>);
 
 impl ToolContributor for SettingsEcho {
     fn tools(
@@ -2906,7 +2911,7 @@ impl ToolContributor for SettingsEcho {
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        vec![Arc::new(Self)]
+        vec![Arc::new(self.clone())]
     }
 }
 
@@ -2931,6 +2936,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
         'call: 'a,
     {
         Box::pin(async move {
+            *self.0.lock().expect("history lock") = Some(call.conversation_history);
             let metadata: Value = serde_json::from_str(
                 call.codex_turn_metadata
                     .as_deref()
@@ -2947,8 +2953,12 @@ impl<'call> ToolExecutor<ToolCall<'call>> for SettingsEcho {
     }
 }
 
+#[test_case(ThreadHistoryMode::Legacy; "legacy")]
+#[test_case(ThreadHistoryMode::Paginated; "paginated")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn captured_step_settings_reach_extension_executor() -> Result<()> {
+async fn captured_step_settings_and_history_reach_extension_executor(
+    history_mode: ThreadHistoryMode,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
@@ -2961,12 +2971,15 @@ async fn captured_step_settings_reach_extension_executor() -> Result<()> {
                 ev_completed("resp-b"),
             ]),
             sse_completed("resp-result"),
+            sse_completed("resp-later"),
         ],
     )
     .await;
+    let history = Arc::default();
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.tool_contributor(Arc::new(SettingsEcho));
+    extensions.tool_contributor(Arc::new(SettingsEcho(Arc::clone(&history))));
     let test = direct_tool_settings_test()
+        .with_history_mode(history_mode)
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             for model in &mut config.model_catalog.as_mut().expect("models").models {
@@ -3004,6 +3017,28 @@ async fn captured_step_settings_reach_extension_executor() -> Result<()> {
             "output_bytes": 512,
         })
     );
+    test.submit_text_turn("later turn").await?;
+    // First read after a later turn: the extension must retain its invocation-time snapshot.
+    let history = history
+        .lock()
+        .expect("history lock")
+        .take()
+        .expect("captured history");
+    let user_texts = history
+        .items()
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|item| match item {
+            ContentItem::InputText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(user_texts.contains(&"pause before continuing"));
+    assert!(!user_texts.contains(&"later turn"));
     Ok(())
 }
 

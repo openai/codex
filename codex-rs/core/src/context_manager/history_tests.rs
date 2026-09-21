@@ -765,9 +765,8 @@ fn cloned_history_shares_items_until_mutated() {
 
 #[test]
 fn annotated_history_apis_preserve_envelopes() {
-    let first_item = assistant_msg("first");
     let first_envelope = ResponseItemEnvelope {
-        item: first_item.clone(),
+        item: assistant_msg("first"),
         metadata: Some(CodexHarnessMetadata::default()),
     };
     let mut history = ContextManager::new();
@@ -778,7 +777,10 @@ fn annotated_history_apis_preserve_envelopes() {
         history.annotated_items(),
         std::slice::from_ref(&first_envelope)
     );
-    assert_eq!(history.into_raw_items(), vec![first_item]);
+    assert_eq!(
+        history.into_shared_annotated_items().as_slice(),
+        &[first_envelope]
+    );
 }
 
 #[test_case(None, 100, 5, true; "model policy")]
