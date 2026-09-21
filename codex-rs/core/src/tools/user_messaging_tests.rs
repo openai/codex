@@ -27,12 +27,6 @@ fn undelivered_or_unrelated_messages_have_no_evidence(name: &str, input: Value, 
             tool_input: input,
             tool_response: json!({}),
         }),
-    }
-    .into_response();
-    assert_eq!(
-        output
-            .metadata
-            .and_then(|metadata| metadata.delivered_assistant_message),
-        None,
-    );
+    };
+    assert_eq!(output.delivered_assistant_message(), None);
 }

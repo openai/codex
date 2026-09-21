@@ -26,6 +26,8 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +43,14 @@ where
 }
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
+
+/// Host-observed state for one call, owned outside its abortable dispatch task.
+/// Delivery does not finish the call: post-tool hooks can still be cancelled.
+#[derive(Default)]
+pub(crate) struct ToolCallState {
+    pub(crate) terminal_outcome_reached: AtomicBool,
+    pub(crate) delivered_assistant_message: OnceLock<String>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallSource {

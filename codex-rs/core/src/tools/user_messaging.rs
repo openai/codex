@@ -1,5 +1,5 @@
-//! Captures confirmed, post-hook User Messaging text for Guardian's parent context.
-//! The completed output owns the evidence; attempted arguments are not delivery proof.
+//! Extracts confirmed User Messaging text after input-rewriting hooks.
+//! The per-call runtime state retains this evidence independently of post-tool hooks.
 
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
 use crate::guardian::guardian_truncate_text;

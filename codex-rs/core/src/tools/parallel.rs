@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
@@ -20,6 +19,7 @@ use crate::session::step_context::StepContext;
 use crate::tools::call_trace;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolPayload;
 use crate::tools::lifecycle::notify_tool_aborted;
 use crate::tools::registry::AnyToolResult;
@@ -83,8 +83,14 @@ impl ToolCallRuntime {
         let recorder = self.session.services.executed_tool_calls.clone();
         let recorded_call = recorder.prepare_direct_call(&call, &source, &self.step_context);
         let step_context = Arc::clone(&self.step_context);
-        let future =
-            self.handle_tool_call_with_source(step_context, call, source, cancellation_token);
+        let call_state = Arc::new(ToolCallState::default());
+        let future = self.handle_tool_call_with_source(
+            step_context,
+            call,
+            source,
+            cancellation_token,
+            Arc::clone(&call_state),
+        );
         async move {
             let result = future.await;
             let mut recorded_call =
@@ -103,6 +109,12 @@ impl ToolCallRuntime {
                     ResponseItemEnvelope::new(Self::failure_response(error_call, other).into())
                 }
             };
+            if let Some(text) = call_state.delivered_assistant_message.get() {
+                response
+                    .metadata
+                    .get_or_insert_default()
+                    .delivered_assistant_message = Some(text.clone());
+            }
             recorder.attach_direct_call_to_output(&mut response.item, recorded_call);
             Ok(response)
         }
@@ -115,6 +127,7 @@ impl ToolCallRuntime {
         call: ToolCall,
         source: ToolCallSource,
         cancellation_token: CancellationToken,
+        call_state: Arc<ToolCallState>,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
         self.session
             .services
@@ -144,8 +157,7 @@ impl ToolCallRuntime {
         let abort_session = Arc::clone(&session);
         let abort_source = source.clone();
         let abort_turn = Arc::clone(&turn);
-        let terminal_outcome_reached = Arc::new(AtomicBool::new(false));
-        let dispatch_terminal_outcome_reached = Arc::clone(&terminal_outcome_reached);
+        let dispatch_call_state = Arc::clone(&call_state);
         let dispatch_call = call.clone();
         let thread_id = session.thread_id;
         let trace_source = match &source {
@@ -188,14 +200,14 @@ impl ToolCallRuntime {
                 }
 
                 let result = router
-                    .dispatch_tool_call_with_terminal_outcome(
+                    .dispatch_tool_call_with_state(
                         session,
                         step_context,
                         invocation_cancellation_token,
                         tracker,
                         dispatch_call,
                         source,
-                        dispatch_terminal_outcome_reached,
+                        dispatch_call_state,
                     )
                     .instrument(dispatch_span.clone())
                     .await;
@@ -223,7 +235,7 @@ impl ToolCallRuntime {
             let mut result = tokio::select! {
                 res = &mut dispatch_handle => res.map_err(Self::tool_task_join_error)?,
                 _ = cancellation_token.cancelled() => {
-                    if terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
+                    if call_state.terminal_outcome_reached.load(Ordering::Acquire) || dispatch_handle.is_finished() {
                         dispatch_handle.await.map_err(Self::tool_task_join_error)?
                     } else {
                         let secs = started.elapsed().as_secs_f32().max(0.1);
