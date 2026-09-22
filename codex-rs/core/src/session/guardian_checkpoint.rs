@@ -24,6 +24,7 @@ impl Session {
             window_id: Some(window_ids.window_id.to_string()),
             compaction_response_id: None,
             latest_token_usage_record: state.latest_token_usage_record.clone(),
+            resume_metadata: None,
         })];
         if let Some(world_state) = history.world_state_checkpoint() {
             items.push(RolloutItem::WorldState(world_state));

@@ -39,20 +39,25 @@ pub(super) async fn update(
     overrides: ThreadSettingsOverrides,
 ) {
     let updates = prepare_update(overrides);
-    if let Err(error) = apply_update(session, submission_id.clone(), updates).await {
-        session
-            .send_event_raw(Event {
-                id: submission_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    misalignment: None,
-                    message: format!("invalid thread settings override: {error}"),
-                    codex_error_info: Some(CodexErrorInfo::BadRequest),
-                }),
-            })
-            .await;
-    } else {
-        // Standalone settings changes supersede a pending automatic continuation.
-        session.state.lock().await.last_started_turn_id = None;
+    let _settings_guard = acquire_persistence_lock(session).await;
+    match session.update_settings(updates).await {
+        Ok(commit) => {
+            // Standalone settings changes supersede a pending automatic continuation.
+            session.state.lock().await.last_started_turn_id = None;
+            emit_applied(session, submission_id, commit.snapshot).await;
+        }
+        Err(error) => {
+            session
+                .send_event_raw(Event {
+                    id: submission_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        misalignment: None,
+                        message: format!("invalid thread settings override: {error}"),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+        }
     }
 }
 

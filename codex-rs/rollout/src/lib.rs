@@ -27,6 +27,7 @@ pub mod state_db;
 mod writer_lock;
 
 pub use codex_history::CompactedItem;
+pub use codex_history::CompactionResumeMetadata;
 pub use codex_history::InitialHistory;
 pub use codex_history::ResponseItemEnvelope;
 pub use codex_history::ResumedHistory;

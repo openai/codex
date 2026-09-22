@@ -85,6 +85,7 @@ fn legacy_transcript_preview_scans_tail_across_compaction() {
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: None,
+                resume_metadata: None,
             }),
             rollout_user_message("recent user"),
             rollout_agent_message("commentary one\ncommentary two"),
@@ -220,6 +221,7 @@ fn legacy_transcript_preview_falls_back_for_oversized_hidden_record() {
                 window_id: None,
                 compaction_response_id: None,
                 latest_token_usage_record: None,
+                resume_metadata: None,
             }),
             rollout_agent_message("recent assistant"),
         ],
@@ -251,6 +253,7 @@ fn legacy_transcript_preview_falls_back_when_scan_budget_is_exhausted() {
         window_id: None,
         compaction_response_id: None,
         latest_token_usage_record: None,
+        resume_metadata: None,
     });
     let mut items = vec![rollout_user_message("older user")];
     items.extend(std::iter::repeat_n(compacted, 9));
