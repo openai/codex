@@ -87,7 +87,8 @@ pub(super) fn endpoint_error(
         OAuthError::Rejected(rejection) => {
             // Issuers can echo custom URL credentials that shared grant redaction does not know.
             // Request IDs are already truncated, so even replacing complete values is unsafe.
-            let has_query = std::iter::once(config.token_url.as_str())
+            let has_query = [config.authorization_url.as_str(), config.token_url.as_str()]
+                .into_iter()
                 .chain(config.resource.as_deref())
                 .any(|value| value.contains('?'));
             let (detail, request_id) = if has_query {

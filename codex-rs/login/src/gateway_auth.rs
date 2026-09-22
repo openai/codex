@@ -1,4 +1,5 @@
 //! Owns gateway credentials and coordinates refresh and browser login through shared OAuth operations.
+//! Credential I/O runs off the async worker and writes retain the store lock through cancellation.
 //! Rotated credentials survive caller cancellation and remain pending until persistence succeeds.
 
 use std::fmt;
@@ -149,7 +150,7 @@ impl GatewayAuthManager {
         validate_config(&self.state.config)?;
         let mut cached = Arc::clone(&self.state.cached_token).lock_owned().await;
         if cached.token.is_none() && cached.pending.is_none() {
-            cached.token = self.load_token()?;
+            cached.token = self.load_token_async().await?;
         }
         if cached.pending.is_none()
             && matches!(policy, RefreshPolicy::WhenExpired)
@@ -173,12 +174,26 @@ impl GatewayAuthManager {
         }
     }
 
-    fn persist_pending(&self, cached: &mut GatewayAuthCache) -> io::Result<String> {
+    async fn persist_pending(
+        &self,
+        cached: &mut GatewayAuthCache,
+        credential_lock: &Arc<std::fs::File>,
+    ) -> io::Result<String> {
         let token = cached
             .pending
             .as_ref()
             .ok_or_else(|| io::Error::other("provider OAuth credentials are missing"))?;
-        self.save_token(token)?;
+        let manager = self.clone();
+        let saved = token.clone();
+        let credential_lock = Arc::clone(credential_lock);
+        tokio::task::spawn_blocking(move || {
+            // A canceled login may drop its async guard while this write is still running.
+            // Keep the cross-process lock until encryption and the atomic write finish.
+            let _credential_lock = credential_lock;
+            manager.save_token(&saved)
+        })
+        .await
+        .map_err(|_| io::Error::other("provider OAuth credential save task failed"))??;
         let access_token = token.access_token.clone();
         cached.token = cached.pending.take();
         Ok(access_token)
@@ -189,17 +204,17 @@ impl GatewayAuthManager {
         cached: &mut GatewayAuthCache,
         policy: &RefreshPolicy,
     ) -> io::Result<RefreshOutcome> {
-        let _credential_lock = storage::lock_credentials(&self.state.codex_home).await?;
+        let credential_lock = Arc::new(storage::lock_credentials(&self.state.codex_home).await?);
         // Recovery always rereads under the cross-process lock before choosing a token.
         // Even a replacement from storage must differ from the token rejected by this request.
         for _ in 0..2 {
-            let stored = self.load_token()?;
+            let stored = self.load_token_async().await?;
             if stored != cached.token {
                 cached.token = stored;
                 cached.pending = None;
             }
             if cached.pending.is_some() {
-                self.persist_pending(cached)?;
+                self.persist_pending(cached, &credential_lock).await?;
             }
             if let Some(token) = cached.token.as_ref()
                 && policy.can_reuse(token)
@@ -224,7 +239,8 @@ impl GatewayAuthManager {
                 Ok(response) => {
                     cached.pending = Some(response.into_stored(Some(refresh_token))?);
                     return self
-                        .persist_pending(cached)
+                        .persist_pending(cached, &credential_lock)
+                        .await
                         .map(RefreshOutcome::AccessToken);
                 }
                 Err(OAuthError::Rejected(rejection))
@@ -239,7 +255,7 @@ impl GatewayAuthManager {
                     // Some public clients receive refresh tokens despite being unable to use
                     // that grant. Reauthorize after explicit rejection without disabling refresh.
                     // Also recover updates from clients that predate the credential lock.
-                    if self.load_token()? == cached.token {
+                    if self.load_token_async().await? == cached.token {
                         break;
                     }
                 }
@@ -253,7 +269,7 @@ impl GatewayAuthManager {
                 }
             }
         }
-        let stored = self.load_token()?;
+        let stored = self.load_token_async().await?;
         if stored != cached.token {
             cached.token = stored;
             cached.pending = None;
@@ -285,6 +301,13 @@ impl GatewayAuthManager {
             digest.update([0]);
         }
         format!("provider-oauth|{:x}", digest.finalize())
+    }
+
+    async fn load_token_async(&self) -> io::Result<Option<StoredToken>> {
+        let manager = self.clone();
+        tokio::task::spawn_blocking(move || manager.load_token())
+            .await
+            .map_err(|_| io::Error::other("provider OAuth credential load task failed"))?
     }
 
     fn load_token(&self) -> io::Result<Option<StoredToken>> {
@@ -343,8 +366,12 @@ impl GatewayAuthManager {
 
         // Wait for user interaction without the store lock, then serialize issuance and
         // persistence with refreshes. Use the current stored token as the failed-save baseline.
-        let _credential_lock = storage::lock_credentials(&self.state.codex_home).await?;
-        cached.token = self.load_token()?;
+        let credential_lock = Arc::new(storage::lock_credentials(&self.state.codex_home).await?);
+        let stored = self.load_token_async().await?;
+        if stored != cached.token {
+            cached.token = stored;
+            cached.pending = None;
+        }
         let response = self
             .oauth()
             .exchange_code::<TokenResponse>(AuthorizationCodeGrant {
@@ -363,7 +390,7 @@ impl GatewayAuthManager {
                 )
             })?;
         cached.pending = Some(response.into_stored(/*previous_refresh_token*/ None)?);
-        self.persist_pending(cached)
+        self.persist_pending(cached, &credential_lock).await
     }
 
     fn oauth(&self) -> OAuthClient<'_> {

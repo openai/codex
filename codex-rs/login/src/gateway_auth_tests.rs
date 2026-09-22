@@ -394,10 +394,15 @@ async fn token_endpoint_failures_do_not_expose_refresh_tokens() {
 #[tokio::test]
 async fn query_credentials_are_not_exposed_by_echoed_errors_or_truncated_request_ids() {
     enum QueryLocation {
+        AuthorizationEndpoint,
         TokenEndpoint,
         Resource,
     }
-    for location in [QueryLocation::TokenEndpoint, QueryLocation::Resource] {
+    for location in [
+        QueryLocation::AuthorizationEndpoint,
+        QueryLocation::TokenEndpoint,
+        QueryLocation::Resource,
+    ] {
         let server = MockServer::start().await;
         let secret = "query-secret-".repeat(/*n*/ 16);
         Mock::given(method("POST"))
@@ -413,14 +418,12 @@ async fn query_credentials_are_not_exposed_by_echoed_errors_or_truncated_request
             .mount(&server)
             .await;
         let mut oauth = config(&server);
-        match location {
-            QueryLocation::TokenEndpoint => {
-                oauth.token_url.push_str(&format!("?custom_key={secret}"))
-            }
-            QueryLocation::Resource => {
-                oauth.resource = Some(format!("https://gateway.test/?custom_key={secret}"));
-            }
-        }
+        let url = match location {
+            QueryLocation::AuthorizationEndpoint => &mut oauth.authorization_url,
+            QueryLocation::TokenEndpoint => &mut oauth.token_url,
+            QueryLocation::Resource => oauth.resource.as_mut().expect("configured resource"),
+        };
+        url.push_str(&format!("?custom_key={secret}"));
         let keyring = Arc::new(MockKeyringStore::default());
         let (manager, _home) = client(oauth, keyring.clone());
         save_token(
@@ -1055,6 +1058,22 @@ async fn failed_save_retains_rotation_without_overwriting_a_new_external_login()
                     expires_at: None,
                 })
                 .expect("external login");
+        }
+        // A failed browser login must discard pending rotation only if storage changed.
+        Mock::given(method("POST"))
+            .and(body_string_contains("grant_type=authorization_code"))
+            .respond_with(
+                ResponseTemplate::new(/*s*/ 400).set_body_json(json!({"error": "invalid_grant"})),
+            )
+            .expect(/*r*/ 1)
+            .mount(&server)
+            .await;
+        {
+            let mut cached = Arc::clone(&manager.state.cached_token).lock_owned().await;
+            manager
+                .authorize_with_browser(&mut cached, complete_browser_authorization)
+                .await
+                .expect_err("failed login must preserve the correct recovery baseline");
         }
         if recovery == Recovery::Expired {
             manager
