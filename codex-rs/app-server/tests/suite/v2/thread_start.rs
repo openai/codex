@@ -115,7 +115,7 @@ model = "gpt-5.4-mini"
         })
         .await?;
 
-    assert_eq!(response.model, "openai.gpt-5.6-sol");
+    assert_eq!(response.model, "openai.gpt-6-sol");
     Ok(())
 }
 
@@ -244,6 +244,16 @@ async fn thread_start_provider_model_fallback_uses_bedrock_static_catalog() -> R
         /*allow_provider_model_fallback*/ true,
     )
     .await?;
+    for model in [
+        "openai.gpt-6-sol",
+        "openai.gpt-6-luna",
+        "openai.gpt-5.6-sol",
+    ] {
+        let response =
+            start_thread_with_model(&mut mcp, model, /*allow_provider_model_fallback*/ true)
+                .await?;
+        assert_eq!(response.model, model);
+    }
     let supported_with_fallback = start_thread_with_model(
         &mut mcp,
         "openai.gpt-5.4",
@@ -263,7 +273,7 @@ async fn thread_start_provider_model_fallback_uses_bedrock_static_catalog() -> R
             supported_with_fallback.model,
             unsupported_without_fallback.model,
         ],
-        vec!["openai.gpt-5.6-sol", "openai.gpt-5.4", "gpt-5.4-mini"]
+        vec!["openai.gpt-6-sol", "openai.gpt-5.4", "gpt-5.4-mini"]
     );
     Ok(())
 }
@@ -281,7 +291,14 @@ async fn thread_start_bedrock_runtime_prefers_global_cross_region_models() -> Re
         .build_initialized()
         .await?;
 
-    for model in ["global.openai.gpt-5.6-sol", "us.openai.gpt-5.6-sol"] {
+    for model in [
+        "global.openai.gpt-6-sol",
+        "us.openai.gpt-6-sol",
+        "global.openai.gpt-6-luna",
+        "us.openai.gpt-6-luna",
+        "global.openai.gpt-5.6-sol",
+        "us.openai.gpt-5.6-sol",
+    ] {
         let response =
             start_thread_with_model(&mut mcp, model, /*allow_provider_model_fallback*/ true)
                 .await?;
@@ -294,7 +311,7 @@ async fn thread_start_bedrock_runtime_prefers_global_cross_region_models() -> Re
         /*allow_provider_model_fallback*/ true,
     )
     .await?;
-    assert_eq!(response.model, "global.openai.gpt-5.6-sol");
+    assert_eq!(response.model, "global.openai.gpt-6-sol");
 
     Ok(())
 }

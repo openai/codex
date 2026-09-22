@@ -5,13 +5,13 @@ expression: "render_bottom_popup(&chat, 100)"
   Select Model and Effort
 
 
-› 1. GPT-5.6 Sol (Global) (current)   Older coding model for complex work.
-  2. GPT-6-Astra (Global)             Frontier intelligence for the most demanding work.
-  3. GPT-5.6 Terra (Global)           Older balanced model for straightforward work.
-  4. GPT-5.6 Luna (Global)            Older fast and efficient model.
-  5. GPT-5.6 Sol (US cross-region)    Older coding model for complex work.
-  6. GPT-6-Astra (US cross-region)    Frontier intelligence for the most demanding work.
-  7. GPT-5.6 Terra (US cross-region)  Older balanced model for straightforward work.
-  8. GPT-5.6 Luna (US cross-region)   Older fast and efficient model.
-
+› 1. GPT-6 Sol (Global) (current)      Workhorse model for coding and everyday work.
+  2. GPT-6-Astra (Global)              Frontier intelligence for the most demanding work.
+  3. GPT-6 Luna (Global)               Fast and affordable model for easier tasks.
+  4. GPT-5.6 Sol (Global)              Older coding model for complex work.
+  5. GPT-5.6 Terra (Global)            Older balanced model for straightforward work.
+  6. GPT-5.6 Luna (Global)             Older fast and efficient model.
+  7. GPT-6 Sol (US cross-region)       Workhorse model for coding and everyday work.
+  8. GPT-6-Astra (US cross-region)     Frontier intelligence for the most demanding work.
+↓
   enter select · esc back

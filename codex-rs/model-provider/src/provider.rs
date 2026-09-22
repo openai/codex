@@ -1263,7 +1263,12 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             )
             .await;
         assert_eq!(uncached_catalog, catalog);
-        for slug in ["openai.gpt-5.6-sol", "openai.gpt-6-astra"] {
+        for slug in [
+            "openai.gpt-6-sol",
+            "openai.gpt-6-luna",
+            "openai.gpt-5.6-sol",
+            "openai.gpt-6-astra",
+        ] {
             let model_info = manager
                 .get_model_info(
                     slug,
@@ -1289,8 +1294,10 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
         assert_eq!(
             models,
             vec![
-                ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
+                ("openai.gpt-6-sol", "GPT-6 Sol"),
                 ("openai.gpt-6-astra", "GPT-6-Astra"),
+                ("openai.gpt-6-luna", "GPT-6 Luna"),
+                ("openai.gpt-5.6-sol", "GPT-5.6 Sol"),
                 ("openai.gpt-5.6-terra", "GPT-5.6 Terra"),
                 ("openai.gpt-5.6-luna", "GPT-5.6 Luna"),
                 ("openai.gpt-5.5", "GPT-5.5"),
@@ -1310,8 +1317,10 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
                 .map(|preset| preset.model.as_str())
                 .collect::<Vec<_>>(),
             vec![
-                "openai.gpt-5.6-sol",
+                "openai.gpt-6-sol",
                 "openai.gpt-6-astra",
+                "openai.gpt-6-luna",
+                "openai.gpt-5.6-sol",
                 "openai.gpt-5.6-terra",
                 "openai.gpt-5.6-luna",
                 "openai.gpt-5.5",
@@ -1324,7 +1333,7 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
             .find(|preset| preset.is_default)
             .expect("Bedrock catalog should have a default model");
 
-        assert_eq!(default_model.model, "openai.gpt-5.6-sol");
+        assert_eq!(default_model.model, "openai.gpt-6-sol");
     }
 
     #[tokio::test]
