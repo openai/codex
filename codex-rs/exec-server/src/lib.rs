@@ -46,6 +46,9 @@ mod telemetry;
 mod trace_context;
 mod websocket_pong_watchdog;
 
+// Shared limits for inbound executor messages across all transports.
+mod client_inbound_request_limit;
+
 use codex_exec_server_protocol as protocol;
 
 /// Process-local opt-in for tying a remote executor to its parent's stdin pipe.

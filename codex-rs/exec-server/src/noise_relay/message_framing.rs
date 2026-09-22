@@ -4,6 +4,8 @@ use bytes::BytesMut;
 use codex_exec_server_protocol::JSONRPCMessage;
 
 use crate::ExecServerError;
+use crate::client_inbound_request_limit::MAX_CLIENT_INBOUND_REQUEST_LEN;
+use crate::client_inbound_request_limit::client_inbound_message_exceeded_limit;
 
 const LENGTH_PREFIX_BYTES: usize = size_of::<u32>();
 pub(crate) const MAX_NOISE_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
@@ -106,6 +108,49 @@ impl MessageDecoder {
             ));
         }
         Ok(messages)
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ClientJsonRpcMessageDecoder {
+    decoder: JsonRpcMessageDecoder,
+}
+
+impl ClientJsonRpcMessageDecoder {
+    pub(crate) fn push(
+        &mut self,
+        plaintext_record: &[u8],
+    ) -> Result<Vec<JSONRPCMessage>, ExecServerError> {
+        if self.decoder.decoder.buffered.is_empty()
+            && plaintext_record.len() <= MAX_CLIENT_INBOUND_REQUEST_LEN
+        {
+            return self.decoder.push(plaintext_record);
+        }
+
+        self.decoder
+            .decoder
+            .push(plaintext_record)?
+            .into_iter()
+            .map(|encoded| {
+                let message = serde_json::from_slice(&encoded);
+                if let Some(max_len) = client_inbound_message_exceeded_limit(
+                    message.as_ref(),
+                    encoded.len(),
+                    MAX_CLIENT_INBOUND_REQUEST_LEN,
+                ) {
+                    return Err(ExecServerError::Protocol(format!(
+                        "Noise relay JSON-RPC message exceeds maximum length of {max_len} bytes"
+                    )));
+                }
+                message.map_err(Into::into)
+            })
+            .collect()
+    }
+}
+
+impl JsonRpcMessageDecoder {
+    pub(crate) fn client() -> ClientJsonRpcMessageDecoder {
+        ClientJsonRpcMessageDecoder::default()
     }
 }
 

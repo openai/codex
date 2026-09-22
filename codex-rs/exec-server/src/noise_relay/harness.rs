@@ -32,6 +32,7 @@ use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
 use crate::noise_channel::NoiseTransport;
 use crate::noise_channel::noise_channel_prologue;
+use crate::noise_relay::message_framing::ClientJsonRpcMessageDecoder;
 use crate::noise_relay::message_framing::JsonRpcMessageDecoder;
 use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
@@ -274,7 +275,7 @@ where
         let mut websocket = websocket.peekable();
         let mut next_outbound_seq = 0u32;
         let mut inbound_ciphertexts = OrderedCiphertextFrames::default();
-        let mut inbound_decoder = JsonRpcMessageDecoder::default();
+        let mut inbound_decoder = JsonRpcMessageDecoder::client();
         let mut keepalive = tokio::time::interval_at(
             tokio::time::Instant::now() + WEBSOCKET_KEEPALIVE_INTERVAL,
             WEBSOCKET_KEEPALIVE_INTERVAL,
@@ -594,7 +595,7 @@ where
 async fn receive_data(
     inbound_ciphertexts: &mut OrderedCiphertextFrames,
     transport: &mut NoiseTransport,
-    decoder: &mut JsonRpcMessageDecoder,
+    decoder: &mut ClientJsonRpcMessageDecoder,
     data: RelayData,
     delivery_deadline: tokio::time::Instant,
     incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>,

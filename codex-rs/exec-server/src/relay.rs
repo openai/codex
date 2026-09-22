@@ -21,6 +21,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::ExecServerError;
+use crate::client_inbound_request_limit::MAX_CLIENT_INBOUND_REQUEST_LEN;
+use crate::client_inbound_request_limit::client_inbound_message_exceeded_limit;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
@@ -204,11 +206,6 @@ impl RelayMessageFrame {
         }
     }
 
-    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
-        let payload = self.into_data()?.payload;
-        serde_json::from_slice(&payload).map_err(ExecServerError::Json)
-    }
-
     pub(crate) fn into_handshake_payload(self) -> Result<Vec<u8>, ExecServerError> {
         let kind = self.validate()?;
         if kind != RelayFrameBodyKind::Handshake {
@@ -380,8 +377,35 @@ where
                                 }
                             };
                             match kind {
-                                RelayFrameBodyKind::Data => match frame.into_jsonrpc_message() {
-                                    Ok(message) => {
+                                RelayFrameBodyKind::Data => match frame.into_data() {
+                                    Ok(data) => {
+                                        let message = serde_json::from_slice(&data.payload);
+                                        if let Some(max_len) = client_inbound_message_exceeded_limit(
+                                            message.as_ref(),
+                                            data.payload.len(),
+                                            MAX_CLIENT_INBOUND_REQUEST_LEN,
+                                        ) {
+                                            let _ = disconnected_tx.send(true);
+                                            let _ = incoming_tx
+                                                .send(JsonRpcConnectionEvent::Disconnected {
+                                                    reason: Some(format!(
+                                                        "relay JSON-RPC message from {reader_label} exceeds maximum length of {max_len} bytes"
+                                                    )),
+                                                })
+                                                .await;
+                                            break;
+                                        }
+                                        let message = match message {
+                                            Ok(message) => message,
+                                            Err(err) => {
+                                                let _ = incoming_tx
+                                                    .send(JsonRpcConnectionEvent::MalformedMessage {
+                                                        reason: err.to_string(),
+                                                    })
+                                                    .await;
+                                                continue;
+                                            }
+                                        };
                                         match send_event_with_keepalive(
                                             &mut websocket,
                                             &mut keepalive,
@@ -968,6 +992,7 @@ mod tests {
     use std::time::Duration;
 
     use codex_exec_server_protocol::JSONRPCRequest;
+    use codex_exec_server_protocol::JSONRPCResponse;
     use codex_exec_server_protocol::RequestId;
     use futures::Sink;
     use futures::Stream;
@@ -1012,6 +1037,77 @@ mod tests {
             anyhow::bail!("expected a queued JSON-RPC request");
         };
         assert_eq!(JSONRPCMessage::Request(request), message);
+
+        drop(connection);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn harness_connection_rejects_oversized_request_and_accepts_large_response()
+    -> anyhow::Result<()> {
+        let (client_websocket, mut server_websocket) = websocket_pair().await?;
+        let mut connection =
+            harness_connection_from_websocket(client_websocket, "test".to_string());
+        let stream_id = read_resume_stream_id(&mut server_websocket).await?;
+        let response = JSONRPCMessage::Response(JSONRPCResponse {
+            id: RequestId::Integer(1),
+            result: serde_json::json!({
+                "padding": "x".repeat(MAX_CLIENT_INBOUND_REQUEST_LEN),
+            }),
+        });
+
+        server_websocket
+            .send(Message::Binary(
+                encode_relay_message_frame(&RelayMessageFrame {
+                    version: RELAY_MESSAGE_FRAME_VERSION,
+                    stream_id: stream_id.clone(),
+                    body: Some(relay_message_frame::Body::Data(RelayData {
+                        seq: 0,
+                        segment_index: 0,
+                        segment_count: 1,
+                        payload: jsonrpc_payload(&response)?,
+                    })),
+                    ..RelayMessageFrame::default()
+                })
+                .into(),
+            ))
+            .await?;
+        assert!(matches!(
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+            Some(JsonRpcConnectionEvent::Message(actual)) if actual == response
+        ));
+
+        let request = JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(2),
+            method: "network/policyRequest".to_string(),
+            params: Some(serde_json::json!({
+                "padding": "x".repeat(MAX_CLIENT_INBOUND_REQUEST_LEN),
+            })),
+            trace: None,
+        });
+        server_websocket
+            .send(Message::Binary(
+                encode_relay_message_frame(&RelayMessageFrame {
+                    version: RELAY_MESSAGE_FRAME_VERSION,
+                    stream_id,
+                    body: Some(relay_message_frame::Body::Data(RelayData {
+                        seq: 1,
+                        segment_index: 0,
+                        segment_count: 1,
+                        payload: jsonrpc_payload(&request)?,
+                    })),
+                    ..RelayMessageFrame::default()
+                })
+                .into(),
+            ))
+            .await?;
+        assert!(matches!(
+            timeout(Duration::from_secs(1), connection.incoming_rx.recv()).await?,
+            Some(JsonRpcConnectionEvent::Disconnected { reason: Some(reason) })
+                if reason == format!(
+                    "relay JSON-RPC message from test exceeds maximum length of {MAX_CLIENT_INBOUND_REQUEST_LEN} bytes"
+                )
+        ));
 
         drop(connection);
         Ok(())
@@ -1170,7 +1266,10 @@ mod tests {
         };
         let frame = decode_relay_message_frame(data_payload.as_ref())?;
         assert_eq!(frame.stream_id, stream_id);
-        assert_eq!(frame.into_jsonrpc_message()?, message);
+        assert_eq!(
+            serde_json::from_slice::<JSONRPCMessage>(&frame.into_data()?.payload)?,
+            message
+        );
         drop(connection);
         Ok(())
     }

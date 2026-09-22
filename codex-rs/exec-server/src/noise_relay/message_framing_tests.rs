@@ -1,5 +1,9 @@
+use codex_exec_server_protocol::EXEC_OUTPUT_DELTA_METHOD;
 use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCNotification;
+use codex_exec_server_protocol::JSONRPCRequest;
+use codex_exec_server_protocol::JSONRPCResponse;
+use codex_exec_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 
 use super::JsonRpcMessageDecoder;
@@ -7,11 +11,12 @@ use super::MAX_NOISE_JSONRPC_MESSAGE_LEN;
 use super::NOISE_RECORD_PLAINTEXT_LEN;
 use super::frame_jsonrpc_message;
 use crate::ExecServerError;
+use crate::client_inbound_request_limit::MAX_CLIENT_INBOUND_REQUEST_LEN;
 
 #[test]
 fn fragments_and_reassembles_large_jsonrpc_message() {
     let message = JSONRPCMessage::Notification(JSONRPCNotification {
-        method: "large/test".to_string(),
+        method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
         params: Some(serde_json::json!({
             "data": "x".repeat(128 * 1024),
         })),
@@ -19,7 +24,7 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
     let framed = frame_jsonrpc_message(&message).unwrap();
     assert!(framed.len() > 128 * 1024);
 
-    let mut decoder = JsonRpcMessageDecoder::default();
+    let mut decoder = JsonRpcMessageDecoder::client();
     let mut decoded = Vec::new();
     for record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
         decoded.extend(decoder.push(record).unwrap());
@@ -49,6 +54,63 @@ fn rejects_oversized_plaintext_record() {
         Err(ExecServerError::Protocol(message))
             if message == "Noise relay plaintext record exceeds maximum length"
     ));
+}
+
+#[test]
+fn client_decoder_rejects_oversized_request_and_preserves_large_response() {
+    let request = JSONRPCMessage::Request(JSONRPCRequest {
+        id: RequestId::Integer(1),
+        method: "network/policyRequest".to_string(),
+        params: Some(serde_json::json!({
+            "padding": "x".repeat(MAX_CLIENT_INBOUND_REQUEST_LEN),
+        })),
+        trace: None,
+    });
+    let request = frame_jsonrpc_message(&request).unwrap();
+    let mut client = JsonRpcMessageDecoder::client();
+    assert!(matches!(
+        client.push(&request),
+        Err(ExecServerError::Protocol(message))
+            if message == format!(
+                "Noise relay JSON-RPC message exceeds maximum length of {MAX_CLIENT_INBOUND_REQUEST_LEN} bytes"
+        )
+    ));
+
+    let mut client = JsonRpcMessageDecoder::client();
+    let split = MAX_CLIENT_INBOUND_REQUEST_LEN / 2;
+    assert!(client.push(&request[..split]).unwrap().is_empty());
+    assert!(matches!(
+        client.push(&request[split..]),
+        Err(ExecServerError::Protocol(message))
+            if message == format!(
+                "Noise relay JSON-RPC message exceeds maximum length of {MAX_CLIENT_INBOUND_REQUEST_LEN} bytes"
+            )
+    ));
+
+    let response = JSONRPCMessage::Response(JSONRPCResponse {
+        id: RequestId::Integer(1),
+        result: serde_json::json!({
+            "padding": "x".repeat(MAX_CLIENT_INBOUND_REQUEST_LEN),
+        }),
+    });
+    let framed = frame_jsonrpc_message(&response).unwrap();
+    let mut client = JsonRpcMessageDecoder::client();
+    assert_eq!(client.push(&framed).unwrap(), vec![response]);
+}
+
+#[test]
+fn executor_decoder_preserves_large_request() {
+    let request = JSONRPCMessage::Request(JSONRPCRequest {
+        id: RequestId::Integer(1),
+        method: "process/start".to_string(),
+        params: Some(serde_json::json!({
+            "padding": "x".repeat(MAX_CLIENT_INBOUND_REQUEST_LEN),
+        })),
+        trace: None,
+    });
+    let framed = frame_jsonrpc_message(&request).unwrap();
+    let mut executor = JsonRpcMessageDecoder::default();
+    assert_eq!(executor.push(&framed).unwrap(), vec![request]);
 }
 
 #[test]

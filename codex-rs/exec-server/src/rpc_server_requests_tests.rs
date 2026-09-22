@@ -3,12 +3,25 @@ use std::time::Duration;
 
 use codex_exec_server_protocol::JSONRPCRequest;
 use codex_exec_server_protocol::RequestId;
+use codex_protocol::protocol::W3cTraceContext;
+use opentelemetry::Context;
+use opentelemetry::trace::SpanContext;
+use opentelemetry::trace::SpanId;
+use opentelemetry::trace::TraceContextExt as _;
+use opentelemetry::trace::TraceFlags;
+use opentelemetry::trace::TraceId;
+use opentelemetry::trace::TraceState;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
+use tracing::Instrument;
+use tracing_subscriber::prelude::*;
 
 use super::MAX_IN_FLIGHT_SERVER_CALLS;
+use super::MAX_SERVER_REQUEST_TRACESTATE_LEN;
 use super::RpcServerRequestSender;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcServerOutboundMessage;
@@ -33,6 +46,75 @@ impl RpcServerRequestSender {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rpc_server_sender_bounds_tracestate_without_dropping_traceparent() {
+    let tracer_provider = SdkTracerProvider::builder().build();
+    let tracer = tracer_provider.tracer("exec-server-test");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let _subscriber_guard = subscriber.set_default();
+    tracing::callsite::rebuild_interest_cache();
+
+    let ordinary_tracestate = TraceState::from_key_value([("vendor", "value")])
+        .expect("ordinary tracestate should be valid");
+    let oversized_tracestate =
+        TraceState::from_key_value([("first", "a".repeat(256)), ("second", "b".repeat(256))])
+            .expect("oversized aggregate tracestate should have valid members");
+    assert!(oversized_tracestate.header().len() > MAX_SERVER_REQUEST_TRACESTATE_LEN);
+
+    for (tracestate, expected_tracestate) in [
+        (
+            ordinary_tracestate.clone(),
+            Some(ordinary_tracestate.header()),
+        ),
+        (oversized_tracestate, None),
+    ] {
+        let span_context = SpanContext::new(
+            TraceId::from_hex("00000000000000000000000000000001").expect("valid trace id"),
+            SpanId::from_hex("0000000000000002").expect("valid span id"),
+            TraceFlags::SAMPLED,
+            /*is_remote*/ true,
+            tracestate,
+        );
+        let span = tracing::info_span!("executor-outbound-request");
+        codex_otel::set_parent_from_context(
+            &span,
+            Context::new().with_remote_span_context(span_context),
+        );
+        let expected_traceparent = codex_otel::span_w3c_trace_context(&span)
+            .expect("span should have trace context")
+            .traceparent;
+
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*buffer*/ 1);
+        let requests = RpcServerRequestSender::new(outgoing_tx);
+        let params = serde_json::json!({});
+        let call = requests
+            .call_with_timeout::<_, serde_json::Value>(
+                "network/policyRequest",
+                &params,
+                Duration::from_secs(1),
+            )
+            .instrument(span);
+        tokio::pin!(call);
+        assert!(futures::poll!(call.as_mut()).is_pending());
+
+        let request = receive_server_request(&mut outgoing_rx).await;
+        assert_eq!(
+            request.trace,
+            Some(W3cTraceContext {
+                traceparent: expected_traceparent,
+                tracestate: expected_tracestate,
+            })
+        );
+
+        requests.complete(request.id, Ok(serde_json::json!({})));
+        assert_eq!(
+            call.await.expect("traced request should complete"),
+            serde_json::json!({})
+        );
     }
 }
 
