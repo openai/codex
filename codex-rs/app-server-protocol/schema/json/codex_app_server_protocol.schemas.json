@@ -1820,6 +1820,75 @@
             },
             "method": {
               "enum": [
+                "account/gatewayOAuth/read"
+              ],
+              "title": "Account/gatewayOAuth/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/gatewayOAuth/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/gatewayOAuth/login"
+              ],
+              "title": "Account/gatewayOAuth/loginRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/gatewayOAuth/loginRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/gatewayOAuth/cancel"
+              ],
+              "title": "Account/gatewayOAuth/cancelRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/gatewayOAuth/cancelRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "modelProvider/capabilities/read"
               ],
               "title": "ModelProvider/capabilities/readRequestMethod",
@@ -3288,6 +3357,10 @@
         "experimentalApi": {
           "default": false,
           "description": "Opt into receiving experimental API methods and fields.",
+          "type": "boolean"
+        },
+        "explicitGatewayOauth": {
+          "description": "Use explicit gateway OAuth login instead of automatic browser authorization. Applies to this app-server's gateway runtime; later connections cannot undo it.",
           "type": "boolean"
         },
         "extensions": {
@@ -5449,6 +5522,26 @@
             "params"
           ],
           "title": "Account/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "account/gatewayOAuth/changed"
+              ],
+              "title": "Account/gatewayOAuth/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/GatewayOAuthChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Account/gatewayOAuth/changedNotification",
           "type": "object"
         },
         {
@@ -12451,6 +12544,95 @@
             "type": "object"
           }
         ]
+      },
+      "GatewayOAuthCancelResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "GatewayOAuthCancelResponse",
+        "type": "object"
+      },
+      "GatewayOAuthChangedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "authUrl": {
+            "description": "Authorization handoff, sent only to the connection that started login.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/GatewayOAuthStatus"
+          }
+        },
+        "required": [
+          "providerId",
+          "status"
+        ],
+        "title": "GatewayOAuthChangedNotification",
+        "type": "object"
+      },
+      "GatewayOAuthLoginResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "GatewayOAuthLoginResponse",
+        "type": "object"
+      },
+      "GatewayOAuthReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Current effective gateway policy and credential readiness; never contains credentials.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "providerName": {
+            "type": "string"
+          },
+          "required": {
+            "description": "Whether the selected provider uses gateway OAuth, even when already signed in.",
+            "type": "boolean"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/GatewayOAuthStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the effective provider does not use gateway OAuth."
+          }
+        },
+        "required": [
+          "providerId",
+          "providerName",
+          "required"
+        ],
+        "title": "GatewayOAuthReadResponse",
+        "type": "object"
+      },
+      "GatewayOAuthStatus": {
+        "enum": [
+          "notReady",
+          "started",
+          "succeeded",
+          "failed"
+        ],
+        "type": "string"
       },
       "GetAccountParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",

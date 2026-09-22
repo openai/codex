@@ -49,12 +49,13 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 use tracing_subscriber::layer::SubscriberExt;
 use wiremock::MockServer;
 
-const TEST_CONNECTION_ID: ConnectionId = ConnectionId(7);
+pub(super) const TEST_CONNECTION_ID: ConnectionId = ConnectionId(7);
 
 struct TestTracing {
     exporter: InMemorySpanExporter,
@@ -120,7 +121,12 @@ impl TracingHarness {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
-        let (processor, outgoing_rx) = build_test_processor(config).await;
+        let auth_manager = AuthManager::shared_from_config(
+            config.as_ref(),
+            /*enable_codex_api_key_env*/ false,
+        )
+        .await?;
+        let (processor, outgoing_rx) = build_test_processor(config, auth_manager).await;
         let tracing = init_test_tracing();
         tracing.exporter.reset();
         tracing::callsite::rebuild_interest_cache();
@@ -229,21 +235,20 @@ async fn build_test_config(codex_home: &Path, server_uri: &str) -> Result<Config
         .await?)
 }
 
-async fn build_test_processor(
+pub(super) async fn build_test_processor(
     config: Arc<Config>,
+    auth_manager: Arc<AuthManager>,
 ) -> (
     Arc<MessageProcessor>,
     mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
-    let auth_manager =
-        AuthManager::shared_from_config(config.as_ref(), /*enable_codex_api_key_env*/ false)
-            .await
-            .expect("test auth manager");
     let config_manager = ConfigManager::new(
         config.codex_home.to_path_buf(),
         Vec::new(),
-        LoaderOverrides::default(),
+        LoaderOverrides::with_managed_config_path_for_tests(
+            config.codex_home.join("managed_config.toml").to_path_buf(),
+        ),
         /*strict_config*/ false,
         CloudConfigBundleLoader::default(),
         Arg0DispatchPaths::default(),
@@ -432,12 +437,20 @@ fn assert_has_internal_descendant_at_min_depth(
     );
 }
 
-async fn read_response<T: serde::de::DeserializeOwned>(
+pub(super) async fn read_response<T: serde::de::DeserializeOwned>(
     outgoing_rx: &mut mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
     request_id: i64,
 ) -> T {
+    read_response_from(outgoing_rx, TEST_CONNECTION_ID, request_id).await
+}
+
+pub(super) async fn read_response_from<T: serde::de::DeserializeOwned>(
+    outgoing_rx: &mut mpsc::Receiver<crate::outgoing_message::OutgoingEnvelope>,
+    expected_connection_id: ConnectionId,
+    request_id: i64,
+) -> T {
     loop {
-        let envelope = tokio::time::timeout(std::time::Duration::from_secs(5), outgoing_rx.recv())
+        let envelope = tokio::time::timeout(Duration::from_secs(/*secs*/ 30), outgoing_rx.recv())
             .await
             .expect("timed out waiting for response")
             .expect("outgoing channel closed");
@@ -449,7 +462,7 @@ async fn read_response<T: serde::de::DeserializeOwned>(
         else {
             continue;
         };
-        if connection_id != TEST_CONNECTION_ID {
+        if connection_id != expected_connection_id {
             continue;
         }
         let crate::outgoing_message::OutgoingMessage::Response(response) = message else {

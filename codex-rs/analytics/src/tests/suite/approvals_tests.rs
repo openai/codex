@@ -256,6 +256,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                         version: "1.0.0".to_string(),
                     },
                     capabilities: Some(InitializeCapabilities {
+                        explicit_gateway_oauth: false,
                         experimental_api: false,
                         request_attestation: false,
                         opt_out_notification_methods: None,

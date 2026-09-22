@@ -27,6 +27,7 @@ from .v2_all import FileChangePatchUpdatedNotification
 from .v2_all import FsChangedNotification
 from .v2_all import FuzzyFileSearchSessionCompletedNotification
 from .v2_all import FuzzyFileSearchSessionUpdatedNotification
+from .v2_all import GatewayOAuthChangedNotification
 from .v2_all import GuardianWarningNotification
 from .v2_all import HookCompletedNotification
 from .v2_all import HookStartedNotification
@@ -109,6 +110,7 @@ KnownNotificationPayload: TypeAlias = (
     | FsChangedNotification
     | FuzzyFileSearchSessionCompletedNotification
     | FuzzyFileSearchSessionUpdatedNotification
+    | GatewayOAuthChangedNotification
     | GuardianWarningNotification
     | HookCompletedNotification
     | HookStartedNotification
@@ -172,6 +174,7 @@ KnownNotificationPayload: TypeAlias = (
 )
 
 NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
+    "account/gatewayOAuth/changed": GatewayOAuthChangedNotification,
     "account/login/completed": AccountLoginCompletedNotification,
     "account/rateLimits/updated": AccountRateLimitsUpdatedNotification,
     "account/updated": AccountUpdatedNotification,

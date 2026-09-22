@@ -1634,6 +1634,10 @@
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
         },
+        "explicitGatewayOauth": {
+          "description": "Use explicit gateway OAuth login instead of automatic browser authorization. Applies to this app-server's gateway runtime; later connections cannot undo it.",
+          "type": "boolean"
+        },
         "extensions": {
           "additionalProperties": true,
           "description": "MCP extension settings declared by the app-server client.",
@@ -7502,6 +7506,75 @@
         "params"
       ],
       "title": "Model/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/gatewayOAuth/read"
+          ],
+          "title": "Account/gatewayOAuth/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/gatewayOAuth/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/gatewayOAuth/login"
+          ],
+          "title": "Account/gatewayOAuth/loginRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/gatewayOAuth/loginRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/gatewayOAuth/cancel"
+          ],
+          "title": "Account/gatewayOAuth/cancelRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/gatewayOAuth/cancelRequest",
       "type": "object"
     },
     {

@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GatewayOAuthStatus": {
+      "enum": [
+        "notReady",
+        "started",
+        "succeeded",
+        "failed"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "authUrl": {
+      "description": "Authorization handoff, sent only to the connection that started login.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "providerId": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/GatewayOAuthStatus"
+    }
+  },
+  "required": [
+    "providerId",
+    "status"
+  ],
+  "title": "GatewayOAuthChangedNotification",
+  "type": "object"
+}

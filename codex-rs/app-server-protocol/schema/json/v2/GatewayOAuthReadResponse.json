@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "GatewayOAuthStatus": {
+      "enum": [
+        "notReady",
+        "started",
+        "succeeded",
+        "failed"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Current effective gateway policy and credential readiness; never contains credentials.",
+  "properties": {
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "providerId": {
+      "type": "string"
+    },
+    "providerName": {
+      "type": "string"
+    },
+    "required": {
+      "description": "Whether the selected provider uses gateway OAuth, even when already signed in.",
+      "type": "boolean"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/GatewayOAuthStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Null when the effective provider does not use gateway OAuth."
+    }
+  },
+  "required": [
+    "providerId",
+    "providerName",
+    "required"
+  ],
+  "title": "GatewayOAuthReadResponse",
+  "type": "object"
+}

@@ -1830,6 +1830,27 @@ class FuzzyFileSearchSessionUpdatedNotification(BaseModel):
     session_id: Annotated[str, Field(alias="sessionId")]
 
 
+class GatewayOAuthCancelResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class GatewayOAuthLoginResponse(BaseModel):
+    pass
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+
+
+class GatewayOAuthStatus(Enum):
+    not_ready = "notReady"
+    started = "started"
+    succeeded = "succeeded"
+    failed = "failed"
+
+
 class GetAccountParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2094,6 +2115,13 @@ class InitializeCapabilities(BaseModel):
             description="Opt into receiving experimental API methods and fields.",
         ),
     ] = False
+    explicit_gateway_oauth: Annotated[
+        bool | None,
+        Field(
+            alias="explicitGatewayOauth",
+            description="Use explicit gateway OAuth login instead of automatic browser authorization. Applies to this app-server's gateway runtime; later connections cannot undo it.",
+        ),
+    ] = None
     extensions: Annotated[
         dict[str, Any] | None,
         Field(description="MCP extension settings declared by the app-server client."),
@@ -7249,6 +7277,41 @@ class ModelListRequest(BaseModel):
     params: ModelListParams
 
 
+class AccountGatewayOAuthReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/gatewayOAuth/read"], Field(title="Account/gatewayOAuth/readRequestMethod")
+    ]
+    params: None = None
+
+
+class AccountGatewayOAuthLoginRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/gatewayOAuth/login"],
+        Field(title="Account/gatewayOAuth/loginRequestMethod"),
+    ]
+    params: None = None
+
+
+class AccountGatewayOAuthCancelRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/gatewayOAuth/cancel"],
+        Field(title="Account/gatewayOAuth/cancelRequestMethod"),
+    ]
+    params: None = None
+
+
 class ModelProviderCapabilitiesReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8090,6 +8153,41 @@ class FunctionCallOutputContentItem(
             description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs."
         ),
     ]
+
+
+class GatewayOAuthChangedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    auth_url: Annotated[
+        str | None,
+        Field(
+            alias="authUrl",
+            description="Authorization handoff, sent only to the connection that started login.",
+        ),
+    ] = None
+    error: str | None = None
+    provider_id: Annotated[str, Field(alias="providerId")]
+    status: GatewayOAuthStatus
+
+
+class GatewayOAuthReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    error: str | None = None
+    provider_id: Annotated[str, Field(alias="providerId")]
+    provider_name: Annotated[str, Field(alias="providerName")]
+    required: Annotated[
+        bool,
+        Field(
+            description="Whether the selected provider uses gateway OAuth, even when already signed in."
+        ),
+    ]
+    status: Annotated[
+        GatewayOAuthStatus | None,
+        Field(description="Null when the effective provider does not use gateway OAuth."),
+    ] = None
 
 
 class GetAccountResponse(BaseModel):
@@ -9205,6 +9303,24 @@ class AccountUpdatedServerNotification(BaseModel):
     ] = None
     method: Annotated[Literal["account/updated"], Field(title="Account/updatedNotificationMethod")]
     params: AccountUpdatedNotification
+
+
+class AccountGatewayOAuthChangedServerNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    emitted_at_ms: Annotated[
+        int | None,
+        Field(
+            alias="emittedAtMs",
+            description="Unix timestamp (in milliseconds) when app-server emitted this notification.",
+        ),
+    ] = None
+    method: Annotated[
+        Literal["account/gatewayOAuth/changed"],
+        Field(title="Account/gatewayOAuth/changedNotificationMethod"),
+    ]
+    params: GatewayOAuthChangedNotification
 
 
 class TurnModerationMetadataServerNotification(BaseModel):
@@ -12337,6 +12453,9 @@ class ClientRequest(
         | TurnInterruptRequest
         | ReviewStartRequest
         | ModelListRequest
+        | AccountGatewayOAuthReadRequest
+        | AccountGatewayOAuthLoginRequest
+        | AccountGatewayOAuthCancelRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
@@ -12444,6 +12563,9 @@ class ClientRequest(
         | TurnInterruptRequest
         | ReviewStartRequest
         | ModelListRequest
+        | AccountGatewayOAuthReadRequest
+        | AccountGatewayOAuthLoginRequest
+        | AccountGatewayOAuthCancelRequest
         | ModelProviderCapabilitiesReadRequest
         | ExperimentalFeatureListRequest
         | PermissionProfileListRequest
@@ -12701,6 +12823,7 @@ class ServerNotification(
         | McpServerStartupStatusUpdatedServerNotification
         | McpServerEventStreamNotificationServerNotification
         | AccountUpdatedServerNotification
+        | AccountGatewayOAuthChangedServerNotification
         | AccountRateLimitsUpdatedServerNotification
         | AppListUpdatedServerNotification
         | RemoteControlStatusChangedServerNotification
@@ -12789,6 +12912,7 @@ class ServerNotification(
         | McpServerStartupStatusUpdatedServerNotification
         | McpServerEventStreamNotificationServerNotification
         | AccountUpdatedServerNotification
+        | AccountGatewayOAuthChangedServerNotification
         | AccountRateLimitsUpdatedServerNotification
         | AppListUpdatedServerNotification
         | RemoteControlStatusChangedServerNotification

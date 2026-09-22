@@ -30,6 +30,10 @@
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
         },
+        "explicitGatewayOauth": {
+          "description": "Use explicit gateway OAuth login instead of automatic browser authorization. Applies to this app-server's gateway runtime; later connections cannot undo it.",
+          "type": "boolean"
+        },
         "extensions": {
           "additionalProperties": true,
           "description": "MCP extension settings declared by the app-server client.",

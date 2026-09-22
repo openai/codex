@@ -8,6 +8,11 @@ import type { JsonValue } from "./serde_json/JsonValue";
  */
 export type InitializeCapabilities = {
 /**
+ * Use explicit gateway OAuth login instead of automatic browser authorization.
+ * Applies to this app-server's gateway runtime; later connections cannot undo it.
+ */
+explicitGatewayOauth?: boolean,
+/**
  * Opt into receiving experimental API methods and fields.
  */
 experimentalApi: boolean,

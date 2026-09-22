@@ -178,6 +178,39 @@ impl CatalogRequestProcessor {
         &self,
         params: ModelListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        // Gate the same provider used by the catalog, including when its model cache is warm.
+        // Resolving credentials may refresh them, but explicit host policy prevents browser login.
+        if let Some(gateway) = codex_model_provider::create_model_provider(
+            self.config.model_provider.clone(),
+            Some(self.thread_manager.auth_manager()),
+        )
+        .gateway_auth_manager()
+        .map_err(|error| internal_error(error.to_string()))?
+        {
+            // Refreshing credentials can contact the gateway before the catalog's own check.
+            self.config_manager
+                .check_thread_model_provider(&self.config)
+                .await
+                .map_err(|err| config_load_error(&err))?;
+            if gateway.resolve_access_token().await.is_err() {
+                let current = self
+                    .config_manager
+                    .load_latest_config(/*fallback_cwd*/ None)
+                    .await
+                    .map_err(|err| config_load_error(&err))?;
+                // Login RPCs use current config, while the catalog retains its startup provider.
+                if current.model_provider_id != self.config.model_provider_id
+                    || current.model_provider != self.config.model_provider
+                {
+                    return Err(invalid_request(
+                        "Model provider settings changed. Restart Codex to apply them, then retry fetching the model list",
+                    ));
+                }
+                return Err(invalid_request(
+                    "Gateway sign-in required or unavailable. Complete gateway sign-in and retry fetching the model list",
+                ));
+            }
+        }
         self.list_models(params)
             .await
             .map(|response| Some(response.into()))

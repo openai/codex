@@ -1752,6 +1752,7 @@ impl CodexClient {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
                 capabilities: Some(InitializeCapabilities {
+                    explicit_gateway_oauth: false,
                     experimental_api,
                     request_attestation: false,
                     opt_out_notification_methods: Some(

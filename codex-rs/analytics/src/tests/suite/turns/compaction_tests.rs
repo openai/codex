@@ -139,6 +139,7 @@ async fn compaction_event_ingests_custom_fact() {
                         version: "1.0.0".to_string(),
                     },
                     capabilities: Some(InitializeCapabilities {
+                        explicit_gateway_oauth: false,
                         experimental_api: false,
                         request_attestation: false,
                         opt_out_notification_methods: None,

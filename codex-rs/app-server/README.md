@@ -330,3 +330,65 @@ compatibility but is not emitted. Non-Windows hosts report `notConfigured`.
 MXC uses the standard `command/exec` streaming and process-control path, including
 ConPTY when `tty` is enabled. The buffered legacy Windows sandbox restrictions on
 process control and custom output caps do not apply to MXC.
+
+### Gateway OAuth sign-in
+
+Providers configured with `gateway_oauth` require a secondary OAuth credential in
+addition to their primary authentication. Clients with a gateway sign-in UI set
+`initialize.capabilities.explicitGatewayOauth: true`, complete initialization, and
+successfully call `account/gatewayOAuth/read` before sending authenticated requests,
+including startup `model/list` and inference requests. Repeat this probe on each
+new connection. A successful `initialize` alone does not confirm support: older
+servers can ignore the unknown capability and retain automatic browser login.
+
+Support for `account/gatewayOAuth/read` and `explicitGatewayOauth` is introduced
+together, so a successful read confirms support even when `required` is `false`
+or `status` is `notReady`. The returned status determines whether sign-in is needed;
+it is separate from the capability check. If the probe fails because the method is
+unsupported, require a server upgrade. Other errors and timeouts also leave
+authenticated requests blocked until a probe succeeds; do not silently fall back
+to automatic login.
+
+With explicit login enabled, app-server refreshes existing credentials, but only the
+`account/gatewayOAuth/login` RPC starts browser authorization. Requests needing
+sign-in fail promptly so the client can offer that flow.
+
+Clients that omit the capability or set it to `false`, including the TUI, retain
+automatic browser authorization after initialization. Startup credential reads
+cannot open a browser before initialization. Explicit opt-in is shared by gateway
+managers using the same home and network configuration within the process and
+cannot be undone by a later connection that omits the capability.
+
+- `account/gatewayOAuth/read` returns the current effective `providerId`,
+  `providerName`, `required`, `status`, and `error`. `required` indicates that this
+  provider uses gateway OAuth, including when already signed in. This operation
+  does not refresh tokens or open a browser; `status` is null for other providers.
+  `notReady` means credentials are not ready. `succeeded` means saved credentials
+  are locally usable, not that a gateway request has been verified. Reads observe
+  usable replacement credentials saved by another process sharing the same home.
+- `account/gatewayOAuth/login` starts authorization and returns `{}` after
+  the credential has been saved. Providers requiring OpenAI authentication need a
+  primary account first. A second login request fails while a login is active.
+  The initiating connection receives a `started` notification with `authUrl`; the
+  client must open that URL in a browser that can reach the server callback port.
+  Other status notifications set `authUrl` to null. Login is rejected if the
+  initiating connection opted out of `account/gatewayOAuth/changed` notifications.
+- `account/gatewayOAuth/cancel` cancels the calling connection's login and returns
+  `{}` after the active login releases its slot, so the client can immediately
+  start another login. Closing that connection also cancels its login and releases
+  the callback listener. Cancellation makes the pending login request fail.
+- `account/gatewayOAuth/changed` reports `notReady`, `started`, `succeeded`, or
+  `failed`, with an optional `error`. Notifications apply to the current effective
+  gateway configuration. Clients can read readiness when connecting and after
+  changing configuration. Notifications follow the standard per-connection
+  `optOutNotificationMethods` setting.
+  These payloads never contain credentials.
+
+Read, login, and cancel take no params. Read and login use the app's current
+provider, reloading configuration and returning an error if it cannot be loaded.
+Status notifications include `providerId`. During browser sign-in, inference
+requests fail promptly and can be retried when sign-in succeeds.
+
+`model/list` also checks gateway authentication before returning cached models.
+If authentication fails after the provider configuration changes, it asks the client
+to restart Codex so the retained catalog and gateway sign-in use the same provider.

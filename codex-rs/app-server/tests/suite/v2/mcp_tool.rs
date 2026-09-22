@@ -259,6 +259,7 @@ async fn mcp_server_tool_call_forwards_only_server_extensions() -> Result<()> {
             version: "0.1.0".to_string(),
         },
         Some(InitializeCapabilities {
+            explicit_gateway_oauth: false,
             experimental_api: true,
             request_attestation: false,
             mcp_server_openai_form_elicitation: true,
@@ -354,6 +355,7 @@ async fn model_mcp_tool_call_uses_session_client_extensions() -> Result<()> {
             version: "0.1.0".to_string(),
         },
         Some(InitializeCapabilities {
+            explicit_gateway_oauth: false,
             experimental_api: true,
             request_attestation: false,
             mcp_server_openai_form_elicitation: true,

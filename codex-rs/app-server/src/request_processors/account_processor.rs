@@ -14,6 +14,7 @@ use codex_login::login_with_bedrock_access_keys;
 use codex_model_provider::is_supported_amazon_bedrock_region;
 
 mod bedrock_setup;
+mod gateway_oauth;
 mod rate_limit_resets;
 mod workspace_routing;
 
@@ -96,6 +97,9 @@ pub(crate) struct AccountRequestProcessor {
     workspace_routing: Arc<Mutex<Option<workspace_routing::CachedWorkspaceRouting>>>,
     workspace_routing_fetches: Arc<Mutex<workspace_routing::WorkspaceRoutingFetches>>,
     workspace_routing_shutdown: CancellationToken,
+    gateway_login: Arc<std::sync::Mutex<Option<gateway_oauth::ActiveGatewayLogin>>>,
+    gateway_client: Arc<std::sync::Mutex<Option<Arc<codex_login::GatewayAuthManager>>>>,
+    _gateway_notifications: Arc<tokio_util::task::AbortOnDropHandle<()>>,
 }
 
 impl AccountRequestProcessor {
@@ -106,13 +110,21 @@ impl AccountRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
     ) -> Arc<Self> {
+        let gateway_notifications = crate::gateway_oauth_notifications::spawn(
+            Arc::clone(&auth_manager),
+            config_manager.clone(),
+            Arc::clone(&outgoing),
+        );
         let processor = Arc::new(Self {
+            _gateway_notifications: Arc::new(gateway_notifications),
             auth_manager,
             thread_manager,
             outgoing,
             config,
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
+            gateway_login: Arc::new(std::sync::Mutex::new(/*t*/ None)),
+            gateway_client: Arc::new(std::sync::Mutex::new(/*t*/ None)),
             workspace_routing: Arc::new(Mutex::new(None)),
             workspace_routing_fetches: Arc::new(Mutex::new(HashMap::new())),
             workspace_routing_shutdown: CancellationToken::new(),
@@ -197,6 +209,7 @@ impl AccountRequestProcessor {
     }
 
     pub(crate) async fn cancel_active_login(&self) {
+        self.cancel_gateway_login();
         let mut guard = self.active_login.lock().await;
         if let Some(active_login) = guard.take() {
             drop(active_login);
@@ -954,13 +967,7 @@ impl AccountRequestProcessor {
         }
         let config = self.load_latest_config().await;
 
-        // Cancel any active login attempt.
-        {
-            let mut guard = self.active_login.lock().await;
-            if let Some(active) = guard.take() {
-                drop(active);
-            }
-        }
+        self.cancel_active_login().await;
 
         match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}
