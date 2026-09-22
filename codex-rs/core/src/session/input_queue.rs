@@ -333,7 +333,7 @@ impl InputQueue {
                 Some(active_turn) => {
                     let turn_state = active_turn.turn_state.lock().await;
                     (
-                        !turn_state.pending_input.items.is_empty(),
+                        !turn_state.pending_input.is_empty(),
                         turn_state.accepts_mailbox_delivery_for_current_turn(),
                     )
                 }
@@ -351,6 +351,10 @@ impl InputQueue {
 }
 
 impl TurnInputQueue {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     fn has_pending_input(&self) -> bool {
         self.items.iter().any(|input| {
             matches!(

@@ -428,6 +428,11 @@ pub(super) async fn submission_loop(
                     interrupt(&sess).await;
                     false
                 }
+                Op::InterruptIfNoPendingInput { turn_id, reply } => {
+                    sess.interrupt_turn_if_no_pending_input(&turn_id, reply)
+                        .await;
+                    false
+                }
                 Op::CleanBackgroundTerminals => {
                     clean_background_terminals(&sess).await;
                     false
