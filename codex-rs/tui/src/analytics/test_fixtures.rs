@@ -221,6 +221,7 @@ pub(super) fn view(kind: super::models::AccountKind) -> super::AnalyticsView {
 /// Populate explicit report state after a test chooses its account, period, and grouping.
 pub(super) fn seed_reports(view: &mut super::AnalyticsView) {
     use super::data::Load;
+    view.clock_format = crate::clock_format::ClockFormat::TwentyFourHour;
     if view.business() {
         view.chats = Load::Ready(chats());
     }

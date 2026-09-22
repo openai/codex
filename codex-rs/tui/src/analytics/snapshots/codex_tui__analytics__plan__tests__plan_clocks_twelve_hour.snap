@@ -1,0 +1,15 @@
+---
+source: tui/src/analytics/plan_tests.rs
+expression: rendered
+---
+› 5-hour limits
+
+› Sep 2 10:00 AM – Sep 2 3:00 PM *                                          125%
+
+  Weekly limits
+
+› Sep 1 12:00 AM – Sep 8 12:00 AM *                                Not available
+Some periods aren't available yet
+Usage as of Sep 2 12:00 PM UTC · * current at last update
+Available since Sep 1 12:00 AM UTC
+Amounts and period boundaries are approximate; recent activity may be delayed

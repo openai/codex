@@ -378,8 +378,12 @@ impl ChatWidget {
                     .limit_name
                     .clone()
                     .unwrap_or_else(|| limit_id.clone());
-                let display =
-                    rate_limit_snapshot_display_for_limit(&snapshot, limit_label, Local::now());
+                let display = rate_limit_snapshot_display_for_limit(
+                    &snapshot,
+                    limit_label,
+                    Local::now(),
+                    self.clock_format,
+                );
                 self.rate_limit_snapshots_by_limit_id
                     .insert(limit_id, display);
             }

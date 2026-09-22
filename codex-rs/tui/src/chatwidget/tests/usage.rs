@@ -98,10 +98,10 @@ fn reset_credit_options_use_generic_copy_when_backend_copy_is_missing() {
     credit.reset_type = RateLimitResetType::Unknown;
 
     assert_eq!(
-        reset_credit_options(&detailed_reset_credits(
-            /*available_count*/ 1,
-            vec![credit],
-        )),
+        reset_credit_options(
+            &detailed_reset_credits(/*available_count*/ 1, vec![credit],),
+            crate::clock_format::ClockFormat::TwentyFourHour
+        ),
         vec![ResetCreditOption {
             credit_id: Some("future-credit".to_string()),
             name: "Full reset".to_string(),
@@ -416,6 +416,7 @@ async fn rate_limit_reset_popup_states_snapshot() {
 #[tokio::test]
 async fn rate_limit_reset_picker_wraps_expiry_details_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.clock_format = crate::clock_format::ClockFormat::TwelveHour;
     let request_id = chat.show_rate_limit_reset_loading_popup();
     let expiry = expiry_timestamp(/*day*/ 18, /*hour*/ 9, /*minute*/ 39);
     assert!(chat.finish_rate_limit_reset_credits_refresh(

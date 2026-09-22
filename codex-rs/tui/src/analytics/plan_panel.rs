@@ -109,8 +109,8 @@ impl AnalyticsView {
                     let label = format!(
                         "{} {} – {}{}",
                         if selected { "›" } else { " " },
-                        period.start.format("%b %-d %H:%M"),
-                        period.end.format("%b %-d %H:%M"),
+                        period.start.format(self.clock_format.date_time_format()),
+                        period.end.format(self.clock_format.date_time_format()),
                         if period.start <= report.as_of && period.end > report.as_of {
                             " *"
                         } else {
@@ -227,16 +227,19 @@ impl AnalyticsView {
             lines.push(
                 format!(
                     "Usage as of {} UTC · * current at last update",
-                    as_of.format("%b %-d %H:%M")
+                    as_of.format(self.clock_format.date_time_format())
                 )
                 .dim()
                 .into(),
             );
             if let Some(start) = coverage_start {
                 lines.push(
-                    format!("Available since {} UTC", start.format("%b %-d %H:%M"))
-                        .dim()
-                        .into(),
+                    format!(
+                        "Available since {} UTC",
+                        start.format(self.clock_format.date_time_format())
+                    )
+                    .dim()
+                    .into(),
                 );
             }
             if *approximate {

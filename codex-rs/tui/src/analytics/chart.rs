@@ -336,9 +336,12 @@ impl AnalyticsView {
                 .and_then(|value| chrono::DateTime::from_timestamp(value, /*nsecs*/ 0))
         {
             lines.push(
-                format!("Updated {} UTC", updated.format("%b %-d %H:%M"))
-                    .set_style(secondary_style())
-                    .into(),
+                format!(
+                    "Updated {} UTC",
+                    updated.format(self.clock_format.date_time_format())
+                )
+                .set_style(secondary_style())
+                .into(),
             );
         }
         if side_by_side {

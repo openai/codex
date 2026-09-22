@@ -165,7 +165,7 @@ impl ChatWidget {
         reset_credits: &RateLimitResetCreditsSummary,
     ) -> SelectionViewParams {
         let confirmation_gate = Arc::new(AtomicBool::new(true));
-        let mut items = reset_credit_options(reset_credits)
+        let mut items = reset_credit_options(reset_credits, self.clock_format)
             .into_iter()
             .map(|option| {
                 let confirmation_gate = confirmation_gate.clone();

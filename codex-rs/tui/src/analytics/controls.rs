@@ -277,7 +277,12 @@ impl AnalyticsView {
             .and_then(|report| report.updated_at)
             .and_then(|value| chrono::DateTime::from_timestamp(value, /*nsecs*/ 0));
         let metadata = updated
-            .map(|updated| format!("Updated · {} UTC", updated.format("%b %-d %H:%M")))
+            .map(|updated| {
+                format!(
+                    "Updated · {} UTC",
+                    updated.format(self.clock_format.date_time_format())
+                )
+            })
             .unwrap_or_default();
         truncate(metadata.set_style(secondary_style()).into(), width).render(
             Rect::new(area.x, area.bottom() - 1, area.width, /*height*/ 1),

@@ -38,7 +38,7 @@ fn notice_details_fit_without_truncating_the_warning() {
                 primary: Some(primary),
                 ..Default::default()
             },
-            &[94, 93, 58, 57, 38, 37, 12, 11, 0][..],
+            &[98, 97, 58, 57, 38, 37, 12, 11, 0][..],
         ),
         (
             "weekly_usage_notice_widths",
@@ -50,12 +50,12 @@ fn notice_details_fit_without_truncating_the_warning() {
                 }),
                 ..Default::default()
             },
-            &[132, 131, 76, 75, 56, 55, 16, 15][..],
+            &[138, 137, 76, 75, 56, 55, 16, 15][..],
         ),
     ] {
         let mut lines = Vec::new();
         for &width in widths {
-            let line = state.line(width, now);
+            let line = state.line(width, now, ClockFormat::TwelveHour);
             assert!(
                 line.as_ref()
                     .is_none_or(|line| line.width() <= usize::from(width))
@@ -89,7 +89,7 @@ fn notice_shows_only_valid_future_reset_times() {
     ] {
         state.primary.as_mut().unwrap().resets_at = reset;
         assert_eq!(
-            state.line(/*width*/ 160, now),
+            state.line(/*width*/ 160, now, ClockFormat::TwentyFourHour),
             Some(
                 Line::from(format!("⚠ 5h limit: 8% left{expected} · /status"))
                     .style(crate::style::warning_notice_style().bold())
@@ -114,7 +114,11 @@ fn notice_emphasis_tracks_utilization_without_claiming_a_hard_stop() {
         };
         let style = crate::style::warning_notice_style();
         assert_eq!(
-            state.line(/*width*/ 80, notice_time()),
+            state.line(
+                /*width*/ 80,
+                notice_time(),
+                ClockFormat::TwentyFourHour
+            ),
             Some(
                 Line::from(format!("⚠ 5h limit: {remaining} left · /status")).style(if bold {
                     style.bold()

@@ -2,8 +2,8 @@
 source: tui/src/chatwidget/usage_notice_tests.rs
 expression: "lines.join(\"\\n\")"
 ---
-94 columns: ⚠ 5h limit: 8% left · resets at 13:00 · /status
-93 columns: ⚠ 5h limit: 8% left · /status
+98 columns: ⚠ 5h limit: 8% left · resets at 1:00 PM · /status
+97 columns: ⚠ 5h limit: 8% left · /status
 58 columns: ⚠ 5h limit: 8% left · /status
 57 columns: ⚠ 5h limit: 8% left
 38 columns: ⚠ 5h limit: 8% left

@@ -1,3 +1,4 @@
+use crate::clock_format::ClockFormat;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
@@ -14,6 +15,7 @@ pub(super) struct ResetCreditOption {
 
 pub(super) fn reset_credit_options(
     summary: &RateLimitResetCreditsSummary,
+    clock_format: ClockFormat,
 ) -> Vec<ResetCreditOption> {
     let available_count = summary.available_count.max(0);
     let detail_limit = usize::try_from(available_count).unwrap_or(usize::MAX);
@@ -33,11 +35,11 @@ pub(super) fn reset_credit_options(
             let expiration = match credit.expires_at {
                 Some(expires_at) => DateTime::<Utc>::from_timestamp(expires_at, 0)
                     .map(|expires_at| {
+                        let expires_at = expires_at.with_timezone(&Local);
                         format!(
-                            "Expires {}",
-                            expires_at
-                                .with_timezone(&Local)
-                                .format("%H:%M on %-d %b %Y")
+                            "Expires {} on {}",
+                            expires_at.format(clock_format.time_format()),
+                            expires_at.format("%-d %b %Y")
                         )
                     })
                     .unwrap_or_else(|| "Expiration unavailable".to_string()),

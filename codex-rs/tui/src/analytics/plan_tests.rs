@@ -343,3 +343,20 @@ fn invalid_history_returns_safe_errors() {
         assert!(!error.contains("private wire value"));
     }
 }
+
+#[test]
+fn plan_clocks_follow_preference_and_keep_utc() {
+    let mut view = fixture::view(AccountKind::Consumer);
+    view.clock_format = crate::clock_format::ClockFormat::TwelveHour;
+    view.plan.enabled = true;
+    view.section = Section::Plan;
+    view.plan.report = Load::Ready(Report::parse(response()).unwrap().unwrap());
+    let rendered = view
+        .plan_lines(/*width*/ 80)
+        .0
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!("plan_clocks_twelve_hour", rendered);
+}

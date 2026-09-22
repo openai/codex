@@ -1,5 +1,5 @@
 //! Detects the TUI host's clock preference once. Unknown preferences preserve 12-hour output;
-//! detection never changes the process locale or runs while rendering a history cell.
+//! detection never changes the process locale. Views capture the preference for consistent rendering.
 
 use std::sync::OnceLock;
 
@@ -13,6 +13,13 @@ impl ClockFormat {
     pub(crate) fn system() -> Self {
         static FORMAT: OnceLock<ClockFormat> = OnceLock::new();
         *FORMAT.get_or_init(|| detect().unwrap_or(Self::TwelveHour))
+    }
+
+    pub(crate) fn date_time_format(self) -> &'static str {
+        match self {
+            Self::TwelveHour => "%b %-d %-I:%M %p",
+            Self::TwentyFourHour => "%b %-d %H:%M",
+        }
     }
 
     pub(crate) fn time_format(self) -> &'static str {

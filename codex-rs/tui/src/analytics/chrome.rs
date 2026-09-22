@@ -160,7 +160,7 @@ impl AnalyticsView {
         {
             controls.push(format!(
                 "Report updated {} UTC",
-                updated.format("%b %-d %H:%M")
+                updated.format(self.clock_format.date_time_format())
             ));
         }
         controls

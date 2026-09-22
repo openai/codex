@@ -7,6 +7,7 @@
 //! capture timestamp so stale detection and reset labels remain coherent for a given draw cycle.
 use crate::chatwidget::fallback_limit_label;
 use crate::chatwidget::limit_label_for_window;
+use crate::clock_format::ClockFormat;
 use crate::text_formatting::capitalize_first;
 
 use super::helpers::format_reset_timestamp;
@@ -76,12 +77,17 @@ pub(crate) struct RateLimitWindowDisplay {
 }
 
 impl RateLimitWindowDisplay {
-    fn from_window(window: &RateLimitWindow, captured_at: DateTime<Local>) -> Self {
+    fn from_window(
+        window: &RateLimitWindow,
+        captured_at: DateTime<Local>,
+        clock_format: ClockFormat,
+    ) -> Self {
         let resets_at_utc = window
             .resets_at
             .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
             .map(|dt| dt.with_timezone(&Local));
-        let resets_at = resets_at_utc.map(|dt| format_reset_timestamp(dt, captured_at));
+        let resets_at =
+            resets_at_utc.map(|dt| format_reset_timestamp(dt, captured_at, clock_format));
 
         Self {
             used_percent: f64::from(window.used_percent),
@@ -140,13 +146,19 @@ pub(crate) fn rate_limit_snapshot_display(
     snapshot: &RateLimitSnapshot,
     captured_at: DateTime<Local>,
 ) -> RateLimitSnapshotDisplay {
-    rate_limit_snapshot_display_for_limit(snapshot, "codex".to_string(), captured_at)
+    rate_limit_snapshot_display_for_limit(
+        snapshot,
+        "codex".to_string(),
+        captured_at,
+        ClockFormat::TwentyFourHour,
+    )
 }
 
 pub(crate) fn rate_limit_snapshot_display_for_limit(
     snapshot: &RateLimitSnapshot,
     limit_name: String,
     captured_at: DateTime<Local>,
+    clock_format: ClockFormat,
 ) -> RateLimitSnapshotDisplay {
     RateLimitSnapshotDisplay {
         normal_model_slug: snapshot.normal_model_slug.clone(),
@@ -155,16 +167,15 @@ pub(crate) fn rate_limit_snapshot_display_for_limit(
         primary: snapshot
             .primary
             .as_ref()
-            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
+            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at, clock_format)),
         secondary: snapshot
             .secondary
             .as_ref()
-            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at)),
+            .map(|window| RateLimitWindowDisplay::from_window(window, captured_at, clock_format)),
         credits: snapshot.credits.as_ref().map(CreditsSnapshotDisplay::from),
-        individual_limit: snapshot
-            .individual_limit
-            .as_ref()
-            .and_then(|limit| SpendControlLimitSnapshotDisplay::from_limit(limit, captured_at)),
+        individual_limit: snapshot.individual_limit.as_ref().and_then(|limit| {
+            SpendControlLimitSnapshotDisplay::from_limit(limit, captured_at, clock_format)
+        }),
     }
 }
 
@@ -182,14 +193,16 @@ impl SpendControlLimitSnapshotDisplay {
     fn from_limit(
         value: &CoreSpendControlLimitSnapshot,
         captured_at: DateTime<Local>,
+        clock_format: ClockFormat,
     ) -> Option<Self> {
         Some(Self {
             captured_at,
             percent_remaining: f64::from(value.remaining_percent.clamp(0, 100)),
             used: format_credit_amount(&value.used)?,
             limit: format_credit_amount(&value.limit)?,
-            resets_at: DateTime::<Utc>::from_timestamp(value.resets_at, 0)
-                .map(|dt| format_reset_timestamp(dt.with_timezone(&Local), captured_at)),
+            resets_at: DateTime::<Utc>::from_timestamp(value.resets_at, 0).map(|dt| {
+                format_reset_timestamp(dt.with_timezone(&Local), captured_at, clock_format)
+            }),
         })
     }
 }

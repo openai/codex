@@ -29,10 +29,25 @@ fn banner_response(
 async fn backend_banner_presentation_and_cta_do_not_imply_recovery() {
     for presentation in [None, Some("inline"), Some("dismissible")] {
         let (mut chat, mut rx, _ops) = make_chatwidget_manual(Some("test-model-a")).await;
-        let response = banner_response(
+        let mut response = banner_response(
             presentation,
             json!([{"action":"notify_owner","label":"Notify owner"}]),
         );
+        if presentation == Some("inline") {
+            use chrono::Timelike;
+            chat.clock_format = crate::clock_format::ClockFormat::TwelveHour;
+            let banner = response.rate_limit_upsell.as_mut().unwrap();
+            banner["description"] =
+                json!("Your usage resets at {time}. Ask your owner for credits.");
+            banner["reset_at"] = json!(
+                chrono::Local::now()
+                    .with_hour(17)
+                    .unwrap()
+                    .with_minute(30)
+                    .unwrap()
+                    .timestamp()
+            );
+        }
         chat.update_backend_banner(&response);
         let initial = render_bottom_popup(&chat, /*width*/ 70);
         assert!(initial.contains("Selected model usage exhausted"));

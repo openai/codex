@@ -58,6 +58,7 @@ use sections::SectionState;
 use sections::SectionStates;
 
 pub(crate) struct AnalyticsView {
+    clock_format: crate::clock_format::ClockFormat,
     model_names: std::collections::HashMap<String, String>,
     sections: SectionStates,
     chats: Load<chats::Chats>,
@@ -98,6 +99,7 @@ pub(crate) struct AnalyticsView {
 impl AnalyticsView {
     pub(crate) fn new(keymap: ListKeymap) -> Self {
         let mut view = Self {
+            clock_format: crate::clock_format::ClockFormat::system(),
             model_names: std::collections::HashMap::new(),
             sections: SectionStates(std::array::from_fn(|_| SectionState::default())),
             chats: Load::Unavailable,
