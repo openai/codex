@@ -310,6 +310,7 @@ Routing compares origins by scheme, host, and effective port, ignoring API paths
 configured base URL.
 
 Responses HTTP (including compaction) and WebSockets wait for discovery and preserve API paths.
+Guardian v2 classifier HTTP and pooled WebSockets use the same routing.
 HTTP redirects are rejected. `us` and `us_cr` set `X-OpenAI-Account-Routing-Override`;
 `NO_CONSTRAINT` omits it.
 

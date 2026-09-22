@@ -13,11 +13,11 @@ pub const ACCOUNT_ROUTING_HEADER: &str = "x-openai-account-routing-override";
 
 /// Routing scope for one session's provider. Once routed, it cannot become
 /// independent merely because the account owner's bootstrap configuration changes.
-/// Lookups and the first successful routing transition are serialized per session.
-#[derive(Debug)]
+/// Clones serialize discovery and share the first successful routing transition.
+#[derive(Clone, Debug)]
 pub struct WorkspaceRoutingContext {
     pub(crate) chatgpt_base_url: String,
-    pub(crate) previously_routed: Mutex<bool>,
+    pub(crate) previously_routed: Arc<Mutex<bool>>,
     pub(crate) session: Option<Arc<WorkspaceRoutingSession>>,
 }
 
@@ -25,7 +25,7 @@ impl WorkspaceRoutingContext {
     pub fn new(chatgpt_base_url: String) -> Self {
         Self {
             chatgpt_base_url,
-            previously_routed: Mutex::new(/*t*/ false),
+            previously_routed: Arc::new(Mutex::new(/*t*/ false)),
             session: None,
         }
     }

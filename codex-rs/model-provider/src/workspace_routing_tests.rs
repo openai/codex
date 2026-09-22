@@ -67,7 +67,8 @@ async fn concurrent_discovery_cannot_forget_established_routing() {
         Some(auth),
     );
     let mut first = provider.responses_api_provider(&context);
-    let mut second = provider.responses_api_provider(&context);
+    let classifier_context = context.clone();
+    let mut second = provider.responses_api_provider(&classifier_context);
     let early_second = std::future::poll_fn(|cx| {
         assert!(first.as_mut().poll(cx).is_pending());
         std::task::Poll::Ready(second.as_mut().poll(cx))

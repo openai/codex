@@ -6,6 +6,10 @@ use super::super::tests::sampler_config;
 use super::*;
 use anyhow::Result;
 use codex_login::AuthManager;
+use codex_login::WorkspaceRouting;
+use codex_login::WorkspaceRoutingRequest;
+use codex_login::WorkspaceRoutingResolver;
+use codex_model_provider::ModelProviderFuture;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use core_test_support::responses;
@@ -367,5 +371,92 @@ async fn supersession_closes_http_before_headers_and_while_draining_the_body() -
             Some(1)
         );
     }
+    Ok(())
+}
+
+struct RoutingPolicy(Mutex<Option<WorkspaceRouting>>);
+
+impl WorkspaceRoutingResolver for RoutingPolicy {
+    fn resolve(
+        &self,
+        _request: WorkspaceRoutingRequest,
+    ) -> ModelProviderFuture<'_, std::io::Result<Option<WorkspaceRouting>>> {
+        Box::pin(async { Ok(self.0.lock().unwrap().clone()) })
+    }
+}
+
+#[tokio::test]
+async fn http_cache_preserves_no_constraint_redirect_policy_and_configured_headers() -> Result<()> {
+    let base_url = "https://localhost:9/backend-api/codex".to_owned();
+    let auth =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let resolver = Arc::new(RoutingPolicy(Mutex::new(None)));
+    let routing_owner: Arc<dyn WorkspaceRoutingResolver> = resolver.clone();
+    auth.set_workspace_routing_resolver(Arc::downgrade(&routing_owner));
+    let mut config = sampler_config(base_url.clone());
+    config.provider = create_model_provider(
+        ModelProviderInfo::create_openai_provider(Some(base_url)),
+        Some(auth),
+    );
+    let pool = ConnectionPool::new(Arc::new(config));
+    // Exercise HTTP leases without starting a background WebSocket opener.
+    *pool.retry_after.lock().unwrap() = Some(Instant::now() + CONNECT_COOLDOWN);
+    let mut previous: Option<Arc<HttpTransport>> = None;
+    for (routing, expected_policy) in [
+        (None, ClientRedirectPolicy::Default),
+        (Some("NO_CONSTRAINT"), ClientRedirectPolicy::Reject),
+        (Some("NO_CONSTRAINT"), ClientRedirectPolicy::Reject),
+        (None, ClientRedirectPolicy::Default),
+    ] {
+        *resolver.0.lock().unwrap() = routing.map(|account_routing_override| WorkspaceRouting {
+            chatgpt_account_id: "account_id".into(),
+            backend_origin: "https://localhost:9".into(),
+            account_routing_override: account_routing_override.into(),
+        });
+        let setup = pool.client_setup().await?;
+        assert!(!setup.provider.headers.contains_key(ACCOUNT_ROUTING_HEADER));
+        let lease = pool.lease().await?;
+        assert!(matches!(lease.connection, Connection::Http(_)));
+        let cached = Arc::clone(pool.http_transport.lock().unwrap().as_ref().unwrap());
+        assert_eq!(
+            (cached.url.as_str(), cached.redirect_policy),
+            (
+                "https://localhost:9/backend-api/codex/responses",
+                expected_policy
+            ),
+        );
+        if let Some(previous) = previous {
+            assert_eq!(
+                Arc::ptr_eq(&previous, &cached),
+                previous.redirect_policy == expected_policy,
+            );
+        }
+        previous = Some(cached);
+    }
+
+    let mut config = sampler_config("https://localhost:9/v1".into());
+    let mut info = config.provider.info().clone();
+    info.http_headers = Some(std::collections::HashMap::from([(
+        ACCOUNT_ROUTING_HEADER.into(),
+        "us".into(),
+    )]));
+    config.provider = create_model_provider(info, config.provider.auth_manager());
+    let pool = ConnectionPool::new(Arc::new(config));
+    *pool.retry_after.lock().unwrap() = Some(Instant::now() + CONNECT_COOLDOWN);
+    assert_eq!(
+        pool.client_setup().await?.redirect_policy,
+        ClientRedirectPolicy::Default
+    );
+    let lease = pool.lease().await?;
+    assert!(matches!(lease.connection, Connection::Http(_)));
+    assert_eq!(
+        pool.http_transport
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .redirect_policy,
+        ClientRedirectPolicy::Reject,
+    );
     Ok(())
 }
