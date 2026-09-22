@@ -30,6 +30,8 @@ use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
+use futures::StreamExt;
+use futures::stream;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
 
@@ -187,7 +189,8 @@ impl LocalAgentControl {
         config: &Config,
         root_thread_id: ThreadId,
     ) {
-        self.runtime.registry.register_root_thread(root_thread_id);
+        let registry = &self.runtime.registry;
+        registry.register_root_thread(root_thread_id);
 
         let Ok(state) = self.upgrade() else {
             return;
@@ -209,23 +212,32 @@ impl LocalAgentControl {
             }
         };
 
-        for thread_id in descendant_ids {
-            if self
-                .runtime
-                .registry
-                .agent_metadata_for_thread(thread_id)
-                .is_some()
-            {
+        // Overlap storage reads, but reserve paths and nicknames in graph order.
+        let mut stored_threads = stream::iter(
+            descendant_ids
+                .into_iter()
+                .filter(|thread_id| registry.agent_metadata_for_thread(*thread_id).is_none())
+                .map(|thread_id| {
+                    let state = &state;
+                    async move {
+                        let stored_thread = state
+                            .read_stored_thread(ReadThreadParams {
+                                thread_id,
+                                include_archived: true,
+                                include_history: false,
+                            })
+                            .await;
+                        (thread_id, stored_thread)
+                    }
+                }),
+        )
+        .buffered(/*n*/ 8);
+
+        while let Some((thread_id, stored_thread)) = stored_threads.next().await {
+            if registry.agent_metadata_for_thread(thread_id).is_some() {
                 continue;
             }
-            let restore_result = async {
-                let stored_thread = state
-                    .read_stored_thread(ReadThreadParams {
-                        thread_id,
-                        include_archived: true,
-                        include_history: false,
-                    })
-                    .await?;
+            let restore_result = stored_thread.and_then(|stored_thread| {
                 let stored_agent_path = stored_thread
                     .agent_path
                     .as_deref()
@@ -234,10 +246,7 @@ impl LocalAgentControl {
                     .map_err(|err| {
                         CodexErr::InvalidRequest(format!("invalid stored agent path: {err}"))
                     })?;
-                let mut reservation = self
-                    .runtime
-                    .registry
-                    .reserve_spawn_slot(/*max_threads*/ None)?;
+                let mut reservation = registry.reserve_spawn_slot(/*max_threads*/ None)?;
                 let mut metadata = self.prepare_agent_metadata(
                     &mut reservation,
                     config,
@@ -251,9 +260,8 @@ impl LocalAgentControl {
                 )?;
                 metadata.agent_id = Some(thread_id);
                 reservation.commit(metadata);
-                Ok::<(), CodexErr>(())
-            }
-            .await;
+                Ok(())
+            });
             if let Err(err) = restore_result {
                 warn!("failed to restore V2 agent metadata for {thread_id}: {err}");
             }
