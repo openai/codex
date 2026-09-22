@@ -64,6 +64,7 @@ impl App {
         } else if matches!(control, VoiceControl::Mute) {
             self.chat_widget.toggle_realtime_microphone();
         }
+        self.repaint_agents_overview();
     }
 
     pub(super) fn retire_background_voice(&mut self) {

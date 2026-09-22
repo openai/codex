@@ -1747,6 +1747,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn reset_realtime_conversation(&mut self) -> Option<ThreadId> {
+        if self.realtime_conversation_is_running() {
+            self.app_event_tx
+                .send(AppEvent::RealtimeConversationStateChanged);
+        }
         self.finish_realtime_session_metrics();
         let should_refresh_terminal_title = self.realtime_conversation.phase
             != RealtimeConversationPhase::Inactive

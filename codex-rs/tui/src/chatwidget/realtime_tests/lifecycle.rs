@@ -151,9 +151,12 @@ async fn audio_failure_cancels_pending_voice_and_reports_the_device_error() {
     chat.on_realtime_error("speaker stream failed: device disconnected".to_string());
 
     commit_realtime_history_events(&mut chat, &mut events);
-    let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
-        panic!("voice should report the speaker failure");
-    };
+    let cell = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(cell),
+            _ => None,
+        })
+        .expect("voice should report the speaker failure");
     assert!(
         cell.display_lines(/*width*/ 80)
             .iter()

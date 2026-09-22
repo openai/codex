@@ -1927,6 +1927,9 @@ impl App {
                     self.background_voice_error = Some((thread_id, message));
                 }
             }
+            AppEvent::RealtimeConversationStateChanged => {
+                self.repaint_agents_overview();
+            }
             AppEvent::VoiceControl { thread_id, control } => {
                 if thread_id == self.chat_widget.thread_id() || self.voice_owner_thread_id().is_some() {
                     self.control_voice(control);

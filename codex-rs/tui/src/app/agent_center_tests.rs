@@ -52,7 +52,7 @@ async fn live_center_columns() {
         ),
         ("Failed task", ThreadStatus::SystemError, 3630),
     ];
-    let threads = fixtures
+    let mut threads = fixtures
         .iter()
         .enumerate()
         .map(|(index, (title, status, age))| {
@@ -66,6 +66,14 @@ async fn live_center_columns() {
             thread
         })
         .collect::<Vec<_>>();
+    let child = ThreadId::from_u128(/*value*/ 48);
+    threads.push(overview_thread(
+        child,
+        Some(ThreadId::from_u128(/*value*/ 43)),
+        "Child",
+        ThreadStatus::Idle,
+    ));
+    crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, child);
     let mut view = app.agents_overview_view(threads, Some(current));
     insta::assert_snapshot!(screen(&view, /*width*/ 160, /*height*/ 22));
     let mut selected_status_styles = Vec::new();
@@ -503,4 +511,45 @@ async fn backspace_edits_search_and_rename_without_deleting_tasks() {
         assert!(rx.try_recv().is_err());
         view.handle_key_event(KeyCode::Esc.into());
     }
+}
+
+#[tokio::test]
+async fn overview_clears_voice_badge_after_async_close() -> Result<()> {
+    let (mut app, mut events, _) = crate::app::tests::make_test_app_with_channels().await;
+    let owner = ThreadId::new();
+    crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, owner);
+    app.chat_widget.park_voice();
+    let (visible, _, _, _) = crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+    app.background_voice = Some(Box::new(std::mem::replace(&mut app.chat_widget, visible)));
+    app.primary_thread_id = Some(owner);
+    let thread = overview_thread(
+        owner,
+        /*parent_thread_id*/ None,
+        "Voice owner",
+        ThreadStatus::Idle,
+    );
+    app.agents_overview
+        .threads
+        .insert(owner, Some(thread.clone()));
+    let view = app.agents_overview_view(vec![thread], Some(owner));
+    app.agents_overview.visible_thread_ids = view.thread_ids();
+    app.chat_widget.show_bottom_pane_view(Box::new(view));
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 100).contains("  voice"));
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.deliver_background_voice_notification(
+        owner,
+        &ServerNotification::ThreadRealtimeClosed(
+            codex_app_server_protocol::ThreadRealtimeClosedNotification {
+                thread_id: owner.to_string(),
+                reason: Some("requested".into()),
+            },
+        ),
+    );
+    while let Ok(event) = events.try_recv() {
+        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+    }
+    assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 100).contains("  voice"));
+    server.shutdown().await?;
+    Ok(())
 }
