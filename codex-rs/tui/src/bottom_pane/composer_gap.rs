@@ -10,6 +10,8 @@ use crate::render::renderable::Renderable;
 
 #[derive(Default)]
 pub(crate) struct ComposerGap {
+    /// Visible text needs a separator after activity when the viewport has room for it.
+    pub(crate) needs_separator: bool,
     /// Filled during rendering; a fresh instance prevents reusing a hidden or clipped row.
     pub(crate) area: Cell<Rect>,
 }

@@ -47,29 +47,49 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
         app.transcript_view.jump_to_latest();
         let bottom = app.render_owned_transcript(&mut tui, size)?;
         let cursor = tui.terminal.last_known_cursor_pos;
+        if running {
+            let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+            insta::assert_snapshot!(
+                "running_without_composer_hint",
+                crate::chatwidget::tests::helpers::normalize_snapshot_paths(
+                    super::tests::buffer_text(buffer)
+                ),
+            );
+        }
         app.transcript_view
             .scroll(&app.transcript_cells, /*rows*/ -10);
         tui.screen_size_for_event(&TuiEvent::Resize(size))?;
-        assert_eq!(app.render_owned_transcript(&mut tui, size)?, bottom);
-        for height in [24, 12] {
+        app.render_owned_transcript(&mut tui, size)?;
+        assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
+        for height in [24, 9, 8, 12] {
             let resized = Size::new(width, height);
             tui.screen_size_for_event(&TuiEvent::Resize(resized))?;
-            let resized_bottom = app.render_owned_transcript(&mut tui, resized)?;
+            app.render_owned_transcript(&mut tui, resized)?;
             let resized_cursor = tui.terminal.last_known_cursor_pos;
             assert_eq!(
                 (
                     app.chat_widget.composer_text_with_pending(),
                     resized_cursor.x,
-                    resized_cursor.y - resized_bottom.y,
+                    resized.height - resized_cursor.y,
                     app.transcript_view.is_following(),
                 ),
                 (
                     "draft stays here".to_string(),
                     cursor.x,
-                    cursor.y - bottom.y,
+                    size.height - cursor.y,
                     false
                 )
             );
+            if running && height == 9 {
+                let buffer =
+                    crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+                insta::assert_snapshot!(
+                    "running_follow_control_short_terminal",
+                    crate::chatwidget::tests::helpers::normalize_snapshot_paths(
+                        super::tests::buffer_text(buffer)
+                    ),
+                );
+            }
         }
         let buffer = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
         if running {
@@ -121,6 +141,28 @@ async fn follow_control_click_preserves_draft_caret_and_composer_geometry() -> R
             ("draft stays here".to_string(), cursor)
         );
         assert!(app.chat_widget.queued_user_message_texts().is_empty());
+        if running {
+            app.transcript_view.show_copy_feedback(
+                &Ok(crate::clipboard_copy::CopyStatus::Confirmed),
+                /*characters*/ 24,
+            );
+            let mut snapshots = Vec::new();
+            for (width, height) in [(80, 12), (18, 14), (6, 18), (80, 6)] {
+                let size = Size::new(width, height);
+                tui.screen_size_for_event(&TuiEvent::Resize(size))?;
+                app.render_owned_transcript(&mut tui, size)?;
+                let buffer =
+                    crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+                snapshots.push(format!(
+                    "{width} columns, {height} rows\n{}",
+                    super::tests::buffer_text(buffer)
+                ));
+            }
+            insta::assert_snapshot!(
+                "running_copy_feedback_spacing",
+                crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join("\n\n")),
+            );
+        }
     }
     tui.set_owned_screen(/*owned*/ false)?;
     assert!(!app.handle_owned_transcript_event(

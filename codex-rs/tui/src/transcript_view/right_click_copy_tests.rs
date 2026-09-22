@@ -6,6 +6,7 @@ use crate::transcript_view::tests::cell;
 use crate::transcript_view::tests::render;
 use crate::transcript_view::tests::text;
 use pretty_assertions::assert_eq;
+use std::time::Instant;
 
 #[test]
 fn right_click_retains_selection_until_confirmed_and_preserves_reading_position() {
@@ -62,6 +63,7 @@ fn right_click_retains_selection_until_confirmed_and_preserves_reading_position(
             )),
             /*hint*/ None,
             &mut buffer,
+            Instant::now(),
         );
         frames.push(format!("{result:?}\n{}", text(&buffer)));
     }

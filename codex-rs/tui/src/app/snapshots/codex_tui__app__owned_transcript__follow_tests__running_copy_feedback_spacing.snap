@@ -1,0 +1,61 @@
+---
+source: tui/src/app/owned_transcript_follow_tests.rs
+expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
+---
+80 columns, 12 rows
+transcript row 37
+transcript row 38
+transcript row 39
+
+• Working (0s • esc to interrupt)
+
+                                              Copied 24 chars to host clipboard
+
+› draft stays here
+
+  GPT-5.6-Sol default · /tmp/project
+  tab to queue message
+
+18 columns, 14 rows
+transcript row 36
+transcript row 37
+transcript row 38
+transcript row 39
+
+• Working (0s • e…
+
+  Copied 24 chars
+
+› draft stays
+  here
+
+  GPT-5.6-Sol def…
+  tab to queue mes
+
+6 columns, 18 rows
+ript
+row 38
+transc
+ript
+row 39
+
+• Wor…
+
+
+› dra
+  ft
+  sta
+  ys
+  her
+  e
+
+  GPT…
+  tab
+
+80 columns, 6 rows
+• Working (0s • esc to interrupt)
+
+› draft stays here
+
+  GPT-5.6-Sol default · /tmp/project
+  tab to queue message
