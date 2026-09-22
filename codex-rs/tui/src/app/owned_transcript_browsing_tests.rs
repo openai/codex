@@ -375,12 +375,14 @@ async fn browsing_requires_fresh_escape_presses_and_ignores_confirmation_repeats
     )
     .await?;
     assert!(!app.backtrack.overlay_preview_active);
-    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::PageUp.into()))
-        .await?;
-    assert!(!app.backtrack.primed);
-    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
-        .await?;
-    assert!(!app.backtrack.overlay_preview_active);
+    for key in [KeyCode::PageUp, KeyCode::F(8)] {
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))
+            .await?;
+        assert!(!app.backtrack.primed);
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+            .await?;
+        assert!(!app.backtrack.overlay_preview_active);
+    }
     app.handle_tui_event(
         &mut tui,
         &mut server,
@@ -416,6 +418,33 @@ async fn browsing_requires_fresh_escape_presses_and_ignores_confirmation_repeats
         !std::iter::from_fn(|| events.try_recv().ok())
             .any(|event| matches!(event, AppEvent::RevertSessionForPromptEdit { .. }))
     );
+    for (binding, keys) in [
+        ("f8", vec![KeyCode::F(8)]),
+        ("f8 v", vec![KeyCode::F(8), KeyCode::Char('v')]),
+    ] {
+        app.keymap = RuntimeKeymap::from_config(&toml::from_str(&format!(
+            "[chat]\ntoggle_voice = '{binding}'"
+        ))?)
+        .expect("valid voice binding");
+        let thread_id = app.chat_widget.thread_id().unwrap();
+        crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, thread_id);
+        for key in keys {
+            app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))
+                .await?;
+        }
+        assert_eq!(
+            (
+                app.backtrack.overlay_preview_active,
+                app.chat_widget.realtime_conversation_is_running()
+            ),
+            (false, false)
+        );
+        for _ in 0..2 {
+            app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(KeyCode::Esc.into()))
+                .await?;
+        }
+        assert!(app.backtrack.overlay_preview_active);
+    }
     app.keymap = RuntimeKeymap::from_config(&toml::from_str(
         "[global]\nopen_external_editor = [\"f6 f7\"]",
     )?)

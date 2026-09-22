@@ -135,3 +135,34 @@ async fn startup_submission_does_not_confirm_merged_destination_text() {
     );
     assert_no_submit_op(&mut op_rx);
 }
+
+#[tokio::test]
+async fn voice_shortcut_cancels_startup_submission_before_app_dispatch() -> color_eyre::Result<()> {
+    let mut app = crate::app::test_support::make_test_app().await;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(
+        app.chat_widget.config_ref(),
+    ))
+    .await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.chat_widget.bottom_pane.insert_str("confirmed draft");
+    let mut draft = Some(app.chat_widget.bottom_pane.composer_draft_snapshot());
+    app.chat_widget
+        .bottom_pane
+        .set_composer_text(String::new(), Vec::new(), Vec::new());
+    app.chat_widget
+        .restore_startup_input_when_ready(&mut draft, &mut true);
+    assert!(app.chat_widget.input_queue.startup_submission.is_some());
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        crate::tui::TuiEvent::Key(KeyCode::F(8).into()),
+    )
+    .await?;
+    assert!(app.chat_widget.input_queue.startup_submission.is_none());
+    assert_eq!(
+        app.chat_widget.composer_text_with_pending(),
+        "confirmed draft"
+    );
+    server.shutdown().await?;
+    Ok(())
+}

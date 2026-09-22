@@ -796,6 +796,16 @@ async fn transcript_fixed_keys_take_precedence_over_pager_chord_prefixes() -> Re
         );
         app.reset_external_editor_state(&mut tui);
     }
+    for voice in ["f9", "f9 v"] {
+        app.keymap = RuntimeKeymap::from_config(&toml::from_str(&format!(
+            "[chat]\ntoggle_voice = '{voice}'\n[pager]\nclose_transcript = 'f9'"
+        ))?)
+        .unwrap();
+        app.open_transcript_overlay(&mut tui);
+        press(&mut app, &mut tui, &mut app_server, KeyCode::F(9).into()).await?;
+        assert!(!app.transcript_view.is_detailed());
+        assert!(!app.key_chord_matcher.is_pending());
+    }
     tui.set_owned_screen(/*owned*/ false)?;
     app_server.shutdown().await?;
     Ok(())
@@ -861,5 +871,27 @@ async fn selection_after_live_commit_uses_the_refreshed_frame() -> Result<()> {
     .await?;
     app.close_transcript_overlay(&mut tui);
     app_server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
+    let (mut app, mut rx, _op_rx) = super::make_test_app_with_channels().await;
+    let mut app_server = start_config_write_test_app_server(&app).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    for config in ["", "[chat]\ntoggle_voice = 'f8 v'"] {
+        app.keymap = RuntimeKeymap::from_config(&toml::from_str(config)?).unwrap();
+        app.chat_widget.open_keymap_capture(
+            "composer".into(),
+            "submit".into(),
+            crate::app_event::KeymapEditIntent::ReplaceAll,
+            crate::app_event::KeymapCaptureMode::SingleKey,
+            &app.keymap,
+        );
+        press(&mut app, &mut tui, &mut app_server, KeyCode::F(8).into()).await?;
+        assert!(
+            matches!(rx.try_recv()?, crate::app_event::AppEvent::KeymapCaptured { key, .. } if key == "f8")
+        );
+    }
     Ok(())
 }

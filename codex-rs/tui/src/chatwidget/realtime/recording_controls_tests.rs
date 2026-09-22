@@ -1,73 +1,16 @@
-//! Rendering and key routing regressions for live recording controls.
+//! Rendering and capture-state regressions for live recording controls.
 
 use super::*;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
-async fn voice_mute_shortcut_only_handles_active_current_thread_presses() {
-    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
-    let thread_id = activate_voice(&mut chat);
-    let shortcut = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
-
-    assert!(!chat.handle_realtime_microphone_shortcut(KeyEvent::new(
-        KeyCode::Char('m'),
-        KeyModifiers::CONTROL,
-    )));
-    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-        assert!(!chat.handle_realtime_microphone_shortcut(KeyEvent { kind, ..shortcut }));
-    }
-    for phase in [
-        RealtimeConversationPhase::Inactive,
-        RealtimeConversationPhase::Starting,
-        RealtimeConversationPhase::Stopping,
-    ] {
-        chat.realtime_conversation.phase = phase;
-        assert!(!chat.handle_realtime_microphone_shortcut(shortcut));
-    }
-    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
-    chat.thread_id = Some(ThreadId::new());
-    assert!(!chat.handle_realtime_microphone_shortcut(shortcut));
-    chat.thread_id = Some(thread_id);
-    assert!(events.try_recv().is_err());
-
-    assert!(chat.handle_realtime_microphone_shortcut(shortcut));
-
-    let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
-        panic!("a missing microphone handle should fail closed with the existing voice error");
-    };
-    assert!(
-        cell.display_lines(/*width*/ 80)
-            .iter()
-            .any(|line| line.to_string().contains("Start voice mode before muting"))
-    );
-    assert!(!chat.realtime_conversation.microphone_muted);
-    assert!(ops.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn voice_mute_shortcut_accepts_raw_terminal_control_bytes() {
-    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+async fn voice_mute_keymap_updates_the_composer_hint() {
+    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
     activate_voice(&mut chat);
-
-    assert!(chat.handle_realtime_microphone_shortcut(KeyEvent::new(
-        KeyCode::Char('\u{18}'),
-        KeyModifiers::NONE,
-    )));
-    assert!(events.try_recv().is_ok());
-    assert!(!chat.realtime_conversation.microphone_muted);
-    assert!(ops.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn voice_mute_keymap_updates_the_active_handler_and_composer_hint() {
-    let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
-    activate_voice(&mut chat);
-    let custom = KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
-    for (binding, hint, handles_key) in [("'f8'", "f8 mute", true), ("[]", "/voice mute", false)] {
+    for (binding, hint) in [("'f8'", "f8 mute"), ("[]", "/voice mute")] {
         let config = toml::from_str::<codex_config::types::TuiKeymap>(&format!(
             "[chat]\ntoggle_voice_mute = {binding}"
         ))
@@ -75,16 +18,6 @@ async fn voice_mute_keymap_updates_the_active_handler_and_composer_hint() {
         let runtime = crate::keymap::RuntimeKeymap::from_config(&config).unwrap();
         chat.apply_keymap_update(config, &runtime);
         assert!(render_bottom_popup(&chat, /*width*/ 80).contains(hint));
-        assert!(!chat.handle_realtime_microphone_shortcut(KeyEvent::new(
-            KeyCode::Char('x'),
-            KeyModifiers::CONTROL
-        )));
-        assert_eq!(
-            chat.handle_realtime_microphone_shortcut(custom),
-            handles_key
-        );
-        assert_eq!(events.try_recv().is_ok(), handles_key);
-        assert!(!chat.realtime_conversation.microphone_muted);
     }
 }
 
@@ -717,78 +650,4 @@ async fn compact_voice_meters_keep_real_speaker_history_when_the_microphone_is_m
     chat.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
     chat.update_realtime_footer();
     assert!(!render_bottom_popup(&chat, /*width*/ 45).contains("codex"));
-}
-
-#[tokio::test]
-async fn voice_toggle_shortcut_uses_the_slash_command_start_guard_and_preserves_draft() {
-    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
-    let config =
-        toml::from_str::<codex_config::types::TuiKeymap>("[chat]\ntoggle_voice = 'f8'").unwrap();
-    let runtime = crate::keymap::RuntimeKeymap::from_config(&config).unwrap();
-    chat.apply_keymap_update(config, &runtime);
-    chat.set_side_conversation_active(/*active*/ true);
-    chat.bottom_pane
-        .set_composer_text("draft".to_string(), Vec::new(), Vec::new());
-
-    chat.handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-
-    let Ok(AppEvent::InsertHistoryCell(cell)) = events.try_recv() else {
-        panic!("voice should report that side conversations are unsupported");
-    };
-    assert!(
-        cell.display_lines(/*width*/ 80)
-            .iter()
-            .any(|line| line.to_string().contains("side conversations"))
-    );
-    assert!(render_bottom_popup(&chat, /*width*/ 80).contains("draft"));
-    assert!(!chat.realtime_conversation_is_running());
-    assert!(ops.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn voice_toggle_shortcut_stops_only_on_press_outside_popups() {
-    let (mut chat, _sender, _events, mut ops) = make_chatwidget_manual_with_sender().await;
-    let config =
-        toml::from_str::<codex_config::types::TuiKeymap>("[chat]\ntoggle_voice = 'f8'").unwrap();
-    let runtime = crate::keymap::RuntimeKeymap::from_config(&config).unwrap();
-    chat.apply_keymap_update(config, &runtime);
-    let thread_id = activate_voice(&mut chat);
-    let shortcut = KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
-    for kind in [KeyEventKind::Repeat, KeyEventKind::Release] {
-        chat.handle_key_event(KeyEvent { kind, ..shortcut });
-        assert!(chat.realtime_conversation_is_running());
-    }
-    chat.bottom_pane
-        .set_composer_text("/".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(shortcut);
-    assert!(chat.realtime_conversation_is_running());
-    assert!(ops.try_recv().is_err());
-    chat.bottom_pane
-        .set_composer_text(String::new(), Vec::new(), Vec::new());
-
-    chat.handle_key_event(shortcut);
-
-    assert!(!chat.realtime_conversation_is_running());
-    assert!(
-        matches!(ops.try_recv(), Ok(AppCommand::RealtimeConversationStop { thread_id: stopped }) if stopped == thread_id)
-    );
-}
-
-#[tokio::test]
-async fn voice_toggle_shortcut_respects_live_remapping_and_unbinding() {
-    let (mut chat, _sender, _events, mut ops) = make_chatwidget_manual_with_sender().await;
-    for (binding, stops) in [("'f9'", true), ("[]", false)] {
-        let config = toml::from_str::<codex_config::types::TuiKeymap>(&format!(
-            "[chat]\ntoggle_voice = {binding}"
-        ))
-        .unwrap();
-        let runtime = crate::keymap::RuntimeKeymap::from_config(&config).unwrap();
-        chat.apply_keymap_update(config, &runtime);
-        activate_voice(&mut chat);
-        chat.handle_key_event(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        assert!(chat.realtime_conversation_is_running());
-        chat.handle_key_event(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE));
-        assert_eq!(chat.realtime_conversation_is_running(), !stops);
-        assert_eq!(ops.try_recv().is_ok(), stops);
-    }
 }

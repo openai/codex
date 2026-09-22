@@ -1894,6 +1894,11 @@ impl App {
                 }
                 return Ok(control);
             }
+            AppEvent::VoiceControl { thread_id, control } => {
+                if thread_id == self.chat_widget.thread_id() {
+                    self.control_voice(control);
+                }
+            }
             AppEvent::RealtimeWebrtcOfferCreated {
                 thread_id,
                 attempt_id,

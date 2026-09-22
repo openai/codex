@@ -1,10 +1,10 @@
 //! Live voice capture controls, activity meters, and interruption presentation.
-//! Meter samples remain bounded and the current thread owns every shortcut.
+//! Meter samples remain bounded; App routes shortcuts to the voice owner.
 
 use super::*;
 
 impl ChatWidget {
-    pub(in crate::chatwidget) fn toggle_realtime_microphone(&mut self) {
+    pub(crate) fn toggle_realtime_microphone(&mut self) {
         let muted = !self.realtime_conversation.microphone_muted;
         if let Some(handle) = self.realtime_conversation.handle.as_ref() {
             if let Err(error) = handle.set_microphone_muted(muted) {
@@ -37,17 +37,6 @@ impl ChatWidget {
             && self.realtime_conversation.thread_id.is_some()
             && self.realtime_conversation.thread_id == self.thread_id()
             && self.bottom_pane.no_modal_or_popup_active()
-    }
-
-    pub(crate) fn handle_realtime_microphone_shortcut(&mut self, key_event: KeyEvent) -> bool {
-        if key_event.kind != KeyEventKind::Press
-            || !self.chat_keymap.toggle_voice_mute.is_pressed(key_event)
-            || !self.realtime_microphone_shortcut_available()
-        {
-            return false;
-        }
-        self.toggle_realtime_microphone();
-        true
     }
 
     pub(in crate::chatwidget) fn realtime_microphone_is_listening(&self) -> bool {

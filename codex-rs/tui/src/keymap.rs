@@ -49,6 +49,7 @@ mod voice_tests;
 #[path = "keymap/global_find_tests.rs"]
 mod global_find_tests;
 
+pub(crate) use bindings::KeymapActionId;
 pub(crate) use bindings::KeymapContext;
 pub(crate) use bindings::bindings_for_action;
 pub(crate) use bindings::keymap_action_id;
@@ -59,6 +60,7 @@ pub(crate) use chords::KeyChordMatch;
 pub(crate) use chords::KeyChordMatcher;
 pub(crate) use chords::KeymapContextSet;
 pub(crate) use chords::RuntimeChordKeymap;
+pub(crate) use chords::is_dispatch_token_event;
 
 /// Runtime keymap used by TUI input handlers.
 ///

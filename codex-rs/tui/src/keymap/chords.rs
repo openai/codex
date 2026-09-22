@@ -44,6 +44,9 @@ pub(crate) struct KeymapContextSet(u32);
 const ACTIVITY_FOCUS: u32 = 1 << 13;
 const TRANSCRIPT_CLOSE: u32 = 1 << 15;
 const WARNINGS_FOCUS: u32 = 1 << 16;
+const VOICE_TOGGLE: u32 = 1 << 17;
+const RAW_KEY_CAPTURE: u32 = 1 << 18;
+const VOICE_TOGGLE_BLOCKED: u32 = 1 << 19;
 
 const TRANSCRIPT_BROWSING: u32 = 1 << 14;
 
@@ -82,8 +85,62 @@ impl KeymapContextSet {
         self.0 & WARNINGS_FOCUS != 0
     }
 
+    pub(crate) const fn raw_key_capture() -> Self {
+        Self(RAW_KEY_CAPTURE)
+    }
+
+    /// Only function-key voice bindings extend beyond chat; other surfaces own editing keys.
+    /// Existing surface bindings and chord prefixes still win.
+    pub(crate) fn with_voice_toggle(self, keymap: &RuntimeKeymap) -> Self {
+        let voice = KeymapActionId {
+            context: KeymapContext::Chat,
+            action: "toggle_voice",
+        };
+        let mut prefixes = keymap
+            .chat
+            .toggle_voice
+            .iter()
+            .map(|key| (*key, None))
+            .chain(
+                keymap
+                    .chords
+                    .bindings
+                    .iter()
+                    .filter(|binding| binding.action == voice)
+                    .map(|binding| (binding.chord.prefix, Some(binding.chord.completion))),
+            );
+        // Only the native chat path combines Chat and Global; dialogs can include Chat alone.
+        let native_chat =
+            self.contains(KeymapContext::Chat) && self.contains(KeymapContext::Global);
+        let conflicts = prefixes.any(|(prefix, completion)| {
+            (!native_chat && !matches!(prefix.parts().0, KeyCode::F(_)))
+                || runtime_action_bindings(keymap).any(|binding| {
+                    binding.id != voice
+                        && self.contains_action(binding.id)
+                        && binding.bindings.iter().any(|key| {
+                            normalize_chord_binding(*key) == normalize_chord_binding(prefix)
+                        })
+                })
+                || keymap.chords.bindings.iter().any(|binding| {
+                    binding.action != voice
+                        && self.contains_action(binding.action)
+                        && binding.chord.prefix == normalize_chord_binding(prefix)
+                        && completion.is_none_or(|key| key == binding.chord.completion)
+                })
+        });
+        if self.0 & RAW_KEY_CAPTURE != 0 || conflicts {
+            Self(self.0 | VOICE_TOGGLE_BLOCKED)
+        } else {
+            Self(self.0 | VOICE_TOGGLE)
+        }
+    }
+
     /// Whether this input path can dispatch the action, including focus-specific exclusions.
     pub(crate) fn contains_action(self, action: KeymapActionId) -> bool {
+        if action.context == KeymapContext::Chat && action.action == "toggle_voice" {
+            return self.0 & VOICE_TOGGLE_BLOCKED == 0
+                && (self.0 & VOICE_TOGGLE != 0 || self.contains(KeymapContext::Chat));
+        }
         self.contains(action.context)
             && (self.0 & ACTIVITY_FOCUS == 0
                 || action.context != KeymapContext::Global
@@ -498,7 +555,7 @@ pub(crate) fn is_dispatch_token(binding: KeyBinding) -> bool {
     )
 }
 
-fn is_dispatch_token_event(event: KeyEvent) -> bool {
+pub(crate) fn is_dispatch_token_event(event: KeyEvent) -> bool {
     matches!(
         event.code,
         KeyCode::F(FIRST_DISPATCH_FUNCTION_KEY..=LAST_DISPATCH_FUNCTION_KEY)

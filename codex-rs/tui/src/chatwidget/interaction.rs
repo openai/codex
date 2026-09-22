@@ -107,18 +107,6 @@ impl ChatWidget {
             return;
         }
 
-        if key_event.kind == KeyEventKind::Press
-            && self.chat_keymap.toggle_voice.is_pressed(key_event)
-            && self.bottom_pane.no_modal_or_popup_active()
-        {
-            self.toggle_realtime_conversation();
-            return;
-        }
-
-        if self.handle_realtime_microphone_shortcut(key_event) {
-            return;
-        }
-
         match key_event {
             KeyEvent {
                 code: KeyCode::Char(c),

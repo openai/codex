@@ -190,26 +190,26 @@ impl App {
             } else {
                 KeymapContext::Pager
             };
-            let contexts = KeymapContextSet::new(context);
+            let contexts = KeymapContextSet::new(context).with_voice_toggle(&self.keymap);
             return if self.backtrack.overlay_preview_active && context == KeymapContext::Pager {
-                KeymapContextSet::browsing()
+                KeymapContextSet::browsing().with_voice_toggle(&self.keymap)
             } else {
                 contexts
             };
         }
         if self.transcript_view.is_search_active() && self.chat_widget.no_modal_or_popup_active() {
-            return KeymapContextSet::new(KeymapContext::Editor);
+            return KeymapContextSet::new(KeymapContext::Editor).with_voice_toggle(&self.keymap);
         }
         if self.transcript_view.is_activity_focused() && self.chat_widget.no_modal_or_popup_active()
         {
-            return KeymapContextSet::activity();
+            return KeymapContextSet::activity().with_voice_toggle(&self.keymap);
         }
         if self.backtrack.overlay_preview_active && self.chat_widget.no_modal_or_popup_active() {
-            return KeymapContextSet::browsing();
+            return KeymapContextSet::browsing().with_voice_toggle(&self.keymap);
         }
         let voice_available = self.chat_widget.realtime_microphone_shortcut_available();
         let contexts = self.chat_widget.keymap_contexts();
-        if self.chat_widget.no_modal_or_popup_active() {
+        let contexts = if self.chat_widget.no_modal_or_popup_active() {
             let contexts = contexts
                 .with(KeymapContext::Global)
                 .with(KeymapContext::Chat);
@@ -225,7 +225,8 @@ impl App {
             }
         } else {
             contexts
-        }
+        };
+        contexts.with_voice_toggle(&self.keymap)
     }
 
     pub(super) async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {

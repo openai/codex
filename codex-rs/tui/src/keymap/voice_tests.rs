@@ -133,32 +133,82 @@ fn voice_toggle_default_yields_to_existing_shortcuts_and_chord_prefixes() {
 }
 
 #[test]
-fn voice_toggle_chord_dispatches_in_chat_without_an_active_voice_session() {
-    let config = toml::from_str::<TuiKeymap>("[chat]\ntoggle_voice = 'f8 v'").unwrap();
+fn global_voice_toggle_yields_to_overlay_bindings() {
+    for (voice, overlay, conflicts, global) in [
+        ("f9", "f9", true, true),
+        ("f9 v", "f9 v", true, true),
+        ("f9", "f9 v", true, true),
+        ("f9 v", "f9", true, true),
+        ("ctrl-5", "ctrl-]", true, false),
+        ("ctrl-5 v", "ctrl-]", true, false),
+        ("tab", "f9", false, false),
+        ("tab v", "f9", false, false),
+        ("f9 v", "f9 t", false, true),
+    ] {
+        let config = toml::from_str::<TuiKeymap>(&format!(
+            "[composer]\nqueue = []\n[chat]\ntoggle_voice = '{voice}'\n[agents]\nresume = '{overlay}'"
+        ))
+        .unwrap();
+        let runtime = RuntimeKeymap::from_config(&config).expect("existing bindings stay valid");
+        let action = keymap_action_id("chat", "toggle_voice").unwrap();
+        assert!(
+            KeymapContextSet::new(KeymapContext::Chat)
+                .with(KeymapContext::Global)
+                .with_voice_toggle(&runtime)
+                .contains_action(action)
+        );
+        for (context, enabled) in [
+            (KeymapContext::Chat, global),
+            (KeymapContext::Agents, global && !conflicts),
+            (KeymapContext::Pager, global),
+        ] {
+            assert_eq!(
+                KeymapContextSet::new(context)
+                    .with_voice_toggle(&runtime)
+                    .contains_action(action),
+                enabled
+            );
+        }
+    }
+}
+
+#[test]
+fn voice_toggle_chord_dispatches_in_overview_without_an_active_voice_session() {
+    let config = toml::from_str::<TuiKeymap>(
+        "[chat]\ntoggle_voice = 'f8 v'\n[global]\nopen_transcript = 'f8 t'",
+    )
+    .unwrap();
     let runtime = RuntimeKeymap::from_config(&config).unwrap();
     let mut matcher = KeyChordMatcher::default();
     let prefix = KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE);
-    assert_eq!(
-        matcher.advance(
-            prefix,
+    for contexts in [
+        KeymapContextSet::new(KeymapContext::List),
+        KeymapContextSet::raw_key_capture().with_voice_toggle(&runtime),
+    ] {
+        assert_eq!(
+            matcher.advance(prefix, &runtime.chords, contexts),
+            KeyChordMatch::PassThrough
+        );
+    }
+    for contexts in [
+        KeymapContextSet::new(KeymapContext::Agents),
+        KeymapContextSet::default(),
+        KeymapContextSet::new(KeymapContext::Chat).with(KeymapContext::Global),
+    ] {
+        let contexts = contexts.with_voice_toggle(&runtime);
+        assert!(matches!(
+            matcher.advance(prefix, &runtime.chords, contexts),
+            KeyChordMatch::Pending(_)
+        ));
+        let KeyChordMatch::Completed(dispatch) = matcher.advance(
+            KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
             &runtime.chords,
-            KeymapContextSet::new(KeymapContext::Pager)
-        ),
-        KeyChordMatch::PassThrough
-    );
-    let contexts = KeymapContextSet::new(KeymapContext::Chat);
-    assert!(matches!(
-        matcher.advance(prefix, &runtime.chords, contexts),
-        KeyChordMatch::Pending(_)
-    ));
-    let KeyChordMatch::Completed(dispatch) = matcher.advance(
-        KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
-        &runtime.chords,
-        contexts,
-    ) else {
-        panic!("voice toggle chord completes")
-    };
-    assert!(runtime.chat.toggle_voice.is_pressed(dispatch));
+            contexts,
+        ) else {
+            panic!("voice toggle chord completes")
+        };
+        assert!(runtime.chat.toggle_voice.is_pressed(dispatch));
+    }
 }
 
 #[test]

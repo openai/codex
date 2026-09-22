@@ -15,7 +15,6 @@ use crate::app_event::AppEvent;
 use crate::bottom_pane::VoiceStripPhase;
 use crate::bottom_pane::VoiceStripState;
 use crate::history_cell;
-use crate::key_hint::KeyBindingListExt;
 use crate::motion::MotionMode;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::UserInput;
@@ -25,8 +24,6 @@ use codex_protocol::models::MessagePhase;
 use codex_realtime_webrtc::RealtimeWebrtcSession;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
 use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
-use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use futures::future::AbortHandle;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -331,7 +328,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(super) fn stop_realtime_conversation(&mut self) {
+    pub(crate) fn stop_realtime_conversation(&mut self) {
         self.realtime_conversation.startup_retry = StartupRetry::Used;
         if matches!(
             self.realtime_conversation.phase,

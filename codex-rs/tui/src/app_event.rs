@@ -67,6 +67,14 @@ use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
 
+/// Global voice controls always apply to the one call's owner.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum VoiceControl {
+    Toggle,
+    Stop,
+    Mute,
+}
+
 /// Confirmed server lifecycle operations available from the agents dashboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgentsOverviewAction {
@@ -1081,6 +1089,11 @@ pub(crate) enum AppEvent {
 
     /// Move visible completed voice captions into history in one app event.
     CommitRealtimeTranscriptHistory,
+
+    VoiceControl {
+        thread_id: Option<ThreadId>,
+        control: VoiceControl,
+    },
 
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,

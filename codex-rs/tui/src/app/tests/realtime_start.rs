@@ -98,3 +98,24 @@ async fn rejected_voice_stop_clears_the_owned_session() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn voice_mute_shortcut_reaches_the_active_widget() -> Result<()> {
+    let (mut app, mut events, _) = make_test_app_with_channels().await;
+    crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, ThreadId::new());
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_tui_event(
+        &mut tui,
+        &mut server,
+        tui::TuiEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+    )
+    .await?;
+    // The fixture has no microphone handle, so reaching mute reports that limitation.
+    assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
+        matches!(event, AppEvent::InsertHistoryCell(cell) if cell.display_lines(/*width*/ 80)
+            .iter().any(|line| line.to_string().contains("Start voice mode before muting")))
+    }));
+    server.shutdown().await?;
+    Ok(())
+}

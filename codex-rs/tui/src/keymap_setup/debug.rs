@@ -150,6 +150,10 @@ impl Renderable for KeymapDebugView {
 }
 
 impl BottomPaneView for KeymapDebugView {
+    fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
+        crate::keymap::KeymapContextSet::raw_key_capture()
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
             return;
