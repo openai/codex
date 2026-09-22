@@ -1,0 +1,19 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(r\"\\[\n\\begin{aligned}\n\\frac{x}{y}+\\frac{1}{123456789}&=0\\\\\n\\frac{123456789}{1}+\\frac{y}{x}&=1\n\\end{aligned}\n\\]\n\n\\[\n\\begin{aligned}\\frac{a}{b}\\end{aligned}=c\n\\]\n\n\\[\n\\begin{aligned}x&=\\begin{aligned}\\frac{a}{b}\\end{aligned}\\\\y&=2\\end{aligned}\n\\]\",\n80)"
+---
+x      1
+─+ ───────── =0
+y  123456789
+123456789  y
+─────────+ ─ =1
+    1      x
+
+a
+─=c
+b
+
+   a
+x =─
+   b
+y =2

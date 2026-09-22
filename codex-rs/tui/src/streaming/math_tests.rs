@@ -5,6 +5,40 @@ use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn unicode_math_aligned_stream_matches_complete_render() {
+    let cwd = std::env::temp_dir();
+    let source = "Before.\n\n\\[\n\\begin{aligned}\n\\underset{x}{\\min}&=\\sum_{i=1}^N x_{gpt}\\\\[2mm]\ny&=2\n\\end{aligned}\n\\]\n\nAfter $\\alpha$.\n";
+    for width in [80, 12] {
+        for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
+            let mut stream = StreamCore::new(
+                Some(width),
+                &cwd,
+                mode,
+                /*inline_visualization_context*/ None,
+            );
+            let mut emitted = Vec::new();
+            for ch in source.chars() {
+                stream.push_delta(&ch.to_string());
+                emitted.extend(stream.tick_batch(usize::MAX));
+            }
+            let (remaining, raw) = stream.finalize_remaining();
+            emitted.extend(remaining);
+            assert_eq!(raw, source);
+            assert_eq!(
+                emitted,
+                render_source(
+                    source,
+                    Some(width),
+                    &cwd,
+                    mode,
+                    /*inline_visualization_context*/ None
+                )
+            );
+        }
+    }
+}
+
+#[test]
 fn unicode_math_stream_holds_display_until_closed_and_preserves_source() {
     let cwd = std::env::temp_dir();
     for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {

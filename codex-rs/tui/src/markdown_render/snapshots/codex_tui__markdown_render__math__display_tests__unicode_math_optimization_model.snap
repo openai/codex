@@ -1,0 +1,22 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+assertion_line: 110
+expression: rendered
+---
+Let X_{gpt}=x_{gpt}, with X_{gp,-1}=I_{gp}.
+
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│  minimize    ∑ w_{π_{gt}}u_{gt} +λ ∑    ∑    κₚₜm_{gpt} +μ    ∑   s_{gt}              │
+│  z,u,s,m≥0  g,t                    t (g,p)∈𝒥ₜ              (g,t)∈𝒬                    │
+│  subject to F̂_{gt}+u_{gt}-s_{gt}=D_{gt}                                    ∀ g,t      │
+│             ∑x_{gpt}≤ Sₚₜ-Bₚₜ                                              ∀ p,t      │
+│             g                                                                         │
+│               ∑  z_{gpkℓ t}≤ C_{ℓ t}                                       ∀ ℓ,t      │
+│             g,p,k                                                                     │
+│                        ∑            x_{gpt} ≥    ∑   α_{rg}x_{gpt}         ∀ r,t      │
+│             (g∈ Gᵣ; p:region(p)∈ Mᵣ)          g∈ Gᵣ,p                                 │
+│             qₐL_{adt}≤ Lₐₜ                                                 ∀ a,d,t    │
+│             m_{gpt}≥ X_{gp,t-1}-X_{gpt}                                    ∀ (g,p)∈𝒥ₜ │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+
+After the model: α².

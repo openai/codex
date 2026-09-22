@@ -1,0 +1,25 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(r\"\\[\n\\underset{x,u,m\\ge0}{\\operatorname{minimize}}\\quad\n\\sum_{g,t}x_{gpt}+\\lambda\\sum^{N}_{i=1}y_i\n\\]\n\n\\[\n\\sum_{i=1}^N\\frac{x_i}{y_i}\\overset{\\text{def}}{=}\\underset{j\\in J}{\\min} z_j\n\\]\n\n\\[\n\\sum_{j=\\sum_i^n i}^N x_j\n\\]\n\n\\[\n\\sum_{ij}^{100}x+\\sum^{ij}_{100}y\n\\]\n\n\\[\n\\frac{\\sum_i x_i}{\\sum_j y_j}+\\sqrt{\\sum_i x_i}+x^{\\sum_i a_i}+x_{\\underset{i}{\\min}}+\\sum_k z_k\n\\]\n\nInline: \\(\\sum_{i=1}^N x_i\\), \\(\\underset{x\\ge0}{\\min} x\\).\",\n100)"
+---
+                         N
+minimize    ∑ x_{gpt}+λ  ∑ yᵢ
+x,u,m≥0    g,t          i=1
+
+ N  xᵢ def
+ ∑  ──  =  min  zⱼ
+i=1 yᵢ     j∈ J
+
+   N
+   ∑    xⱼ
+j=∑ᵢⁿ i
+
+100   ij
+ ∑ x+  ∑ y
+ij    100
+
+∑ᵢ xᵢ
+─────+√(∑ᵢ xᵢ)+x^{∑ᵢ aᵢ}+x_{(min)_{i}}+ ∑ zₖ
+∑ⱼ yⱼ                                   k
+
+Inline: ∑ᵢ₌₁^{N} xᵢ, (min)_{x≥0} x.

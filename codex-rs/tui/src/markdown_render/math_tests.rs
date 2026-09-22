@@ -122,7 +122,6 @@ fn unicode_math_bounds_and_unsupported_input() {
         r"\frac{a}",
         "{x",
         "x}",
-        "x^{q}",
         "^2",
         "x^2^3",
         "{a+b}^2",

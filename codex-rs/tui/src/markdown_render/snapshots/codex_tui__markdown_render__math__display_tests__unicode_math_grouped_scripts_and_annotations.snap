@@ -1,0 +1,7 @@
+---
+source: tui/src/markdown_render/math_display_tests.rs
+expression: "plain(r\"Indices: \\(x_{gpt} + x_{i,j} + w_{\\pi_{gt}} + x^{q+1} + x_{g}^2\\).\nNative scripts: \\(x_i^2 + y_{10}\\). Sets: \\(\\mathcal Q_t\\).\nAnnotations: \\(\\underset{i\\in I}{\\min} x_i\\), \\(\\overset{\\text{def}}{=}\\).\",\n100)"
+---
+Indices: x_{gpt} + x_{i,j} + w_{π_{gt}} + x^{q+1} + x_{g}².
+Native scripts: xᵢ² + y₁₀. Sets: 𝒬ₜ.
+Annotations: (min)_{i∈ I} xᵢ, (=)^{def}.

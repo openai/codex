@@ -1,8 +1,11 @@
 //! Bounded Unicode layout for a deliberately small TeX math subset.
 //! Accents apply only to single graphemes so their scope survives terminal rendering.
+//! Unsupported Unicode scripts use explicit grouping; structured layouts remain bounded.
 
 use crate::width::display_width;
 use unicode_segmentation::UnicodeSegmentation;
+
+mod structured;
 
 const MAX_ROWS: usize = 16;
 const MAX_COLUMNS: usize = 256;
@@ -66,8 +69,9 @@ pub(super) fn render(source: &str, display: bool) -> Option<String> {
         remaining: source.trim(),
         depth: 0,
         display,
+        stack_annotations: display,
     };
-    let result = parser.sequence(/*group*/ false)?;
+    let result = parser.sequence(SequenceEnd::Input)?;
     (!result.rows.iter().all(|row| row.trim().is_empty())).then(|| result.rows.join("\n"))
 }
 
@@ -75,6 +79,14 @@ struct MathParser<'a> {
     remaining: &'a str,
     depth: usize,
     display: bool,
+    stack_annotations: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SequenceEnd {
+    Input,
+    Group,
+    Cell,
 }
 
 impl MathParser<'_> {
@@ -84,7 +96,7 @@ impl MathParser<'_> {
         Some(ch)
     }
 
-    fn sequence(&mut self, group: bool) -> Option<Layout> {
+    fn sequence(&mut self, end: SequenceEnd) -> Option<Layout> {
         if self.depth >= 32 {
             return None;
         }
@@ -93,8 +105,18 @@ impl MathParser<'_> {
         let mut scripts = 0;
         let mut has_base = false;
         while let Some(ch) = self.remaining.chars().next() {
+            let remaining = self.remaining.trim_start();
+            if end == SequenceEnd::Cell
+                && (remaining.starts_with(['&', '}'])
+                    || remaining.starts_with(r"\\")
+                    || remaining.starts_with(r"\end{"))
+            {
+                self.remaining = remaining;
+                self.depth -= 1;
+                return Some(result);
+            }
             if ch == '}' {
-                if !group {
+                if end != SequenceEnd::Group {
                     return None;
                 }
                 self.take();
@@ -120,7 +142,7 @@ impl MathParser<'_> {
             result = result.join(atom)?;
         }
         self.depth -= 1;
-        (!group).then_some(result)
+        (end == SequenceEnd::Input).then_some(result)
     }
 
     fn argument(&mut self) -> Option<Layout> {
@@ -144,10 +166,10 @@ impl MathParser<'_> {
     fn atom_inner(&mut self) -> Option<Layout> {
         let ch = self.take()?;
         match ch {
-            '{' => self.sequence(/*group*/ true),
+            '{' => self.sequence(SequenceEnd::Group),
             '\\' => self.command(),
             '^' | '_' => {
-                let arg = self.argument()?;
+                let arg = self.compact_argument()?;
                 let (plain, alphabet) = if ch == '^' {
                     (
                         "0123456789+-=()abcdefghijklmnoprstuvwxyz",
@@ -159,12 +181,17 @@ impl MathParser<'_> {
                         "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ",
                     )
                 };
-                let mut output = String::new();
-                for value in arg.single()?.chars() {
-                    let index = plain.chars().position(|ch| ch == value)?;
-                    output.push(alphabet.chars().nth(index)?);
-                }
-                Some(Layout::text(output))
+                let text = arg.single()?;
+                let output: Option<String> = text
+                    .chars()
+                    .map(|value| {
+                        let index = plain.chars().position(|ch| ch == value)?;
+                        alphabet.chars().nth(index)
+                    })
+                    .collect();
+                Some(Layout::text(
+                    output.unwrap_or_else(|| format!("{ch}{{{text}}}")),
+                ))
             }
             '}' | '$' | '%' | '#' | '&' | '`' => None,
             ch if ch.is_whitespace() => {
@@ -195,9 +222,13 @@ impl MathParser<'_> {
         let name = &self.remaining[..length];
         self.remaining = &self.remaining[length..];
         match name {
+            "sum" if self.stack_annotations => self.display_sum(),
+            "begin" | "boxed" | "underset" | "overset" | "substack" | "mathcal" => {
+                self.structured_command(name)
+            }
             "frac" | "dfrac" | "tfrac" => {
-                let numerator = self.argument()?;
-                let denominator = self.argument()?;
+                let numerator = self.compact_argument()?;
+                let denominator = self.compact_argument()?;
                 if !self.display {
                     return Some(Layout::text(format!(
                         "(({})/({}))",
@@ -233,7 +264,7 @@ impl MathParser<'_> {
                 if self.remaining.trim_start().starts_with('[') {
                     return None;
                 }
-                let radicand = self.argument()?;
+                let radicand = self.compact_argument()?;
                 Some(Layout::text(format!("√({})", radicand.single()?)))
             }
             "mathbb" => {
@@ -249,7 +280,7 @@ impl MathParser<'_> {
                 };
                 Some(Layout::text(text))
             }
-            "hat" | "bar" | "tilde" | "vec" | "dot" | "ddot" => {
+            "hat" | "widehat" | "bar" | "tilde" | "vec" | "dot" | "ddot" => {
                 let arg = self.argument()?;
                 let text = arg.single()?;
                 if text.graphemes(/*is_extended*/ true).count() != 1
@@ -259,7 +290,7 @@ impl MathParser<'_> {
                     return None;
                 }
                 let accent = match name {
-                    "hat" => '\u{0302}',
+                    "hat" | "widehat" => '\u{0302}',
                     "bar" => '\u{0304}',
                     "tilde" => '\u{0303}',
                     "vec" => '\u{20d7}',
