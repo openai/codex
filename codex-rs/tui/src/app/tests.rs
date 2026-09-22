@@ -430,6 +430,7 @@ async fn handle_mcp_inventory_result_respects_origin_thread() {
             name: "docs".to_string(),
             runtime_status: None,
             plugin_id: None,
+            http_origin: None,
             server_info: None,
             tools: HashMap::new(),
             resources: Vec::new(),

@@ -28,6 +28,7 @@ fn mcp_inventory_connection_states() {
         name: name.to_string(),
         runtime_status,
         plugin_id: None,
+        http_origin: None,
         server_info: None,
         tools: HashMap::new(),
         tools_error: None,

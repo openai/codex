@@ -69,6 +69,13 @@
         "authStatus": {
           "$ref": "#/definitions/McpAuthStatus"
         },
+        "httpOrigin": {
+          "description": "HTTP origin of the effective configured endpoint, including plugin servers. Excludes credentials, path, query, and fragment; null for non-HTTP transports.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "name": {
           "type": "string"
         },

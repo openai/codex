@@ -8413,6 +8413,13 @@ class McpServerStatus(BaseModel):
         populate_by_name=True,
     )
     auth_status: Annotated[McpAuthStatus, Field(alias="authStatus")]
+    http_origin: Annotated[
+        str | None,
+        Field(
+            alias="httpOrigin",
+            description="HTTP origin of the effective configured endpoint, including plugin servers. Excludes credentials, path, query, and fragment; null for non-HTTP transports.",
+        ),
+    ] = None
     name: str
     plugin_id: Annotated[str | None, Field(alias="pluginId")] = None
     resource_templates: Annotated[list[ResourceTemplate], Field(alias="resourceTemplates")]

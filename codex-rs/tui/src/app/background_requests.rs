@@ -1564,6 +1564,7 @@ mod tests {
                 name: "docs".to_string(),
                 runtime_status: None,
                 plugin_id: None,
+                http_origin: None,
                 server_info: None,
                 tools: HashMap::from([(
                     "list".to_string(),
@@ -1588,6 +1589,7 @@ mod tests {
                 name: "disabled".to_string(),
                 runtime_status: None,
                 plugin_id: None,
+                http_origin: None,
                 server_info: None,
                 tools: HashMap::new(),
                 resources: Vec::new(),

@@ -404,6 +404,18 @@ impl McpRequestProcessor {
                         | McpServerSource::Extension { .. } => None,
                     },
                 ),
+                http_origin: mcp_config
+                    .mcp_server_catalog
+                    .server(name)
+                    .and_then(|server| match &server.config().transport {
+                        McpServerTransportConfig::StreamableHttp { url, .. } => {
+                            url::Url::parse(url).ok().and_then(|url| {
+                                matches!(url.scheme(), "http" | "https")
+                                    .then(|| url.origin().ascii_serialization())
+                            })
+                        }
+                        McpServerTransportConfig::Stdio { .. } => None,
+                    }),
                 server_info: server_infos.remove(name),
                 server_capabilities: server_capabilities.remove(name),
                 tools: tools_by_server.remove(name).unwrap_or_default(),

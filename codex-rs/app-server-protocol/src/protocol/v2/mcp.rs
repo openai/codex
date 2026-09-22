@@ -78,6 +78,9 @@ pub struct McpServerStatus {
     /// Current thread-runtime connection state; null when unavailable or the configuration changed.
     pub runtime_status: Option<McpServerConnectionStatus>,
     pub plugin_id: Option<String>,
+    /// HTTP origin of the effective configured endpoint, including plugin servers.
+    /// Excludes credentials, path, query, and fragment; null for non-HTTP transports.
+    pub http_origin: Option<String>,
     pub server_info: Option<McpServerInfo>,
     /// Capabilities advertised by the initialized MCP server; null when unavailable.
     pub server_capabilities: Option<serde_json::Value>,
