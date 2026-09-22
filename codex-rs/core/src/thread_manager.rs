@@ -2009,6 +2009,7 @@ impl ThreadManagerState {
         };
         let mut request =
             ThreadSpawnRequest::new(options, Arc::clone(&self.auth_manager), agent_control);
+        request.fork_persistence = ForkPersistence::CopiedDeferred;
         request.parent_thread_id = parent_thread_id;
         request.forked_from_thread_id = forked_from_thread_id;
         request.inherited_environments = inherited_environments;

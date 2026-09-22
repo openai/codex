@@ -416,6 +416,8 @@ pub(crate) enum GitEnrichmentPolicy {
 /// Controls which fork history belongs in the newly created thread's own rollout.
 pub(crate) enum ForkPersistence {
     Copied,
+    /// The spawn caller owns the durability barrier before acknowledging the child.
+    CopiedDeferred,
     Referenced {
         history_base: Option<HistoryPosition>,
         inherited_item_count: usize,
@@ -1641,13 +1643,15 @@ impl Session {
                         rollout_items.drain(..*inherited_item_count);
                         rollout_items.insert(0, thread_settings_applied);
                     }
-                    ForkPersistence::Copied if is_paginated_subagent => {
+                    ForkPersistence::Copied | ForkPersistence::CopiedDeferred
+                        if is_paginated_subagent =>
+                    {
                         // Paginated subagents already persist inherited context when their live
                         // thread is created.
                         rollout_items.clear();
                         rollout_items.push(thread_settings_applied);
                     }
-                    ForkPersistence::Copied => {
+                    ForkPersistence::Copied | ForkPersistence::CopiedDeferred => {
                         // Keep the copied prefix and effective child settings in one append so a
                         // cold resume cannot observe inherited settings as the latest value.
                         rollout_items.push(thread_settings_applied);
@@ -1655,9 +1659,14 @@ impl Session {
                 }
                 self.persist_rollout_items(&rollout_items).await;
 
-                // Forked threads should remain file-backed immediately after startup.
-                self.ensure_rollout_materialized(PersistContext::Standard)
-                    .await;
+                // Agent spawn owns its final durability barrier so it can overlap the edge write.
+                let persist_context = match self.fork_persistence {
+                    ForkPersistence::CopiedDeferred => PersistContext::SubagentSpawn,
+                    ForkPersistence::Copied | ForkPersistence::Referenced { .. } => {
+                        PersistContext::Standard
+                    }
+                };
+                self.ensure_rollout_materialized(persist_context).await;
 
                 // Flush after seeding history and any persisted rollout copy.
                 if !is_subagent {

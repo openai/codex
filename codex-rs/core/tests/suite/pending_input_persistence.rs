@@ -9,16 +9,19 @@ use std::time::Duration;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
+use codex_features::Feature;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_thread_store::AppendThreadItemsParams;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::CreateThreadParams;
@@ -63,6 +66,7 @@ enum InputKind {
 
 #[derive(Debug)]
 struct PendingCheckpoint {
+    thread_id: ThreadId,
     context: PersistContext,
     complete: oneshot::Sender<()>,
 }
@@ -72,6 +76,8 @@ struct GatedCheckpointStore {
     inner: InMemoryThreadStore,
     policy: CheckpointPolicy,
     armed: AtomicBool,
+    arm_on: Option<PersistContext>,
+    checkpoint_context: Option<PersistContext>,
     checkpoints: mpsc::UnboundedSender<PendingCheckpoint>,
 }
 
@@ -129,15 +135,25 @@ impl ThreadStore for GatedCheckpointStore {
         context: PersistContext,
     ) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move {
+            if self.arm_on == Some(context) {
+                self.armed.store(true, Ordering::SeqCst);
+            }
             if self.policy == CheckpointPolicy::Preparation
                 && context == PersistContext::ThreadPreparation
             {
                 return Ok(());
             }
-            if self.armed.swap(false, Ordering::SeqCst) {
+            let should_checkpoint = self
+                .checkpoint_context
+                .is_none_or(|checkpoint_context| checkpoint_context == context);
+            if should_checkpoint && self.armed.swap(false, Ordering::SeqCst) {
                 let (complete, completed) = oneshot::channel();
                 self.checkpoints
-                    .send(PendingCheckpoint { context, complete })
+                    .send(PendingCheckpoint {
+                        thread_id,
+                        context,
+                        complete,
+                    })
                     .expect("checkpoint receiver should stay alive");
                 if self.policy == CheckpointPolicy::Synchronous
                     || !context.allows_background_persistence()
@@ -192,6 +208,8 @@ async fn steered_input_checkpoint_controls_next_request(
         inner: InMemoryThreadStore::default(),
         policy,
         armed: AtomicBool::new(false),
+        arm_on: None,
+        checkpoint_context: None,
         checkpoints,
     });
     let base_url = format!("{}/v1", server.uri());
@@ -297,6 +315,8 @@ async fn preparation_and_first_sampling_do_not_wait_for_durable_metadata() -> an
         inner: InMemoryThreadStore::default(),
         policy: CheckpointPolicy::Preparation,
         armed: AtomicBool::new(false),
+        arm_on: None,
+        checkpoint_context: None,
         checkpoints,
     });
     let base_url = format!("{}/v1", server.uri());
@@ -467,5 +487,101 @@ async fn local_preparation_is_durable_before_first_input_and_survives_restart(
         vec![("developer", PREPARED_CONTEXT), ("user", FIRST_PROMPT)]
     );
     resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_spawn_discards_provisional_child() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let (checkpoints, mut checkpoint_requests) = mpsc::unbounded_channel();
+    let store = Arc::new(GatedCheckpointStore {
+        inner: InMemoryThreadStore::default(),
+        policy: CheckpointPolicy::Synchronous,
+        armed: AtomicBool::new(false),
+        arm_on: Some(PersistContext::SubagentSpawn),
+        checkpoint_context: Some(PersistContext::Standard),
+        checkpoints,
+    });
+    let test = test_codex()
+        .with_thread_store(store)
+        .with_history_mode(ThreadHistoryMode::Legacy)
+        .with_config(|config| {
+            config.agent_max_depth = 1;
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("enable collaboration");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_function_call_with_namespace(
+                "spawn-checkpoint",
+                "multi_agent_v1",
+                "spawn_agent",
+                &json!({"message":"child startup task", "task_name":"worker", "fork_context":true})
+                    .to_string(),
+            ),
+            responses::ev_completed("parent-spawn"),
+        ]),
+    )
+    .await;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "parent context to inherit".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let checkpoint = timeout(Duration::from_secs(10), checkpoint_requests.recv())
+        .await?
+        .expect("child history should reach its durability barrier");
+    let child = test.thread_manager.get_thread(checkpoint.thread_id).await?;
+    let state_db = codex_core::init_state_db(&test.config)
+        .await
+        .expect("state db should be enabled");
+
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_))
+    })
+    .await;
+    timeout(Duration::from_secs(10), child.wait_until_terminated()).await?;
+    timeout(Duration::from_secs(10), async {
+        while test
+            .thread_manager
+            .get_thread(checkpoint.thread_id)
+            .await
+            .is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    timeout(Duration::from_secs(10), async {
+        loop {
+            let open_children = state_db
+                .list_thread_spawn_children_with_status(
+                    test.session_configured.thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Open,
+                )
+                .await?;
+            let closed_children = state_db
+                .list_thread_spawn_children_with_status(
+                    test.session_configured.thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Closed,
+                )
+                .await?;
+            if open_children.is_empty() && closed_children == vec![checkpoint.thread_id] {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }

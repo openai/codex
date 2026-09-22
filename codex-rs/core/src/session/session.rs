@@ -808,7 +808,7 @@ impl Session {
             ForkPersistence::Referenced { history_base, .. } => {
                 history_base.map(|position| position.end_ordinal_exclusive)
             }
-            ForkPersistence::Copied => match &initial_history {
+            ForkPersistence::Copied | ForkPersistence::CopiedDeferred => match &initial_history {
                 InitialHistory::Resumed(resumed) => {
                     // Both local and CCA thread stores place the resumed thread's
                     // canonical SessionMeta first. Never inspect inherited metadata:
@@ -1018,7 +1018,7 @@ impl Session {
                             multi_agent_version: initial_multi_agent_version,
                             history_mode: session_configuration.history_mode,
                             history_base: match &fork_persistence {
-                                ForkPersistence::Copied => None,
+                                ForkPersistence::Copied | ForkPersistence::CopiedDeferred => None,
                                 ForkPersistence::Referenced { history_base, .. } => *history_base,
                             },
                             subagent_history_start_ordinal: None,
@@ -1037,7 +1037,10 @@ impl Session {
                             },
                         };
                         if is_paginated_subagent
-                            && matches!(&fork_persistence, ForkPersistence::Copied)
+                            && matches!(
+                                &fork_persistence,
+                                ForkPersistence::Copied | ForkPersistence::CopiedDeferred
+                            )
                             && let InitialHistory::Forked(items) = &initial_history
                         {
                             LiveThread::create_with_inherited_model_context(

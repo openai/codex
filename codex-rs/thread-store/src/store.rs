@@ -68,6 +68,9 @@ pub enum PersistContext {
     ThreadPreparation,
     /// Standard persistence makes the thread and all queued items durable and readable.
     Standard,
+    /// Copied subagent history may be enqueued so its durability fence can overlap relationship
+    /// persistence. The caller must await standard persistence before acknowledging the child.
+    SubagentSpawn,
     /// A turn is about to begin sampling after its input has been recorded.
     TurnStart,
     /// Accepted user input is being recorded before an active turn's next sampling request.
@@ -81,7 +84,7 @@ impl PersistContext {
     pub fn allows_background_persistence(self) -> bool {
         match self {
             Self::ThreadPreparation | Self::Standard => false,
-            Self::TurnStart | Self::SteeredUserInput => true,
+            Self::SubagentSpawn | Self::TurnStart | Self::SteeredUserInput => true,
         }
     }
 }

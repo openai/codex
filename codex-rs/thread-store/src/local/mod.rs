@@ -529,6 +529,9 @@ impl ThreadStore for LocalThreadStore {
         thread_id: ThreadId,
         context: PersistContext,
     ) -> ThreadStoreFuture<'_, ()> {
+        if context == PersistContext::SubagentSpawn {
+            return Box::pin(async { Ok(()) });
+        }
         Box::pin(async move {
             if context == PersistContext::ThreadPreparation {
                 live_writer::flush_thread(self, thread_id).await

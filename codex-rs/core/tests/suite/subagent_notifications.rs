@@ -28,6 +28,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::LoadThreadHistoryParams;
 use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::assert_parent_turn;
@@ -1105,6 +1106,15 @@ async fn spawned_child_receives_forked_parent_context(
             .as_str()
             .expect("legacy child thread id"),
     )?;
+    // Read the acknowledged fork from storage without flushing the live child first.
+    let reopened_store = codex_core::thread_store_from_config(&test.config, /*state_db*/ None);
+    let persisted = reopened_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: child_thread_id,
+            include_archived: false,
+        })
+        .await?;
+    assert!(serde_json::to_string(&persisted.items)?.contains(TURN_0_FORK_PROMPT));
     let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
     tokio::time::timeout(Duration::from_secs(2), async {
         while !matches!(child_thread.agent_status().await, AgentStatus::Completed(_)) {
