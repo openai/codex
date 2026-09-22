@@ -713,14 +713,7 @@ impl LocalThreadStore {
         // phase. Keep the individual operations readable and tag the phase once if it fails.
         let conversion_result = async {
             let bounded_subagent_context = if kind == RolloutMigrationKind::Subagent {
-                let RolloutItem::SessionMeta(session_meta) = &canonical_session_meta.item else {
-                    return Err(migration_error("canonical session metadata is missing"));
-                };
-                let context = subagent::select_bounded_context(
-                    source_path.to_path_buf(),
-                    session_meta.clone(),
-                )
-                .await?;
+                let context = subagent::select_bounded_context(source_path.to_path_buf()).await?;
                 limiter.account(source_metadata.len()).await;
                 context
             } else {

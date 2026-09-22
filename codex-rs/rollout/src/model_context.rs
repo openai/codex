@@ -1,10 +1,10 @@
-use crate::ResponseItemEnvelope;
+//! Collects persisted rollout items needed to reconstruct the most recent context window.
+//!
+//! Storage readers feed items newest-to-oldest. The scan stops at the newest compaction that has
+//! both replacement history and a window number, or at the beginning of the rollout when no such
+//! compaction exists. Items are returned in chronological order.
+
 use crate::RolloutItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::InterAgentCommunication;
-use codex_protocol::protocol::SessionMetaLine;
 
 /// Whether a reverse model-context scan needs more rollout items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,197 +15,45 @@ pub enum ModelContextScanProgress {
     Complete,
 }
 
-/// Accumulates newest-to-oldest rollout items until they are sufficient to reconstruct the latest
-/// model context.
+/// Finds a bounded suffix for reconstructing the most recent context window.
 ///
-/// Storage implementations own how they fetch older items. Local JSONL readers and future
-/// reverse-paged cloud readers can both feed their items through this scan to share the cutoff
-/// rules and chronological replay assembly.
-///
-/// The scan stops once it has both:
-///
-/// - `saw_compaction`: a `CompactedItem` with `replacement_history` and `window_number`;
-/// - `saw_completed_turn_context`: a completed turn with a compatible `TurnContextItem` and a
-///   durable context baseline.
-///
-/// If the scan reaches the beginning before finding a bounded cutoff, it has already collected
-/// the complete replay and so we can return that directly.
-///
-/// A turn establishes a context baseline with a user-turn boundary (a paginated
-/// `ItemCompleted(UserMessage)` marker, agent message, or inter-agent message), or a full
-/// `WorldState` snapshot newer than that turn's latest compaction. The snapshot also lets turns
-/// with empty input supply resume metadata, matching rollout reconstruction. Without either,
-/// the scan continues to older turns. A raw `role=user` response item is not sufficient because
-/// contextual user fragments use that role but do not count as turn boundaries during reconstruction.
-/// The compaction restores model-visible items; the turn context restores previous settings
-/// (`model`, `comp_hash`, and `realtime_active`) and the reference baseline.
-///
-/// These paginated shapes disable the bounded cutoff:
-///
-/// - compaction without `replacement_history` or `window_number`;
-/// - rollback markers;
-///
-/// When one appears, the scanner continues to the beginning and returns the complete replay.
+/// A compaction with replacement history and a window number is a complete conversation-history
+/// boundary. Records after it provide any companion state that was persisted. Older compactions
+/// missing either field require the complete rollout so reconstruction can rebuild their history
+/// or window number.
 #[derive(Debug, Default)]
 pub struct ModelContextScan {
     items_newest_first: Vec<RolloutItem>,
-    saw_compaction: bool,
-    saw_completed_turn_context: bool,
-    must_scan_to_start: bool,
-    active_segment: ActiveTurnSegment,
+    requires_full_replay: bool,
 }
 
 impl ModelContextScan {
     /// Adds the next newest-to-oldest rollout item and reports whether the reader can stop.
     pub fn push(&mut self, item: RolloutItem) -> ModelContextScanProgress {
-        let progress = self.observe(&item);
+        let progress = if self.requires_full_replay {
+            ModelContextScanProgress::Continue
+        } else if let RolloutItem::Compacted(compacted) = &item {
+            if compacted.replacement_history.is_some() && compacted.window_number.is_some() {
+                ModelContextScanProgress::Complete
+            } else {
+                // This compaction cannot be reconstructed from a bounded suffix. Do not stop at
+                // an older compaction because this newer one still affects the surviving history.
+                self.requires_full_replay = true;
+                ModelContextScanProgress::Continue
+            }
+        } else {
+            ModelContextScanProgress::Continue
+        };
         self.items_newest_first.push(item);
         progress
     }
 
-    /// Returns the collected items in chronological order with canonical head metadata.
+    /// Returns the collected items in chronological order.
     ///
     /// Call this after the reader reaches the beginning of its source or after [`Self::push`]
     /// returns [`ModelContextScanProgress::Complete`].
-    pub fn finish(mut self, session_meta: SessionMetaLine) -> Vec<RolloutItem> {
+    pub fn finish(mut self) -> Vec<RolloutItem> {
         self.items_newest_first.reverse();
-        if self.has_bounded_cutoff() {
-            // A bounded scan stops before reaching the head. Prepend the separately loaded head
-            // SessionMeta, which remains canonical when copied fork history contains later
-            // metadata.
-            self.items_newest_first
-                .insert(0, RolloutItem::SessionMeta(session_meta));
-        }
         self.items_newest_first
-    }
-
-    fn observe(&mut self, item: &RolloutItem) -> ModelContextScanProgress {
-        if self.must_scan_to_start {
-            return ModelContextScanProgress::Continue;
-        }
-
-        match item {
-            RolloutItem::Compacted(compacted)
-                if compacted.replacement_history.is_none() || compacted.window_number.is_none() =>
-            {
-                self.must_scan_to_start = true;
-            }
-            RolloutItem::Compacted(_) => {
-                self.saw_compaction = true;
-                self.active_segment.saw_compaction = true;
-            }
-            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(_)) => {
-                // Rollback markers only occur in legacy history. Keep old rollouts correct rather than
-                // duplicating rollback survival semantics in this bounded selector.
-                self.must_scan_to_start = true;
-            }
-            RolloutItem::EventMsg(EventMsg::ItemCompleted(event)) => {
-                if self.active_segment.turn_id.is_none() {
-                    self.active_segment.turn_id = Some(event.turn_id.clone());
-                }
-                if turn_ids_are_compatible(
-                    self.active_segment.turn_id.as_deref(),
-                    Some(event.turn_id.as_str()),
-                ) {
-                    self.active_segment.has_user_turn |=
-                        matches!(&event.item, TurnItem::UserMessage(_));
-                }
-            }
-            RolloutItem::EventMsg(EventMsg::TurnComplete(event)) => {
-                self.active_segment
-                    .turn_id
-                    .get_or_insert_with(|| event.turn_id.clone());
-            }
-            RolloutItem::EventMsg(EventMsg::TurnAborted(event)) => {
-                if let Some(turn_id) = &event.turn_id {
-                    self.active_segment
-                        .turn_id
-                        .get_or_insert_with(|| turn_id.clone());
-                }
-            }
-            RolloutItem::EventMsg(EventMsg::TurnStarted(event)) => {
-                if turn_ids_are_compatible(
-                    self.active_segment.turn_id.as_deref(),
-                    Some(event.turn_id.as_str()),
-                ) {
-                    self.finalize_active_segment();
-                }
-            }
-            RolloutItem::TurnContext(context) => {
-                if self.active_segment.turn_id.is_none() {
-                    self.active_segment.turn_id = context.turn_id.clone();
-                }
-                if turn_ids_are_compatible(
-                    self.active_segment.turn_id.as_deref(),
-                    context.turn_id.as_deref(),
-                ) {
-                    self.active_segment.has_turn_context = true;
-                }
-            }
-            RolloutItem::ResponseItem(response_item) => {
-                self.active_segment.has_user_turn |=
-                    response_item_counts_as_user_turn(response_item);
-            }
-            RolloutItem::InterAgentCommunication(_) => {
-                self.active_segment.has_user_turn = true;
-            }
-            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
-                self.active_segment.has_user_turn = true;
-            }
-            RolloutItem::WorldState(state) => {
-                self.active_segment.has_full_world_state |=
-                    state.full && !self.active_segment.saw_compaction;
-            }
-            RolloutItem::EventMsg(_)
-            | RolloutItem::SessionMeta(_)
-            | RolloutItem::InterAgentCommunicationMetadata { .. }
-            | RolloutItem::RealtimeItem(_)
-            | RolloutItem::RetainedContext(_)
-            | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::TokenUsageRecord(_) => {}
-        }
-
-        if self.has_bounded_cutoff() {
-            ModelContextScanProgress::Complete
-        } else {
-            ModelContextScanProgress::Continue
-        }
-    }
-
-    fn finalize_active_segment(&mut self) {
-        if self.active_segment.has_turn_context
-            && (self.active_segment.has_user_turn || self.active_segment.has_full_world_state)
-        {
-            self.saw_completed_turn_context = true;
-        }
-        self.active_segment = ActiveTurnSegment::default();
-    }
-
-    fn has_bounded_cutoff(&self) -> bool {
-        !self.must_scan_to_start && self.saw_compaction && self.saw_completed_turn_context
-    }
-}
-
-#[derive(Debug, Default)]
-struct ActiveTurnSegment {
-    turn_id: Option<String>,
-    has_user_turn: bool,
-    has_turn_context: bool,
-    has_full_world_state: bool,
-    saw_compaction: bool,
-}
-
-fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
-    active_turn_id
-        .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))
-}
-
-fn response_item_counts_as_user_turn(response_item: &ResponseItemEnvelope) -> bool {
-    match &response_item.item {
-        ResponseItem::AgentMessage { .. } => true,
-        ResponseItem::Message { role, content, .. } => {
-            role == "assistant" && InterAgentCommunication::is_message_content(content)
-        }
-        _ => false,
     }
 }

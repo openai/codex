@@ -4379,6 +4379,172 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn paginated_compaction_cold_resume_from_bounded_suffix() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+                ev_completed_with_tokens("before-compact", /*total_tokens*/ 96),
+            ]),
+            sse(vec![
+                ev_assistant_message("summary", &auto_summary(AUTO_SUMMARY_TEXT)),
+                ev_completed_with_tokens("compact", /*total_tokens*/ 10),
+            ]),
+            sse(vec![
+                ev_assistant_message("continued", "continued"),
+                ev_completed_with_tokens("continued", /*total_tokens*/ 10),
+            ]),
+            sse(vec![ev_completed_with_tokens(
+                "resumed", /*total_tokens*/ 10,
+            )]),
+        ],
+    )
+    .await;
+    let provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_model_info_override("gpt-5.4", |model| {
+            model.multi_agent_version = Some(codex_protocol::protocol::MultiAgentVersion::V2);
+        })
+        .with_history_mode(codex_protocol::protocol::ThreadHistoryMode::Paginated)
+        .with_config(move |config| {
+            config
+                .features
+                .disable(Feature::MultiAgentV2)
+                .expect("disable override");
+            config.agents_enabled = true;
+            config.model_provider = provider;
+            config.include_environment_context = false;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(100);
+            config.model_auto_compact_token_limit = Some(90);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    core_test_support::submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: test.session_configured.model.clone(),
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
+                    developer_instructions: Some(
+                        "Preserve the compaction's plan instructions.".into(),
+                    ),
+                },
+            }),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let codex_core::TurnInputSubmission::Started { turn_id } = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: FUNCTION_CALL_LIMIT_MSG.into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?
+    else {
+        panic!("initial turn did not start");
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let expected_settings = test.codex.thread_settings_snapshot().await;
+    let path = test.codex.rollout_path().expect("rollout path");
+    test.codex.shutdown_and_wait().await?;
+    test.thread_manager
+        .remove_thread(&test.session_configured.thread_id)
+        .await;
+
+    let context = test
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id: test.session_configured.thread_id,
+            include_archived: false,
+        })
+        .await?;
+    let [
+        RolloutItem::SessionMeta(meta),
+        RolloutItem::Compacted(compacted),
+        ..,
+    ] = context.items.as_slice()
+    else {
+        panic!("bounded resume should start with session metadata and the compaction");
+    };
+    assert_eq!(meta.meta.multi_agent_version, None);
+    assert!(compacted.resume_metadata.is_some());
+    let replacement_len = compacted
+        .replacement_history
+        .as_ref()
+        .expect("replacement history")
+        .len();
+
+    let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+        CodexAuth::from_api_key("test"),
+        test.config.codex_home.to_path_buf(),
+    );
+    let resumed = test
+        .thread_manager
+        .resume_thread_with_history(
+            test.config.clone(),
+            codex_history::InitialHistory::Resumed(codex_history::ResumedHistory {
+                conversation_id: context.thread_id,
+                history: Arc::new(context.items),
+                rollout_path: Some(path),
+            }),
+            auth_manager,
+            /*parent_trace*/ None,
+            codex_protocol::mcp::ClientMcpExtensions::default(),
+        )
+        .await?;
+    assert_eq!(
+        resumed.thread.thread_settings_snapshot().await,
+        expected_settings
+    );
+    assert_eq!(
+        resumed.thread.multi_agent_version(),
+        Some(codex_protocol::protocol::MultiAgentVersion::V2)
+    );
+    let submission = resumed
+        .thread
+        .continue_turn_if_idle(
+            TurnInputRequest::new(codex_core::TurnInput::ResponseItem(
+                core_test_support::responses::user_message_item("continue after cold resume"),
+            )),
+            turn_id,
+        )
+        .await?;
+    assert!(matches!(
+        submission,
+        codex_core::TurnInputSubmission::Started { .. }
+    ));
+    wait_for_event(&resumed.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        &requests[3].input()[..replacement_len],
+        &requests[2].input()[..replacement_len]
+    );
+    insta::assert_snapshot!(
+        "compaction_cold_resume_after_completion",
+        format_history_snapshot(
+            "Real paginated mid-turn compaction and cold resume from the bounded suffix.",
+            &requests,
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_mid_turn_continuation_compaction() {
     skip_if_no_network!();
 

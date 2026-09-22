@@ -3,6 +3,7 @@
 mod compaction_resume_metadata;
 pub use compaction_resume_metadata::CompactionResumeMetadata;
 pub use compaction_resume_metadata::PreviousTurnSettings;
+pub use compaction_resume_metadata::resume_multi_agent_version;
 
 mod compaction_checkpoint;
 pub use compaction_checkpoint::CompactionCheckpoint;
@@ -541,22 +542,7 @@ fn multi_agent_version_from_items(
         _ => None,
     });
 
-    session_meta_version.or_else(|| {
-        items.iter().rev().find_map(|item| match item {
-            RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
-            RolloutItem::SessionMeta(_)
-            | RolloutItem::ResponseItem(_)
-            | RolloutItem::InterAgentCommunication(_)
-            | RolloutItem::InterAgentCommunicationMetadata { .. }
-            | RolloutItem::Compacted(_)
-            | RolloutItem::TokenUsageRecord(_)
-            | RolloutItem::WorldState(_)
-            | RolloutItem::RetainedContext(_)
-            | RolloutItem::SecurityRiskScore(_)
-            | RolloutItem::RealtimeItem(_)
-            | RolloutItem::EventMsg(_) => None,
-        })
-    })
+    session_meta_version.or_else(|| items.iter().rev().find_map(resume_multi_agent_version))
 }
 
 #[cfg(test)]

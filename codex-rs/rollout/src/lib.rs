@@ -36,6 +36,7 @@ pub use codex_history::RetainedContextEvent;
 pub use codex_history::RetainedInputSource;
 pub use codex_history::RolloutItem;
 pub use codex_history::RolloutLine;
+pub use codex_history::resume_multi_agent_version;
 pub(crate) use codex_protocol::protocol;
 
 /// Decodes a persisted rollout record without Serde's flattened-envelope buffering.

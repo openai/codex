@@ -1,4 +1,4 @@
-//! Exercises retained review history through compaction, resume, fork, eviction, and legacy rollback replay.
+//! Exercises retained review history through compaction, resume, fork, and eviction.
 
 use anyhow::Result;
 use base64::Engine;
@@ -18,7 +18,6 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
-use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -312,14 +311,14 @@ async fn guardian_history_uses_deltas_between_eviction_batches() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_answers_survive_compaction_and_eviction_but_not_rollback() -> Result<()> {
+async fn guardian_answers_survive_compaction_and_eviction() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
         Ok(()),
         "Guardian approval actions require host-native paths"
     );
     let server = start_mock_server().await;
-    let mut test = test_codex()
+    let test = test_codex()
         .with_config(|config| {
             config.features.enable(Feature::TokenBudget).unwrap();
             config
@@ -415,130 +414,82 @@ async fn guardian_answers_survive_compaction_and_eviction_but_not_rollback() -> 
     );
     assert!(image_url.len() > 4 * 1024 * 1024);
     let command = r#"{"cmd":"echo publish","sandbox_permissions":"require_escalated","justification":"Publish the inspected change."}"#;
-    for (prompt, retained) in [
-        ("Do not publish the attached image.", true),
-        ("Inspect a different repository.", false),
-    ] {
-        let review = mount_sse_sequence(
-            &server,
-            vec![
-                sse(vec![
-                    ev_function_call("publish", "exec_command", command),
-                    ev_completed("publish"),
-                ]),
-                sse(vec![
-                    ev_assistant_message("review", r#"{"outcome":"deny"}"#),
-                    ev_completed("review"),
-                ]),
-                sse(vec![ev_completed("publish-done")]),
-            ],
-        )
-        .await;
-        test.codex
-            .start_or_steer_turn(TurnInputRequest::user_input(vec![
-                UserInput::Text {
-                    text: prompt.to_owned(),
-                    text_elements: Vec::new(),
-                },
-                UserInput::Image {
-                    image: ImageReference::Inline {
-                        image_url: image_url.clone(),
-                    },
-                    detail: None,
-                },
-            ]))
-            .await?;
-        wait_for_event(&test.codex, |event| {
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-        let requests = review.requests();
-        assert!(
-            requests[0]
-                .input()
-                .iter()
-                .filter_map(|item| item["content"].as_array())
-                .flatten()
-                .any(|item| item["image_url"]
-                    .as_str()
-                    .is_some_and(|url| url.len() > 4 * 1024 * 1024))
-        );
-        let guardian = requests
+    let prompt = "Do not publish the attached image.";
+    let review = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call("publish", "exec_command", command),
+                ev_completed("publish"),
+            ]),
+            sse(vec![
+                ev_assistant_message("review", r#"{"outcome":"deny"}"#),
+                ev_completed("review"),
+            ]),
+            sse(vec![ev_completed("publish-done")]),
+        ],
+    )
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![
+            UserInput::Text {
+                text: prompt.to_owned(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Image {
+                image: ImageReference::Inline { image_url },
+                detail: None,
+            },
+        ]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = review.requests();
+    assert!(
+        requests[0]
+            .input()
             .iter()
-            .find(|request| {
-                request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
-            })
-            .expect("Guardian request");
-        let transcript = serde_json::to_string(&guardian.input())?;
-        assert!(transcript.contains(prompt));
-        if retained {
-            let trusted_answers = transcript
-                .split_once(">>> TRUSTED USER ANSWERS START")
-                .expect("trusted answers survive compaction")
-                .1
-                .split_once(">>> TRUSTED USER ANSWERS END")
-                .expect("trusted answers end marker")
-                .0;
-            assert!(trusted_answers.contains("user: Do not publish anything."));
-            let positions = [
-                "Only publish to a private repository.",
-                "Do not publish the attached image.",
-            ]
-            .map(|text| {
-                transcript
-                    .find(text)
-                    .unwrap_or_else(|| panic!("missing {text}: {transcript}"))
-            });
-            assert!(!transcript.contains("tool update_plan call"));
-            assert!(!transcript.contains("tool update_plan result"));
-            let mut ordered = positions;
-            ordered.sort();
-            assert_eq!(positions, ordered);
-            assert!(
-                requests[0]
-                    .input()
-                    .iter()
-                    .all(|item| item["call_id"] != "inspect-0"
-                        && item["call_id"] != "confirm-publish")
-            );
-            test.codex.ensure_rollout_materialized().await;
-            test.codex
-                .append_rollout_items(&[RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
-                    ThreadRolledBackEvent { num_turns: 2 },
-                ))])
-                .await?;
-            test.codex.shutdown_and_wait().await?;
-            let thread_id = test.session_configured.thread_id;
-            test.thread_manager.remove_thread(&thread_id).await;
-            let model_context = test
-                .thread_store
-                .load_latest_model_context(LoadThreadHistoryParams {
-                    thread_id,
-                    include_archived: false,
-                })
-                .await?;
-            test.codex = test
-                .thread_manager
-                .resume_thread_with_history(
-                    test.config.clone(),
-                    InitialHistory::Resumed(ResumedHistory {
-                        conversation_id: thread_id,
-                        history: Arc::new(model_context.items),
-                        rollout_path: None,
-                    }),
-                    test.thread_manager.auth_manager(),
-                    /*parent_trace*/ None,
-                    ClientMcpExtensions::default(),
-                )
-                .await?
-                .thread;
-        } else {
-            assert!(!transcript.contains(">>> TRUSTED USER ANSWERS START"));
-            assert!(!transcript.contains("Do not publish anything."));
-            assert!(!transcript.contains("Only publish to a private repository."));
-            assert!(!transcript.contains("tool update_plan call"));
-            assert!(!transcript.contains("tool update_plan result"));
-        }
-    }
+            .filter_map(|item| item["content"].as_array())
+            .flatten()
+            .any(|item| item["image_url"]
+                .as_str()
+                .is_some_and(|url| url.len() > 4 * 1024 * 1024))
+    );
+    let guardian = requests
+        .iter()
+        .find(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
+        .expect("Guardian request");
+    let transcript = serde_json::to_string(&guardian.input())?;
+    assert!(transcript.contains(prompt));
+    let trusted_answers = transcript
+        .split_once(">>> TRUSTED USER ANSWERS START")
+        .expect("trusted answers survive compaction")
+        .1
+        .split_once(">>> TRUSTED USER ANSWERS END")
+        .expect("trusted answers end marker")
+        .0;
+    assert!(trusted_answers.contains("user: Do not publish anything."));
+    let positions = [
+        "Only publish to a private repository.",
+        "Do not publish the attached image.",
+    ]
+    .map(|text| {
+        transcript
+            .find(text)
+            .unwrap_or_else(|| panic!("missing {text}: {transcript}"))
+    });
+    assert!(!transcript.contains("tool update_plan call"));
+    assert!(!transcript.contains("tool update_plan result"));
+    let mut ordered = positions;
+    ordered.sort();
+    assert_eq!(positions, ordered);
+    assert!(
+        requests[0]
+            .input()
+            .iter()
+            .all(|item| item["call_id"] != "inspect-0" && item["call_id"] != "confirm-publish")
+    );
     Ok(())
 }

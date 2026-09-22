@@ -26,11 +26,9 @@ mod tests;
 
 /// Loads rollout items needed to reconstruct the latest model-visible context.
 ///
-/// Paginated JSONL rollouts use a reverse scan. When it finds both a usable replacement-
-/// history checkpoint and the completed user-turn context needed for resume metadata, the returned
-/// replay starts with the canonical `SessionMeta` followed by that newest suffix. When no
-/// bounded cutoff is available, the scan continues to the beginning and returns the complete
-/// replay it already accumulated.
+/// Paginated JSONL rollouts use a reverse scan. It stops at the newest `CompactedItem` with both
+/// replacement history and a window number, and returns that compaction plus its newer suffix. If
+/// the newest compaction lacks either field, the scan continues to the beginning of the rollout.
 ///
 /// Compressed segments are decoded before applying their original JSONL offsets. Legacy rollouts
 /// keep the existing full-history path.
@@ -115,9 +113,7 @@ pub(super) async fn load_for_fork(
                     let ScanOutcome::Parsed(line) = outcome else {
                         continue;
                     };
-                    if let RolloutItem::TurnContext(context) = &line.item
-                        && let Some(version) = context.multi_agent_version
-                    {
+                    if let Some(version) = codex_rollout::resume_multi_agent_version(&line.item) {
                         return Ok(Some(version));
                     }
                     // Ancestor metadata does not describe the immediate source's runtime.
@@ -191,10 +187,7 @@ fn scan_model_context_from_lineage_blocking(
         }
     }
 
-    let canonical_meta = session_meta.clone();
-    let mut items = scan.finish(session_meta);
-    if !matches!(items.first(), Some(RolloutItem::SessionMeta(_))) {
-        items.insert(0, RolloutItem::SessionMeta(canonical_meta));
-    }
+    let mut items = scan.finish();
+    items.insert(0, RolloutItem::SessionMeta(session_meta));
     Ok(items)
 }

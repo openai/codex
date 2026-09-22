@@ -889,3 +889,19 @@ fn multi_agent_version_uses_newest_present_session_meta_value() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn multi_agent_version_uses_compaction_metadata_without_turn_context() -> Result<()> {
+    let compacted = serde_json::from_value::<CompactedItem>(json!({
+        "message": "summary",
+        "replacement_history": [],
+        "window_number": 1,
+        "resume_metadata": {"multi_agent_version": "v2"}
+    }))?;
+
+    assert_eq!(
+        InitialHistory::Forked(vec![RolloutItem::Compacted(compacted)]).get_multi_agent_version(),
+        Some(MultiAgentVersion::V2)
+    );
+    Ok(())
+}

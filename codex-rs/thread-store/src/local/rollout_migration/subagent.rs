@@ -4,15 +4,13 @@
 //! files verbatim can preserve gigabytes of duplicated history even though a resumed subagent only
 //! needs its latest bounded model context.
 //!
-//! This module reverse-scans the legacy rollout for a safe model-context checkpoint and returns the
-//! smallest replay needed to resume from there. Malformed reverse-scanned records are skipped. If
-//! we cannot prove that a bounded replay is safe, we return `None` and let the caller fall back to
-//! full tolerant replay.
+//! This module reverse-scans the legacy rollout for the newest compaction with replacement history
+//! and a window number. Malformed records are skipped. If no such compaction exists, the caller
+//! falls back to full tolerant replay.
 
 use std::fs::File;
 use std::path::PathBuf;
 
-use codex_protocol::protocol::SessionMetaLine;
 use codex_rollout::ModelContextScan;
 use codex_rollout::ModelContextScanProgress;
 use codex_rollout::ReverseJsonlScanner;
@@ -24,11 +22,9 @@ use super::line_parser;
 use super::migration_error;
 use crate::ThreadStoreResult;
 
-/// Returns a bounded replay when the legacy child has enough durable context to reconstruct from
-/// a suffix. Without that proof, the caller streams the complete legacy replay instead.
+/// Returns the suffix starting at the newest usable compaction, if one exists.
 pub(super) async fn select_bounded_context(
     rollout_path: PathBuf,
-    session_meta: SessionMetaLine,
 ) -> ThreadStoreResult<Option<Vec<RolloutItem>>> {
     tokio::task::spawn_blocking(move || {
         let file = File::open(rollout_path).map_err(migration_error)?;
@@ -46,7 +42,7 @@ pub(super) async fn select_bounded_context(
                 continue;
             };
             if scan.push(line.item) == ModelContextScanProgress::Complete {
-                let mut items = scan.finish(session_meta);
+                let mut items = scan.finish();
                 items.retain(|item| !matches!(item, RolloutItem::SessionMeta(_)));
                 return Ok(Some(items));
             }

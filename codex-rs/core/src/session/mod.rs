@@ -1706,6 +1706,7 @@ impl Session {
             mut history,
             retained_context,
             guardian_history,
+            last_started_turn_id,
             previous_turn_settings,
             reference_context_item,
             world_state_baseline,
@@ -1767,6 +1768,7 @@ impl Session {
                 guardian_history.as_ref(),
                 reviewer_compaction_hash.as_deref(),
             );
+            state.last_started_turn_id = last_started_turn_id;
             if let Some(world_state) = world_state_baseline {
                 state.history.set_world_state_baseline(world_state);
             }
