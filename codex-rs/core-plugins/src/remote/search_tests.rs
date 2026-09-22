@@ -108,6 +108,7 @@ async fn search_remote_plugins_forwards_parameters_and_converts_results() {
         result,
         RemotePluginSearchPage {
             plugins: vec![RemotePluginSummary {
+                extensions: None,
                 id: format!("linear@{REMOTE_GLOBAL_MARKETPLACE_NAME}"),
                 remote_plugin_id: "plugins~Plugin_linear".to_string(),
                 version: Some("1.2.3".to_string()),

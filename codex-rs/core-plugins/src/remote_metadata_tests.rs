@@ -14,6 +14,7 @@ fn image_url(renewal: &str) -> String {
 
 fn plugin(renewal: &str) -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
+        extensions: None,
         marketplace_name: REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(),
         id: "plugin-test".to_string(),
         version: Some("1.0.0".to_string()),

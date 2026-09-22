@@ -4,13 +4,14 @@
 import type { PluginAuthPolicy } from "./PluginAuthPolicy";
 import type { PluginAvailability } from "./PluginAvailability";
 import type { PluginDisabledReason } from "./PluginDisabledReason";
+import type { PluginExtensions } from "./PluginExtensions";
 import type { PluginInstallPolicy } from "./PluginInstallPolicy";
 import type { PluginInstallPolicySource } from "./PluginInstallPolicySource";
 import type { PluginInterface } from "./PluginInterface";
 import type { PluginShareContext } from "./PluginShareContext";
 import type { PluginSource } from "./PluginSource";
 
-export type PluginSummary = { id: string,
+export type PluginSummary = { extensions: PluginExtensions | null, id: string,
 /**
  * Backend remote plugin identifier when available.
  */

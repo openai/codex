@@ -696,6 +696,8 @@ pub enum PluginDisabledReason {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginSummary {
+    #[serde(default)]
+    pub extensions: Option<super::PluginExtensions>,
     pub id: String,
     /// Backend remote plugin identifier when available.
     pub remote_plugin_id: Option<String>,

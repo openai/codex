@@ -757,11 +757,11 @@ mod tests {
             crate::test_support::recorded_http_client_urls(&selected_urls),
             vec![
                 format!(
-                    "{}/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+                    "{}/backend-api/ps/plugins/installed?includeExtensions=true&limit=200&includeDownloadUrls=true",
                     server.uri()
                 ),
                 format!(
-                    "{}/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true&pageToken=page-2",
+                    "{}/backend-api/ps/plugins/installed?includeExtensions=true&limit=200&includeDownloadUrls=true&pageToken=page-2",
                     server.uri()
                 ),
             ]

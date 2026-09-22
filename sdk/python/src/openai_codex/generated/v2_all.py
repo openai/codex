@@ -3143,6 +3143,16 @@ class PluginHookSummary(BaseModel):
     key: str
 
 
+class PluginIcon(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mime_type: Annotated[str | None, Field(alias="mimeType")] = None
+    sizes: list[str] | None = None
+    src: str
+    theme: str | None = None
+
+
 class PluginInstallParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3295,6 +3305,22 @@ class PluginListParams(BaseModel):
     ] = None
 
 
+class ToolPluginQuickActionTarget(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    arguments: Any | None = None
+    name: str
+    type: Annotated[Literal["tool"], Field(title="ToolPluginQuickActionTargetType")]
+
+
+class PluginQuickActionTarget(RootModel[ToolPluginQuickActionTarget]):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: ToolPluginQuickActionTarget
+
+
 class PluginReadParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -3362,10 +3388,28 @@ class PluginReconcileResponse(BaseModel):
     ]
 
 
+class PluginSearchProviderCall(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    field_meta: Annotated[Any, Field(alias="_meta")]
+    arguments: Any
+    name: str
+
+
 class PluginSearchScope(Enum):
     global_ = "global"
     workspace = "workspace"
     personal = "personal"
+
+
+class PluginSettings(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    app_id: Annotated[str, Field(alias="appId")]
+    read_tool_name: Annotated[str, Field(alias="readToolName")]
+    update_tool_name: Annotated[str, Field(alias="updateToolName")]
 
 
 class PluginShareCheckoutParams(BaseModel):
@@ -8707,6 +8751,64 @@ class PermissionProfileListResponse(BaseModel):
     ] = None
 
 
+class SettingsPluginEntrypoint(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    app_id: Annotated[str, Field(alias="appId")]
+    icons: list[PluginIcon]
+    resource_uri: Annotated[str, Field(alias="resourceUri")]
+    search_terms: Annotated[list[str] | None, Field(alias="searchTerms")] = []
+    title: str
+    tool_name: Annotated[str, Field(alias="toolName")]
+    type: Annotated[Literal["settings"], Field(title="SettingsPluginEntrypointType")]
+
+
+class ThreadPluginEntrypoint(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    app_id: Annotated[str, Field(alias="appId")]
+    icons: list[PluginIcon]
+    resource_uri: Annotated[str, Field(alias="resourceUri")]
+    title: str
+    tool_name: Annotated[str, Field(alias="toolName")]
+    type: Annotated[Literal["thread"], Field(title="ThreadPluginEntrypointType")]
+
+
+class FilePluginEntrypoint(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    app_id: Annotated[str, Field(alias="appId")]
+    extensions: list[str]
+    icons: list[PluginIcon]
+    resource_uri: Annotated[str, Field(alias="resourceUri")]
+    title: str
+    tool_name: Annotated[str, Field(alias="toolName")]
+    type: Annotated[Literal["file"], Field(title="FilePluginEntrypointType")]
+
+
+class PluginQuickAction(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    icons: list[PluginIcon]
+    target: PluginQuickActionTarget
+    title: str
+
+
+class PluginSearchProvider(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    app_id: Annotated[str, Field(alias="appId")]
+    call: PluginSearchProviderCall | None = None
+    link_id: Annotated[str, Field(alias="linkId")]
+    title: str
+    tool_name: Annotated[str, Field(alias="toolName")]
+
+
 class PluginSharePrincipal(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10838,6 +10940,56 @@ class ModelsRequirements(BaseModel):
     new_thread: Annotated[NewThreadModelDefaults | None, Field(alias="newThread")] = None
 
 
+class GlobalPluginEntrypoint(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    app_id: Annotated[str, Field(alias="appId")]
+    icons: list[PluginIcon]
+    quick_action: Annotated[PluginQuickAction | None, Field(alias="quickAction")] = None
+    resource_uri: Annotated[str, Field(alias="resourceUri")]
+    title: str
+    tool_name: Annotated[str, Field(alias="toolName")]
+    type: Annotated[Literal["global"], Field(title="GlobalPluginEntrypointType")]
+
+
+class PluginEntrypoint(
+    RootModel[
+        GlobalPluginEntrypoint
+        | SettingsPluginEntrypoint
+        | ThreadPluginEntrypoint
+        | FilePluginEntrypoint
+    ]
+):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    root: (
+        GlobalPluginEntrypoint
+        | SettingsPluginEntrypoint
+        | ThreadPluginEntrypoint
+        | FilePluginEntrypoint
+    )
+
+
+class PluginExtensions(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    entrypoints: list[PluginEntrypoint] | None = None
+    file_handlers: Annotated[list[PluginEntrypoint] | None, Field(alias="fileHandlers")] = []
+    search_mention_providers: Annotated[
+        list[PluginSearchProvider] | None, Field(alias="searchMentionProviders")
+    ] = []
+    settings: list[PluginSettings] | None = []
+    settings_entrypoints: Annotated[
+        list[PluginEntrypoint] | None, Field(alias="settingsEntrypoints")
+    ] = []
+    thread_entrypoints: Annotated[
+        list[PluginEntrypoint] | None, Field(alias="threadEntrypoints")
+    ] = []
+
+
 class PluginShareContext(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10894,6 +11046,7 @@ class PluginSummary(BaseModel):
         ),
     ] = None
     enabled: bool
+    extensions: PluginExtensions | None = None
     id: str
     install_policy: Annotated[PluginInstallPolicy, Field(alias="installPolicy")]
     install_policy_source: Annotated[
