@@ -3318,11 +3318,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
         .await
         .expect("start thread");
     let agent_id = thread.thread_id;
-    let mut status_rx = manager
-        .agent_control()
-        .subscribe_status(agent_id)
-        .await
-        .expect("subscribe should succeed");
+    let mut status_rx = thread.thread.subscribe_status();
 
     let _ = thread
         .thread

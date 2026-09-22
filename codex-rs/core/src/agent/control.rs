@@ -55,13 +55,13 @@ use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::LoadThreadHistoryParams;
 use codex_thread_store::ReadThreadParams;
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
-use tokio::sync::watch;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -83,6 +83,7 @@ mod spawn;
 mod spawn_request;
 mod target;
 mod user_authorization;
+mod watch;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
@@ -426,16 +427,6 @@ impl LocalAgentControl {
         Ok(thread_ids)
     }
 
-    /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
-    pub(crate) async fn subscribe_status(
-        &self,
-        agent_id: ThreadId,
-    ) -> CodexResult<watch::Receiver<AgentStatus>> {
-        let state = self.upgrade()?;
-        let thread = state.get_thread(agent_id).await?;
-        Ok(thread.subscribe_status())
-    }
-
     pub(crate) async fn format_environment_context_subagents(
         &self,
         parent_thread_id: ThreadId,
@@ -598,16 +589,20 @@ impl LocalAgentControl {
         let control = self.clone();
         tokio::spawn(async move {
             let status = match control.subscribe_status(child_thread_id).await {
-                Ok(mut status_rx) => {
-                    let mut status = status_rx.borrow().clone();
-                    while !is_final(&status) {
-                        if status_rx.changed().await.is_err() {
-                            status = control.get_status(child_thread_id).await;
+                Ok(mut updates) => {
+                    let mut final_status = None;
+                    while let Some(Ok(snapshot)) = updates.next().await {
+                        if let Some(status) = snapshot.status()
+                            && is_final(status)
+                        {
+                            final_status = Some(status.clone());
                             break;
                         }
-                        status = status_rx.borrow().clone();
                     }
-                    status
+                    match final_status {
+                        Some(status) => status,
+                        None => control.get_status(child_thread_id).await,
+                    }
                 }
                 Err(_) => control.get_status(child_thread_id).await,
             };
