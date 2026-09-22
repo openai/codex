@@ -157,15 +157,11 @@ async fn interactive_startup_honors_codex_home_symlink_opt_out() -> Result<()> {
 }
 
 #[test]
-fn owned_screen_entry_paints_before_sync_ends_and_exit_clears_inline_draft() -> Result<()> {
+fn default_owned_screen_entry_paints_before_sync_ends_and_exit_clears_inline_draft() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempfile::tempdir()?;
     write_test_config(codex_home.path(), &repo_root)?;
-    let mut terminal = PtyCodex::start(
-        &repo_root,
-        codex_home,
-        &["-c", "tui.fullscreen_transcript=true"],
-    )?;
+    let mut terminal = PtyCodex::start(&repo_root, codex_home, &[])?;
     terminal.wait_for_startup()?;
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while !terminal.parser.screen().alternate_screen() && Instant::now() < deadline {
@@ -255,11 +251,15 @@ fn owned_screen_entry_paints_before_sync_ends_and_exit_clears_inline_draft() -> 
 }
 
 #[test]
-fn fullscreen_transcript_defaults_to_terminal_scrollback() -> Result<()> {
+fn fullscreen_transcript_can_opt_out_to_terminal_scrollback() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex_home = tempfile::tempdir()?;
     write_test_config(codex_home.path(), &repo_root)?;
-    let mut terminal = PtyCodex::start(&repo_root, codex_home, &[])?;
+    let mut terminal = PtyCodex::start(
+        &repo_root,
+        codex_home,
+        &["-c", "tui.fullscreen_transcript=false"],
+    )?;
     terminal.wait_for_startup()?;
     terminal.wait_for_screen("GPT-5.6-Terra")?;
     ensure!(
@@ -267,7 +267,7 @@ fn fullscreen_transcript_defaults_to_terminal_scrollback() -> Result<()> {
             .output
             .windows(b"\x1b[?1049h".len())
             .any(|bytes| bytes == b"\x1b[?1049h"),
-        "default launch entered the alternate screen"
+        "fullscreen opt-out entered the alternate screen"
     );
     Ok(())
 }

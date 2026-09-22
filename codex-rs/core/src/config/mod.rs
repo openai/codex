@@ -4436,7 +4436,7 @@ impl Config {
             tui_fullscreen_transcript: cfg
                 .tui
                 .as_ref()
-                .is_some_and(|tui| tui.fullscreen_transcript),
+                .is_none_or(|tui| tui.fullscreen_transcript),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()

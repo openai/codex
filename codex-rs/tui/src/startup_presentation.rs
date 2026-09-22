@@ -61,7 +61,7 @@ pub(super) async fn load(
         config_toml
             .tui
             .as_ref()
-            .is_some_and(|tui| tui.fullscreen_transcript),
+            .is_none_or(|tui| tui.fullscreen_transcript),
         use_alt_screen,
     );
     let status_line_enabled = config_toml

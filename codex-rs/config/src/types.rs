@@ -799,8 +799,8 @@ pub struct Tui {
     pub raw_output_mode: bool,
 
     /// Own the fullscreen transcript, including scrolling, selection, and search.
-    /// Defaults to `false`; alternate-screen restrictions take precedence.
-    #[serde(default)]
+    /// Defaults to `true`; alternate-screen restrictions take precedence.
+    #[serde(default = "default_true")]
     pub fullscreen_transcript: bool,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
