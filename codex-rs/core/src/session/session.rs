@@ -1432,12 +1432,18 @@ impl Session {
                 "session_init.plugin_skill_warmup",
                 otel.name = "session_init.plugin_skill_warmup",
             ));
-            let thread_name_lookup =
-                thread_title_from_thread_store(live_thread.as_ref(), &thread_store, thread_id)
-                    .instrument(info_span!(
-                        "session_init.thread_name_lookup",
-                        otel.name = "session_init.thread_name_lookup",
-                    ));
+            let thread_name_lookup = async {
+                if config.ephemeral && matches!(&initial_history, InitialHistory::Forked(_)) {
+                    None
+                } else {
+                    thread_title_from_thread_store(live_thread.as_ref(), &thread_store, thread_id)
+                        .await
+                }
+            }
+            .instrument(info_span!(
+                "session_init.thread_name_lookup",
+                otel.name = "session_init.thread_name_lookup",
+            ));
             let (instruction_refresh, plugin_skill_errors, thread_name) = tokio::join!(
                 agents_md_manager.refresh(config.as_ref(), &resolved_environments),
                 plugin_skill_warmup,
