@@ -9986,7 +9986,10 @@ async fn build_initial_context_reuses_in_flight_recommendation_prewarm() {
 
     let (_, initial_context) = tokio::join!(prewarm, initial_context);
     assert_eq!(
-        user_input_texts(&initial_context),
+        developer_input_texts(&initial_context)
+            .into_iter()
+            .filter(|text| text.starts_with("<recommended_plugins>"))
+            .collect::<Vec<_>>(),
         vec![concat!(
             "<recommended_plugins>\n",
             "Here is a list of plugins that are available but not installed.\n\n",

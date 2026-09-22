@@ -13,6 +13,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::responses;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
@@ -170,9 +171,20 @@ async fn recommended_plugins_after_external_login(
                 .any(|text| text.contains("suggest a plugin"))
         })
         .expect("turn request");
-    let contextual_user_message = request.message_input_texts("user").join("\n");
-    assert!(contextual_user_message.contains("<recommended_plugins>"));
-    assert!(contextual_user_message.contains("- GitHub (github@openai-curated-remote)"));
+    let recommendations = request
+        .message_input_texts("developer")
+        .into_iter()
+        .filter(|text| text.starts_with("<recommended_plugins>"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recommendations,
+        vec![concat!(
+            "<recommended_plugins>\n",
+            "Here is a list of plugins that are available but not installed.\n\n",
+            "- GitHub (github@openai-curated-remote)\n",
+            "</recommended_plugins>",
+        )]
+    );
     let body = request.body_json();
     let tool_names = body
         .get("tools")

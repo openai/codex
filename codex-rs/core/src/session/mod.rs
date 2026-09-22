@@ -4226,12 +4226,6 @@ impl Session {
         } else {
             None
         };
-        if let Some(recommended_plugins) = recommended_plugin_candidates
-            .as_deref()
-            .and_then(RecommendedPluginsInstructions::from_plugins)
-        {
-            contextual_user_sections.push(recommended_plugins.render_fragment());
-        }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
         for contributor in &context_contributors {
             for fragment in contributor
@@ -4358,6 +4352,13 @@ impl Session {
                 "user" => contextual_user_sections.push(fragment.render_fragment()),
                 _ => {}
             }
+        }
+
+        if let Some(recommended_plugins) = recommended_plugin_candidates
+            .as_deref()
+            .and_then(RecommendedPluginsInstructions::from_plugins)
+        {
+            developer_sections.push(recommended_plugins.render_fragment());
         }
 
         let mut items = Vec::with_capacity(4);
