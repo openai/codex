@@ -576,6 +576,21 @@ async fn advance_queue_poll() {
     tokio::time::resume();
 }
 
+async fn wait_for_queue_empty(
+    queue: &QueuedItemService,
+    thread_id: ThreadId,
+) -> anyhow::Result<()> {
+    // A turn can complete before the dispatcher finishes deleting its queued item.
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
+        while !queue.list(thread_id).await?.is_empty() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .context("queued item was not consumed")?
+}
+
 #[tokio::test]
 async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes()
 -> anyhow::Result<()> {
@@ -662,10 +677,9 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
         Duration::from_secs(/*secs*/ 25),
     )
     .await;
-    advance_queue_poll().await;
 
-    assert!(queue.list(thread_id).await?.is_empty());
-    assert!(queue.list(independent_thread.thread_id).await?.is_empty());
+    wait_for_queue_empty(&queue, thread_id).await?;
+    wait_for_queue_empty(&queue, independent_thread.thread_id).await?;
 
     let rollout_path = test.codex.rollout_path().context("rollout path missing")?;
     test.codex.shutdown_and_wait().await?;
@@ -691,7 +705,7 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
         Duration::from_secs(/*secs*/ 25),
     )
     .await;
-    assert!(queue.list(thread_id).await?.is_empty());
+    wait_for_queue_empty(&queue, thread_id).await?;
 
     let prompts = model_responses
         .requests()

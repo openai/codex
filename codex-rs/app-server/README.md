@@ -294,6 +294,11 @@ This is the server's advertised MCP capabilities object, including its `extensio
 map. It is null when the connection has not initialized successfully; capabilities
 are never inferred from tools or copied from a shared catalog cache.
 
+# MCP OAuth login
+
+`mcpServer/oauth/login` only returns HTTP(S) authorization URLs. Authorization
+endpoints with other schemes fail before client registration or URL return.
+
 # Thread rollback
 
 `thread/rollback` has been removed from the API, including its request and response

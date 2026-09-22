@@ -57,6 +57,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
+use core_test_support::ThreadIdle;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -853,7 +854,10 @@ async fn sample_configured_conversation_history_with_source(
         "{guardian_config}\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n"
     );
     let has_model_defaults = model_defaults.is_some();
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
     let builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override("codex-auto-review", |model_info| {
             model_info
@@ -2376,6 +2380,8 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    // TurnComplete precedes active-turn cleanup; wait before injecting user input.
+    ThreadIdle::wait(&test.codex).await;
     assert_eq!(
         cached_approval(
             &registry,

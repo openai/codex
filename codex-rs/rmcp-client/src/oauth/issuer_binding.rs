@@ -7,12 +7,15 @@ use url::Url;
 
 use super::StoredOAuthTokens;
 
-/// Reject authorization endpoints that cannot be bound to their actual issuer.
+/// Reject non-web authorization endpoints or endpoints that cannot be bound to their issuer.
 pub(crate) fn validate_authorization_server_endpoints(
     metadata: &AuthorizationMetadata,
 ) -> Result<()> {
     let authorization_endpoint = Url::parse(&metadata.authorization_endpoint)
         .context("OAuth authorization endpoint must be a valid URL")?;
+    if !matches!(authorization_endpoint.scheme(), "http" | "https") {
+        bail!("OAuth authorization endpoint must use HTTP or HTTPS");
+    }
     let issuer = metadata
         .issuer
         .as_deref()
