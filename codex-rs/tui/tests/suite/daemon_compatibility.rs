@@ -71,11 +71,11 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
         let (snapshot, warning_end) = match scenario {
             "default" => (
                 "daemon_feature_mismatch",
-                "features.api_key_model_discovery=false.",
+                "api_key_model_discovery to be disabled.",
             ),
             "explicit" => (
                 "daemon_override_mismatch",
-                "features.api_key_model_discovery=true.",
+                "api_key_model_discovery to be enabled.",
             ),
             "host policy" => ("daemon_host_policy_mismatch", "requires embedded mode."),
             _ => unreachable!(),

@@ -17,11 +17,11 @@ fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
         ("features={worktrees=true}", true),
         (
             "features={worktrees=true,api_key_model_discovery=false}",
-            false,
+            true,
         ),
-        ("features.auth_elicitation=false", false),
-        ("features.code_mode_host=false", false),
-        ("features.mcp_oauth_refresh_coordination=false", false),
+        ("features.auth_elicitation=false", true),
+        ("features.code_mode_host=false", true),
+        ("features.mcp_oauth_refresh_coordination=false", true),
         ("suppress_unstable_features_warning=true", true),
         ("suppress_unstable_features_warning='true'", false),
         ("features={worktrees=true,shell_tool=false}", false),
@@ -136,6 +136,119 @@ fn daemon_launch_telemetry_records_once_on_connection_or_early_return() {
             vec![(AppServerTarget::Embedded, connected)]
         );
     }
+}
+
+#[tokio::test]
+async fn daemon_feature_compatibility_respects_required_and_optional_attachment()
+-> color_eyre::Result<()> {
+    use codex_app_server_protocol::JSONRPCMessage;
+    use futures::SinkExt;
+    use futures::StreamExt;
+    use serde_json::json;
+    use tokio_tungstenite::tungstenite::Message;
+
+    for allow_embedded_fallback in [false, true] {
+        for scenario in [
+            "matching",
+            "stale overrides",
+            "conflicting client",
+            "unsupported RPC",
+        ] {
+            let home = TempDir::new()?;
+            let mut config = ConfigBuilder::default()
+                .codex_home(home.path().to_path_buf())
+                .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+                .build()
+                .await?;
+            config.features.enable(Feature::ApiKeyModelDiscovery)?;
+            if scenario == "conflicting client" {
+                config.features.disable(Feature::ApiKeyModelDiscovery)?;
+            }
+            let features = [
+                Feature::ApiKeyModelDiscovery,
+                Feature::CodeModeHost,
+                Feature::AuthElicitation,
+                Feature::McpOAuthRefreshCoordination,
+            ].map(|feature| {
+                let enabled = if feature == Feature::ApiKeyModelDiscovery && scenario == "stale overrides" {
+                    false
+                } else if feature == Feature::ApiKeyModelDiscovery && scenario == "conflicting client" {
+                    true
+                } else {
+                    config.features.enabled(feature)
+                };
+                json!({"name": feature.key(), "stage": "beta", "enabled": enabled, "defaultEnabled": false})
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let target = AppServerTarget::LocalDaemon {
+                endpoint: RemoteAppServerEndpoint::WebSocket {
+                    websocket_url: format!("ws://{}", listener.local_addr()?),
+                    auth_token: None,
+                },
+                allow_embedded_fallback,
+            };
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                while let Some(Ok(Message::Text(text))) = socket.next().await {
+                    let JSONRPCMessage::Request(request) = serde_json::from_str(&text).unwrap()
+                    else {
+                        continue;
+                    };
+                    let response = if request.method == "initialize" {
+                        json!({"id": request.id, "result": {"userAgent": "daemon-test"}})
+                    } else {
+                        assert_eq!(request.method, "experimentalFeature/list");
+                        assert_eq!(request.params.unwrap()["threadId"], json!(null));
+                        if scenario == "unsupported RPC" {
+                            json!({"id": request.id, "error": {"code": -32601, "message": "method not found"}})
+                        } else {
+                            json!({"id": request.id, "result": {"data": features, "nextCursor": null}})
+                        }
+                    };
+                    socket
+                        .send(Message::Text(response.to_string().into()))
+                        .await
+                        .unwrap();
+                }
+            });
+            let result = daemon_startup::compatibility_warning(&target, &config).await;
+            server.await?;
+            if scenario == "matching" {
+                assert_eq!(result?, None);
+                continue;
+            }
+            let reason = match scenario {
+                "stale overrides" => "This session requires api_key_model_discovery to be enabled",
+                "conflicting client" => {
+                    "This session requires api_key_model_discovery to be disabled"
+                }
+                "unsupported RPC" => "Experimental feature request failed",
+                _ => unreachable!(),
+            };
+            if allow_embedded_fallback {
+                assert_eq!(
+                    result?,
+                    Some(format!(
+                        "Running without the shared background server: {reason}."
+                    ))
+                );
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert_eq!(
+                    error,
+                    format!(
+                        "Cannot use the shared background server: {reason}.\n{}",
+                        daemon_startup::FAILURE_HINT
+                    )
+                );
+                if scenario == "stale overrides" {
+                    insta::assert_snapshot!("daemon_feature_mismatch_error", error);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]

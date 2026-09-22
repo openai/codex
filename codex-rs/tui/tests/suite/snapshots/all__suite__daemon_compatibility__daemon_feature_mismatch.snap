@@ -2,4 +2,4 @@
 source: tui/tests/suite/daemon_compatibility.rs
 expression: warning
 ---
-⚠ Running without the shared background server: daemon does not report features.api_key_model_discovery=false.
+⚠ Running without the shared background server: This session requires api_key_model_discovery to be disabled.

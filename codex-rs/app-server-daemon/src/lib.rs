@@ -6,6 +6,7 @@ use backend::windows::try_lock_file;
 mod client;
 mod install_lock;
 mod launch;
+pub use launch::restart_with_features;
 pub use launch::start_with_features;
 mod managed_install;
 mod prepare_install;
@@ -437,8 +438,7 @@ impl Daemon {
             .await)
     }
 
-    async fn restart(&self) -> Result<LifecycleOutput> {
-        let settings = self.load_settings().await?;
+    async fn restart_with_settings(&self, settings: DaemonSettings) -> Result<LifecycleOutput> {
         if client::probe(&self.socket_path).await.is_ok()
             && self.running_backend(&settings).await?.is_none()
         {
@@ -465,6 +465,11 @@ impl Daemon {
                 .await?;
         }
 
+        // Persist changed launch settings only after the old process has stopped.
+        // A failed or interrupted drain must not make an unapplied change look current.
+        if self.load_settings().await? != settings {
+            settings.save(&self.settings_file).await?;
+        }
         let pid = managed.start_managed_backend(&settings).await?;
         let info = self.wait_until_ready().await?;
         if let Err(err) = managed.ensure_managed_updater(&settings).await {

@@ -2246,6 +2246,7 @@ fn should_show_bedrock_setup_wizard(
             .is_login_method_allowed(ForcedLoginMethod::Api)
 }
 
+mod daemon_recovery;
 mod daemon_startup;
 mod daemon_telemetry;
 

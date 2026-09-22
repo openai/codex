@@ -15,6 +15,36 @@ async fn auto_daemon_start_attaches_to_shared_server() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(unix)]
+async fn incompatible_daemon_can_cancel() -> Result<()> {
+    daemon_startup("mismatch-cancel").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn incompatible_daemon_can_run_embedded() -> Result<()> {
+    daemon_startup("mismatch-embedded").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn incompatible_daemon_can_restart_with_confirmed_settings() -> Result<()> {
+    daemon_startup("mismatch-restart").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn fresh_daemon_requires_confirmation_to_disable_shared_features() -> Result<()> {
+    daemon_startup("mismatch-disable").await
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn stopped_daemon_requires_confirmation_to_disable_persisted_features() -> Result<()> {
+    daemon_startup("mismatch-disable-persisted").await
+}
+
+#[tokio::test]
 async fn daemon_exclusion_survives_resume_picker() -> Result<()> {
     daemon_startup("resume").await
 }
@@ -55,6 +85,10 @@ async fn daemon_startup(command: &str) -> Result<()> {
             serde_json::to_string(&workspace_path)?,
         ),
     )?;
+    let mismatch = command.starts_with("mismatch-");
+    let persisted = command == "mismatch-disable-persisted";
+    let disabling = matches!(command, "mismatch-disable" | "mismatch-disable-persisted");
+    let restart = command == "mismatch-restart" || disabling;
     let bedrock_onboarding = matches!(command, "bedrock" | "bedrock-running");
     if !bedrock_onboarding {
         fs::write(
@@ -83,7 +117,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
     env.insert("TERM".into(), "xterm-256color".into());
     let mut args = vec!["--no-alt-screen".to_string()];
     let mut steps: VecDeque<(&str, &[u8])> = VecDeque::new();
-    if matches!(command, "start" | "bedrock-running") {
+    if matches!(command, "start" | "bedrock-running") || mismatch {
         // A selected package with a stopped daemon avoids installing a release.
         let managed = home
             .path()
@@ -93,12 +127,16 @@ async fn daemon_startup(command: &str) -> Result<()> {
         fs::create_dir(home.path().join("app-server-daemon"))?;
         fs::write(
             home.path().join("app-server-daemon/settings.json"),
-            r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false}}"#,
+            if persisted {
+                r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false},"featureOverrides":{"api_key_model_discovery":true}}"#
+            } else {
+                r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false}}"#
+            },
         )?;
     }
     let pid_file = home.path().join("app-server-daemon/daemon.pid");
     let result = async {
-        let existing_daemon = if command == "bedrock-running" {
+        let mut existing_daemon = if command == "bedrock-running" || (mismatch && !disabling) {
             let started = Command::new(&codex)
                 .env_clear()
                 .envs(&env)
@@ -118,6 +156,27 @@ async fn daemon_startup(command: &str) -> Result<()> {
             // The draft header is visible before the session's command composer is ready.
             steps.push_back(("GPT-5.6-Terra", b"/status\r"));
             "Server:Localbackgroundserver"
+        } else if mismatch {
+            args.extend(if persisted {
+                ["--disable".into(), "api_key_model_discovery".into()]
+            } else if disabling {
+                ["--disable".into(), "auth_elicitation".into()]
+            } else {
+                ["--enable".into(), "api_key_model_discovery".into()]
+            });
+            let input: &[u8] = match command {
+                "mismatch-cancel" => b"\x03",
+                "mismatch-embedded" => b"1",
+                "mismatch-restart" | "mismatch-disable" | "mismatch-disable-persisted" => b"2\r",
+                _ => unreachable!(),
+            };
+            steps.push_back(("Backgroundserverhasincompatiblefeaturesettings", input));
+            if command == "mismatch-cancel" {
+                "--no-daemon"
+            } else {
+                steps.push_back(("GPT-5.6-Terra", b"/status\r"));
+                if restart { "Server:Localbackgroundserver" } else { "Model:" }
+            }
         } else if bedrock_onboarding {
             "UseAmazonBedrock"
         } else {
@@ -139,6 +198,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             &[],
         )
         .await?;
+        let exit = spawned.exit_rx;
         let session = spawned.session;
         let writer = session.writer_sender();
         let mut stdout = spawned.stdout_rx;
@@ -153,7 +213,9 @@ async fn daemon_startup(command: &str) -> Result<()> {
             ("\x1b]10;?", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
             ("\x1b]11;?", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
         ];
-        let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 45), async {
+        // A fresh disable request includes both cold daemon startup and its confirmed restart.
+        let timeout = Duration::from_secs(if disabling { 90 } else { 45 });
+        let result = tokio::time::timeout(timeout, async {
             while let Some(bytes) = stdout.recv().await {
                 output.push_str(&String::from_utf8_lossy(&bytes));
                 screen.process(&bytes);
@@ -172,11 +234,29 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 if let Some((ready, input)) = steps.front()
                     && text.contains(ready)
                 {
+                    if disabling && *ready == "Backgroundserverhasincompatiblefeaturesettings" {
+                        existing_daemon = Some(fs::read(&pid_file)?);
+                        let settings: serde_json::Value = serde_json::from_slice(&fs::read(home.path().join("app-server-daemon/settings.json"))?)?;
+                        if persisted {
+                            ensure!(settings["featureOverrides"]["api_key_model_discovery"] == true);
+                        } else {
+                            ensure!(settings["featureOverrides"]["auth_elicitation"].is_null());
+                        }
+                    }
                     writer.send(input.to_vec()).await?;
                     steps.pop_front();
                     output.clear();
                 } else if steps.is_empty() && text.contains(expected) {
-                    if command == "start" {
+                    if mismatch {
+                        let previous_pid = existing_daemon.as_ref().context("missing original daemon PID")?;
+                        ensure!((fs::read(&pid_file)? != *previous_pid) == restart);
+                        if command == "mismatch-cancel" {
+                            ensure!(text.contains("Cannotusethesharedbackgroundserver:Thissessionrequiresapi_key_model_discoverytobeenabled."));
+                        } else {
+                            ensure!(text.contains("Server:Localbackgroundserver") == restart);
+                        }
+                    } else if command == "start" {
+                        ensure!(text.contains("Server:Localbackgroundserver"));
                         ensure!(home.path().join("app-server-daemon/daemon.pid").exists());
                     } else if let Some(existing_daemon) = &existing_daemon {
                         ensure!(fs::read(&pid_file)? == *existing_daemon);
@@ -192,9 +272,13 @@ async fn daemon_startup(command: &str) -> Result<()> {
             )
         })
         .await;
+        if command == "mismatch-cancel" && matches!(result, Ok(Ok(()))) {
+            let status = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), exit).await??;
+            ensure!(status != 0, "incompatible daemon launch must fail");
+        }
         Ok::<_, anyhow::Error>((
             session,
-            result.with_context(|| format!("{command} timed out: {}", screen.screen().contents())),
+            result.with_context(|| format!("{command} timed out waiting for {}: {}", steps.front().map_or(expected, |(ready, _)| *ready), screen.screen().contents())),
         ))
     }
     .await;

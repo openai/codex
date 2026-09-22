@@ -1,0 +1,17 @@
+---
+source: tui/src/daemon_recovery_tests.rs
+expression: text
+---
+
+  Background server has incompatible feature settings
+  This session requires api_key_model_discovery to be enabled
+  Restart will use these shared feature settings:
+    api_key_model_discovery = true
+    mcp_oauth_refresh_coordination = false
+  These settings persist and can disable functionality for other clients. Restart may
+  interrupt active or queued work.
+
+
+  1. Run without daemon this time
+  2. Restart with these settings
+› 3. Cancel

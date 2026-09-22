@@ -491,7 +491,10 @@ pub(super) async fn run_main_inner(
         daemon_exclusion = Some("Bedrock sign-in");
         app_server_target = AppServerTarget::Embedded;
     }
-    let daemon_features = daemon_startup::server_features(&cli_kv_overrides);
+    let mut daemon_features = daemon_startup::server_features(&cli_kv_overrides);
+    // Disabling shared services requires confirmation, even on a fresh auto-start.
+    daemon_features.retain(|_, enabled| *enabled);
+    let mut managed_daemon = false;
     if auto_start_daemon && daemon_exclusion.is_none() {
         startup_draft.flush_pending_events().await?;
         let output = startup_draft
@@ -506,6 +509,7 @@ pub(super) async fn run_main_inner(
                 })
             })
             .await?;
+        managed_daemon = output.backend.is_some();
         app_server_target = AppServerTarget::LocalDaemon {
             endpoint: RemoteAppServerEndpoint::UnixSocket {
                 socket_path: AbsolutePathBuf::from_absolute_path_checked(output.socket_path)?,
@@ -517,12 +521,13 @@ pub(super) async fn run_main_inner(
     let compatibility_warning = if cli.agents_overview {
         None
     } else {
-        startup_draft
-            .run_until(daemon_startup::compatibility_warning(
-                &app_server_target,
-                &config,
-            ))
-            .await?
+        daemon_recovery::check(
+            &mut startup_draft,
+            &app_server_target,
+            &config,
+            managed_daemon,
+        )
+        .await?
     };
     if compatibility_warning.is_some() {
         app_server_target = AppServerTarget::Embedded;

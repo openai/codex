@@ -1,6 +1,6 @@
 //! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
-//! incompatible feature settings use embedded mode. Compatible automatic launches
-//! require a successful shared-server connection.
+//! optional attachment may fall back to embedded mode, while automatic launches
+//! require a compatible shared server and a successful connection.
 
 use super::*;
 use std::collections::BTreeMap;
@@ -13,6 +13,13 @@ const SERVER_FEATURES: [Feature; 4] = [
 ];
 
 pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
+
+#[derive(Debug, thiserror::Error)]
+#[error("Cannot use the shared background server: {reason}.\n{FAILURE_HINT}")]
+pub(super) struct CompatibilityError {
+    pub reason: String,
+    pub restart_features: Option<BTreeMap<String, bool>>,
+}
 
 pub(super) fn exclusion(
     cli: &Cli,
@@ -54,7 +61,10 @@ pub(super) fn config_exclusion(
         .all(|(key, value)| match key.as_str() {
             "suppress_unstable_features_warning" | "tui.fullscreen_transcript" => value.is_bool(),
             "tui" => value.as_table().is_some_and(|tui| {
-                tui.len() == 1 && tui.get("fullscreen_transcript").is_some_and(toml::Value::is_bool)
+                tui.len() == 1
+                    && tui
+                        .get("fullscreen_transcript")
+                        .is_some_and(toml::Value::is_bool)
             }),
             "features" => value.as_table().is_some_and(|features| {
                 !features.is_empty()
@@ -64,9 +74,6 @@ pub(super) fn config_exclusion(
             }),
             _ => key.strip_prefix("features.").is_some_and(allowed_feature) && value.is_bool(),
         })
-        // Older clients cannot check compatibility before attaching. Do not disable
-        // shared services they may rely on through a new daemon's CLI overrides.
-        || server_features(cli_kv_overrides).values().any(|enabled| !enabled)
     {
         Some("command-line configuration overrides (-c, --enable, --disable, or --search)")
     } else if !loader_overrides_are_default(loader_overrides) {
@@ -111,17 +118,22 @@ pub(super) fn server_features(overrides: &[(String, toml::Value)]) -> BTreeMap<S
 pub(super) async fn compatibility_warning(
     target: &AppServerTarget,
     config: &Config,
-) -> Option<String> {
-    if !matches!(target, AppServerTarget::LocalDaemon { .. }) {
-        return None;
-    }
-    // The feature-list RPC cannot report this process-scoped structured setting.
-    if !config.features.enabled(Feature::CodeModeHost)
-        && config.code_mode.disable_in_process_fallback
-    {
-        return Some("Running without the shared background server: code-mode host fallback policy requires embedded mode.".to_string());
-    }
+) -> Result<Option<String>, CompatibilityError> {
+    let AppServerTarget::LocalDaemon {
+        allow_embedded_fallback,
+        ..
+    } = target
+    else {
+        return Ok(None);
+    };
+    let mut restart_features = None;
     let check = async {
+        // The feature-list RPC cannot report this process-scoped structured setting.
+        if !config.features.enabled(Feature::CodeModeHost)
+            && config.code_mode.disable_in_process_fallback
+        {
+            return Err("code-mode host fallback policy requires embedded mode".to_string());
+        }
         let client = app_server_connection::connect(target)
             .await
             .map_err(|_| "could not connect to check daemon feature settings".to_string())?;
@@ -146,13 +158,29 @@ pub(super) async fn compatibility_warning(
                 .is_some_and(|feature| feature.enabled)
                 != enabled
             {
-                return Err(format!("daemon does not report features.{name}={enabled}"));
+                restart_features = Some(
+                    SERVER_FEATURES
+                        .into_iter()
+                        .map(|feature| {
+                            (feature.key().to_string(), config.features.enabled(feature))
+                        })
+                        .collect(),
+                );
+                let state = if enabled { "enabled" } else { "disabled" };
+                return Err(format!("This session requires {name} to be {state}"));
             }
         }
         Ok::<(), String>(())
     }
     .await;
-    check
-        .err()
-        .map(|reason| format!("Running without the shared background server: {reason}."))
+    match check {
+        Ok(()) => Ok(None),
+        Err(reason) if *allow_embedded_fallback => Ok(Some(format!(
+            "Running without the shared background server: {reason}."
+        ))),
+        Err(reason) => Err(CompatibilityError {
+            reason,
+            restart_features,
+        }),
+    }
 }

@@ -6,6 +6,11 @@ slow-timeout = { period = "30s", terminate-after = 2 }
 retries = 1
 
 [[profile.default.overrides]]
+# These cases cold-start a daemon before confirming a second launch with new settings.
+filter = 'package(codex-cli) & binary(daemon_startup) & test(requires_confirmation_to_disable_)'
+slow-timeout = { period = "1m", terminate-after = 2 }
+
+[[profile.default.overrides]]
 # This case validates and copies both the initial and replacement debug package.
 filter = 'package(codex-cli) & binary(app_server_daemon) & test(=packaged_daemon_start_and_explicit_replacement)'
 slow-timeout = { period = "1m", terminate-after = 3 }
