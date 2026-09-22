@@ -605,6 +605,10 @@ fn write_config(codex_home: &Path, repo_root: &Path) -> Result<()> {
 model_provider = "openai"
 suppress_unstable_features_warning = true
 
+[notice.model_migrations]
+"gpt-5.4" = "gpt-6-sol"
+"gpt-5.6-terra" = "gpt-6-sol"
+
 [projects."{repo_root_display}"]
 trust_level = "trusted"
 "#
