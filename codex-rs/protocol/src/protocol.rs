@@ -1861,6 +1861,7 @@ pub enum CodexErrorInfo {
     InternalServerError,
     Unauthorized,
     BadRequest,
+    InvalidPrompt,
     SandboxError,
     /// The response SSE stream disconnected in the middle of a turnbefore completion.
     ResponseStreamDisconnected {
@@ -1898,6 +1899,7 @@ impl CodexErrorInfo {
             | Self::InternalServerError
             | Self::Unauthorized
             | Self::BadRequest
+            | Self::InvalidPrompt
             | Self::SandboxError
             | Self::ResponseStreamDisconnected { .. }
             | Self::ResponseTooManyFailedAttempts { .. }

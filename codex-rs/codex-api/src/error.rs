@@ -33,6 +33,8 @@ pub enum ApiError {
     RateLimit(String),
     #[error("invalid request: {message}")]
     InvalidRequest { message: String },
+    #[error("invalid prompt: {message}")]
+    InvalidPrompt { message: String },
     #[error("cyber policy: {message}")]
     CyberPolicy { message: String },
     #[error("bio policy: {message}")]

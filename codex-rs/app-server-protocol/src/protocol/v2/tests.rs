@@ -4729,6 +4729,7 @@ fn core_error_info_converts_to_camel_case() {
     for (core, expected) in [
         (CoreCodexErrorInfo::CyberPolicy, json!("cyberPolicy")),
         (CoreCodexErrorInfo::BioPolicy, json!("other")),
+        (CoreCodexErrorInfo::InvalidPrompt, json!("other")),
         (
             CoreCodexErrorInfo::RateLimitExceeded,
             json!("rateLimitExceeded"),

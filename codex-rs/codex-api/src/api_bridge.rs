@@ -53,6 +53,9 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
             })
         }
         ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        ApiError::InvalidPrompt { message } => {
+            CodexErr::new(CodexErrorDetails::InvalidPrompt { message })
+        }
         ApiError::CyberPolicy { message } => {
             CodexErr::new(CodexErrorDetails::CyberPolicy { message })
         }
@@ -118,11 +121,16 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 if status == http::StatusCode::BAD_REQUEST {
                     if let Ok(parsed) = serde_json::from_str::<Value>(&body_text)
                         && let Some(error) = parsed.get("error")
-                        && let Some(code @ (CYBER_POLICY_ERROR_CODE | BIO_POLICY_ERROR_CODE)) =
-                            error.get("code").and_then(Value::as_str)
+                        && let Some(
+                            code @ (CYBER_POLICY_ERROR_CODE
+                            | BIO_POLICY_ERROR_CODE
+                            | INVALID_PROMPT_ERROR_CODE),
+                        ) = error.get("code").and_then(Value::as_str)
                     {
                         let fallback_message = if code == BIO_POLICY_ERROR_CODE {
                             BIO_POLICY_FALLBACK_MESSAGE
+                        } else if code == INVALID_PROMPT_ERROR_CODE {
+                            INVALID_PROMPT_FALLBACK_MESSAGE
                         } else {
                             CYBER_POLICY_FALLBACK_MESSAGE
                         };
@@ -134,6 +142,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                             .unwrap_or_else(|| fallback_message.to_string());
                         if code == BIO_POLICY_ERROR_CODE {
                             CodexErr::new(CodexErrorDetails::BioPolicy { message })
+                        } else if code == INVALID_PROMPT_ERROR_CODE {
+                            CodexErr::new(CodexErrorDetails::InvalidPrompt { message })
                         } else {
                             CodexErr::new(CodexErrorDetails::CyberPolicy { message })
                         }
@@ -234,6 +244,8 @@ const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
 const X_OPENAI_AUTHORIZATION_ERROR_HEADER: &str = "x-openai-authorization-error";
 const X_ERROR_JSON_HEADER: &str = "x-error-json";
+const INVALID_PROMPT_ERROR_CODE: &str = "invalid_prompt";
+const INVALID_PROMPT_FALLBACK_MESSAGE: &str = "Invalid request.";
 const CYBER_POLICY_ERROR_CODE: &str = "cyber_policy";
 const CYBER_POLICY_FALLBACK_MESSAGE: &str =
     "This request has been flagged for possible cybersecurity risk.";

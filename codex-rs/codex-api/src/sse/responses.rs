@@ -455,7 +455,7 @@ pub fn process_responses_event(
                         let message = error
                             .message
                             .unwrap_or_else(|| "Invalid request.".to_string());
-                        response_error = ApiError::InvalidRequest { message };
+                        response_error = ApiError::InvalidPrompt { message };
                     } else if is_server_overloaded_error(&error) {
                         response_error = ApiError::ServerOverloaded;
                     } else {
@@ -1404,7 +1404,7 @@ mod tests {
 
             assert_eq!(events.len(), 1);
             match (code, &events[0]) {
-                ("invalid_prompt", Err(ApiError::InvalidRequest { message }))
+                ("invalid_prompt", Err(ApiError::InvalidPrompt { message }))
                 | ("bio_policy", Err(ApiError::BioPolicy { message })) => {
                     assert_eq!(message, expected_message);
                 }
@@ -1414,23 +1414,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bio_policy_error_uses_fallback_for_missing_or_blank_message() {
-        for message in [None, Some(""), Some("  ")] {
-            let mut event = json!({
-                "type": "response.failed",
-                "response": { "error": { "code": "bio_policy" } },
-            });
-            if let Some(message) = message {
-                event["response"]["error"]["message"] = json!(message);
-            }
-            let sse = format!("event: response.failed\ndata: {event}\n\n");
-            let events = collect_events(&[sse.as_bytes()]).await;
-            match events.as_slice() {
-                [Err(ApiError::BioPolicy { message })] => assert_eq!(
-                    message,
-                    "This content was flagged for possible biological risk."
-                ),
-                other => panic!("unexpected events: {other:?}"),
+    async fn typed_errors_handle_missing_or_blank_message() {
+        for (code, fallback) in [
+            (
+                "bio_policy",
+                "This content was flagged for possible biological risk.",
+            ),
+            ("invalid_prompt", "Invalid request."),
+        ] {
+            for message in [None, Some(""), Some("  ")] {
+                let mut event = json!({
+                    "type": "response.failed",
+                    "response": { "error": { "code": code } },
+                });
+                if let Some(message) = message {
+                    event["response"]["error"]["message"] = json!(message);
+                }
+                let expected = match (code, message) {
+                    ("invalid_prompt", Some(message)) => message,
+                    _ => fallback,
+                };
+                let sse = format!("event: response.failed\ndata: {event}\n\n");
+                let events = collect_events(&[sse.as_bytes()]).await;
+                match (code, events.as_slice()) {
+                    ("bio_policy", [Err(ApiError::BioPolicy { message })])
+                    | ("invalid_prompt", [Err(ApiError::InvalidPrompt { message })]) => {
+                        assert_eq!(message, expected);
+                    }
+                    other => panic!("unexpected events: {other:?}"),
+                }
             }
         }
     }

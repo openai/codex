@@ -104,6 +104,7 @@ fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
             | CodexErrorInfo::MisalignmentPolicyViolation
             | CodexErrorInfo::Unauthorized
             | CodexErrorInfo::BadRequest
+            | CodexErrorInfo::InvalidPrompt
             | CodexErrorInfo::SandboxError
             | CodexErrorInfo::ActiveTurnNotSteerable { .. }
             | CodexErrorInfo::ThreadRollbackFailed

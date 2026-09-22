@@ -185,48 +185,72 @@ fn map_api_error_uses_cyber_policy_fallback_for_missing_message() {
 }
 
 #[test]
-fn map_api_error_preserves_bio_policy() {
-    let err = map_api_error(ApiError::BioPolicy {
-        message: "This request was blocked by bio policy.".to_string(),
-    });
-    assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BioPolicy);
-    assert_eq!(err.to_string(), "This request was blocked by bio policy.");
-    assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
+fn map_api_error_preserves_typed_errors() {
+    let message = "This request was rejected.";
+    for (error, expected_info) in [
+        (
+            ApiError::BioPolicy {
+                message: message.to_string(),
+            },
+            CodexErrorInfo::BioPolicy,
+        ),
+        (
+            ApiError::InvalidPrompt {
+                message: message.to_string(),
+            },
+            CodexErrorInfo::InvalidPrompt,
+        ),
+    ] {
+        let err = map_api_error(error);
+        assert_eq!(err.to_codex_protocol_error(), expected_info);
+        assert_eq!(err.to_string(), message);
+        assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
+    }
 }
 
 #[test]
-fn map_api_error_maps_http_and_wrapped_websocket_bio_policy() {
-    for wrapped in [false, true] {
-        for message in [
-            Some("This request was blocked by bio policy."),
-            None,
-            Some(""),
-            Some("  "),
-        ] {
-            let mut body = serde_json::json!({"error": {"code": "bio_policy"}});
-            if let Some(message) = message {
-                body["error"]["message"] = serde_json::json!(message);
-            }
-            if wrapped {
-                body["type"] = serde_json::json!("error");
-                body["status"] = serde_json::json!(400);
-            }
-            let err = map_api_error(ApiError::Transport(TransportError::Http {
-                status: http::StatusCode::BAD_REQUEST,
-                url: None,
-                headers: None,
-                body: Some(body.to_string()),
-            }));
+fn map_api_error_maps_http_and_wrapped_websocket_typed_errors() {
+    for (code, expected_info, fallback) in [
+        (
+            "bio_policy",
+            CodexErrorInfo::BioPolicy,
+            "This content was flagged for possible biological risk.",
+        ),
+        (
+            "invalid_prompt",
+            CodexErrorInfo::InvalidPrompt,
+            "Invalid request.",
+        ),
+    ] {
+        for wrapped in [false, true] {
+            for (message, expected) in [
+                (
+                    Some("This request was rejected."),
+                    "This request was rejected.",
+                ),
+                (None, fallback),
+                (Some(""), fallback),
+                (Some("  "), fallback),
+            ] {
+                let mut body = serde_json::json!({"error": {"code": code}});
+                if let Some(message) = message {
+                    body["error"]["message"] = serde_json::json!(message);
+                }
+                if wrapped {
+                    body["type"] = serde_json::json!("error");
+                    body["status"] = serde_json::json!(400);
+                }
+                let err = map_api_error(ApiError::Transport(TransportError::Http {
+                    status: http::StatusCode::BAD_REQUEST,
+                    url: None,
+                    headers: None,
+                    body: Some(body.to_string()),
+                }));
 
-            let expected = message
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or("This content was flagged for possible biological risk.");
-            let CodexErrorDetails::BioPolicy { message } = err.details() else {
-                panic!("expected CodexErrorDetails::BioPolicy, got {err:?}");
-            };
-            assert_eq!(message, expected);
-            assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BioPolicy);
-            assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
+                assert_eq!(err.to_string(), expected);
+                assert_eq!(err.to_codex_protocol_error(), expected_info);
+                assert_eq!(err.retry_delay(/*retry_count*/ 1), None);
+            }
         }
     }
 }
@@ -359,25 +383,27 @@ fn map_api_error_preserves_misalignment_details_from_wrapped_websocket_error() {
 }
 
 #[test]
-fn map_api_error_keeps_unknown_400_errors_generic() {
-    let body = serde_json::json!({
-        "error": {
-            "message": "Some other bad request.",
-            "code": "some_other_policy"
-        }
-    })
-    .to_string();
-    let err = map_api_error(ApiError::Transport(TransportError::Http {
-        status: http::StatusCode::BAD_REQUEST,
-        url: Some("http://example.com/v1/responses".to_string()),
-        headers: None,
-        body: Some(body.clone()),
-    }));
+fn map_api_error_keeps_other_400_errors_generic() {
+    for code in ["invalid_request", "some_other_policy"] {
+        let body = serde_json::json!({
+            "error": {
+                "message": "Some other bad request.",
+                "code": code
+            }
+        })
+        .to_string();
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::BAD_REQUEST,
+            url: Some("http://example.com/v1/responses".to_string()),
+            headers: None,
+            body: Some(body.clone()),
+        }));
 
-    let CodexErrorDetails::InvalidRequest(message) = err.details() else {
-        panic!("expected CodexErrorDetails::InvalidRequest, got {err:?}");
-    };
-    assert_eq!(message, &body);
+        let CodexErrorDetails::InvalidRequest(message) = err.details() else {
+            panic!("expected CodexErrorDetails::InvalidRequest, got {err:?}");
+        };
+        assert_eq!(message, &body);
+    }
 }
 
 #[test]

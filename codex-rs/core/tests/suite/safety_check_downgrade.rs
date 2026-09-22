@@ -39,6 +39,7 @@ const TRUSTED_ACCESS_FOR_CYBER_VERIFICATION: &str = "trusted_access_for_cyber";
 const CYBER_POLICY_MESSAGE: &str =
     "This request has been flagged for potentially high-risk cyber activity.";
 const BIO_POLICY_MESSAGE: &str = "This request has been flagged for possible biological risk.";
+const INVALID_PROMPT_MESSAGE: &str = "This prompt was rejected.";
 
 fn disabled_text_turn(test: &TestCodex, text: &str) -> TurnInputRequest {
     let (sandbox_policy, permission_profile) =
@@ -108,48 +109,59 @@ async fn openai_model_header_mismatch_emits_warning_event() -> Result<()> {
 
 #[test_case::test_case("cyber_policy", CYBER_POLICY_MESSAGE, CodexErrorInfo::CyberPolicy; "cyber")]
 #[test_case::test_case("bio_policy", BIO_POLICY_MESSAGE, CodexErrorInfo::BioPolicy; "bio")]
+#[test_case::test_case("invalid_prompt", INVALID_PROMPT_MESSAGE, CodexErrorInfo::InvalidPrompt; "invalid_prompt")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn policy_response_emits_typed_error_without_retry(
+async fn error_response_emits_typed_error_without_retry(
     code: &str,
     message: &str,
     error_info: CodexErrorInfo,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_mock_server().await;
-    let response = ResponseTemplate::new(400).set_body_json(serde_json::json!({
-        "error": {
-            "message": message,
-            "type": "invalid_request",
-            "param": null,
-            "code": code
-        }
-    }));
-    let mock = mount_response_once(&server, response).await;
+    let error = serde_json::json!({
+        "message": message,
+        "type": "invalid_request",
+        "param": null,
+        "code": code
+    });
+    for response in [
+        ResponseTemplate::new(400).set_body_json(serde_json::json!({"error": error})),
+        sse_response(sse(vec![serde_json::json!({
+            "type": "response.failed",
+            "response": {"error": error}
+        })])),
+    ] {
+        let server = start_mock_server().await;
+        let mock = mount_response_once(&server, response).await;
 
-    let mut builder = test_codex().with_model(REQUESTED_MODEL);
-    let test = builder.build_with_auto_env(&server).await?;
+        let mut builder = test_codex().with_model(REQUESTED_MODEL);
+        let test = builder.build_with_auto_env(&server).await?;
 
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "trigger policy error".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "trigger error".to_string(),
+                text_elements: Vec::new(),
+            }]))
+            .await?;
 
-    let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
-    let EventMsg::Error(error) = error else {
-        panic!("expected error event");
-    };
-    assert_eq!(error.message, message);
-    assert_eq!(error.codex_error_info, Some(error_info));
+        let error = wait_for_event(&test.codex, |event| matches!(event, EventMsg::Error(_))).await;
+        let EventMsg::Error(error) = error else {
+            panic!("expected error event");
+        };
+        assert_eq!(error.message, message);
+        assert_eq!(error.codex_error_info.as_ref(), Some(&error_info));
+        assert_eq!(
+            serde_json::to_value(&error.codex_error_info)?,
+            serde_json::json!(code)
+        );
 
-    let _ = wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+        let _ = wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
 
-    mock.single_request();
+        mock.single_request();
+    }
 
     Ok(())
 }
