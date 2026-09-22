@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::time::Duration;
 
 use crate::AuthProvider;
@@ -18,6 +19,8 @@ pub const OPENAI_FILE_URI_PREFIX: &str = "sediment://";
 pub const OPENAI_FILE_UPLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 const OPENAI_FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+const OPENAI_FILE_BLOB_UPLOAD_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const MAX_BLOB_UPLOAD_ATTEMPTS: u64 = 5;
 const OPENAI_FILE_FINALIZE_TIMEOUT: Duration = Duration::from_secs(30);
 const OPENAI_FILE_FINALIZE_RETRY_DELAY: Duration = Duration::from_millis(250);
 const OPENAI_FILE_USE_CASE: &str = "codex";
@@ -41,6 +44,8 @@ pub struct UploadedOpenAiFile {
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiFileError {
+    #[error("failed to open OpenAI file upload contents: {0}")]
+    ReadContents(#[source] std::io::Error),
     #[error(
         "file `{file_name}` is too large: {size_bytes} bytes exceeds the limit of {limit_bytes} bytes"
     )]
@@ -118,15 +123,21 @@ pub fn openai_file_uri(file_id: &str) -> String {
     format!("{OPENAI_FILE_URI_PREFIX}{file_id}")
 }
 
-pub async fn upload_openai_file(
+/// Creates and finalizes one file record, reopening the same contents for blob PUT retries.
+pub async fn upload_openai_file<Open, OpenFuture, Contents>(
     base_url: &str,
     auth: &dyn AuthProvider,
     client_pool: &RouteAwareClientPool,
     file_name: String,
     file_size_bytes: u64,
-    contents: impl Stream<Item = std::io::Result<Bytes>> + Send + 'static,
+    mut open_contents: Open,
     hosted_upload: Option<&HostedFileUploadContext>,
-) -> Result<UploadedOpenAiFile, OpenAiFileError> {
+) -> Result<UploadedOpenAiFile, OpenAiFileError>
+where
+    Open: FnMut() -> OpenFuture,
+    OpenFuture: Future<Output = std::io::Result<Contents>>,
+    Contents: Stream<Item = std::io::Result<Bytes>> + Send + 'static,
+{
     if file_size_bytes > OPENAI_FILE_UPLOAD_LIMIT_BYTES {
         return Err(OpenAiFileError::FileTooLarge {
             file_name,
@@ -186,19 +197,12 @@ pub async fn upload_openai_file(
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown-host".to_string());
-    let azure_client_request_id = Uuid::new_v4().to_string();
     let upload_started_at = Instant::now();
-    let upload_response = client_pool
-        .put(&create_payload.upload_url)
-        .timeout(Duration::from_secs(5 * 60))
-        .header("x-ms-blob-type", "BlockBlob")
-        .header("x-ms-client-request-id", &azure_client_request_id)
-        .header(CONTENT_LENGTH, file_size_bytes)
-        .body_stream(contents)
-        .send()
-        .await
-        .map_err(|source| {
-            let elapsed_ms = upload_started_at.elapsed().as_millis();
+    let deadline = upload_started_at + OPENAI_FILE_BLOB_UPLOAD_TIMEOUT;
+    let mut retry_delay = Duration::ZERO;
+    for attempt in 1..=MAX_BLOB_UPLOAD_ATTEMPTS {
+        let azure_client_request_id = Uuid::new_v4().to_string();
+        let request_error = |source: RouteAwareRequestError| {
             let error_kind = if source.is_timeout() {
                 "timeout"
             } else if source.is_connect() {
@@ -210,53 +214,135 @@ pub async fn upload_openai_file(
             } else {
                 "other"
             };
-            tracing::event!(
-                target: "codex_otel.log_only",
-                tracing::Level::WARN,
-                event.name = "codex.openai_file_blob_upload_failed",
-                file_id = %create_payload.file_id,
-                host = %upload_host,
-                file_size_bytes,
-                elapsed_ms,
-                error_kind,
-                azure_client_request_id,
-                "OpenAI file blob upload transport failed"
-            );
             OpenAiFileError::BlobUploadRequest {
                 host: upload_host.clone(),
-                elapsed_ms,
+                elapsed_ms: upload_started_at.elapsed().as_millis(),
                 error_kind,
                 azure_client_request_id: azure_client_request_id.clone(),
                 source: source.without_url(),
             }
-        })?;
-    let upload_status = upload_response.status();
-    let cloudflare_ray_id = upload_response_header(&upload_response, "cf-ray");
-    let azure_request_id = upload_response_header(&upload_response, "x-ms-request-id");
-    let azure_error_code = upload_response_header(&upload_response, "x-ms-error-code");
-    if !upload_status.is_success() {
+        };
+        // Opening the stream, sending every attempt, and backoff share one deadline.
+        let result = tokio::time::timeout_at(deadline, async {
+            if Instant::now() >= deadline {
+                return Err(request_error(RouteAwareRequestError::Timeout));
+            }
+            let contents = open_contents()
+                .await
+                .map_err(OpenAiFileError::ReadContents)?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(request_error(RouteAwareRequestError::Timeout));
+            }
+            client_pool
+                .put(&create_payload.upload_url)
+                .timeout(remaining)
+                .header("x-ms-blob-type", "BlockBlob")
+                .header("x-ms-client-request-id", &azure_client_request_id)
+                .header(CONTENT_LENGTH, file_size_bytes)
+                .body_stream(contents)
+                .send()
+                .await
+                .map_err(request_error)
+        })
+        .await
+        .unwrap_or_else(|_| Err(request_error(RouteAwareRequestError::Timeout)));
+
+        let mut status = None;
+        let mut cloudflare_ray_id = "missing".to_string();
+        let mut azure_request_id = "missing".to_string();
+        let mut azure_error_code = "missing".to_string();
+        let mut server_delay = None;
+        let (error, retryable, error_kind) = match result {
+            Ok(response) => {
+                let upload_status = response.status();
+                status = Some(upload_status.to_string());
+                cloudflare_ray_id = upload_response_header(&response, "cf-ray");
+                azure_request_id = upload_response_header(&response, "x-ms-request-id");
+                azure_error_code = upload_response_header(&response, "x-ms-error-code");
+                if upload_status.is_success() {
+                    if attempt > 1 {
+                        tracing::event!(
+                            target: "codex_otel.log_only",
+                            tracing::Level::INFO,
+                            event.name = "codex.openai_file_blob_upload_recovered",
+                            file_id = %create_payload.file_id,
+                            host = %upload_host,
+                            file_size_bytes,
+                            elapsed_ms = upload_started_at.elapsed().as_millis(),
+                            attempt,
+                            delay_ms = retry_delay.as_millis(),
+                            status = status.as_deref(),
+                            cloudflare_ray_id,
+                            azure_client_request_id,
+                            azure_request_id,
+                            azure_error_code,
+                            "OpenAI file blob upload recovered"
+                        );
+                    }
+                    break;
+                }
+                server_delay = blob_retry_after(response.headers());
+                (
+                    OpenAiFileError::BlobUploadStatus {
+                        host: upload_host.clone(),
+                        status: upload_status,
+                        azure_client_request_id: azure_client_request_id.clone(),
+                        azure_request_id: azure_request_id.clone(),
+                        azure_error_code: azure_error_code.clone(),
+                    },
+                    upload_status == StatusCode::SERVICE_UNAVAILABLE,
+                    "http_status",
+                )
+            }
+            Err(error) => {
+                let (retryable, error_kind) = match &error {
+                    OpenAiFileError::BlobUploadRequest {
+                        source, error_kind, ..
+                    } => (
+                        source.is_timeout()
+                            || source.is_connect()
+                            || source.is_body()
+                            || source.is_request(),
+                        *error_kind,
+                    ),
+                    _ => (false, "read"),
+                };
+                (error, retryable, error_kind)
+            }
+        };
+        retry_delay = server_delay
+            .unwrap_or_else(|| codex_client::backoff(Duration::from_millis(125), attempt));
+        let will_retry = retryable
+            && attempt < MAX_BLOB_UPLOAD_ATTEMPTS
+            && retry_delay < deadline.saturating_duration_since(Instant::now());
+        let event_name = if will_retry {
+            "codex.openai_file_blob_upload_retry"
+        } else {
+            "codex.openai_file_blob_upload_failed"
+        };
         tracing::event!(
             target: "codex_otel.log_only",
             tracing::Level::WARN,
-            event.name = "codex.openai_file_blob_upload_failed",
+            event.name = event_name,
             file_id = %create_payload.file_id,
             host = %upload_host,
             file_size_bytes,
             elapsed_ms = upload_started_at.elapsed().as_millis(),
-            status = %upload_status,
+            attempt,
+            delay_ms = if will_retry { retry_delay.as_millis() } else { 0 },
+            status = status.as_deref(),
+            error_kind,
             cloudflare_ray_id,
             azure_client_request_id,
             azure_request_id,
             azure_error_code,
-            "OpenAI file blob upload failed"
+            "OpenAI file blob upload attempt failed"
         );
-        return Err(OpenAiFileError::BlobUploadStatus {
-            host: upload_host,
-            status: upload_status,
-            azure_client_request_id,
-            azure_request_id,
-            azure_error_code,
-        });
+        if !will_retry {
+            return Err(error);
+        }
+        tokio::time::sleep(retry_delay).await;
     }
 
     let finalize_url = format!(
@@ -363,6 +449,30 @@ fn upload_response_header(response: &HttpResponse, header: &str) -> String {
         .to_string()
 }
 
+fn blob_retry_after(headers: &http::HeaderMap) -> Option<Duration> {
+    if let Some(delay) = headers
+        .get("x-ms-retry-after-ms")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+    {
+        return Some(Duration::from_millis(delay));
+    }
+    let value = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
+    if let Ok(seconds) = value.parse() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let date = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some(
+        date.signed_duration_since(chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default(),
+    )
+}
+
+#[cfg(test)]
+#[path = "files_retry_tests.rs"]
+mod retry_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,9 +495,9 @@ mod tests {
     use wiremock::matchers::path;
 
     #[derive(Clone, Copy)]
-    struct ChatGptTestAuth;
+    pub(super) struct ChatGptTestAuth;
 
-    fn default_http_client_pool() -> RouteAwareClientPool {
+    pub(super) fn default_http_client_pool() -> RouteAwareClientPool {
         RouteAwareClientPool::new_without_request_logging(
             HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             ClientRouteClass::Api,
@@ -405,11 +515,11 @@ mod tests {
         }
     }
 
-    fn chatgpt_auth() -> ChatGptTestAuth {
+    pub(super) fn chatgpt_auth() -> ChatGptTestAuth {
         ChatGptTestAuth
     }
 
-    fn base_url_for(server: &MockServer) -> String {
+    pub(super) fn base_url_for(server: &MockServer) -> String {
         format!("{}/backend-api", server.uri())
     }
 
@@ -461,15 +571,15 @@ mod tests {
             .await;
 
         let base_url = base_url_for(&server);
-        let contents =
-            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]);
+        let open_contents =
+            || async { Ok(futures::stream::iter([Ok(Bytes::from_static(b"hello"))])) };
         let uploaded = upload_openai_file(
             &base_url,
             &chatgpt_auth(),
             &default_http_client_pool(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
-            contents,
+            open_contents,
             /*hosted_upload*/ None,
         )
         .await
@@ -542,7 +652,7 @@ mod tests {
             &default_http_client_pool(),
             "report.pdf".to_string(),
             /*file_size_bytes*/ 8,
-            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"%PDF-1.4"))]),
+            || async { Ok(futures::stream::iter([Ok(Bytes::from_static(b"%PDF-1.4"))])) },
             Some(&hosted_upload),
         )
         .await
@@ -595,7 +705,7 @@ mod tests {
             &default_http_client_pool(),
             "report.pdf".to_string(),
             /*file_size_bytes*/ 8,
-            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"%PDF-1.4"))]),
+            || async { Ok(futures::stream::iter([Ok(Bytes::from_static(b"%PDF-1.4"))])) },
             Some(&hosted_upload),
         )
         .await
@@ -653,15 +763,18 @@ mod tests {
         let client_pool = default_http_client_pool();
         let mut uploaded_files = Vec::new();
         for (file_name, _, contents) in files {
-            let contents_stream =
-                futures::stream::iter([Ok::<_, std::io::Error>(Bytes::copy_from_slice(contents))]);
+            let open_contents = || async {
+                Ok(futures::stream::iter([Ok(Bytes::copy_from_slice(
+                    contents,
+                ))]))
+            };
             let uploaded = upload_openai_file(
                 &base_url_for(&server),
                 &chatgpt_auth(),
                 &client_pool,
                 file_name.to_string(),
                 u64::try_from(contents.len()).expect("file size should fit in a u64"),
-                contents_stream,
+                open_contents,
                 /*hosted_upload*/ None,
             )
             .await
@@ -721,7 +834,7 @@ mod tests {
             &default_http_client_pool(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
-            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]),
+            || async { Ok(futures::stream::iter([Ok(Bytes::from_static(b"hello"))])) },
             /*hosted_upload*/ None,
         )
         .await
@@ -759,7 +872,7 @@ mod tests {
             &default_http_client_pool(),
             "hello.txt".to_string(),
             /*file_size_bytes*/ 5,
-            futures::stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(b"hello"))]),
+            || async { Ok(futures::stream::iter([Ok(Bytes::from_static(b"hello"))])) },
             /*hosted_upload*/ None,
         )
         .await
