@@ -71,6 +71,8 @@ mod realtime_start;
 mod reasoning_resume_tests;
 #[path = "tests/recap_generation_tests.rs"]
 mod recap_generation;
+#[path = "tests/resume_shutdown_tests.rs"]
+mod resume_shutdown_tests;
 mod safety_buffering;
 #[path = "tests/session_lifecycle_requests.rs"]
 mod session_lifecycle_requests;

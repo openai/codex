@@ -14,6 +14,7 @@ use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RateLimitReachedType;
@@ -25,8 +26,10 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadSource;
+use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SubAgentSource;
+use std::time::Duration;
 
 impl App {
     pub(super) fn refresh_mcp_startup_expected_servers_from_config(&mut self) {
@@ -116,6 +119,62 @@ impl App {
         app_server_client: &AppServerSession,
         notification: ServerNotification,
     ) {
+        // A picker can leave an old runtime's close notification queued while the same thread
+        // is resumed. Thread IDs survive reloads, so confirm that the displayed thread is still
+        // unloaded before routing a close that would exit the TUI or switch away from it.
+        if let ServerNotification::ThreadClosed(closed) = &notification
+            && let Ok(thread_id) = ThreadId::from_string(&closed.thread_id)
+            && self.current_displayed_thread_id() == Some(thread_id)
+        {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 5);
+            for attempt in 0..2 {
+                let result = tokio::time::timeout_at(
+                    deadline,
+                    app_server_client
+                        .request_handle()
+                        .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
+                            request_id: RequestId::String(format!(
+                                "thread-closed-{thread_id}-{attempt}"
+                            )),
+                            params: ThreadReadParams {
+                                thread_id: closed.thread_id.clone(),
+                                include_turns: false,
+                            },
+                        }),
+                )
+                .await;
+                match result {
+                    Ok(Ok(response))
+                        if !matches!(response.thread.status, ThreadStatus::NotLoaded) =>
+                    {
+                        return;
+                    }
+                    Ok(Ok(_)) => break,
+                    // Unpersisted closed threads can no longer be read. Preserve that close
+                    // and compatibility with servers that do not support this request.
+                    Ok(Err(TypedRequestError::Server { source, .. }))
+                        if matches!(source.code, -32602..=-32600) =>
+                    {
+                        break;
+                    }
+                    Ok(Err(TypedRequestError::Server { source, .. }))
+                        if source.code == -32603 && attempt == 0 =>
+                    {
+                        continue;
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        // A failed read does not confirm closure. Remote connections recover
+                        // through the normal reconnect path, rather than exiting the TUI.
+                        tracing::warn!("could not confirm displayed thread closure");
+                        if self.begin_reconnect() {
+                            return;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         if let ServerNotification::ThreadStatusChanged(status) = &notification {
             let _ = self.dynamic_tool_status_updates.send(status.clone());
         }
