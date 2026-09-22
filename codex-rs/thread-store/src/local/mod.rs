@@ -527,9 +527,15 @@ impl ThreadStore for LocalThreadStore {
     fn persist_thread(
         &self,
         thread_id: ThreadId,
-        _context: PersistContext,
+        context: PersistContext,
     ) -> ThreadStoreFuture<'_, ()> {
-        Box::pin(async move { live_writer::persist_thread(self, thread_id).await })
+        Box::pin(async move {
+            if context == PersistContext::ThreadPreparation {
+                live_writer::flush_thread(self, thread_id).await
+            } else {
+                live_writer::persist_thread(self, thread_id).await
+            }
+        })
     }
 
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {

@@ -78,6 +78,9 @@ mod agent_message_board;
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
+#[path = "scenarios_preparation.rs"]
+mod preparation;
+
 #[path = "scenarios_shared_instructions.rs"]
 mod shared_instructions;
 

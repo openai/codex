@@ -64,6 +64,8 @@ pub type ThreadStoreFuture<'a, T> = Pin<Box<dyn Future<Output = ThreadStoreResul
 /// Why thread persistence is being requested.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PersistContext {
+    /// Thread initialization or context injection is complete without starting a turn.
+    ThreadPreparation,
     /// Standard persistence makes the thread and all queued items durable and readable.
     Standard,
     /// A turn is about to begin sampling after its input has been recorded.
@@ -78,7 +80,7 @@ impl PersistContext {
     /// durability barrier. Stores may still choose to persist synchronously.
     pub fn allows_background_persistence(self) -> bool {
         match self {
-            Self::Standard => false,
+            Self::ThreadPreparation | Self::Standard => false,
             Self::TurnStart | Self::SteeredUserInput => true,
         }
     }
@@ -142,9 +144,22 @@ pub trait ThreadStore: Any + Send + Sync {
     /// replay history and before updating any implementation-owned projections.
     fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreFuture<'_, ()>;
 
+    /// Records metadata derived from rollout items.
+    /// Unlike [`Self::update_thread_metadata`], this allows the write to be deferred.
+    ///
+    /// The default implementation awaits the update. Deferred writes must respect the
+    /// flush and shutdown guarantees documented by [`Self::persist_thread`].
+    fn record_thread_metadata(
+        &self,
+        params: UpdateThreadMetadataParams,
+    ) -> ThreadStoreFuture<'_, ()> {
+        Box::pin(async move { self.update_thread_metadata(params).await.map(|_| ()) })
+    }
+
     /// Materializes the thread if persistence is lazy, then persists all queued items.
     ///
-    /// Standard persistence must complete before returning. Contexts that allow background
+    /// Preparation checkpoints may leave disposable preparation data in memory without
+    /// activating storage. Standard persistence must complete before returning. Contexts that allow background
     /// persistence may complete asynchronously when the implementation enqueues the checkpoint
     /// before returning, fences it with subsequent flush or shutdown operations, and surfaces
     /// failures through those operations.
@@ -158,6 +173,7 @@ pub trait ThreadStore: Any + Send + Sync {
     fn flush_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
 
     /// Flushes pending items and closes the live thread writer.
+    /// Stores with opt-in disposable preparations may discard an unactivated preparation.
     fn shutdown_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
 
     /// Discards the live thread writer without forcing pending in-memory items to become durable.
