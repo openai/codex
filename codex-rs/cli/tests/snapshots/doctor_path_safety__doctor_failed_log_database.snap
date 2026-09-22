@@ -1,0 +1,6 @@
+---
+source: cli/tests/doctor_path_safety.rs
+expression: state_row
+---
+  [XX] state        FIXTURE/sqlite/logs_2.sqlite database failed integrity check
+    -> Move the damaged SQLite database aside, then restart the interactive CLI or app server so it can rebuild that runtime database from saved data. Other entry points may not rebuild automatically.

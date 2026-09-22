@@ -10,6 +10,8 @@ use anyhow::Result;
 use app_test_support::TestAppServer;
 use codex_app_server_protocol::RequestId;
 use codex_config::loader::project_trust_key;
+use codex_state::SqliteConfig;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -195,6 +197,134 @@ fn non_interactive_dumb_terminal_preserves_other_doctor_failures() -> Result<()>
     let report: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(report["checks"]["terminal.env"]["status"], "warning");
     assert_eq!(report["overallStatus"], "fail");
+    Ok(())
+}
+
+#[test]
+fn doctor_reports_failed_database_paths() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let sqlite_home = fixture.root.path().join("sqlite");
+    std::fs::create_dir(&sqlite_home)?;
+    let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(sqlite_home.clone())?);
+    let config_file = fixture.home.join("config.toml");
+    let config = std::fs::read_to_string(&config_file)?;
+    let sqlite_home = toml::Value::String(sqlite_home.display().to_string());
+    std::fs::write(
+        &config_file,
+        format!("sqlite_home = {sqlite_home}\n{config}"),
+    )?;
+
+    for (snapshot_name, failed_paths) in [
+        ("doctor_failed_log_database", vec![sqlite.logs_db_path()]),
+        (
+            "doctor_failed_multiple_databases",
+            vec![sqlite.logs_db_path(), sqlite.goals_db_path()],
+        ),
+    ] {
+        for path in &failed_paths {
+            std::fs::write(path, "not a SQLite database")?;
+        }
+        let paths = failed_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let noun = if failed_paths.len() == 1 {
+            "database"
+        } else {
+            "databases"
+        };
+        let expected_cause = format!("{paths} {noun} failed integrity check");
+        for args in [
+            vec!["doctor", "--json"],
+            vec!["doctor", "--json", "--feedback"],
+        ] {
+            let output = fixture.command()?.args(args).output()?;
+            assert_eq!(output.status.code(), Some(1));
+            let report: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(report["checks"]["state.paths"]["status"], "fail");
+            assert_eq!(
+                report["checks"]["state.paths"]["summary"],
+                "state database integrity check failed"
+            );
+            assert_eq!(
+                report["checks"]["state.paths"]["issues"][0]["cause"],
+                expected_cause
+            );
+        }
+
+        for summary_only in [false, true] {
+            let mut command = fixture.command()?;
+            command.args(["doctor", "--ascii", "--no-color"]);
+            if summary_only {
+                command.arg("--summary");
+            }
+            let output = command.output()?;
+            assert_eq!(output.status.code(), Some(1));
+            let stdout = String::from_utf8(output.stdout)?;
+            let state_row = stdout
+                .lines()
+                .filter(|line| {
+                    line.starts_with("  [XX] state ")
+                        || (!summary_only
+                            && line.starts_with("    -> Move the damaged SQLite database aside"))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .replace(&fixture.root.path().display().to_string(), "FIXTURE")
+                .replace('\\', "/");
+            if summary_only {
+                assert_eq!(
+                    state_row,
+                    format!(
+                        "  [XX] state        {}",
+                        expected_cause
+                            .replace(&fixture.root.path().display().to_string(), "FIXTURE")
+                    )
+                    .replace('\\', "/")
+                );
+            } else {
+                insta::assert_snapshot!(snapshot_name, state_row);
+            }
+        }
+        for path in &failed_paths {
+            assert_eq!(std::fs::read_to_string(path)?, "not a SQLite database");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn doctor_redacts_failed_database_paths_in_json() -> Result<()> {
+    let fixture = Fixture::new()?;
+    let sqlite_home = fixture.root.path().join("doctor-secret-sqlite");
+    std::fs::create_dir(&sqlite_home)?;
+    let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(sqlite_home.clone())?);
+    let config_file = fixture.home.join("config.toml");
+    let config = std::fs::read_to_string(&config_file)?;
+    let sqlite_home = toml::Value::String(sqlite_home.display().to_string());
+    std::fs::write(
+        &config_file,
+        format!("sqlite_home = {sqlite_home}\n{config}"),
+    )?;
+    std::fs::write(sqlite.logs_db_path(), "not a SQLite database")?;
+
+    let output = fixture
+        .command()?
+        .args(["doctor", "--json", "--feedback"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(!stdout.contains("doctor-secret-sqlite"));
+    let report: Value = serde_json::from_str(&stdout)?;
+    assert_eq!(
+        report["checks"]["state.paths"]["summary"],
+        "state database integrity check failed"
+    );
+    assert_eq!(
+        report["checks"]["state.paths"]["issues"][0]["cause"],
+        "<redacted>"
+    );
     Ok(())
 }
 

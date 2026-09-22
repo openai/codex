@@ -890,8 +890,11 @@ pub(super) fn redact_detail(detail: &str) -> String {
         "secret",
     ];
     if secret_keys.iter().any(|key| lower.contains(key)) {
-        let name = detail.split(':').next().unwrap_or(detail);
-        format!("{name}: <redacted>")
+        // make sure that windows drives in paths are not matches C:/ if they are a first token
+        detail.split_once(": ").map_or_else(
+            || "<redacted>".to_string(),
+            |(name, _)| format!("{name}: <redacted>"),
+        )
     } else {
         redact_urls(detail)
     }
@@ -1776,6 +1779,27 @@ Run codex doctor without --summary for detailed diagnostics.
 
         assert!(rendered.contains("\u{1b}[38;5;220m0.130.0 available"));
         assert!(rendered.contains("\u{1b}[2m(current 0.0.0, dismissed 0.128.0)"));
+    }
+
+    #[test]
+    fn redact_detail_distinguishes_database_paths_from_field_labels() {
+        let details = [
+            r"C:\doctor-secret-sqlite\logs_2.sqlite database failed integrity check",
+            "C:/doctor-secret-sqlite/logs_2.sqlite database failed integrity check",
+            "/tmp/doctor-secret-sqlite/logs_2.sqlite database failed integrity check",
+            r"log database: C:\doctor-secret-sqlite\logs_2.sqlite",
+        ];
+
+        assert_eq!(
+            details.map(redact_detail),
+            [
+                "<redacted>",
+                "<redacted>",
+                "<redacted>",
+                "log database: <redacted>",
+            ]
+            .map(str::to_string)
+        );
     }
 
     #[test]
