@@ -391,7 +391,7 @@ async fn thread_delete_removes_persisted_board_even_with_feature_disabled() -> R
             /*busy_timeout*/ None,
         )
         .await?;
-    assert_eq!(board_counts(&pool).await?, (1, 1, 1));
+    assert_eq!(board_counts(&pool).await?, (1, 1, 2));
     let _: ThreadArchiveResponse = app
         .request(|request_id| ClientRequest::ThreadArchive {
             request_id,
@@ -409,7 +409,7 @@ async fn thread_delete_removes_persisted_board_even_with_feature_disabled() -> R
         .with_codex_home(home.path())
         .build_initialized()
         .await?;
-    assert_eq!(board_counts(&pool).await?, (1, 1, 1));
+    assert_eq!(board_counts(&pool).await?, (1, 1, 2));
     let _: ThreadDeleteResponse = app
         .request(|request_id| ClientRequest::ThreadDelete {
             request_id,

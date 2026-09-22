@@ -87,6 +87,9 @@ pub(super) fn tool(name: &str, namespace: Option<&str>, namespace_description: &
     let mut properties = serde_json::Map::new();
     for field in fields {
         let schema = match *field {
+            "new_channel_name" => {
+                json!({"type":"string","description":"Create and subscribe to this channel."})
+            }
             "subscribe" => {
                 json!({"type":"boolean","description":"Subscribe to new roots. Default true."})
             }

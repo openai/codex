@@ -102,11 +102,13 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         .await
         .unwrap();
     first
-        .create_channel(
+        .post(
             child,
-            CreateChannelRequest {
-                channel_name: "proofs".into(),
-                subscription: SubscriptionChange::Subscribe,
+            PostRequest {
+                request_id: "create-proofs".into(),
+                destination: PostDestination::NewChannel("proofs".into()),
+                text: "Share proofs here.".into(),
+                agents_to_notify: Vec::new(),
             },
         )
         .await
@@ -115,7 +117,8 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         request_id: "call-1".into(),
         destination: PostDestination::Channel("proofs".into()),
         text: "é🦀 proof".into(),
-        agents_to_notify: vec![AgentPath::root(), child_path.clone(), child_path.clone()],
+        // The creator receives this through its channel subscription.
+        agents_to_notify: vec![AgentPath::root()],
     };
     let second = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
         .await
@@ -176,6 +179,19 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
                 target: SubscriptionTarget::Channel("proofs".into()),
                 target_agent: Some(child_path.clone()),
                 change: SubscriptionChange::Unsubscribe,
+            },
+        )
+        .await
+        .unwrap();
+    // Posting to an existing channel must not re-enable its subscription.
+    resumed
+        .post(
+            child,
+            PostRequest {
+                request_id: "one-off-post".into(),
+                destination: PostDestination::Channel("proofs".into()),
+                text: "One more proof, while staying unsubscribed.".into(),
+                agents_to_notify: Vec::new(),
             },
         )
         .await

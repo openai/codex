@@ -235,6 +235,12 @@ impl LocalAgentMessageBoard {
             PostDestination::NewChannel(channel) => {
                 validate_channel(channel)?;
                 self.insert_channel(&mut tx, channel, &author, now).await?;
+                self.subscribe(
+                    &mut tx,
+                    &SubscriptionTarget::Channel(channel.clone()),
+                    caller,
+                )
+                .await?;
                 (
                     channel.clone(),
                     id,

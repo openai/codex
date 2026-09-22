@@ -51,6 +51,7 @@ pub trait AgentMessageBoard: Send + Sync {
     /// Uses the caller's configured clock; clock failures must not create a post.
     /// The request ID identifies a logical call across retries. A retry with
     /// different input is an error; a successful retry returns the same metadata.
+    /// Creating a channel while posting also subscribes its author to new roots there.
     fn post(&self, caller: ThreadId, request: PostRequest) -> BoxFuture<'_, Result<PostMetadata>>;
 
     fn list_threads(
