@@ -81,6 +81,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
          suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
          windows.sandbox = \"unelevated\"\n\
          tui.disable_paste_burst = true\n\
+         notice.model_migrations.\"gpt-5.6-terra\" = \"gpt-6-sol\"\n\
          [projects.{}]\ntrust_level = \"trusted\"\n",
             serde_json::to_string(&workspace_path)?,
         ),
