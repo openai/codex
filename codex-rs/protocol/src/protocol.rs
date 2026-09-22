@@ -215,6 +215,8 @@ pub struct ConversationStartParams {
     /// Selects how automatic Codex handoffs are routed in Frameless Bidi sessions.
     /// Realtime V1 and V2 ignore this setting.
     pub codex_response_handoff_mode: CodexResponseHandoffMode,
+    /// Relays public reasoning summaries as quiet context for realtime V3 delegations.
+    pub backend_reasoning_status: bool,
     /// Optional client-selected BEM prefixes keyed by `analysis`, `commentary`, and `final`.
     pub codex_response_handoff_channel_prefixes: Option<BTreeMap<String, Vec<String>>>,
     /// Overrides the configured realtime model for this session only.

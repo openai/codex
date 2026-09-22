@@ -1238,6 +1238,7 @@ impl TurnRequestProcessor {
                 codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
                 codex_response_item_prefix: params.codex_response_item_prefix,
                 codex_response_handoff_mode: params.codex_response_handoff_mode.unwrap_or_default(),
+                backend_reasoning_status: params.backend_reasoning_status,
                 codex_response_handoff_channel_prefixes: params
                     .codex_response_handoff_channel_prefixes,
                 model: params.model,

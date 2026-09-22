@@ -97,6 +97,7 @@ async fn misalignment_retires_late_voice_handoff_before_it_starts_a_turn() -> Re
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,

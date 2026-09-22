@@ -103,7 +103,7 @@ fn realtime_user_verification_notice_excludes_request_payload() {
     });
     assert_eq!(
         realtime_text_for_event(&event),
-        Some((
+        Some(RealtimeEventText::Handoff(
             "<user_verification_notice>User verification is required. Please respond in the app.</user_verification_notice>".to_string(),
             None,
         )),

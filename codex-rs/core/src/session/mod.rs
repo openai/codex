@@ -278,6 +278,7 @@ use self::session::SessionSettingsCommit;
 pub(crate) use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
+use self::turn::RealtimeEventText;
 use self::turn::agent_message_text;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
@@ -2491,10 +2492,16 @@ impl Session {
             }
             _ => {}
         }
-        let Some((text, phase)) = realtime_text_for_event(msg) else {
-            return;
+        let result = match realtime_text_for_event(msg) {
+            Some(RealtimeEventText::Handoff(text, phase)) => {
+                self.conversation.handoff_out(text, phase).await
+            }
+            Some(RealtimeEventText::QuietReasoning(text)) => {
+                self.conversation.send_reasoning_status(&text).await
+            }
+            None => return,
         };
-        if let Err(err) = self.conversation.handoff_out(text, phase).await {
+        if let Err(err) = result {
             debug!("failed to mirror event text to realtime conversation: {err}");
         }
     }

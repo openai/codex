@@ -104,6 +104,7 @@ async fn start_realtime_conversation(codex: &codex_core::CodexThread) -> Result<
             codex_response_item_prefix: None,
             codex_response_handoff_mode:
                 codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: None,
             model: None,
             output_modality: RealtimeOutputModality::Audio,

@@ -220,6 +220,9 @@ pub struct ThreadRealtimeStartParams {
     /// default to `thinking`. Realtime V1 and V2 ignore this setting.
     #[ts(optional = nullable)]
     pub codex_response_handoff_mode: Option<CodexResponseHandoffMode>,
+    /// Relays public reasoning summaries as quiet context for realtime V3 delegations. Defaults to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub backend_reasoning_status: bool,
     /// Overrides BEM channel prefixes by `analysis`, `commentary`, or `final`.
     /// Omitted channels retain their default uppercase bracketed prefixes.
     #[ts(optional = nullable)]

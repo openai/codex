@@ -2000,7 +2000,13 @@ pub(super) fn agent_message_text(item: &codex_protocol::items::AgentMessageItem)
         .collect()
 }
 
-pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<MessagePhase>)> {
+#[derive(Debug, PartialEq)]
+pub(super) enum RealtimeEventText {
+    Handoff(String, Option<MessagePhase>),
+    QuietReasoning(String),
+}
+
+pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventText> {
     match msg {
         EventMsg::ElicitationRequest(request)
             if matches!(
@@ -2008,11 +2014,27 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
                 codex_protocol::approvals::ElicitationRequest::UserVerification { .. }
             ) =>
         {
-            Some((UserVerificationNotice.render(), None))
+            Some(RealtimeEventText::Handoff(
+                UserVerificationNotice.render(),
+                None,
+            ))
         }
-        EventMsg::AgentMessage(event) => Some((event.message.clone(), event.phase.clone())),
+        EventMsg::AgentMessage(event) => Some(RealtimeEventText::Handoff(
+            event.message.clone(),
+            event.phase.clone(),
+        )),
         EventMsg::ItemCompleted(event) => match &event.item {
-            TurnItem::AgentMessage(item) => Some((agent_message_text(item), item.phase.clone())),
+            TurnItem::AgentMessage(item) => Some(RealtimeEventText::Handoff(
+                agent_message_text(item),
+                item.phase.clone(),
+            )),
+            TurnItem::Reasoning(item) => item
+                .summary_text
+                .iter()
+                .rev()
+                .map(|summary| summary.trim())
+                .find(|summary| !summary.is_empty())
+                .map(|summary| RealtimeEventText::QuietReasoning(summary.to_owned())),
             _ => None,
         },
         EventMsg::ExecApprovalRequest(_)
@@ -2030,7 +2052,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<(String, Option<
             };
             serde_json::to_string(msg)
                 .ok()
-                .map(|request| (format!("{message}\n\n{request}"), None))
+                .map(|request| RealtimeEventText::Handoff(format!("{message}\n\n{request}"), None))
         }
         EventMsg::Error(_)
         | EventMsg::Warning(_)
