@@ -48,9 +48,7 @@ impl ReviewContextPolicy {
     pub(super) fn parent_compaction(
         self,
         history: &ContextManager,
-        reviewer_compaction_hash: Option<&str>,
     ) -> anyhow::Result<Option<ResponseItem>> {
-        let strict = self == Self::ThreadOwned;
         if self == Self::Legacy {
             return Ok(None);
         }
@@ -60,21 +58,16 @@ impl ReviewContextPolicy {
             return Ok(None);
         };
         let valid = checkpoint.is_usable();
-        if !valid && !strict {
+        if !valid && self == Self::LegacyWithCheckpointReuse {
+            // Legacy review can use its retained transcript without this checkpoint.
             return Ok(None);
         }
         anyhow::ensure!(
             valid,
             "parent compaction checkpoint is unusable for Guardian review"
         );
-        if strict {
-            // A resumed parent may now use a different model. Compare the actual
-            // checkpoint producer with the selected reviewer, not the live parent model.
-            anyhow::ensure!(
-                checkpoint.is_compatible_with(reviewer_compaction_hash),
-                "parent compaction checkpoint is incompatible with the Guardian review model or its compatibility is unknown"
-            );
-        }
+        // The synchronous reviewer can consume checkpoints across advertised comp_hash
+        // values. Let the backend validate the payload; review errors still fail closed.
         Ok(Some(checkpoint.item.clone()))
     }
 }

@@ -121,7 +121,6 @@ pub(crate) struct GuardianReviewOptions {
 pub(super) struct GuardianReviewSessionConfig {
     pub(super) spawn_config: crate::config::Config,
     pub(super) node_repl_policy: GuardianNodeReplPolicy,
-    pub(super) compaction_model_hash: Option<String>,
     review_model: ReviewModel,
 }
 
@@ -168,7 +167,6 @@ pub(super) async fn guardian_review_session_config(
     }
     Ok(GuardianReviewSessionConfig {
         spawn_config,
-        compaction_model_hash: guardian_model_info.comp_hash.clone(),
         node_repl_policy: GuardianNodeReplPolicy::from_messages(model_messages),
         review_model,
     })
@@ -227,7 +225,6 @@ async fn run_guardian_review_session_before_deadline(
                 reasons,
                 schema,
                 review_model: session_config.review_model,
-                compaction_model_hash: session_config.compaction_model_hash,
                 reasoning_summary: context.reasoning_summary,
                 personality: context.personality,
                 external_cancel,
