@@ -250,6 +250,9 @@ impl ChatWidget {
     /// Animated titles record their next refresh for the foreground loop, independently
     /// of full TUI redraws.
     fn refresh_terminal_title_from_selections(&mut self, selections: &StatusSurfaceSelections) {
+        if self.app_event_tx.voice_only.load(Ordering::Relaxed) {
+            return;
+        }
         self.last_terminal_title_requires_action =
             self.terminal_title_shows_action_required_with_selections(selections);
         let now = Instant::now();

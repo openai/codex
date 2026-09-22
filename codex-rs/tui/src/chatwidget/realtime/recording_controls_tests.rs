@@ -494,6 +494,13 @@ async fn voice_terminal_title_tracks_capture_activity_and_user_settings() {
     check(&mut chat, "project");
     chat.thread_id = Some(thread_id);
     check(&mut chat, "● project");
+    chat.park_voice();
+    let (mut restored, _, _, _) = make_chatwidget_manual_with_sender().await;
+    restored.thread_id = Some(thread_id);
+    restored.local_settings.tui.animations = false;
+    restored.resume_background_voice(&mut chat);
+    assert_eq!(restored.last_terminal_title.as_deref(), Some("● project"));
+    chat = restored;
     chat.reset_realtime_conversation();
     assert_eq!(chat.last_terminal_title.as_deref(), Some("project"));
     activate_voice(&mut chat);

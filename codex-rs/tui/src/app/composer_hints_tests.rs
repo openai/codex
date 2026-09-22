@@ -388,7 +388,7 @@ async fn running_turn_dismisses_announcement_across_thread_resets() {
         /*replay_kind*/ None,
     );
     assert_eq!(app.composer_hint(/*width*/ 80), None);
-    app.reset_thread_event_state();
+    app.reset_thread_event_state().await;
     let tip = app.composer_tips.select(
         /*turn_count*/ 0,
         || panic!("an already running turn must end the startup announcement"),

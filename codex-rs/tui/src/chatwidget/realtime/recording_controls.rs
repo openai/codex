@@ -12,7 +12,7 @@ impl ChatWidget {
                 return;
             }
         } else if self.realtime_conversation.phase != RealtimeConversationPhase::Starting {
-            self.add_error_message("Start voice mode before muting the microphone.".to_string());
+            self.add_realtime_error("Start voice mode before muting the microphone.".to_string());
             return;
         }
 
@@ -126,7 +126,7 @@ impl ChatWidget {
         }
     }
 
-    pub(in crate::chatwidget) fn refresh_realtime_microphone_level(&mut self) {
+    pub(crate) fn refresh_realtime_microphone_level(&mut self) {
         if !matches!(
             self.realtime_conversation.phase,
             RealtimeConversationPhase::Starting | RealtimeConversationPhase::Active

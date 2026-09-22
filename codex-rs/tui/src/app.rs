@@ -641,6 +641,8 @@ pub(crate) struct App {
     pending_realtime_transcript_replay:
         HashMap<ThreadId, VecDeque<crate::chatwidget::RealtimeTranscriptRecord>>,
     realtime_replay_order: VecDeque<ThreadId>,
+    background_voice: Option<Box<ChatWidget>>,
+    background_voice_error: Option<(ThreadId, String)>,
     temporary_structured_requests: HashMap<ThreadId, mpsc::UnboundedSender<ServerNotification>>,
     /// Track title generation across thread switches and deduplicate automatic requests.
     pending_thread_titles: HashMap<(ThreadId, ThreadTitleDestination), CancellationToken>,
@@ -1100,6 +1102,9 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     let had_active_modal = self.chat_widget.has_active_modal();
+                    if let Some(owner) = self.background_voice.as_mut() {
+                        owner.refresh_realtime_microphone_level();
+                    }
                     self.chat_widget.pre_draw_tick();
                     self.refresh_agents_overview_usage(app_server, tui.frame_requester());
                     let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;

@@ -732,7 +732,9 @@ async fn unchanged_thread_usage_has_bounded_settlement_refreshes() {
         })),
     ));
 
-    chat.refresh_thread_usage_after_turn();
+    let (mut owner, _, _, _) = make_chatwidget_manual_with_sender().await;
+    owner.park_voice();
+    chat.resume_background_voice(&mut owner);
     for attempt in 0..=THREAD_USAGE_SETTLEMENT_DELAYS.len() {
         let request_id = match rx.try_recv() {
             Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,

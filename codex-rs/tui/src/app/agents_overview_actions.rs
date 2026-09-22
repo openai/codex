@@ -178,6 +178,8 @@ impl App {
         let events = tui.event_stream();
         let operation = async {
             let result = async {
+                self.stop_voice_for_removed_thread(app_server, thread_id)
+                    .await?;
                 if let Some(primary) = primary_thread_id
                     && primary != thread_id
                 {
@@ -276,7 +278,9 @@ impl App {
             self.pending_thread_switch_resets += 1;
             self.app_event_tx
                 .send(AppEvent::ResetTranscriptForThreadSwitch);
-            self.reset_thread_event_state();
+            self.detach_current_thread_for_navigation(app_server, /*destination*/ None)
+                .await;
+            self.reset_thread_event_state().await;
             let init = self.chatwidget_init_for_forked_or_resumed_thread(
                 tui,
                 self.config.clone(),

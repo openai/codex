@@ -207,7 +207,8 @@ impl App {
         if self.backtrack.overlay_preview_active && self.chat_widget.no_modal_or_popup_active() {
             return KeymapContextSet::browsing().with_voice_toggle(&self.keymap);
         }
-        let voice_available = self.chat_widget.realtime_microphone_shortcut_available();
+        let voice_available = self.chat_widget.realtime_microphone_shortcut_available()
+            || self.voice_owner_thread_id().is_some();
         let contexts = self.chat_widget.keymap_contexts();
         let contexts = if self.chat_widget.no_modal_or_popup_active() {
             let contexts = contexts

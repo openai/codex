@@ -74,7 +74,10 @@ async fn hidden_and_queued_voice_answers_share_a_lossless_sixteen_item_cap() {
     let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
     let thread_id = activate_voice(&mut chat);
     let mut oldest_delivery_id = None;
-    for index in 0..=super::super::MAX_PENDING_SPEECH_DELIVERIES {
+    for index in 0..=2 * super::super::MAX_PENDING_SPEECH_DELIVERIES {
+        if index == super::super::MAX_PENDING_SPEECH_DELIVERIES + 1 {
+            chat.park_voice();
+        }
         let turn_id = format!("turn-{index}");
         start_item(
             &mut chat,
@@ -123,6 +126,12 @@ async fn hidden_and_queued_voice_answers_share_a_lossless_sixteen_item_cap() {
     }
     assert_eq!(restored, 1);
     assert!(ops.try_recv().is_err());
+    chat.stop_realtime_conversation();
+    chat.reset_realtime_conversation();
+    assert_eq!(
+        chat.take_undelivered_realtime_speech_for_replay().len(),
+        super::super::MAX_PENDING_SPEECH_DELIVERIES
+    );
 }
 
 #[tokio::test]

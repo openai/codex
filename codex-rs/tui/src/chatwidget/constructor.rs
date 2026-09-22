@@ -33,6 +33,8 @@ impl ChatWidget {
             terminal_title_invalid_items_warned,
             session_telemetry,
         } = common;
+        // Keep asynchronous widget callbacks scoped separately from the app and other widgets.
+        let app_event_tx = AppEventSender::new(app_event_tx.app_event_tx);
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
         config.model = model.clone();

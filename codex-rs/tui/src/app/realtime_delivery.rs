@@ -294,6 +294,18 @@ impl App {
         let Some(thread_id) = self.chat_widget.thread_id() else {
             return HashMap::new();
         };
+        if let Some(owner) = self.background_voice.as_ref()
+            && owner.thread_id() == Some(thread_id)
+        {
+            for text in self.chat_widget.prepare_background_voice_replay(owner) {
+                let key = ("assistant".to_string(), normalized_replay_text(text));
+                if let Some(count) = replayed_voice_texts.get_mut(&key) {
+                    *count = count.saturating_sub(/*rhs*/ 1);
+                }
+            }
+            self.pending_realtime_transcript_replay
+                .insert(thread_id, owner.realtime_transcript_cells_for_replay());
+        }
         self.realtime_replay_order
             .retain(|saved| *saved != thread_id);
         let mut retained_assistant_captions = HashMap::<String, usize>::new();

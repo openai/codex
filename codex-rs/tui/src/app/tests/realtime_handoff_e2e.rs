@@ -140,6 +140,19 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
         .thread_realtime_append_speech(thread_id, "fixture prompt".to_string())
         .await?;
 
+    // Keep the real Core delegation running while another session is visible.
+    let other = app_server.start_thread(&app.config).await?;
+    let other_id = other.session.thread_id;
+    app.replace_chat_widget_with_app_server_thread(
+        &mut tui,
+        other,
+        super::super::session_lifecycle::ThreadAttachPresentation::Fresh,
+        /*initial_user_message*/ None,
+    )
+    .await?;
+    assert_eq!(app.voice_owner_thread_id(), Some(thread_id));
+    assert_eq!(app.chat_widget.thread_id(), Some(other_id));
+
     let mut rendered = Vec::new();
     let speech = timeout(Duration::from_secs(15), async {
         loop {
@@ -158,7 +171,7 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
                     }
                     app.handle_event(&mut tui, &mut app_server, event).await?;
                 }
-                op = ops.recv() => {
+                op = ops.recv(), if !ops.is_closed() => {
                     let op = op.expect("TUI command stream should stay open");
                     if matches!(op, Op::RealtimeConversationSpeech { .. }) {
                         break Ok::<_, color_eyre::Report>(op);
@@ -191,6 +204,11 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
             "channel": "speakable"
         })
     );
+    assert_eq!(app.chat_widget.thread_id(), Some(other_id));
+    assert_eq!(app.voice_owner_thread_id(), Some(thread_id));
+    app.select_agent_thread(&mut tui, &mut app_server, thread_id)
+        .await?;
+    assert!(app.chat_widget.realtime_conversation_is_running());
     let rendered = rendered.join("\n");
     assert!(!rendered.contains("PRIVATE REASONING"), "{rendered}");
     assert!(!rendered.contains("PRIVATE COMMENTARY"), "{rendered}");
@@ -211,6 +229,31 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
         "a final answer must be sent only once"
     );
 
+    // Replaying a still-live answer must not duplicate the caption that arrives later.
+    app.chat_widget.handle_server_notification(
+        ServerNotification::ThreadRealtimeTranscriptDone(
+            codex_app_server_protocol::ThreadRealtimeTranscriptDoneNotification {
+                thread_id: thread_id.to_string(),
+                role: "assistant".into(),
+                text: "[ANALYSIS] is the marker you asked about.".into(),
+            },
+        ),
+        /*replay_kind*/ None,
+    );
+    while let Ok(event) = app_events.try_recv() {
+        app.handle_event(&mut tui, &mut app_server, event).await?;
+    }
+    assert_eq!(
+        app.transcript_cells
+            .iter()
+            .flat_map(|cell| cell.display_lines(/*width*/ 100))
+            .filter(|line| line
+                .to_string()
+                .contains("[ANALYSIS] is the marker you asked about."))
+            .count(),
+        1,
+    );
+
     // A typed request on the same live thread must follow the normal visible path.
     app.chat_widget
         .restore_user_message_to_composer(UserMessage::from("typed follow-up"));
@@ -219,9 +262,6 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
             crossterm::event::KeyCode::Enter,
             crossterm::event::KeyModifiers::NONE,
         ));
-    let typed_op = next_user_turn_op(&mut ops);
-    app.handle_event(&mut tui, &mut app_server, AppEvent::CodexOp(typed_op))
-        .await?;
     let mut typed_rendered = Vec::new();
     timeout(Duration::from_secs(10), async {
         loop {
@@ -243,7 +283,7 @@ async fn delegated_core_events_keep_private_output_hidden_and_deliver_final_spee
                     }
                     app.handle_event(&mut tui, &mut app_server, event).await?;
                 }
-                op = ops.recv() => {
+                op = ops.recv(), if !ops.is_closed() => {
                     let op = op.expect("TUI command stream should stay open");
                     assert!(!matches!(op, Op::RealtimeConversationSpeech { .. }), "typed answer must not be spoken");
                     app.handle_event(&mut tui, &mut app_server, AppEvent::CodexOp(op)).await?;

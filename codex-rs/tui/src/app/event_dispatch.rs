@@ -528,7 +528,7 @@ impl App {
                             } else {
                                 None
                             };
-                            self.shutdown_current_thread(app_server).await;
+                            self.detach_current_thread_for_navigation(app_server, Some(forked.session.thread_id)).await;
                             match self
                                 .replace_chat_widget_with_app_server_thread(
                                     tui,
@@ -1006,21 +1006,48 @@ impl App {
                     self.chat_widget.pre_draw_tick();
                     self.render_chat_widget_frame(tui, screen_size)?;
                 }
+                let parked_voice = match &op {
+                    AppCommand::RealtimeConversationStart { thread_id, .. }
+                    | AppCommand::RealtimeConversationStop { thread_id }
+                    | AppCommand::RealtimeConversationSpeech { thread_id, .. } => self
+                        .background_voice
+                        .as_ref()
+                        .is_some_and(|owner| owner.thread_id() == Some(*thread_id)),
+                    _ => false,
+                };
+                let visible_thread = self.active_thread_id;
+                if parked_voice
+                    && let Some(owner) = self.background_voice.as_mut()
+                {
+                    std::mem::swap(&mut self.chat_widget, owner);
+                    self.active_thread_id = self.chat_widget.thread_id();
+                }
                 self.chat_widget.prepare_local_op_submission(&op);
-                if let Err(err) = self.submit_active_thread_op(app_server, op).await {
-                    if let Some(delivery_id) = realtime_speech_delivery_id {
-                        self.chat_widget
-                            .restore_undelivered_realtime_speech(delivery_id);
-                    }
-                    if self.recover_transport_error(&err)
-                    {
+                let result = self.submit_active_thread_op(app_server, op).await;
+                if result.is_err()
+                    && let Some(delivery_id) = realtime_speech_delivery_id
+                {
+                    self.chat_widget.restore_undelivered_realtime_speech(delivery_id);
+                }
+                if parked_voice
+                    && let Some(owner) = self.background_voice.as_mut()
+                {
+                    std::mem::swap(&mut self.chat_widget, owner);
+                    self.active_thread_id = visible_thread;
+                }
+                if let Err(err) = result {
+                    if self.recover_transport_error(&err) {
                         return Ok(AppRunControl::Continue);
                     }
+                    let chat_widget = match self.background_voice.as_deref_mut() {
+                        Some(owner) if parked_voice => owner,
+                        _ => &mut self.chat_widget,
+                    };
                     let unsupported_permissions = err
                         .downcast_ref::<UnsupportedLegacyPermissionProfile>()
                         .is_some();
                     if unsupported_permissions {
-                        self.chat_widget
+                        chat_widget
                             .set_queue_autosend_suppressed(/*suppressed*/ true);
                     }
                     let handled = is_user_turn
@@ -1029,19 +1056,18 @@ impl App {
                             Some(TypedRequestError::Server { method, .. })
                                 if method == "turn/start"
                         ) || unsupported_permissions)
-                        && self
-                            .chat_widget
+                        && chat_widget
                             .handle_turn_start_rejection(format!("Failed to start turn: {err:#}"));
                     if is_realtime_conversation {
                         let message = format!("Voice conversation failed: {err:#}");
                         if is_realtime_stop {
-                            if self.chat_widget.thread_id() == realtime_stop_thread_id {
-                                self.chat_widget.record_realtime_failure();
-                                self.chat_widget.reset_realtime_conversation();
-                                self.chat_widget.add_error_message(message);
+                            if chat_widget.thread_id() == realtime_stop_thread_id {
+                                chat_widget.record_realtime_failure();
+                                chat_widget.reset_realtime_conversation();
+                                chat_widget.add_realtime_error(message);
                             }
                         } else {
-                            self.chat_widget.on_realtime_error(message);
+                            chat_widget.on_realtime_error(message);
                         }
                         tracing::error!(error = ?err, "realtime conversation request failed");
                     } else if handled {
@@ -1894,8 +1920,15 @@ impl App {
                 }
                 return Ok(control);
             }
+            AppEvent::BackgroundVoiceError { thread_id, message } => {
+                if self.chat_widget.thread_id() == Some(thread_id) {
+                    self.chat_widget.add_error_message(message);
+                } else {
+                    self.background_voice_error = Some((thread_id, message));
+                }
+            }
             AppEvent::VoiceControl { thread_id, control } => {
-                if thread_id == self.chat_widget.thread_id() {
+                if thread_id == self.chat_widget.thread_id() || self.voice_owner_thread_id().is_some() {
                     self.control_voice(control);
                 }
             }
@@ -1904,9 +1937,8 @@ impl App {
                 attempt_id,
                 result,
             } => {
-                if self.chat_widget.thread_id() == Some(thread_id) {
-                    self.chat_widget
-                        .on_realtime_webrtc_offer_created(thread_id, attempt_id, result);
+                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
+                    owner.on_realtime_webrtc_offer_created(thread_id, attempt_id, result);
                 } else if let Ok(offer) = result {
                     offer.handle.close();
                 }
@@ -1916,9 +1948,8 @@ impl App {
                 attempt_id,
                 result,
             } => {
-                if self.chat_widget.thread_id() == Some(thread_id) {
-                    self.chat_widget
-                        .on_realtime_webrtc_connected(attempt_id, result);
+                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
+                    owner.on_realtime_webrtc_connected(attempt_id, result);
                 }
             }
             AppEvent::StopRealtimeConversation { thread_id } => {
@@ -3311,7 +3342,9 @@ impl App {
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
-                if self.pending_shutdown_exit_thread_id.is_some() {
+                if self.pending_shutdown_exit_thread_id.is_some()
+                    || self.voice_owner_thread_id().is_some()
+                {
                     // This is a UI escape-hatch budget, not a protocol
                     // deadline. A healthy local thread/unsubscribe round trip
                     // should finish comfortably inside two seconds, while a
@@ -3367,7 +3400,13 @@ impl App {
             }
         }
 
-        Ok(match app_server.thread_archive(thread_id).await {
+        let result = async {
+            self.stop_voice_for_removed_thread(app_server, thread_id)
+                .await?;
+            app_server.thread_archive(thread_id).await
+        }
+        .await;
+        Ok(match result {
             Ok(()) if matches!(self.app_server_target, AppServerTarget::Embedded) => {
                 AppRunControl::Exit(ExitReason::Archived(thread_id))
             }
@@ -3384,7 +3423,9 @@ impl App {
                 self.pending_thread_switch_resets += 1;
                 self.app_event_tx
                     .send(AppEvent::ResetTranscriptForThreadSwitch);
-                self.reset_thread_event_state();
+                self.detach_current_thread_for_navigation(app_server, /*destination*/ None)
+                    .await;
+                self.reset_thread_event_state().await;
                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                     tui,
                     self.config.clone(),
@@ -3427,7 +3468,13 @@ impl App {
             }
         }
 
-        Ok(match app_server.thread_delete(thread_id).await {
+        let result = async {
+            self.stop_voice_for_removed_thread(app_server, thread_id)
+                .await?;
+            app_server.thread_delete(thread_id).await
+        }
+        .await;
+        Ok(match result {
             Ok(()) if matches!(self.app_server_target, AppServerTarget::Embedded) => {
                 AppRunControl::Exit(ExitReason::ThreadRemoved)
             }
@@ -3444,7 +3491,9 @@ impl App {
                 self.pending_thread_switch_resets += 1;
                 self.app_event_tx
                     .send(AppEvent::ResetTranscriptForThreadSwitch);
-                self.reset_thread_event_state();
+                self.detach_current_thread_for_navigation(app_server, /*destination*/ None)
+                    .await;
+                self.reset_thread_event_state().await;
                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                     tui,
                     self.config.clone(),

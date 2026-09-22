@@ -201,7 +201,8 @@ impl App {
         };
         let retry_thread_id = started.session.thread_id;
 
-        self.shutdown_current_thread(app_server).await;
+        self.detach_current_thread_for_navigation(app_server, Some(retry_thread_id))
+            .await;
         if let Err(err) = self
             .replace_chat_widget_with_app_server_thread(
                 tui,

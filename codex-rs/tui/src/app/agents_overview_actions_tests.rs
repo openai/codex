@@ -698,7 +698,9 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             // Removal must not depend on the overview having the primary or its ancestors cached.
             app.agents_overview.threads.remove(&primary);
         }
+        crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, primary);
         Box::pin(app.handle_event(&mut tui, &mut app_server, confirmed)).await?;
+        assert_eq!(app.voice_owner_thread_id(), None);
         assert_eq!(
             (
                 app.primary_thread_id,

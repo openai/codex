@@ -634,10 +634,19 @@ impl App {
                 match startup_draft.as_deref_mut() {
                     Some(draft) => {
                         draft
-                            .run_until(tui, self.shutdown_current_thread(app_server))
+                            .run_until(
+                                tui,
+                                self.detach_current_thread_for_navigation(
+                                    app_server,
+                                    Some(root_thread_id),
+                                ),
+                            )
                             .await?
                     }
-                    None => self.shutdown_current_thread(app_server).await,
+                    None => {
+                        self.detach_current_thread_for_navigation(app_server, Some(root_thread_id))
+                            .await
+                    }
                 }
             }
             // Explicit choices carry across cold resumes and new sessions.
@@ -727,6 +736,7 @@ impl App {
             for thread_id in previous_thread_ids {
                 if previous_running_thread_ids.is_empty()
                     && thread_id != root_thread_id
+                    && self.voice_owner_thread_id() != Some(thread_id)
                     && Some(thread_id) != previous_displayed_thread_id
                     && !self.agents_overview.blank_sessions.contains_key(&thread_id)
                     && let Err(error) = StartupDraftPump::run_with_optional_draft(

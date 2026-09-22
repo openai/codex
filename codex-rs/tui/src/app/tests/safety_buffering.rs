@@ -716,6 +716,11 @@ goals = true
 
     let primary_thread_id = ThreadId::new();
     app.primary_thread_id = Some(primary_thread_id);
+    let voice_owner = ThreadId::new();
+    let (mut owner, _, _, _) = crate::chatwidget::tests::make_chatwidget_manual_with_sender().await;
+    crate::chatwidget::activate_voice_for_thread(&mut owner, voice_owner);
+    owner.park_voice();
+    app.background_voice = Some(Box::new(owner));
     Box::pin(app.retry_safety_buffered_turn(
         &mut tui,
         &mut app_server,
@@ -790,6 +795,7 @@ goals = true
         },
     ))
     .await;
+    assert_eq!(app.voice_owner_thread_id(), Some(voice_owner));
 
     if scenario == SafetyRetryScenario::UnsupportedPermissions {
         assert_eq!(app.active_thread_id, Some(source_thread_id));

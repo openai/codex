@@ -84,17 +84,36 @@ async fn voice_cannot_start_on_a_parent_owned_thread() {
 
 #[tokio::test]
 async fn stopping_while_the_offer_is_pending_resets_the_session() {
-    let (mut chat, _sender, _events, mut ops) = make_chatwidget_manual_with_sender().await;
+    let (mut chat, sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
     let (abort, _registration) = AbortHandle::new_pair();
     let observed_abort = abort.clone();
     chat.realtime_conversation.phase = RealtimeConversationPhase::Starting;
     chat.realtime_conversation.startup_abort = Some(abort);
 
-    chat.stop_realtime_conversation();
+    let (mut restored, _, _, mut ops) = make_chatwidget_manual_with_sender().await;
+    let callback = chat.app_event_tx.clone();
+    chat.park_voice();
+    callback.send(AppEvent::ResetTranscriptForThreadSwitch);
+    assert!(events.try_recv().is_err());
+    callback.send(AppEvent::RefreshRateLimits {
+        origin: crate::app_event::RateLimitRefreshOrigin::Recovery,
+    });
+    assert!(matches!(
+        events.try_recv(),
+        Ok(AppEvent::RefreshRateLimits {
+            origin: crate::app_event::RateLimitRefreshOrigin::Recovery
+        })
+    ));
+    sender.send(AppEvent::ResetTranscriptForThreadSwitch);
+    assert!(events.try_recv().is_ok());
+    restored.resume_background_voice(&mut chat);
+    drop(chat);
+    assert!(!observed_abort.is_aborted());
+    restored.stop_realtime_conversation();
 
     assert_eq!(
         (
-            chat.realtime_conversation.phase,
+            restored.realtime_conversation.phase,
             ops.try_recv().ok(),
             observed_abort.is_aborted(),
         ),

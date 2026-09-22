@@ -1094,6 +1094,10 @@ pub(crate) enum AppEvent {
         thread_id: Option<ThreadId>,
         control: VoiceControl,
     },
+    BackgroundVoiceError {
+        thread_id: ThreadId,
+        message: String,
+    },
 
     /// Finish buffering initial resume replay after all replay events have been queued.
     EndInitialHistoryReplayBuffer,

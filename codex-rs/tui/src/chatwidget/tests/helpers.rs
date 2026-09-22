@@ -374,7 +374,7 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
     let (widget, rx, op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let app_event_tx = widget.app_event_tx.clone();
+    let app_event_tx = AppEventSender::new(widget.app_event_tx.app_event_tx.clone());
     (widget, app_event_tx, rx, op_rx)
 }
 
