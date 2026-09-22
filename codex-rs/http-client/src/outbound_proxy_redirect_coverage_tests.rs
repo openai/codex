@@ -1,10 +1,144 @@
 use super::*;
+use crate::HttpTransport;
+use crate::Request;
+use crate::ReqwestTransport;
+use crate::TransportError;
+use futures::TryStreamExt;
+use http::Method;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
+
+#[tokio::test]
+async fn transport_resolves_routes_for_execute_and_stream_redirects() {
+    let initial_url = "http://transport-start.test/start";
+    let destination_url = "http://transport-final.test/final";
+    let (destination_addr, destination_thread) = spawn_http_listener(vec![
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string();
+        2
+    ]);
+    let (initial_addr, initial_thread) = spawn_http_listener(vec![
+        format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: {destination_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        2
+    ]);
+    for (url, address) in [
+        (initial_url, initial_addr),
+        (destination_url, destination_addr),
+    ] {
+        cache_system_proxy_decision(
+            url,
+            SystemProxyDecision::Proxy {
+                url: format!("http://{address}"),
+            },
+        );
+    }
+    let transport =
+        ReqwestTransport::from_route_aware_client_pool(crate::RouteAwareClientPool::new(
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+            ClientRouteClass::Api,
+        ));
+    let mut request = Request::new(Method::POST, initial_url.to_string())
+        .with_json(&serde_json::json!({"input": "redirected request"}));
+    request.timeout = Some(Duration::from_secs(/*secs*/ 2));
+
+    let response = transport
+        .execute(request.clone())
+        .await
+        .expect("execute should follow the routed redirect");
+    let streamed = transport
+        .stream(request)
+        .await
+        .expect("stream should follow the routed redirect");
+    let streamed_body = streamed
+        .bytes
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("streamed body should be readable")
+        .concat();
+
+    assert_eq!(
+        (response.body.as_ref(), streamed_body.as_slice()),
+        (&b"ok"[..], &b"ok"[..])
+    );
+    let initial_requests = initial_thread.join().expect("initial proxy should finish");
+    let destination_requests = destination_thread
+        .join()
+        .expect("destination proxy should finish");
+    assert_eq!((initial_requests.len(), destination_requests.len()), (2, 2));
+    for (initial, destination) in initial_requests.iter().zip(&destination_requests) {
+        assert!(initial.starts_with("POST http://transport-start.test/start HTTP/1.1\r\n"));
+        assert!(destination.starts_with("POST http://transport-final.test/final HTTP/1.1\r\n"));
+        assert_eq!(
+            (
+                initial.split_once("\r\n\r\n").map(|(_, body)| body),
+                destination.split_once("\r\n\r\n").map(|(_, body)| body),
+            ),
+            (
+                Some(r#"{"input":"redirected request"}"#),
+                Some(r#"{"input":"redirected request"}"#),
+            )
+        );
+    }
+}
+
+#[tokio::test]
+async fn transport_classifies_route_construction_failures_as_build_errors() {
+    let request_url = "http://transport-invalid-proxy.test/request";
+    cache_system_proxy_decision(
+        request_url,
+        SystemProxyDecision::Proxy {
+            url: "://invalid".to_string(),
+        },
+    );
+    let transport =
+        ReqwestTransport::from_route_aware_client_pool(crate::RouteAwareClientPool::new(
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+            ClientRouteClass::Api,
+        ));
+
+    let error = transport
+        .execute(Request::new(Method::GET, request_url.to_string()))
+        .await
+        .expect_err("invalid proxy configuration should fail");
+
+    assert!(matches!(error, TransportError::Build(_)));
+}
+
+#[tokio::test]
+async fn transport_classifies_connection_failures_without_request_urls() {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("unavailable proxy port should bind");
+    let address = listener.local_addr().expect("proxy should have an address");
+    drop(listener);
+    let request_url = "http://transport-unavailable-proxy.test/request?token=url-secret";
+    cache_system_proxy_decision(
+        request_url,
+        SystemProxyDecision::Proxy {
+            url: format!("http://{address}"),
+        },
+    );
+    let transport =
+        ReqwestTransport::from_route_aware_client_pool(crate::RouteAwareClientPool::new(
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+            ClientRouteClass::Api,
+        ));
+
+    let error = match transport
+        .stream(Request::new(Method::GET, request_url.to_string()))
+        .await
+    {
+        Err(TransportError::Connection(error)) => error,
+        Err(error) => panic!("expected a connection failure, got {error}"),
+        Ok(_) => panic!("unavailable proxy should not return a response"),
+    };
+
+    assert!(!error.to_string().contains("url-secret"));
+}
 
 #[tokio::test]
 async fn route_aware_pool_strips_credentials_on_cross_origin_redirect() {
@@ -87,6 +221,32 @@ async fn route_aware_pool_retains_credentials_for_same_origin_and_route() {
 
 #[tokio::test]
 async fn route_aware_pool_sanitizes_redirected_failure_logs() {
+    const SUBPROCESS_ENV_VAR: &str = "CODEX_HTTP_CLIENT_REDIRECT_FAILURE_LOG_TEST";
+    if std::env::var_os(SUBPROCESS_ENV_VAR).is_none() {
+        // Bazel runs unit tests in one process. Isolate the tracing subscriber and callsite
+        // cache from other tests that install different subscribers while requests are in flight.
+        let test_module = module_path!()
+            .split_once("::")
+            .expect("test module should include the crate name")
+            .1;
+        let test_name =
+            format!("{test_module}::route_aware_pool_sanitizes_redirected_failure_logs");
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("test executable should be available"),
+        )
+        .args(["--exact", &test_name, "--nocapture"])
+        .env(SUBPROCESS_ENV_VAR, "1")
+        .output()
+        .expect("logging test subprocess should finish");
+        assert!(
+            output.status.success(),
+            "logging test subprocess failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
     let log_buffer = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry().with(
         tracing_subscriber::fmt::layer()
@@ -115,12 +275,16 @@ async fn route_aware_pool_sanitizes_redirected_failure_logs() {
         ClientRouteClass::Api,
     );
 
-    enabled_pool
+    let error = enabled_pool
         .get(&enabled_initial_url)
         .timeout(Duration::from_secs(2))
         .send()
         .await
         .expect_err("redirect target should fail");
+    assert!(
+        matches!(error, crate::RouteAwareRequestError::Request(_)),
+        "expected a transport error from the redirect target, got {error:?}",
+    );
     only_request(enabled_redirect_thread, "enabled redirect");
     enabled_failure_thread
         .join()
@@ -153,7 +317,10 @@ async fn route_aware_pool_sanitizes_redirected_failure_logs() {
     let logs = String::from_utf8(log_buffer.lock().expect("log buffer lock").clone())
         .expect("logs should be UTF-8");
     assert!(logs.contains("log capture sentinel"));
-    assert!(logs.contains(&enabled_initial_url));
+    assert!(
+        logs.contains(&enabled_initial_url),
+        "captured logs:\n{logs}"
+    );
     assert!(!logs.contains(&disabled_initial_url));
     assert_eq!(logs.matches("Request failed").count(), 1);
     assert!(logs.contains("is_timeout"));

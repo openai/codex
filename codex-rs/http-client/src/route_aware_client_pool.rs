@@ -27,6 +27,8 @@ use crate::HttpClientFactory;
 use crate::OutboundProxyPolicy;
 use crate::OutboundProxyRoute;
 use crate::RouteFailureClass;
+use crate::request_draft::HeaderUpdate;
+use crate::request_draft::RequestDraft;
 use crate::tls_backend_fallback::RustlsClientCache;
 
 const MAX_CACHED_ROUTES: usize = 16;
@@ -46,8 +48,8 @@ enum SelectedTlsBackend {
 
 /// Reuses transport clients by resolved route while selecting a route for every request URL.
 ///
-/// Request creation stays on the pool so the URL used for PAC or system-proxy resolution cannot
-/// differ from the URL that is sent. Redirects are followed through the pool as new requests, so
+/// Resolves the initial route from the complete input URL, before reqwest handles URL credentials.
+/// Redirects are followed through the pool as new requests, so
 /// each hop gets its own route decision while connections are still reused by route.
 #[derive(Clone)]
 pub struct RouteAwareClientPool {
@@ -183,7 +185,7 @@ impl RouteAwareRequestError {
 #[must_use = "requests are not sent unless `send` is awaited"]
 pub struct RouteAwareRequestBuilder {
     pool: RouteAwareClientPool,
-    request: Result<reqwest::Request, RouteAwareRequestError>,
+    request: Result<RequestDraft, RouteAwareRequestError>,
 }
 
 impl fmt::Debug for RouteAwareRequestBuilder {
@@ -192,7 +194,7 @@ impl fmt::Debug for RouteAwareRequestBuilder {
         formatter
             .debug_struct("RouteAwareRequestBuilder")
             .field("pool", &self.pool)
-            .field("method", &request.map(reqwest::Request::method))
+            .field("method", &request.map(|request| request.request.method()))
             .field("url", &request.map(|_| "<redacted>"))
             .finish_non_exhaustive()
     }
@@ -203,16 +205,13 @@ impl RouteAwareRequestBuilder {
     where
         U: IntoUrl,
     {
-        let request = url
-            .into_url()
-            .map(|url| reqwest::Request::new(method, url))
-            .map_err(RouteAwareRequestError::Request);
+        let request = RequestDraft::new(method, url).map_err(RouteAwareRequestError::Request);
         Self { pool, request }
     }
 
     pub fn headers(mut self, headers: HeaderMap) -> Self {
         if let Ok(request) = &mut self.request {
-            request.headers_mut().extend(headers);
+            request.extend_headers(headers);
         }
         self
     }
@@ -234,7 +233,7 @@ impl RouteAwareRequestBuilder {
                 });
             match header {
                 Ok((key, value)) => {
-                    request.headers_mut().append(key, value);
+                    request.headers.push(HeaderUpdate::Append(key, value));
                 }
                 Err(error) => {
                     self.request = Err(RouteAwareRequestError::Build(error.to_string()));
@@ -252,7 +251,7 @@ impl RouteAwareRequestBuilder {
     /// bounded.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         if let Ok(request) = &mut self.request {
-            *request.timeout_mut() = Some(timeout);
+            *request.request.timeout_mut() = Some(timeout);
         }
         self
     }
@@ -264,12 +263,17 @@ impl RouteAwareRequestBuilder {
         if let Ok(request) = &mut self.request {
             match serde_json::to_vec(value) {
                 Ok(body) => {
-                    if !request.headers().contains_key(CONTENT_TYPE) {
-                        request
-                            .headers_mut()
-                            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                    let has_content_type = request.headers.iter().any(|update| match update {
+                        HeaderUpdate::Replace(headers) => headers.contains_key(CONTENT_TYPE),
+                        HeaderUpdate::Append(name, _) => *name == CONTENT_TYPE,
+                    });
+                    if !has_content_type {
+                        request.headers.push(HeaderUpdate::Append(
+                            CONTENT_TYPE,
+                            HeaderValue::from_static("application/json"),
+                        ));
                     }
-                    *request.body_mut() = Some(body.into());
+                    *request.request.body_mut() = Some(body.into());
                 }
                 Err(error) => {
                     self.request = Err(RouteAwareRequestError::Build(error.to_string()));
@@ -284,7 +288,7 @@ impl RouteAwareRequestBuilder {
         B: Into<reqwest::Body>,
     {
         if let Ok(request) = &mut self.request {
-            *request.body_mut() = Some(body.into());
+            *request.request.body_mut() = Some(body.into());
         }
         self
     }
@@ -297,7 +301,7 @@ impl RouteAwareRequestBuilder {
         Bytes: From<S::Ok>,
     {
         if let Ok(request) = &mut self.request {
-            *request.body_mut() = Some(reqwest::Body::wrap_stream(stream));
+            *request.request.body_mut() = Some(reqwest::Body::wrap_stream(stream));
         }
         self
     }
@@ -308,6 +312,10 @@ impl RouteAwareRequestBuilder {
 }
 
 impl RouteAwareClientPool {
+    pub(crate) fn request_logging_enabled(&self) -> bool {
+        self.client_builder.request_logging_enabled()
+    }
+
     pub fn outbound_proxy_policy(&self) -> OutboundProxyPolicy {
         self.http_client_factory.outbound_proxy_policy()
     }
@@ -422,10 +430,25 @@ impl RouteAwareClientPool {
         http_client_factory: HttpClientFactory,
         route_class: ClientRouteClass,
     ) -> Self {
+        Self::with_chatgpt_cloudflare_cookies_and_default_headers(
+            http_client_factory,
+            route_class,
+            HeaderMap::new(),
+        )
+    }
+
+    /// Creates a pool with ChatGPT Cloudflare cookies and default headers on every route.
+    pub fn with_chatgpt_cloudflare_cookies_and_default_headers(
+        http_client_factory: HttpClientFactory,
+        route_class: ClientRouteClass,
+        default_headers: HeaderMap,
+    ) -> Self {
         Self::with_builder(
             http_client_factory,
             route_class,
-            HttpClientBuilder::new().with_chatgpt_cloudflare_cookie_store(),
+            HttpClientBuilder::new()
+                .default_headers(default_headers)
+                .with_chatgpt_cloudflare_cookie_store(),
         )
     }
 

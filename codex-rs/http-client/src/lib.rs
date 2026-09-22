@@ -7,6 +7,7 @@ mod error;
 mod network_policy;
 mod outbound_proxy;
 mod request;
+mod request_draft;
 mod route_aware_client_pool;
 mod route_aware_redirect;
 mod tls_backend_fallback;

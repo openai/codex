@@ -1,5 +1,5 @@
 //! Default Codex HTTP client: shared `User-Agent`, `originator`, optional residency header, and
-//! `HttpClient` construction.
+//! HTTP client and transport construction.
 //!
 //! Use [`crate::default_client`] or [`codex_login::default_client`] from other crates in this
 //! workspace.
@@ -11,6 +11,8 @@ use codex_http_client::HttpClientBuilder;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 pub use codex_http_client::RequestBuilder as CodexRequestBuilder;
+use codex_http_client::ReqwestTransport;
+use codex_http_client::RouteAwareClientPool;
 use codex_terminal_detection::user_agent;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -294,6 +296,40 @@ pub async fn create_client_for_route_async(
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+/// Builds the default Codex transport without blocking the async runtime worker.
+///
+/// Route-aware proxy handling resolves each request and redirect destination. When it is disabled,
+/// or the client is running inside the Codex sandbox, this preserves the default client's behavior.
+pub async fn create_transport_for_routes_async(
+    http_client_factory: HttpClientFactory,
+    route_class: ClientRouteClass,
+) -> std::io::Result<ReqwestTransport> {
+    let permit = ROUTE_AWARE_CLIENT_BUILD_PERMIT
+        .acquire()
+        .await
+        .map_err(std::io::Error::other)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if matches!(
+            http_client_factory.outbound_proxy_policy(),
+            OutboundProxyPolicy::ReqwestDefault
+        ) || is_sandboxed()
+        {
+            return ReqwestTransport::from_http_client(create_client());
+        }
+
+        ReqwestTransport::from_route_aware_client_pool(
+            RouteAwareClientPool::with_chatgpt_cloudflare_cookies_and_default_headers(
+                http_client_factory,
+                route_class,
+                default_headers(),
+            ),
+        )
+    })
+    .await
+    .map_err(std::io::Error::other)
 }
 
 fn default_http_client_builder() -> HttpClientBuilder {

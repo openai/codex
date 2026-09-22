@@ -105,6 +105,10 @@ impl HttpClientBuilder {
         self.follow_redirects
     }
 
+    pub(crate) fn request_logging_enabled(&self) -> bool {
+        self.request_logging == RequestLogging::Enabled
+    }
+
     pub(crate) fn with_rustls_tls(mut self) -> Self {
         self.tls_backend = TlsBackend::Rustls;
         self

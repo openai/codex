@@ -1,4 +1,4 @@
-//! Standalone web search must use the configured system proxy route.
+//! Standalone web search must resolve the configured route for every redirect destination.
 
 use anyhow::Result;
 use codex_core::config::Config;
@@ -12,6 +12,8 @@ use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use http::HeaderMap;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
@@ -20,16 +22,18 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const TEST_NAME: &str =
-    "suite::web_search_system_proxy::standalone_web_search_honors_respect_system_proxy";
+    "suite::web_search_system_proxy::standalone_web_search_resolves_redirect_routes";
 const TEST_SUBPROCESS_ENV_VAR: &str = "CODEX_WEB_SEARCH_SYSTEM_PROXY_TEST_SUBPROCESS";
 const API_BASE_URL: &str = "http://web-search-proxy.invalid/v1";
+const REDIRECT_URL: &str = "http://web-search-redirect.invalid/v1/alpha/search";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn standalone_web_search_honors_respect_system_proxy() -> Result<()> {
+async fn standalone_web_search_resolves_redirect_routes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     if std::env::var_os(TEST_SUBPROCESS_ENV_VAR).is_none() {
@@ -58,13 +62,27 @@ async fn standalone_web_search_honors_respect_system_proxy() -> Result<()> {
     }
 
     let proxy = responses::start_mock_server().await;
+    let redirect_proxy = responses::start_mock_server().await;
     Mock::given(method("POST"))
         .and(path("/v1/alpha/search"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "output": "Search result through system proxy",
-        })))
-        .expect(1)
+        .and(header("host", "web-search-proxy.invalid"))
+        .respond_with(
+            ResponseTemplate::new(StatusCode::TEMPORARY_REDIRECT.as_u16())
+                .insert_header("location", REDIRECT_URL),
+        )
+        .expect(/*r*/ 1)
         .mount(&proxy)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/alpha/search"))
+        .and(header("host", "web-search-redirect.invalid"))
+        .respond_with(
+            ResponseTemplate::new(StatusCode::OK.as_u16()).set_body_json(json!({
+                "output": "Search result through system proxy",
+            })),
+        )
+        .expect(/*r*/ 1)
+        .mount(&redirect_proxy)
         .await;
     responses::mount_sse_once(
         &proxy,
@@ -117,9 +135,42 @@ async fn standalone_web_search_honors_respect_system_proxy() -> Result<()> {
     for endpoint in ["responses", "alpha/search"] {
         cache_system_proxy_route_for_test(&format!("{API_BASE_URL}/{endpoint}"), proxy.uri());
     }
+    cache_system_proxy_route_for_test(REDIRECT_URL, redirect_proxy.uri());
     test.submit_turn("search the web through the system proxy")
         .await?;
 
+    let requests = proxy
+        .received_requests()
+        .await
+        .expect("initial proxy requests");
+    let initial_search = requests
+        .iter()
+        .find(|request| request.url.path() == "/v1/alpha/search")
+        .expect("initial proxy should receive search");
+    let redirected_requests = redirect_proxy
+        .received_requests()
+        .await
+        .expect("redirect proxy requests");
+    let redirected_search = redirected_requests
+        .first()
+        .expect("redirect proxy should receive search");
+    assert_eq!(initial_search.body, redirected_search.body);
+    let default_headers = codex_login::default_client::default_headers();
+    let observed_default_headers = [initial_search, redirected_search].map(|request| {
+        default_headers
+            .keys()
+            .filter_map(|name| {
+                request
+                    .headers
+                    .get(name)
+                    .map(|value| (name.clone(), value.clone()))
+            })
+            .collect::<HeaderMap>()
+    });
+    assert_eq!(
+        observed_default_headers,
+        [default_headers.clone(), default_headers]
+    );
     assert_eq!(
         follow_up_mock
             .single_request()

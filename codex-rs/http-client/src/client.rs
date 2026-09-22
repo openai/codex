@@ -1,4 +1,4 @@
-//! Reusable HTTP client and request-builder wrappers.
+//! Reusable HTTP client wrappers and request construction shared by fixed and route-aware transports.
 
 use http::Error as HttpRequestBuildError;
 use http::HeaderMap;
@@ -247,6 +247,10 @@ impl RequestBuilder {
         B: Into<reqwest::Body>,
     {
         self.map(|builder| builder.body(body))
+    }
+
+    pub(crate) fn build(self) -> Result<reqwest::Request, HttpError> {
+        self.builder.build()
     }
 
     pub async fn send(self) -> Result<HttpResponse, HttpError> {

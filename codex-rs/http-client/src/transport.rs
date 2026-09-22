@@ -1,14 +1,16 @@
-//! Shared HTTP transport with optional limits on complete response bodies.
+//! Shared HTTP transport for fixed clients and route-aware pools, with optional response limits.
 //!
 //! Each request's limit applies to observed body bytes, including unsuccessful responses;
 //! declared content lengths are only an additional early-rejection check.
 
+use crate::RouteAwareClientPool;
+use crate::RouteAwareRequestError;
 use crate::client::HttpClient;
-use crate::client::RequestBuilder;
 use crate::error::TransportError;
 use crate::request::Request;
 use crate::request::RequestBody;
 use crate::request::Response;
+use crate::request_draft::RequestDraft;
 use bytes::Bytes;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -41,21 +43,34 @@ pub trait HttpTransport: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct ReqwestTransport {
-    client: HttpClient,
+    client: TransportClient,
+}
+
+#[derive(Clone, Debug)]
+enum TransportClient {
+    Fixed(HttpClient),
+    RouteAware(Box<RouteAwareClientPool>),
 }
 
 impl ReqwestTransport {
     pub fn new(client: reqwest::Client) -> Self {
-        Self {
-            client: HttpClient::new(client),
-        }
+        Self::from_http_client(HttpClient::new(client))
     }
 
     pub fn from_http_client(client: HttpClient) -> Self {
-        Self { client }
+        Self {
+            client: TransportClient::Fixed(client),
+        }
     }
 
-    fn build(&self, req: Request) -> Result<RequestBuilder, TransportError> {
+    /// Uses the pool to resolve the route for every request and redirect URL.
+    pub fn from_route_aware_client_pool(client: RouteAwareClientPool) -> Self {
+        Self {
+            client: TransportClient::RouteAware(Box::new(client)),
+        }
+    }
+
+    async fn send(&self, req: Request) -> Result<reqwest::Response, TransportError> {
         let prepared = req.prepare_body_for_send().map_err(TransportError::Build)?;
 
         let Request {
@@ -68,20 +83,22 @@ impl ReqwestTransport {
             response_body_limit_bytes: _,
         } = req;
 
-        let mut builder = self.client.request(
-            Method::from_bytes(method.as_str().as_bytes()).unwrap_or(Method::GET),
-            &url,
-        );
+        let method = Method::from_bytes(method.as_str().as_bytes()).unwrap_or(Method::GET);
+        let mut request = RequestDraft::new(method, url).map_err(Self::map_error)?;
+        request.extend_headers(prepared.headers);
+        *request.request.timeout_mut() = timeout;
+        *request.request.body_mut() = prepared.body.map(Into::into);
 
-        if let Some(timeout) = timeout {
-            builder = builder.timeout(timeout);
+        match &self.client {
+            TransportClient::Fixed(client) => {
+                let request = request.build(client).map_err(Self::map_error)?;
+                client.execute(request).await.map_err(Self::map_error)
+            }
+            TransportClient::RouteAware(client) => client
+                .send(request)
+                .await
+                .map_err(Self::map_route_aware_error),
         }
-
-        builder = builder.headers(prepared.headers);
-        if let Some(body) = prepared.body {
-            builder = builder.body(body);
-        }
-        Ok(builder)
     }
 
     fn map_error(err: reqwest::Error) -> TransportError {
@@ -95,8 +112,25 @@ impl ReqwestTransport {
         }
     }
 
+    fn map_route_aware_error(error: RouteAwareRequestError) -> TransportError {
+        match error.without_url() {
+            RouteAwareRequestError::Request(error) => Self::map_error(error),
+            RouteAwareRequestError::Timeout => TransportError::Timeout,
+            RouteAwareRequestError::Route(error) => TransportError::Build(error.to_string()),
+            RouteAwareRequestError::Build(error) => TransportError::Build(error),
+            error @ (RouteAwareRequestError::UnsupportedRedirectScheme(_)
+            | RouteAwareRequestError::TooManyRedirects) => {
+                TransportError::Network(error.to_string())
+            }
+        }
+    }
+
     fn trace_request(&self, req: &Request) {
-        if self.client.request_logging_enabled() && enabled!(Level::TRACE) {
+        let request_logging_enabled = match &self.client {
+            TransportClient::Fixed(client) => client.request_logging_enabled(),
+            TransportClient::RouteAware(client) => client.request_logging_enabled(),
+        };
+        if request_logging_enabled && enabled!(Level::TRACE) {
             trace!(
                 "{} to {}: {}",
                 req.method,
@@ -124,8 +158,7 @@ impl HttpTransport for ReqwestTransport {
 
         let url = req.url.clone();
         let response_body_limit_bytes = req.response_body_limit_bytes;
-        let builder = self.build(req)?;
-        let resp = builder.send().await.map_err(Self::map_error)?;
+        let resp = self.send(req).await?;
         let status = resp.status();
         let headers = resp.headers().clone();
         let bytes = match response_body_limit_bytes {
@@ -159,8 +192,7 @@ impl HttpTransport for ReqwestTransport {
 
         let url = req.url.clone();
         let response_body_limit_bytes = req.response_body_limit_bytes;
-        let builder = self.build(req)?;
-        let resp = builder.send().await.map_err(Self::map_error)?;
+        let resp = self.send(req).await?;
         let status = resp.status();
         let headers = resp.headers().clone();
         if !status.is_success() {

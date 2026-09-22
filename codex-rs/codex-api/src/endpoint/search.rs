@@ -12,7 +12,7 @@ use serde_json::to_value;
 use std::sync::Arc;
 
 /// The provider-relative endpoint for standalone web search.
-pub const SEARCH_ENDPOINT: &str = "alpha/search";
+const SEARCH_ENDPOINT: &str = "alpha/search";
 
 pub struct SearchClient<T: HttpTransport> {
     session: EndpointSession<T>,

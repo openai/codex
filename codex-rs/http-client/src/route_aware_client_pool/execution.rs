@@ -9,6 +9,7 @@ use super::RouteAwareClientPool;
 use super::RouteAwareRequestError;
 use super::SelectedTlsBackend;
 use crate::OutboundProxyRoute;
+use crate::request_draft::RequestDraft;
 use crate::route_aware_redirect::MAX_REDIRECTS;
 use crate::route_aware_redirect::insert_referer;
 use crate::route_aware_redirect::is_redirect;
@@ -18,9 +19,9 @@ use crate::route_aware_redirect::remove_sensitive_headers;
 use crate::tls_backend_fallback::should_retry_with_rustls;
 
 impl RouteAwareClientPool {
-    pub(super) async fn send(
+    pub(crate) async fn send(
         &self,
-        request: reqwest::Request,
+        request: RequestDraft,
     ) -> Result<reqwest::Response, RouteAwareRequestError> {
         let http_client_factory = self.http_client_factory.clone();
         self.send_with_resolver(request, move |request_url| {
@@ -36,15 +37,18 @@ impl RouteAwareClientPool {
 
     pub(super) async fn send_with_resolver<F, Fut>(
         &self,
-        mut request: reqwest::Request,
+        request: impl Into<RequestDraft>,
         resolve_route: F,
     ) -> Result<reqwest::Response, RouteAwareRequestError>
     where
         F: Fn(String) -> Fut,
         Fut: Future<Output = io::Result<OutboundProxyRoute>>,
     {
+        let draft = request.into();
+        let mut request = draft.request;
+        let mut draft_headers = Some(draft.headers);
         let request_method = request.method().clone();
-        let request_url = request.url().to_string();
+        let mut request_url = request.url().to_string();
         let follows_redirects_manually = self.follows_redirects_manually();
         let timeout_deadline = request
             .timeout()
@@ -53,19 +57,23 @@ impl RouteAwareClientPool {
         let mut redirects = 0;
         let mut previous_route = None;
         loop {
-            let current_url = request.url().clone();
             let (current_route, client, selected_tls_backend) = match timeout_deadline {
                 Some(timeout_deadline) => tokio::time::timeout_at(
                     timeout_deadline,
-                    self.client_for_url_with_resolver(current_url.as_str(), &resolve_route),
+                    self.client_for_url_with_resolver(request.url().as_str(), &resolve_route),
                 )
                 .await
                 .map_err(|_| RouteAwareRequestError::Timeout)??,
                 None => {
-                    self.client_for_url_with_resolver(current_url.as_str(), &resolve_route)
+                    self.client_for_url_with_resolver(request.url().as_str(), &resolve_route)
                         .await?
                 }
             };
+            if let Some(headers) = draft_headers.take() {
+                request = RequestDraft { request, headers }.build(&client)?;
+                request_url = request.url().to_string();
+            }
+            let current_url = request.url().clone();
             if previous_route
                 .as_ref()
                 .is_some_and(|previous_route| previous_route != &current_route)
