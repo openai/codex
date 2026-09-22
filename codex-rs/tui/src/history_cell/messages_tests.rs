@@ -4,6 +4,55 @@ use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn user_prompt_urls_keep_destinations_across_widths() {
+    let url = "https://example.test/terminal-link-wrapping/solid-octants";
+    let placeholder = "[Image #1]";
+    let message = format!(
+        "from this site, write out the ascii for solid octants 18 columns {url}\n{placeholder} See (https://example.test/a)."
+    );
+    let image_start = message.find(placeholder).unwrap();
+    let cell = new_user_prompt(
+        message,
+        vec![TextElement::new(
+            (image_start..image_start + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        Vec::new(),
+        Vec::new(),
+    );
+    let mut snapshots = Vec::new();
+    for width in [120, 60, 24] {
+        let lines = cell.display_hyperlink_lines(width);
+        assert_eq!(cell.transcript_hyperlink_lines(width), lines);
+        assert!(lines.iter().all(|line| line.width() <= usize::from(width)));
+        for destination in [url, "https://example.test/a"] {
+            let linked_text = lines
+                .iter()
+                .flat_map(|line| {
+                    line.hyperlinks
+                        .iter()
+                        .filter(|link| link.destination == destination)
+                        .flat_map(|link| {
+                            line.line
+                                .to_string()
+                                .chars()
+                                .skip(link.columns.start)
+                                .take(link.columns.len())
+                                .collect::<Vec<_>>()
+                        })
+                })
+                .collect::<String>();
+            assert_eq!(linked_text, destination, "width {width}");
+        }
+        snapshots.push(format!(
+            "width {width}\n{}",
+            ratatui::text::Text::from(visible_lines(lines))
+        ));
+    }
+    insta::assert_snapshot!(snapshots.join("\n\n"));
+}
+
+#[test]
 fn local_image_only_user_message_remains_visible() {
     let cell = new_user_prompt(
         String::new(),

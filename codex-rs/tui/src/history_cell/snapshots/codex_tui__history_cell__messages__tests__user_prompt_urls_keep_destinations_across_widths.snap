@@ -1,0 +1,31 @@
+---
+source: tui/src/history_cell/messages_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+width 120
+
+› from this site, write out the ascii for solid octants 18 columns
+  https://example.test/terminal-link-wrapping/solid-octants
+  [Image #1] See (https://example.test/a).
+
+
+width 60
+
+› from this site, write out the ascii for solid octants 18
+  columns
+  https://example.test/terminal-link-wrapping/solid-octants
+  [Image #1] See (https://example.test/a).
+
+
+width 24
+
+› from this site, write
+  out the ascii for
+  solid octants 18
+  columns
+  https://example.test/
+  terminal-link-wrappin
+  g/solid-octants
+  [Image #1] See
+  (https://example.test
+  /a).

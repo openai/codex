@@ -5,7 +5,7 @@ use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
 use crate::style::accent_color_on;
 use crate::style::history_prompt_style;
-use crate::terminal_hyperlinks::annotate_web_urls_in_line;
+use crate::terminal_hyperlinks::annotate_web_urls;
 use crate::terminal_hyperlinks::lines_with_sources_eq;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::wrapping::url_preserving_wrap_options;
@@ -289,18 +289,17 @@ fn wrap_user_message(
         build_user_message_lines_with_elements(message, text_elements, style, element_style)
     };
     let mut wrapped = crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
-        &plain_hyperlink_lines(logical_lines),
+        &annotate_web_urls(logical_lines),
         wrap_options,
     )
     .into_iter()
-    .flat_map(|mut line| {
+    .flat_map(|line| {
         if line.width() <= usize::from(wrap_width) {
             return vec![line];
         }
 
         // Terminal autowrap loses the message gutter and background. Explicitly split
         // oversized URL tokens while retaining their complete OSC-8 destination.
-        line.hyperlinks = annotate_web_urls_in_line(line.line.clone()).hyperlinks;
         let forced_lines = word_wrap_line_with_source(
             &line.line,
             url_preserving_wrap_options(RtOptions::new(usize::from(wrap_width)))
