@@ -1,3 +1,4 @@
+use super::Submission;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_speech as handle_realtime_conversation_speech;
@@ -5,7 +6,6 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
-use codex_protocol::protocol::Submission;
 use tracing::Instrument;
 use tracing::debug_span;
 use tracing::info_span;
@@ -598,6 +598,7 @@ pub(super) async fn submission_loop(
         }
         .instrument(dispatch_span)
         .await;
+        drop(sub.residency_guard);
         if should_exit {
             shutdown_received = true;
             break;

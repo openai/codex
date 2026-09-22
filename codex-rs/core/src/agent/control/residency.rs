@@ -65,11 +65,27 @@ impl LocalAgentControl {
         state: &Arc<ThreadManagerState>,
         thread_id: ThreadId,
     ) {
-        if let Ok(thread) = state.get_thread(thread_id).await
-            && is_resident_candidate(thread.as_ref())
-        {
-            self.v2_residency.touch(thread_id);
+        if let Ok(thread) = state.get_thread(thread_id).await {
+            let _ = self.pin_v2_residency(state, &thread).await;
         }
+    }
+
+    /// Pins and touches the registered runtime without waiting for unrelated eviction.
+    pub(crate) async fn pin_v2_residency(
+        &self,
+        state: &ThreadManagerState,
+        thread: &Arc<CodexThread>,
+    ) -> CodexResult<Option<tokio::sync::OwnedRwLockReadGuard<()>>> {
+        if !is_resident_candidate(thread) {
+            return Ok(None);
+        }
+        let guard = Arc::clone(&thread.residency_gate).read_owned().await;
+        let thread_id = thread.session.thread_id;
+        if !Arc::ptr_eq(thread, &state.get_thread(thread_id).await?) {
+            return Err(CodexErr::ThreadNotFound(thread_id));
+        }
+        self.v2_residency.touch(thread_id);
+        Ok(Some(guard))
     }
 
     pub(super) fn forget_v2_residency(&self, thread_id: ThreadId) {
@@ -115,71 +131,85 @@ impl V2Residency {
     }
 
     async fn try_unload_one_resident(
-        &self,
+        self: &Arc<Self>,
         manager: &Arc<ThreadManagerState>,
         protected_thread_id: Option<ThreadId>,
     ) -> bool {
-        let candidates_to_scan = self.resident_count();
-        for _ in 0..candidates_to_scan {
-            let Some(candidate_thread_id) = self.pop_lru_candidate(protected_thread_id) else {
-                return false;
-            };
-            let Some(candidate_thread) = manager
-                .get_thread(candidate_thread_id)
-                .await
-                .ok()
-                .filter(|thread| is_resident_candidate(thread))
-            else {
-                continue;
-            };
-            if !is_unloadable(candidate_thread.as_ref()).await {
-                self.touch(candidate_thread_id);
-                continue;
-            }
-            candidate_thread.ensure_rollout_materialized().await;
-            if let Err(err) = candidate_thread.shutdown_and_wait().await {
-                warn!(
-                    "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
-                );
-                self.touch(candidate_thread_id);
-                continue;
-            }
-            let environments = candidate_thread.environment_selections().await;
-            candidate_thread
-                .session
-                .services
-                .agent_control
-                .state
-                .save_evicted_environments(candidate_thread_id, environments);
-            let _ = manager.remove_thread(&candidate_thread_id).await;
-            return true;
-        }
-        false
-    }
-
-    fn resident_count(&self) -> usize {
-        self.state
+        // Keep shutting-down workers counted until removal. Each runtime's write guard
+        // excludes delivery and competing evictions without blocking unrelated workers.
+        let candidates = self
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .residents
-            .len()
-    }
-
-    fn pop_lru_candidate(&self, protected_thread_id: Option<ThreadId>) -> Option<ThreadId> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let candidates_to_scan = state.residents.len();
-        for _ in 0..candidates_to_scan {
-            let candidate_thread_id = state.residents.pop_front()?;
+            .clone();
+        for candidate_thread_id in candidates {
             if Some(candidate_thread_id) == protected_thread_id {
-                state.residents.push_back(candidate_thread_id);
                 continue;
             }
-            return Some(candidate_thread_id);
+            let candidate_thread = {
+                let threads = manager.threads.read().await;
+                match threads.get(&candidate_thread_id) {
+                    Some(thread) if is_resident_candidate(thread) => Arc::clone(thread),
+                    Some(_) | None => {
+                        // A reload cannot publish between the lookup and stale-entry removal.
+                        self.remove(candidate_thread_id);
+                        return true;
+                    }
+                }
+            };
+            let Ok(residency_guard) =
+                Arc::clone(&candidate_thread.residency_gate).try_write_owned()
+            else {
+                continue;
+            };
+            if !manager
+                .get_thread(candidate_thread_id)
+                .await
+                .is_ok_and(|registered| Arc::ptr_eq(&registered, &candidate_thread))
+                || !is_unloadable(candidate_thread.as_ref()).await
+            {
+                continue;
+            }
+            // Once shutdown is submitted, cancellation cannot revoke it. The eviction task
+            // must keep delivery excluded and capacity reserved through registry removal.
+            let manager = Arc::clone(manager);
+            let residency = Arc::clone(self);
+            let eviction = tokio::spawn(async move {
+                let _residency_guard = residency_guard;
+                candidate_thread.ensure_rollout_materialized().await;
+                if let Err(err) = candidate_thread.shutdown_and_wait().await {
+                    warn!(
+                        "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
+                    );
+                    return false;
+                }
+                let environments = candidate_thread.environment_selections().await;
+                let mut threads = manager.threads.write().await;
+                if threads
+                    .get(&candidate_thread_id)
+                    .is_some_and(|registered| !Arc::ptr_eq(registered, &candidate_thread))
+                {
+                    return false;
+                }
+                candidate_thread
+                    .session
+                    .services
+                    .agent_control
+                    .state
+                    .save_evicted_environments(candidate_thread_id, environments);
+                // Keep publication excluded until both entries have been removed.
+                threads.remove(&candidate_thread_id);
+                residency.remove(candidate_thread_id);
+                true
+            });
+            match eviction.await {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(err) => warn!("v2 resident eviction task failed: {err}"),
+            }
         }
-        None
+        false
     }
 
     fn touch(&self, thread_id: ThreadId) {

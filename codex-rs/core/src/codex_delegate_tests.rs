@@ -154,6 +154,7 @@ async fn forward_ops_preserves_submission_trace_context() {
         }),
         parent_turn_id: Some("parent-turn".to_string()),
         root_turn_id: Some("root-turn".to_string()),
+        residency_guard: None,
     };
     tx_ops.send(submission).await.unwrap();
     drop(tx_ops);

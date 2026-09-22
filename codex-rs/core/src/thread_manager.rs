@@ -395,7 +395,8 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
 /// `Arc` reference that can be downgraded to by `LocalAgentControl` while preventing every single
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
-    threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
+    // Eviction updates this registry and residency together, locking the registry first.
+    pub(crate) threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     shared_thread_instructions: shared_instructions::SharedThreadInstructionsProviders,
     thread_created_tx: broadcast::Sender<ThreadId>,
     thread_id_generator: ThreadIdGenerator,
@@ -1690,6 +1691,16 @@ impl ThreadManagerState {
         root_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
+        let residency_guard = if matches!(op, Op::InterAgentCommunication { .. }) {
+            thread
+                .session
+                .services
+                .agent_control
+                .pin_v2_residency(self, &thread)
+                .await?
+        } else {
+            None
+        };
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
             && let Some(captured_op) = capture_test_op(&op)
@@ -1698,7 +1709,13 @@ impl ThreadManagerState {
         }
         thread
             .io
-            .submit_with_trace(op, /*trace*/ None, parent_turn_id, root_turn_id)
+            .submit_with_trace(
+                op,
+                /*trace*/ None,
+                parent_turn_id,
+                root_turn_id,
+                residency_guard,
+            )
             .await
     }
 

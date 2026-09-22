@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::session::Submission;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
@@ -9,7 +10,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::user_input::UserInput;
 use serde_json::Value;
@@ -260,6 +260,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                         trace: None,
                         parent_turn_id: None,
                         root_turn_id: None,
+                        residency_guard: None,
                     })
                     .await;
                 child_cancel.cancel();

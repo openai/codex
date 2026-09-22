@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
+use crate::session::Submission;
 use crate::session::handlers::submission_loop;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::StepSettings;
@@ -42,7 +43,6 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::TurnAbortReason;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeSet;
@@ -457,6 +457,7 @@ fn settings_submission(
             trace: None,
             parent_turn_id: None,
             root_turn_id: None,
+            residency_guard: None,
         },
         receiver,
     )

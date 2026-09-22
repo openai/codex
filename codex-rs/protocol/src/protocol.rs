@@ -188,23 +188,6 @@ impl GitSha {
     }
 }
 
-/// Submission Queue Entry - requests from user
-#[derive(Debug)]
-pub struct Submission {
-    /// Unique id for this Submission to correlate with Events
-    pub id: String,
-    /// Payload
-    pub op: Op,
-    /// Optional W3C trace carrier propagated across async submission handoffs.
-    pub trace: Option<W3cTraceContext>,
-    /// Core-provided ID of the parent turn that directly initiated this submission.
-    ///
-    /// This is only used for inter-agent communication.
-    pub parent_turn_id: Option<String>,
-    /// Core-provided ID of the top-level turn that causally initiated this submission.
-    pub root_turn_id: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct W3cTraceContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
