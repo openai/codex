@@ -373,7 +373,7 @@ async fn interactive_tmux_startup_does_not_execute_workspace_helpers() -> Result
     );
     let spawned = codex_utils_pty::spawn_pty_process(
         fixture.program.to_str().unwrap(),
-        &[],
+        &["--no-daemon".to_string()],
         &fixture.workspace,
         &env,
         /*arg0*/ &None,

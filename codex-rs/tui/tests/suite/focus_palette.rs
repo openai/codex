@@ -534,7 +534,8 @@ pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<(
     let repo_root = repo_root.display();
     let config = format!(
         "model = \"gpt-5.6-terra\"\nmodel_provider = \"openai\"\n\
-         suppress_unstable_features_warning = true\nanalytics.enabled = false\n\n\
+         suppress_unstable_features_warning = true\nanalytics.enabled = false\n\
+         features.daemon_auto_start = false\n\n\
          [projects.\"{repo_root}\"]\ntrust_level = \"trusted\"\n"
     );
     std::fs::write(codex_home.join("config.toml"), config)
@@ -556,7 +557,7 @@ fn no_daemon_skips_startup_and_discovery() -> Result<()> {
         let contents = std::fs::read_to_string(&config)?;
         std::fs::write(
             config,
-            format!("features.daemon_auto_start = true\n{contents}"),
+            contents.replace("features.daemon_auto_start = false\n", ""),
         )?;
         let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
         std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
@@ -604,7 +605,7 @@ fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
     let contents = std::fs::read_to_string(&config)?;
     std::fs::write(
         config,
-        format!("features.daemon_auto_start = true\n{contents}"),
+        contents.replace("features.daemon_auto_start = false\n", ""),
     )?;
     // An incomplete selected package must fail without installing a replacement.
     std::fs::create_dir_all(home.path().join("packages/app-server-daemon/current"))?;
