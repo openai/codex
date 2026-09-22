@@ -21,6 +21,7 @@ codex-exec-server = { workspace = true }
 codex-http-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-utils-path-uri = { workspace = true }

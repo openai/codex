@@ -4283,6 +4283,7 @@ dependencies = [
  "codex-http-client",
  "codex-keyring-store",
  "codex-network-proxy",
+ "codex-otel",
  "codex-protocol",
  "codex-secrets",
  "codex-utils-cargo-bin",

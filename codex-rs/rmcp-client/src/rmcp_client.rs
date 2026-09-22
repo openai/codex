@@ -31,7 +31,6 @@ use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::ContentBlock;
 use rmcp::model::CustomNotification;
-use rmcp::model::CustomRequest;
 use rmcp::model::ElicitRequestParams;
 use rmcp::model::ElicitResult;
 use rmcp::model::ElicitationAction;
@@ -687,9 +686,10 @@ impl RmcpClient {
 
     pub async fn list_tools(
         &self,
-        mut params: Option<PaginatedRequestParams>,
+        params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
+        let mut params = crate::trace_context::traced_pagination(params);
         self.refresh_oauth_if_needed().await?;
         if self.requires_read_only_tools {
             self.apply_read_only_tools_meta(&mut params.get_or_insert_default().meta);
@@ -748,6 +748,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
+        let params = crate::trace_context::traced_pagination(params);
         self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/list", timeout, move |service| {
@@ -764,6 +765,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
+        let params = crate::trace_context::traced_pagination(params);
         self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/templates/list", timeout, move |service| {
@@ -780,6 +782,8 @@ impl RmcpClient {
         params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
+        let mut params = params;
+        params.meta = crate::trace_context::with_current_trace(params.meta);
         self.refresh_oauth_if_needed().await?;
         let requested_modern = self.protocol_mode == McpProtocolMode::V20260728;
         let result = self
@@ -850,6 +854,7 @@ impl RmcpClient {
             None => None,
         };
         self.apply_read_only_tools_meta(&mut meta);
+        let meta = crate::trace_context::with_current_trace(meta);
         let mut rmcp_params = CallToolRequestParams::new(name);
         rmcp_params.arguments = arguments;
         let requested_modern = self.protocol_mode == McpProtocolMode::V20260728;
@@ -968,10 +973,9 @@ impl RmcpClient {
             .run_service_operation("requests/custom", timeout, move |service| {
                 let params = params.clone();
                 async move {
+                    let request = crate::trace_context::traced_custom_request(method, params);
                     service
-                        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
-                            method, params,
-                        )))
+                        .send_request(ClientRequest::CustomRequest(request))
                         .await
                 }
                 .boxed()
@@ -988,7 +992,7 @@ impl RmcpClient {
     ) -> Result<CancellableEventStreamRequest> {
         let service = self.service().await?;
         let (sender, notifications) = event_notification_channel();
-        let mut request = CustomRequest::new("events/stream", params);
+        let mut request = crate::trace_context::traced_custom_request("events/stream", params);
         request.extensions.insert(sender);
         let handle = service
             .peer()

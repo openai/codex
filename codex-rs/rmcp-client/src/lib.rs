@@ -27,6 +27,7 @@ mod service_error;
 mod startup_error;
 mod stdio_server_launcher;
 mod tool_input;
+mod trace_context;
 mod user_verification;
 mod utils;
 mod www_authenticate;
