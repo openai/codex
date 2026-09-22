@@ -385,13 +385,13 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
                 text: "child task".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: None,
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             SpawnAgentOptions {
                 parent_thread_id: Some(root.thread_id),
                 ..Default::default()

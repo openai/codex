@@ -8,6 +8,7 @@ use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
 use crate::agents_md_manager::SessionInstructions;
 use crate::codex_thread::CodexThread;
+use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::PermissionProfileSnapshot;
 use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
@@ -42,7 +43,7 @@ struct SpawnAgentThreadInheritance {
 /// provide user input directly, making an uncontextualized inter-agent communication
 /// unrepresentable.
 #[allow(clippy::large_enum_variant)]
-enum SpawnInitialInput {
+pub(super) enum SpawnInitialInput {
     UserInput(Vec<UserInput>),
     InterAgentCommunication(InterAgentCommunication, AgentCommunicationContext),
 }
@@ -257,7 +258,7 @@ impl LocalAgentControl {
         initial_input: Vec<UserInput>,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
-        let spawned_agent = Box::pin(self.spawn_agent_internal(
+        let (spawned_agent, _) = Box::pin(self.spawn_agent_internal(
             config,
             SpawnInitialInput::UserInput(initial_input),
             session_source,
@@ -265,40 +266,6 @@ impl LocalAgentControl {
         ))
         .await?;
         Ok(spawned_agent.thread_id)
-    }
-
-    /// Spawn an agent thread with some metadata.
-    pub(crate) async fn spawn_agent_with_metadata(
-        &self,
-        config: Config,
-        initial_input: Vec<UserInput>,
-        session_source: Option<SessionSource>,
-        options: SpawnAgentOptions, // TODO(jif) drop with new fork.
-    ) -> CodexResult<LiveAgent> {
-        Box::pin(self.spawn_agent_internal(
-            config,
-            SpawnInitialInput::UserInput(initial_input),
-            session_source,
-            options,
-        ))
-        .await
-    }
-
-    pub(crate) async fn spawn_agent_with_communication(
-        &self,
-        config: Config,
-        communication: InterAgentCommunication,
-        context: AgentCommunicationContext,
-        session_source: Option<SessionSource>,
-        options: SpawnAgentOptions,
-    ) -> CodexResult<LiveAgent> {
-        Box::pin(self.spawn_agent_internal(
-            config,
-            SpawnInitialInput::InterAgentCommunication(communication, context),
-            session_source,
-            options,
-        ))
-        .await
     }
 
     fn validate_loaded_v2_child(
@@ -629,13 +596,13 @@ impl LocalAgentControl {
         }
     }
 
-    async fn spawn_agent_internal(
+    pub(super) async fn spawn_agent_internal(
         &self,
         config: Config,
         initial_input: SpawnInitialInput,
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
-    ) -> CodexResult<LiveAgent> {
+    ) -> CodexResult<(LiveAgent, ThreadConfigSnapshot)> {
         let state = self.upgrade()?;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
@@ -829,11 +796,13 @@ impl LocalAgentControl {
             );
         }
 
-        Ok(LiveAgent {
+        let agent = LiveAgent {
             thread_id: new_thread.thread_id,
             metadata: agent_metadata,
             status: self.get_status(new_thread.thread_id).await,
-        })
+        };
+        let config = new_thread.thread.config_snapshot().await;
+        Ok((agent, config))
     }
 
     async fn spawn_forked_thread(

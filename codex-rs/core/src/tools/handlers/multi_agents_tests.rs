@@ -1225,13 +1225,13 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: Some(child_path.clone()),
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
@@ -1301,13 +1301,13 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: Some(child_path.clone()),
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
@@ -1466,13 +1466,13 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
                 text: "research".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: Some(researcher_path.clone()),
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
@@ -1486,13 +1486,13 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
                 text: "build".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 2,
                 agent_path: Some(worker_path.clone()),
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
@@ -4016,13 +4016,13 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_id() {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: Some(child_path.clone()),
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             crate::agent::types::SpawnAgentOptions::default(),
         )
         .await
@@ -4083,13 +4083,13 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
                 text: "inspect this repo".to_string(),
                 text_elements: Vec::new(),
             }],
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id: root.thread_id,
                 depth: 1,
                 agent_path: Some(child_path.clone()),
                 agent_nickname: None,
                 agent_role: None,
-            })),
+            }),
             crate::agent::types::SpawnAgentOptions::default(),
         )
         .await

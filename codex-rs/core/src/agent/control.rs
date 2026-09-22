@@ -10,7 +10,6 @@ use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
-use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
 use crate::context::SubagentNotification;
@@ -80,6 +79,7 @@ mod residency;
 mod sender_context;
 mod service_tier;
 mod spawn;
+mod spawn_request;
 mod target;
 mod user_authorization;
 
@@ -423,16 +423,6 @@ impl LocalAgentControl {
         let mut thread_ids = vec![agent_id];
         thread_ids.extend(self.live_thread_spawn_descendants(agent_id).await?);
         Ok(thread_ids)
-    }
-
-    pub(crate) async fn get_agent_config_snapshot(
-        &self,
-        agent_id: ThreadId,
-    ) -> Option<ThreadConfigSnapshot> {
-        match self.inspect_agent(agent_id).await.ok()? {
-            crate::agent::api::AgentInfo::Loaded { config, .. } => Some(*config),
-            crate::agent::api::AgentInfo::Unloaded(_) => None,
-        }
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
