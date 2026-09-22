@@ -699,7 +699,7 @@ fn detailed_permissions_normalize_paths_and_keep_policy_changes_visible() {
             "Some additional sandbox guidance. ".repeat(5)
         );
         let environment = format!(
-            "<environment_context>\n<cwd>{cwd}</cwd>\n<root>{external}</root>\n</environment_context>"
+            "<environment_context>\n<cwd>{cwd}</cwd>\n<filesystem><root>{external}</root><path>{external}</path><path>{cwd}{separator}{denied}</path></filesystem>\n</environment_context>"
         );
         let body = json!({"input": [
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": permissions}]},

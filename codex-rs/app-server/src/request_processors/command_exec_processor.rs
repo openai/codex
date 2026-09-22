@@ -265,10 +265,10 @@ impl CommandExecRequestProcessor {
                 .start_proxy(
                     &network_proxy_permission_profile,
                     managed_proxy_routing_for_windows_sandbox(
-                        self.config.permissions.windows_sandbox_type,
+                        self.config.effective_local_windows_sandbox_type(),
                     ),
                     local_binding_policy_for_sandbox(
-                        self.config.permissions.windows_sandbox_type,
+                        self.config.effective_local_windows_sandbox_type(),
                         Some(std::env::consts::OS),
                     ),
                     /*policy_decider*/ None,
@@ -321,7 +321,7 @@ impl CommandExecRequestProcessor {
             windows_sandbox_workspace_roots.as_slice(),
             &codex_linux_sandbox_exe,
             &self.arg0_paths.codex_self_exe,
-            self.config.permissions.windows_sandbox_type,
+            self.config.effective_local_windows_sandbox_type(),
             use_legacy_landlock,
         )
         .map_err(|err| internal_error(format!("exec failed: {err}")))?;

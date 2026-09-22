@@ -39,15 +39,17 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 
-#[test_case(SandboxType::WindowsRestrictedToken, "allow_local_binding = true", Ok(true); "explicit_local_binding")]
-#[test_case(SandboxType::WindowsMxc, "", Ok(true); "mxc_default_local_binding")]
-#[test_case(SandboxType::WindowsMxc, "allow_local_binding = false", Err("MXC cannot enforce allow_local_binding=false"); "mxc_rejects_false")]
-#[test_case(SandboxType::WindowsRestrictedToken, "", Ok(false); "non_mxc_default_local_binding")]
+#[test_case(SandboxType::WindowsRestrictedToken, "allow_local_binding = true", Ok(true), false; "explicit_local_binding")]
+#[test_case(SandboxType::WindowsMxc, "", Ok(true), false; "mxc_default_local_binding")]
+#[test_case(SandboxType::WindowsMxc, "allow_local_binding = false", Err("MXC cannot enforce allow_local_binding=false"), false; "mxc_rejects_false")]
+#[test_case(SandboxType::WindowsRestrictedToken, "", Ok(false), false; "non_mxc_default_local_binding")]
+#[test_case(SandboxType::WindowsRestrictedToken, "", Ok(false), true; "local_mxc_preference_keeps_remote_legacy")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_local_binding_policy_and_review_cleanup(
     sandbox_type: SandboxType,
     local_binding: &'static str,
     expected_local_binding: Result<bool, &'static str>,
+    prefer_mxc: bool,
 ) -> Result<()> {
     let server = start_mock_server().await;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -199,12 +201,19 @@ mode = "full"
             config.project_doc_max_bytes = 0;
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.permissions.windows_sandbox_type = sandbox_type;
+            config.prefer_mxc = prefer_mxc;
             #[cfg(windows)]
             config.set_windows_sandbox_enabled(/*value*/ true);
         })
         // This test supplies its own fake executor and must not select a CI executor.
         .build(&server)
         .await?;
+    if prefer_mxc {
+        assert_eq!(
+            test.config.effective_local_windows_sandbox_type(),
+            SandboxType::WindowsMxc
+        );
+    }
     let (sandbox_policy, permission_profile) = turn_permission_fields(
         test.session_configured.permission_profile.clone(),
         test.config.cwd.as_path(),

@@ -34,6 +34,7 @@ impl WindowsSandboxRequestProcessor {
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         #[cfg(target_os = "windows")]
         if codex_windows_sandbox::registered_core_requested()
+            && self.config.effective_local_windows_sandbox_type() != SandboxType::WindowsMxc
             && matches!(
                 WindowsSandboxLevel::from_config(&self.config),
                 WindowsSandboxLevel::Elevated
@@ -306,7 +307,7 @@ fn determine_windows_sandbox_readiness(config: &Config) -> WindowsSandboxReadine
         };
     }
 
-    if config.permissions.windows_sandbox_type == SandboxType::WindowsMxc {
+    if config.effective_local_windows_sandbox_type() == SandboxType::WindowsMxc {
         return WindowsSandboxReadinessResponse {
             status: WindowsSandboxReadiness::Ready,
         };

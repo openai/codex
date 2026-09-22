@@ -3524,14 +3524,22 @@ async fn default_permissions_profile_can_extend_builtin_read_only() -> std::io::
     Ok(())
 }
 
+#[test_case::test_case(false; "legacy")]
+#[test_case::test_case(true; "prefer_mxc")]
 #[tokio::test]
-async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::io::Result<()> {
+async fn empty_config_defaults_to_builtin_profile_for_trusted_project(
+    prefer_mxc: bool,
+) -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     let project_key = cwd.path().to_string_lossy().to_string();
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
+            features: Some(FeaturesToml::from(BTreeMap::from([(
+                "prefer_mxc".to_string(),
+                prefer_mxc,
+            )]))),
             projects: Some(HashMap::from([(
                 project_key,
                 ProjectConfig {
@@ -3548,6 +3556,7 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
     )
     .await?;
 
+    let mxc_selected = prefer_mxc && codex_sandboxing::windows_mxc_available();
     let policy = config.permissions.file_system_sandbox_policy();
     assert_eq!(
         config
@@ -3555,13 +3564,13 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
             .active_permission_profile()
             .as_ref()
             .map(|active| active.id.as_str()),
-        Some(if cfg!(target_os = "windows") {
+        Some(if cfg!(target_os = "windows") && !mxc_selected {
             BUILT_IN_PERMISSION_PROFILE_READ_ONLY
         } else {
             BUILT_IN_PERMISSION_PROFILE_WORKSPACE
         })
     );
-    if cfg!(target_os = "windows") {
+    if cfg!(target_os = "windows") && !mxc_selected {
         assert!(
             !policy.can_write_local_path_with_cwd(cwd.path(), cwd.path()),
             "expected trusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
@@ -11027,6 +11036,73 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         config.legacy_sandbox_policy(),
         SandboxPolicy::new_read_only_policy()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn local_mxc_preference_preserves_configured_backend() -> anyhow::Result<()> {
+    use codex_sandboxing::SandboxType::WindowsMxc;
+    use codex_sandboxing::SandboxType::WindowsRestrictedToken;
+
+    let codex_home = TempDir::new()?;
+    for (prefer, resolved_preference, binding, mode, expected) in [
+        (true, true, true, "unelevated", WindowsMxc),
+        (true, false, true, "unelevated", WindowsRestrictedToken),
+        (true, false, false, "unelevated", WindowsRestrictedToken),
+        (false, false, true, "unelevated", WindowsRestrictedToken),
+        (false, false, false, "mxc", WindowsMxc),
+    ] {
+        let cfg: ConfigToml = toml::from_str(&format!(
+            "[windows]\nsandbox = {mode:?}\n[features]\nprefer_mxc = {prefer}\n\
+             [features.network_proxy]\nenabled = true\nallow_local_binding = {binding}\n"
+        ))?;
+        assert_eq!(
+            network_config_allows_mxc(
+                &EffectivePermissionSelection {
+                    profiles: None,
+                    selected_profile_id: None,
+                    persisted_profile_id_was_provided: false,
+                    requirements_force_profile_selection: false,
+                },
+                /*profiles_are_active*/ false,
+                /*permission_profile*/ None,
+                /*network_requirements*/ None,
+                cfg.features.as_ref(),
+                /*enable_network_proxy*/ true,
+            )?,
+            binding,
+        );
+        let mut config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(codex_home.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(
+            config.prefer_mxc,
+            prefer && binding && codex_sandboxing::windows_mxc_available(),
+        );
+        // Exercise both resolved decisions independently of the host's native support.
+        config.prefer_mxc = resolved_preference;
+        assert_eq!(
+            (
+                config.windows_sandbox_type_from_config(),
+                config.effective_local_windows_sandbox_type()
+            ),
+            (
+                if mode == "mxc" {
+                    WindowsMxc
+                } else {
+                    WindowsRestrictedToken
+                },
+                expected
+            ),
+            "prefer={prefer}, resolved={resolved_preference}, binding={binding}, mode={mode}"
+        );
+    }
     Ok(())
 }
 

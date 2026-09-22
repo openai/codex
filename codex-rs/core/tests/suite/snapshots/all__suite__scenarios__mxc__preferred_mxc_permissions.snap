@@ -1,0 +1,36 @@
+---
+source: core/tests/suite/scenarios_mxc.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Resolved local MXC selection preserves workspace-write permissions in a real agent turn.\",\n&mock.requests(), &ContextSnapshotOptions::default(),)"
+---
+Scenario: Resolved local MXC selection preserves workspace-write permissions in a real agent turn.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <permissions instructions>
+    Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: T...ries requires approval. Network access is restricted. [hash=99963de5837f6638]
+    # Escalation Requests
+
+    Commands are run outside the sandbox if they are approved by the user, or match an existing rule that al...hell control operators, including but not limited to: [hash=d24ebf5fa4e4b9bb]
+
+    - Pipes: |
+    - Logical operators: &&, ||
+    <OMITTED 45 LINES; ~808 TOKENS; hash=587bea404c7facc4>
+
+    ### Examples
+    Good examples of prefixes:
+    - ["npm", "run", "dev"]
+    - ["gh", "pr", "check"]
+    - ["cargo", "test"]
+     The writable root is `<WORKSPACE_ROOT 1>`.
+    </permissions instructions>
+01:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><WORKSPACE_ROOT 1></root></workspace_roots><permission_profile type...ntry></file_system></permission_profile></filesystem> [hash=c88e32494c7023a5]
+    </environment_context>
+02:message/user:
+    Inspect the sandbox.

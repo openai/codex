@@ -54,12 +54,12 @@ impl Normalizer {
         };
         let text = normalize_line_endings(&text);
         let segment = known_segment_name(&text, source);
-        let text = self.normalize_values(&text);
         let text = match segment.as_deref() {
             Some("PERMISSIONS_INSTRUCTIONS") => self.permissions(&text),
             Some("ENVIRONMENT_CONTEXT") => self.environment(&text),
             _ => text,
         };
+        let text = self.normalize_values(&text);
         if options.rewrite_known_segments
             && let Some(segment) = segment
         {

@@ -6,6 +6,8 @@ use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WindowsSandboxReadiness;
+use codex_app_server_protocol::WindowsSandboxReadinessResponse;
 use codex_app_server_protocol::WindowsSandboxSetupCompletedNotification;
 use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_app_server_protocol::WindowsSandboxSetupStartParams;
@@ -16,6 +18,49 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[test_case::test_case(false, false)]
+#[test_case::test_case(true, false)]
+#[test_case::test_case(true, true)]
+#[tokio::test]
+async fn startup_mxc_preference_is_resolved_before_readiness(
+    prefer_mxc: bool,
+    deny_local_binding: bool,
+) -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut config_toml = "[features]\nprefer_mxc = false\n".to_string();
+    if deny_local_binding {
+        config_toml
+            .push_str("[features.network_proxy]\nenabled = true\nallow_local_binding = false\n");
+    }
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(&config_path, &config_toml)?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_args(&["-c", &format!("features.prefer_mxc={prefer_mxc}")])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let mxc_selected =
+        prefer_mxc && !deny_local_binding && codex_sandboxing::windows_mxc_available();
+    let request_id = mcp
+        .send_raw_request("windowsSandbox/readiness", /*params*/ None)
+        .await?;
+    let readiness: WindowsSandboxReadinessResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(
+        readiness,
+        WindowsSandboxReadinessResponse {
+            status: if mxc_selected {
+                WindowsSandboxReadiness::Ready
+            } else {
+                WindowsSandboxReadiness::NotConfigured
+            }
+        }
+    );
+    assert_eq!(std::fs::read_to_string(config_path)?, config_toml);
+    Ok(())
+}
 
 #[tokio::test]
 async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<()> {

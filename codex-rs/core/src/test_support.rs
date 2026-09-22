@@ -49,6 +49,26 @@ static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
     presets
 });
 
+/// Inspect the same resolved environment configurations used to construct sampling steps.
+pub async fn environment_windows_sandbox_types(
+    thread: &crate::CodexThread,
+) -> Vec<(String, codex_sandboxing::SandboxType)> {
+    thread
+        .session
+        .services
+        .turn_environments
+        .snapshot()
+        .await
+        .turn_environments()
+        .map(|environment| {
+            (
+                environment.selection.environment_id.clone(),
+                environment.config().windows_sandbox_type,
+            )
+        })
+        .collect()
+}
+
 /// Reattaches request-only observations to a completed turn's history for capture assertions.
 /// Tests inspect this separately from the destination-filtered HTTP/WS request.
 pub async fn history_with_tool_call_metadata(

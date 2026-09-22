@@ -178,13 +178,27 @@ impl SessionConfiguration {
             permission_profile: self.permission_profile_state.snapshot(),
             shell_environment_policy: self.shell_environment_policy.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
-            windows_sandbox_type: self.windows_sandbox_type,
+            windows_sandbox_type: self
+                .original_config_do_not_use
+                .windows_sandbox_type_from_config(),
             use_legacy_landlock: self.use_legacy_landlock,
             exec_policy: None,
             mcp_policy: None,
             network_policy: None,
             selected_capability_roots: Vec::new(),
         }
+    }
+
+    /// Apply the local rollout only when inferring config for a local environment.
+    pub(super) fn inferred_environment_config_for(
+        &self,
+        environment: &Environment,
+    ) -> EnvironmentConfig {
+        let mut config = self.inferred_environment_config();
+        if !environment.is_remote() {
+            config.windows_sandbox_type = self.windows_sandbox_type;
+        }
+        config
     }
 
     pub(super) fn permission_profile(&self) -> PermissionProfile {
@@ -1412,14 +1426,14 @@ impl Session {
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
-                session_configuration.inferred_environment_config(),
+                |environment| session_configuration.inferred_environment_config_for(environment),
                 shell_snapshot,
                 inherited_environments.unwrap_or_default(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(
                 environment_selections,
-                &session_configuration.inferred_environment_config(),
+                |environment| session_configuration.inferred_environment_config_for(environment),
             );
             session_configuration.environments = turn_environments.selections();
             let resolved_environments = turn_environments.snapshot().await;
@@ -1522,7 +1536,7 @@ impl Session {
                         spec,
                         current_exec_policy.as_ref(),
                         config.permissions.permission_profile(),
-                        config.permissions.windows_sandbox_type,
+                        config.effective_local_windows_sandbox_type(),
                         network_policy_decider.as_ref().map(Arc::clone),
                         blocked_request_observer.as_ref().map(Arc::clone),
                         managed_network_requirements_configured,

@@ -842,7 +842,7 @@ impl Session {
             allow_login_shell: config.permissions.allow_login_shell,
             shell_environment_policy: config.permissions.shell_environment_policy.clone(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            windows_sandbox_type: config.permissions.windows_sandbox_type,
+            windows_sandbox_type: config.effective_local_windows_sandbox_type(),
             use_legacy_landlock: config.features.use_legacy_landlock(),
             legacy_fallback_cwd: config.cwd.clone(),
             runtime_workspace_roots: config.workspace_roots.clone(),
@@ -1908,7 +1908,9 @@ impl Session {
             if state.session_configuration.inferred_environment_config() != environment_config {
                 self.services
                     .turn_environments
-                    .update_thread_config(&environment_config);
+                    .update_thread_config(|environment| {
+                        updated.inferred_environment_config_for(environment)
+                    });
             }
             state.session_configuration = updated;
             if root_service_tier_changed {

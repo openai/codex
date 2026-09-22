@@ -158,10 +158,11 @@ impl Session {
                     }
                 }
                 if environments != self.services.turn_environments.selections() {
-                    self.services.turn_environments.update_selections(
-                        &environments,
-                        &configuration.inferred_environment_config(),
-                    );
+                    self.services
+                        .turn_environments
+                        .update_selections(&environments, |environment| {
+                            configuration.inferred_environment_config_for(environment)
+                        });
                 }
             }
             self.services.turn_environments.snapshot()
@@ -256,10 +257,13 @@ impl Session {
         if update_current {
             // Invalidate MCP before installed configuration can wake a waiting turn.
             self.mark_mcp_runtime_dirty();
-            self.services.turn_environments.update_selections(
-                &current,
-                &state.session_configuration.inferred_environment_config(),
-            );
+            self.services
+                .turn_environments
+                .update_selections(&current, |environment| {
+                    state
+                        .session_configuration
+                        .inferred_environment_config_for(environment)
+                });
         }
         Ok(())
     }

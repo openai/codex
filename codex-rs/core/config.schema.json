@@ -951,6 +951,9 @@
             "powershell_shell_version": {
               "type": "boolean"
             },
+            "prefer_mxc": {
+              "type": "boolean"
+            },
             "prevent_idle_sleep": {
               "type": "boolean"
             },
@@ -6845,6 +6848,9 @@
           "type": "boolean"
         },
         "powershell_shell_version": {
+          "type": "boolean"
+        },
+        "prefer_mxc": {
           "type": "boolean"
         },
         "prevent_idle_sleep": {

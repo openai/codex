@@ -122,7 +122,9 @@ pub(super) async fn spawn_review_thread(
         .map(TurnEnvironment::windows_sandbox_selection_for_turn_metadata)
         .unwrap_or_else(|| {
             crate::tools::sandboxing::configured_windows_sandbox_selection(
-                parent_turn_context.config.permissions.windows_sandbox_type,
+                parent_turn_context
+                    .config
+                    .effective_local_windows_sandbox_type(),
                 parent_turn_context.windows_sandbox_level,
                 &codex_utils_path_uri::PathUri::from_abs_path(&parent_turn_context.cwd),
             )

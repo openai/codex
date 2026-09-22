@@ -84,6 +84,9 @@ mod preparation;
 #[path = "scenarios_shared_instructions.rs"]
 mod shared_instructions;
 
+#[path = "scenarios_mxc.rs"]
+mod mxc;
+
 fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install(&mut extensions, |config: &Config| SkillsExtensionConfig {

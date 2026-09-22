@@ -373,12 +373,14 @@ mod tests {
         let environments = crate::environment_selection::ThreadEnvironments::new(
             session.services.turn_environments.environment_manager(),
             crate::shell::default_user_shell(),
-            environment_config.clone(),
+            |_| environment_config.clone(),
             crate::shell_snapshot::ShellSnapshot::disabled(),
             Default::default(),
             /*non_blocking_snapshots*/ true,
         );
-        environments.update_selections(std::slice::from_ref(&selection), &environment_config);
+        environments.update_selections(std::slice::from_ref(&selection), |_| {
+            environment_config.clone()
+        });
         turn_context.initial_environments = environments.snapshot().await;
         turn_context
             .initial_environments

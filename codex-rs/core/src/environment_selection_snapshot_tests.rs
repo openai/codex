@@ -24,12 +24,12 @@ async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
     let environments = ThreadEnvironments::new(
         Arc::new(EnvironmentManager::default_for_tests()),
         crate::shell::default_user_shell(),
-        config.clone(),
+        |_| config.clone(),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
-    environments.update_selections(&[selection], &config);
+    environments.update_selections(&[selection], |_| config.clone());
     let starting = environments
         .snapshot()
         .await
@@ -39,7 +39,7 @@ async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
         .clone();
     let held_snapshot = environments.snapshot();
 
-    environments.update_selections(&[], &config);
+    environments.update_selections(&[], |_| config.clone());
 
     let error = timeout(Duration::from_secs(5), starting.wait_until_ready())
         .await
@@ -87,7 +87,7 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
     let environments = Arc::new(ThreadEnvironments::new(
         Arc::new(EnvironmentManager::default_for_tests()),
         crate::shell::default_user_shell(),
-        config.clone(),
+        |_| config.clone(),
         shell_snapshot,
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
@@ -99,7 +99,7 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
             workspace_roots: vec![cwd_uri],
             config: EnvironmentConfigState::FromThread,
         }],
-        &config,
+        |_| config.clone(),
     );
     let resolution = environments.environments.lock().unwrap()[0]
         .resolution
@@ -128,7 +128,7 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
     let removing = Arc::clone(&environments);
     let mut removal = tokio::task::spawn_blocking(move || {
         removal_started_tx.send(()).expect("signal removal started");
-        removing.update_selections(&[], &config);
+        removing.update_selections(&[], |_| config.clone());
     });
     timeout(Duration::from_secs(/*secs*/ 5), removal_started_rx)
         .await
