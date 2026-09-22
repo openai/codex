@@ -6,7 +6,7 @@ expression: "render_bottom_popup(&chat, 100)"
   No permission profiles returned by the server.
 
 
-›    current-profile (current) (disabled)  Current permission profile. (disabled: Not available on
-                                           this server.)
+›    current-profile (current) (disabled)  Current permission profile (disabled: Not available on
+                                           this server)
 
   enter select · esc back

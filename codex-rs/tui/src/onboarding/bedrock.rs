@@ -566,7 +566,7 @@ impl BedrockState {
                 ),
                 BedrockMethod::EnvironmentInstructions => (
                     "Environment variables".to_string(),
-                    "Configure AWS credentials in your environment, then return here.".to_string(),
+                    "Configure AWS credentials in your environment, then return here".to_string(),
                 ),
                 BedrockMethod::ApiKey => (
                     "Bedrock API key".to_string(),

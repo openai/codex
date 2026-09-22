@@ -104,12 +104,12 @@ async fn plugins_popup_uses_product_labels_for_remote_and_personal_tabs() {
 
     insta::assert_snapshot!(
         rows,
-        @r###"
-        › [-] Buildkite Available Press Enter to install or view plugin details.
-        › [-] Docs Available Press Enter to install or view plugin details.
-        › [-] Link Share Available Press Enter to install or view plugin details.
-        › [-] Local Docs Available Press Enter to install or view plugin details.
-        "###
+        @r"
+    › [-] Buildkite Available Press Enter to install or view plugin details
+    › [-] Docs Available Press Enter to install or view plugin details
+    › [-] Link Share Available Press Enter to install or view plugin details
+    › [-] Local Docs Available Press Enter to install or view plugin details
+    "
     );
 }
 
@@ -275,7 +275,7 @@ async fn plugin_detail_not_installable_plugin_disables_install_action() {
         .find(|line| line.contains("Install plugin"))
         .expect("expected install row");
     assert!(
-        install_row.contains("This plugin is not installable from this marketplace."),
+        install_row.contains("This plugin is not installable from this marketplace"),
         "expected disabled not-installable row, got:\n{install_row}"
     );
 

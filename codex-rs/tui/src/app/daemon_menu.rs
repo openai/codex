@@ -70,7 +70,7 @@ impl App {
             disabled_reason: (unavailable.is_none()
                 && source == DaemonUpdateSource::ThisCli
                 && !has_package)
-                .then(|| "This CLI has no local package to copy.".to_string()),
+                .then(|| "This CLI has no local package to copy".to_string()),
             actions: vec![Box::new(move |tx| {
                 tx.send(AppEvent::ConfirmDaemonUpdate(source));
             })],

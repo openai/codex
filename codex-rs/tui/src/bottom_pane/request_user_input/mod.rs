@@ -62,10 +62,10 @@ const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes";
 pub(super) const TIP_SEPARATOR: &str = " | ";
 pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 const OTHER_OPTION_LABEL: &str = "None of the above";
-const OTHER_OPTION_DESCRIPTION: &str = "Optionally, add details in notes (tab).";
+const OTHER_OPTION_DESCRIPTION: &str = "Optionally, add details in notes (tab)";
 const UNANSWERED_CONFIRM_TITLE: &str = "Submit with unanswered questions?";
 const UNANSWERED_CONFIRM_GO_BACK: &str = "Go back";
-const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Return to the first unanswered question.";
+const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Return to the first unanswered question";
 const UNANSWERED_CONFIRM_SUBMIT: &str = "Proceed";
 const UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR: &str = "question";
 const UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL: &str = "questions";
@@ -945,7 +945,7 @@ impl RequestUserInputOverlay {
         } else {
             UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL
         };
-        format!("Submit with {count} unanswered {suffix}.")
+        format!("Submit with {count} unanswered {suffix}")
     }
 
     fn first_unanswered_index(&self) -> Option<usize> {
@@ -3347,7 +3347,10 @@ mod tests {
     fn request_user_input_options_snapshot() {
         let (tx, _rx) = test_sender();
         let overlay = RequestUserInputOverlay::new(
-            request_event("turn-1", vec![question_with_options("q1", "Area")]),
+            request_event(
+                "turn-1",
+                vec![question_with_options_and_other("q1", "Area")],
+            ),
             tx,
             /*has_input_focus*/ true,
             /*enhanced_keys_supported*/ false,

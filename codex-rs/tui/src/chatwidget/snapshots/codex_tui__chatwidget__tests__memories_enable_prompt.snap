@@ -6,8 +6,9 @@ expression: "render_bottom_popup(&chat, 80)"
   Memories are disabled in this TUI session.
 
 
-› 1. Yes, enable  Save on the server for new threads. This thread is unchanged.
-  2. Not now      Keep memories disabled.
+› 1. Yes, enable  Save on the server for new threads without changing this
+                  thread
+  2. Not now      Keep memories disabled
 
   Learn more: https://developers.openai.com/codex/memories
   enter select · esc back

@@ -158,7 +158,7 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
             BedrockMethod::EnvironmentInstructions,
         ]
     );
-    insta::assert_snapshot!(render_visible(&profile_and_bearer), @r###"
+    insta::assert_snapshot!(render_visible(&profile_and_bearer), @r"
     > Set up Amazon Bedrock
 
       Choose how you authenticate with AWS.
@@ -170,12 +170,12 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
          Enter an access key ID and secret access key
 
       3. Environment variables
-         Configure AWS credentials in your environment, then return here.
+         Configure AWS credentials in your environment, then return here
 
 
       Press enter to continue
       Press esc to go back
-    "###);
+    ");
 
     let profile_state = BedrockState::discovered(BedrockDiscoverResponse {
         profiles: vec![profile],
@@ -263,7 +263,7 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
         profiles: Vec::new(),
         environment_credentials: Vec::new(),
     });
-    insta::assert_snapshot!(render_visible(&empty_state), @r###"
+    insta::assert_snapshot!(render_visible(&empty_state), @r"
     > Set up Amazon Bedrock
 
       No AWS credentials found.
@@ -276,7 +276,7 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
          Enter an access key ID and secret access key
 
       3. Environment variables
-         Configure AWS credentials in your environment, then return here.
+         Configure AWS credentials in your environment, then return here
 
       4. Bedrock API key
          Enter a Bedrock API key
@@ -284,7 +284,7 @@ fn discovery_prioritizes_profiles_and_keeps_bedrock_api_key_last() {
 
       Press enter to continue
       Press esc to go back
-    "###);
+    ");
 
     let mut many_profiles = BedrockState::discovered(BedrockDiscoverResponse {
         profiles: (0..12)

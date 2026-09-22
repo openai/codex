@@ -4,6 +4,19 @@ use super::*;
 use crate::permission_discovery::PermissionDiscovery;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 
+pub(super) fn permission_preset_description(preset: &ApprovalPreset) -> &'static str {
+    match preset.id {
+        "read-only" => "Read workspace files, with approval required for edits or internet access",
+        "auto" => {
+            "Read and edit workspace files and run commands, with approval required for internet access or edits outside the workspace"
+        }
+        "full-access" => {
+            "Use with caution: Codex can edit files outside this workspace and access the internet without approval"
+        }
+        _ => preset.description,
+    }
+}
+
 pub(crate) fn auto_review_available(config: &Config) -> bool {
     cyber_model_approval_reviewer(config) == Some(ApprovalsReviewer::AutoReview)
 }
@@ -57,7 +70,7 @@ impl ChatWidget {
                     &preset.active_permission_profile.id,
                     &preset.permission_profile,
                 ))
-                .then(|| "Disabled by requirements.".to_string())
+                .then(|| "Disabled by requirements".to_string())
             })
     }
 
@@ -86,18 +99,14 @@ impl ChatWidget {
             );
             return;
         };
-        let mut items = vec![
-            self.builtin_permission_mode_selection_item(
-                &discovery,
-                default,
-                ":workspace",
-                default
-                    .description
-                    .replace(" (Identical to Agent mode)", ""),
-                AskForApproval::from(default.approval),
-                ApprovalsReviewer::User,
-            ),
-        ];
+        let mut items = vec![self.builtin_permission_mode_selection_item(
+            &discovery,
+            default,
+            ":workspace",
+            permission_preset_description(default).to_string(),
+            AskForApproval::from(default.approval),
+            ApprovalsReviewer::User,
+        )];
         if self.config.features.enabled(Feature::GuardianApproval) {
             items.push(self.builtin_permission_mode_selection_item(
                 &discovery,
@@ -112,7 +121,7 @@ impl ChatWidget {
             &discovery,
             full_access,
             BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS,
-            full_access.description.to_string(),
+            permission_preset_description(full_access).to_string(),
             AskForApproval::from(full_access.approval),
             ApprovalsReviewer::User,
         ));
@@ -120,7 +129,7 @@ impl ChatWidget {
             &discovery,
             read_only,
             ":read-only",
-            read_only.description.to_string(),
+            permission_preset_description(read_only).to_string(),
             AskForApproval::from(read_only.approval),
             ApprovalsReviewer::User,
         ));
@@ -136,7 +145,7 @@ impl ChatWidget {
                         profile
                             .description
                             .as_deref()
-                            .unwrap_or("Configured permission profile."),
+                            .unwrap_or("Configured permission profile"),
                         active_profile_id.as_deref(),
                         discovery.disabled_reason(
                             &profile.id,
@@ -157,9 +166,9 @@ impl ChatWidget {
             items.push(Self::permission_profile_selection_item(
                 id,
                 id,
-                "Current permission profile.",
+                "Current permission profile",
                 Some(id),
-                Some("Not available on this server.".to_string()),
+                Some("Not available on this server".to_string()),
             ));
         }
         self.bottom_pane.show_selection_view(SelectionViewParams {

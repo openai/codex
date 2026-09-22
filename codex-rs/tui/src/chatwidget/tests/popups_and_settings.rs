@@ -93,7 +93,7 @@ async fn marketplace_upgrade_loading_popup_snapshot() {
         .join(" | ");
     insta::assert_snapshot!(
         upgrade_lines,
-        @"Upgrading debug marketplace... | ›    Upgrading debug marketplace...  This updates when marketplace upgrade completes."
+        @"Upgrading debug marketplace... | ›    Upgrading debug marketplace...  This updates when marketplace upgrade completes"
     );
 }
 
@@ -810,7 +810,7 @@ async fn plugins_popup_remote_row_opens_remote_detail() {
         .expect("expected remote plugin row");
     assert!(
         remote_row.contains("Available")
-            && remote_row.contains("Press Enter to install or view plugin details."),
+            && remote_row.contains("Press Enter to install or view plugin details"),
         "expected remote plugin row to be viewable, got:\n{remote_row}"
     );
 
@@ -887,7 +887,7 @@ async fn plugin_detail_unmaterialized_default_uses_remote_install_path() {
     );
     let popup = render_bottom_popup(&chat, /*width*/ 100);
     assert!(
-        popup.contains("Install plugin") && popup.contains("Install this plugin now."),
+        popup.contains("Install plugin") && popup.contains("Install this plugin now"),
         "expected remote detail to offer install, got:\n{popup}"
     );
 
@@ -1020,8 +1020,8 @@ async fn plugin_detail_remote_without_remote_id_disables_uninstall_action() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     assert!(
-        popup.contains("This remote plugin did not provide an uninstall identity.")
-            && !popup.contains("Remove this plugin now."),
+        popup.contains("This remote plugin did not provide an uninstall identity")
+            && !popup.contains("Remove this plugin now"),
         "expected missing remote ID to disable uninstall, got:\n{popup}"
     );
 
@@ -1116,8 +1116,8 @@ async fn plugin_detail_popup_shows_admin_disabled_status_snapshot() {
         @"  Admin Blocked · Disabled by admin · ChatGPT Marketplace"
     );
     assert!(
-        popup.contains("This plugin is disabled by your workspace admin.")
-            && !popup.contains("Install this plugin now."),
+        popup.contains("This plugin is disabled by your workspace admin")
+            && !popup.contains("Install this plugin now"),
         "expected admin-disabled detail to block install, got:\n{popup}"
     );
 
@@ -1155,7 +1155,7 @@ async fn plugins_popup_admin_disabled_installed_plugin_has_no_toggle_hint() {
     assert!(
         popup.contains("[!] Admin Blocked")
             && popup.contains("Disabled")
-            && popup.contains("Press Enter to view plugin details.")
+            && popup.contains("Press Enter to view plugin details")
             && !popup.contains("Disabled by admin")
             && !popup.contains("Space to disable"),
         "expected admin-disabled installed row to omit toggle hint, got:\n{popup}"
@@ -1200,7 +1200,7 @@ async fn plugins_popup_admin_disabled_available_plugin_has_view_only_hint() {
         .find(|line| line.contains("Admin Blocked"))
         .expect("expected admin-disabled plugin row");
     assert!(
-        admin_blocked_row.contains("Press Enter to view plugin details.")
+        admin_blocked_row.contains("Press Enter to view plugin details")
             && !admin_blocked_row.contains("install or view"),
         "expected admin-disabled available plugin to stay view-only, got:\n{admin_blocked_row}"
     );
@@ -1294,22 +1294,22 @@ async fn plugins_popup_remote_section_fallback_states_when_remote_plugin_disable
             remote_section_state(&remote_curated_empty_popup),
         ]
         .join("\n\n"),
-        @r###"
-        OpenAI Curated marketplace.
-        Loading OpenAI Curated plugins...  This updates when OpenAI Curated plugins finish loading.
+        @r"
+    OpenAI Curated marketplace.
+    Loading OpenAI Curated plugins...  This updates when OpenAI Curated plugins finish loading
 
-        Loading Workspace plugins.
-        Loading Workspace plugins...  This updates when workspace plugins finish loading.
+    Loading Workspace plugins.
+    Loading Workspace plugins...  This updates when workspace plugins finish loading
 
-        Loading Shared with me plugins.
-        Loading Shared with me plugins...  This updates when shared plugins finish loading.
+    Loading Shared with me plugins.
+    Loading Shared with me plugins...  This updates when shared plugins finish loading
 
-        Workspace unavailable.
-        Workspace unavailable  Sign in to ChatGPT to load workspace plugins.
+    Workspace unavailable.
+    Workspace unavailable  Sign in to ChatGPT to load workspace plugins.
 
-        OpenAI Curated marketplace.
-        No OpenAI Curated plugins available  No OpenAI Curated plugins available.
-        "###
+    OpenAI Curated marketplace.
+    No OpenAI Curated plugins available  No OpenAI Curated plugins available
+    "
     );
 }
 
@@ -1633,7 +1633,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected /plugins to refresh installed counts after install, got:\n{after}"
     );
     assert!(
-        after.contains("Installed   Space to disable; Enter view details."),
+        after.contains("Installed   Space to disable; Enter view details"),
         "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
     );
 }
@@ -2865,7 +2865,7 @@ async fn apps_refresh_failure_without_full_snapshot_falls_back_to_installed_apps
         "expected /apps to fall back to the installed apps snapshot, got:\n{popup}"
     );
     assert!(
-        popup.contains("Installed. Press Enter to open the app page"),
+        popup.contains("Installed · Press Enter to open the app page"),
         "expected the fallback popup to behave like the installed apps view, got:\n{popup}"
     );
 }
@@ -2906,11 +2906,11 @@ async fn apps_popup_shows_disabled_status_for_installed_but_disabled_apps() {
     chat.add_connectors_output();
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        popup.contains("Installed · Disabled · Press Enter to open the app page"),
         "expected selected app description to include disabled status, got:\n{popup}"
     );
     assert!(
-        popup.contains("enable/disable this app."),
+        popup.contains("enable/disable this app"),
         "expected selected app description to mention enable/disable action, got:\n{popup}"
     );
 }
@@ -2985,7 +2985,7 @@ async fn apps_refresh_preserves_toggled_enabled_state() {
     chat.add_connectors_output();
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Installed · Disabled. Press Enter to open the app page"),
+        popup.contains("Installed · Disabled · Press Enter to open the app page"),
         "expected disabled status to persist after reload, got:\n{popup}"
     );
 }
@@ -3026,11 +3026,11 @@ async fn apps_popup_for_not_installed_app_uses_install_only_selected_description
     chat.add_connectors_output();
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Can be installed. Press Enter to open the app page to install"),
+        popup.contains("Can be installed · Press Enter to open the app page to install"),
         "expected selected app description to be install-only for not-installed apps, got:\n{popup}"
     );
     assert!(
-        !popup.contains("enable/disable this app."),
+        !popup.contains("enable/disable this app"),
         "did not expect enable/disable text for not-installed apps, got:\n{popup}"
     );
 }

@@ -7,6 +7,6 @@ expression: "render_bottom_popup(&app.chat_widget, 80)"
 
 
 › 1. Install latest public stable
-     Use this CLI build (disabled)  This CLI has no local package to copy.
+     Use this CLI build (disabled)  This CLI has no local package to copy
 
   enter select · esc back

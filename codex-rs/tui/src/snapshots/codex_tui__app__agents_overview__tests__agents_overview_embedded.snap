@@ -6,7 +6,7 @@ expression: "render_bottom_popup(&app.chat_widget, 96)"
   This session isn’t connected to a shared background server.
 
 
-› 1. Start background server  Open `codex agents` in another terminal afterward.
+› 1. Start background server  Open `codex agents` in another terminal afterward
   2. Return to this session
 
   Starting a background server will not interrupt or move this session.

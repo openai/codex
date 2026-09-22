@@ -5,17 +5,14 @@ expression: "render_bottom_popup(&chat, 80)"
   Update Model Permissions
 
 
-  1. Ask for approval        Codex can read and edit files in the current
-                             workspace, and run commands. Approval is required
-                             to access the internet or edit other files.
-  2. Approve for me          Only ask for actions detected as potentially
-                             unsafe.
-     Full Access (disabled)  Codex can edit files outside this workspace and
-                             access the internet without asking for approval.
-                             Exercise caution when using. (disabled: Disabled by
-                             requirements.)
-› 3. Read Only (current)     Codex can read files in the current workspace.
-                             Approval is required to edit files or access the
-                             internet.
+  1. Ask for approval        Read and edit workspace files and run commands,
+                             with approval required for internet access or edits
+                             outside the workspace
+  2. Approve for me          Only ask for actions detected as potentially unsafe
+     Full Access (disabled)  Use with caution: Codex can edit files outside this
+                             workspace and access the internet without approval
+                             (disabled: Disabled by requirements)
+› 3. Read Only (current)     Read workspace files, with approval required for
+                             edits or internet access
 
   enter select · esc back

@@ -1,6 +1,5 @@
 ---
 source: tui/src/chatwidget/tests/popups_and_settings.rs
-assertion_line: 2316
 expression: snapshot
 ---
 › Google Drive  [App] Connected files
@@ -19,8 +18,8 @@ expression: snapshot
 
 
      ChatGPT apps link unavailable  This app did not provide an install/manage
-                                    URL.
-› 1. Continue                       Advance to the next app.
-  2. Skip remaining app setup       Stop this follow-up flow for this plugin.
+                                    URL
+› 1. Continue                       Advance to the next app
+  2. Skip remaining app setup       Stop this follow-up flow for this plugin
 
   esc close

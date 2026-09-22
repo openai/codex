@@ -5,8 +5,8 @@ expression: "render_snapshot(&overlay, Rect::new(0, 0, 120, 16))"
                                                                                                                         
   Field 1/1                                                                                                             
   Boolean elicit MCP example: do you confirm?                                                                           
-  › 1. Allow   Allow this request and continue.                                                                         
-    2. Deny    Decline this request and continue.                                                                       
+  › 1. Allow   Allow this request and continue                                                                          
+    2. Deny    Decline this request and continue                                                                        
     3. Cancel  Cancel this request                                                                                      
                                                                                                                         
                                                                                                                         

@@ -5,8 +5,9 @@ expression: popup
   Implement this plan?
 
 
-› 1. Yes, implement this plan          Switch to Default and start coding.
-  2. Yes, clear context and implement  Fresh thread. Context: 89% used.
-  3. No, stay in Plan mode             Continue planning with the model.
+› 1. Yes, implement this plan          Switch to Default and start coding
+  2. Yes, clear context and implement  Start a fresh thread (current context:
+                                       89% used)
+  3. No, stay in Plan mode             Continue planning with the model
 
   enter select · esc back

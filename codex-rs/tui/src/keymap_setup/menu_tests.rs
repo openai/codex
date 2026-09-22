@@ -131,7 +131,7 @@ fn disabled_reason_wraps_in_the_description_column() {
         .position(|row| row.contains("Remove custom binding (disabled)"))
         .expect("disabled action stays visible");
     let reason_start = rows[y].find("No custom root override").unwrap();
-    let continuation_start = rows[y + 1].find("to remove.").unwrap();
+    let continuation_start = rows[y + 1].find("to remove").unwrap();
     assert_eq!(
         crate::width::display_width(&rows[y + 1][..continuation_start]),
         crate::width::display_width(&rows[y][..reason_start])

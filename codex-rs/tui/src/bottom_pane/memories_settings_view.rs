@@ -82,19 +82,19 @@ impl MemoriesSettingsView {
                 MemoriesMenuItem::Setting {
                     setting: MemoriesSetting::Use,
                     name: "Use memories",
-                    description: "Use memories in the following threads. Applied at next thread.",
+                    description: "Use memories starting with the next thread",
                     enabled: use_memories,
                 },
                 MemoriesMenuItem::Setting {
                     setting: MemoriesSetting::Generate,
                     name: "Generate memories",
-                    description: "Generate memories from the following threads. Current thread included.",
+                    description: "Generate memories from this thread and future threads",
                     enabled: generate_memories,
                 },
                 MemoriesMenuItem::Action {
                     action: MemoriesAction::Reset,
                     name: "Reset all memories",
-                    description: "Clear local memory files and summaries. Existing threads stay intact.",
+                    description: "Clear local memory files and summaries without changing existing threads",
                 },
             ],
             state: ScrollState::new(),
@@ -175,8 +175,8 @@ impl MemoriesSettingsView {
                         format!("  {name}")
                     },
                     description: Some(match idx {
-                        0 => "Delete local memory files and rollout summaries.".to_string(),
-                        1 => "Return to memory settings.".to_string(),
+                        0 => "Delete local memory files and rollout summaries".to_string(),
+                        1 => "Return to memory settings".to_string(),
                         _ => unreachable!("reset confirmation only renders two rows"),
                     }),
                     ..Default::default()

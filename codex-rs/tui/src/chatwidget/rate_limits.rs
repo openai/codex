@@ -490,7 +490,7 @@ impl ChatWidget {
             tx.send(AppEvent::PersistRateLimitSwitchPromptHidden);
         })];
         let description = if preset.description.is_empty() {
-            Some("Uses fewer credits for upcoming turns.".to_string())
+            Some("Uses fewer credits for upcoming turns".to_string())
         } else {
             Some(preset.description)
         };
@@ -517,7 +517,7 @@ impl ChatWidget {
             SelectionItem {
                 name: "Keep current model (never show again)".to_string(),
                 description: Some(
-                    "Hide future rate limit reminders about switching models.".to_string(),
+                    "Hide future rate limit reminders about switching models".to_string(),
                 ),
                 selected_description: None,
                 is_current: false,

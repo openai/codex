@@ -61,7 +61,7 @@ impl PermissionDiscovery {
         reviewer: Option<ApprovalsReviewer>,
     ) -> Option<String> {
         let Some(profile) = self.profiles.iter().find(|profile| profile.id == id) else {
-            return Some("Not available on this server.".to_string());
+            return Some("Not available on this server".to_string());
         };
         let requirements = self.requirements.as_ref();
         if !profile.allowed
@@ -75,7 +75,7 @@ impl PermissionDiscovery {
                 .and_then(|r| r.allowed_approvals_reviewers.as_ref())
                 .is_some_and(|allowed| reviewer.is_some_and(|value| !allowed.contains(&value)))
         {
-            return Some("Disabled by requirements.".to_string());
+            return Some("Disabled by requirements".to_string());
         }
         None
     }

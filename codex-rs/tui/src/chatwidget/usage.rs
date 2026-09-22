@@ -34,10 +34,10 @@ impl ChatWidget {
         let (reset_action_enabled, reset_description) =
             match (reset_eligible, self.available_rate_limit_reset_credits) {
                 (true, Some(available_count)) if available_count > 0 => {
-                    (true, format!("{available_count} available."))
+                    (true, format!("{available_count} available"))
                 }
-                (true, None) => (true, "Check availability.".to_string()),
-                (true, Some(_)) | (false, _) => (false, "None available.".to_string()),
+                (true, None) => (true, "Check availability".to_string()),
+                (true, Some(_)) | (false, _) => (false, "None available".to_string()),
             };
 
         SelectionViewParams {
@@ -48,7 +48,7 @@ impl ChatWidget {
             items: vec![
                 SelectionItem {
                     name: "View analytics".to_string(),
-                    description: Some("Usage history.".to_string()),
+                    description: Some("Usage history".to_string()),
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::OpenAnalytics { view: None });
                     })],
@@ -260,7 +260,7 @@ impl ChatWidget {
                 },
                 SelectionItem {
                     name: "No, go back".to_string(),
-                    description: Some("Choose a different reset.".to_string()),
+                    description: Some("Choose a different reset".to_string()),
                     actions: vec![Box::new(move |_| {
                         no_confirmation_gate.store(true, Ordering::Release);
                     })],

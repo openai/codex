@@ -897,7 +897,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: install_label.to_string(),
                 description: Some("Open the ChatGPT app management page".to_string()),
-                selected_description: Some("Open the app page in your browser.".to_string()),
+                selected_description: Some("Open the app page in your browser".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenUrlInBrowser {
                         url: install_url.clone(),
@@ -908,7 +908,7 @@ impl ChatWidget {
         } else {
             items.push(SelectionItem {
                 name: "ChatGPT apps link unavailable".to_string(),
-                description: Some("This app did not provide an install/manage URL.".to_string()),
+                description: Some("This app did not provide an install/manage URL".to_string()),
                 is_disabled: true,
                 ..Default::default()
             });
@@ -917,8 +917,8 @@ impl ChatWidget {
         if is_installed {
             items.push(SelectionItem {
                 name: "Continue".to_string(),
-                description: Some("This app is already installed.".to_string()),
-                selected_description: Some("Advance to the next app.".to_string()),
+                description: Some("This app is already installed".to_string()),
+                selected_description: Some("Advance to the next app".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::PluginInstallAuthAdvance {
                         refresh_connectors: false,
@@ -930,10 +930,10 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: "I've installed it".to_string(),
                 description: Some(
-                    "Trust your confirmation and continue to the next app.".to_string(),
+                    "Trust your confirmation and continue to the next app".to_string(),
                 ),
                 selected_description: Some(
-                    "Continue without waiting for refresh to complete.".to_string(),
+                    "Continue without waiting for refresh to complete".to_string(),
                 ),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::PluginInstallAuthAdvance {
@@ -946,8 +946,8 @@ impl ChatWidget {
 
         items.push(SelectionItem {
             name: "Skip remaining app setup".to_string(),
-            description: Some("Stop this follow-up flow for this plugin.".to_string()),
-            selected_description: Some("Abandon remaining required app setup.".to_string()),
+            description: Some("Stop this follow-up flow for this plugin".to_string()),
+            selected_description: Some("Abandon remaining required app setup".to_string()),
             actions: vec![Box::new(|tx| {
                 tx.send(AppEvent::PluginInstallAuthAbandon);
             })],

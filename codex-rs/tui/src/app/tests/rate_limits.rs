@@ -304,7 +304,7 @@ async fn stale_rate_limit_reads_preserve_newer_workspace_hard_stop_for_every_ori
         let popup = render_bottom_popup(&app.chat_widget, /*width*/ 100);
         match origin_name {
             "usage" => assert!(
-                popup.contains("Redeem reset    None available."),
+                popup.contains("Redeem reset    None available"),
                 "expected usage reset availability, got: {popup}"
             ),
             "reset-picker" => {

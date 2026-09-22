@@ -56,11 +56,11 @@ pub(super) fn reset_credit_options(
                 .as_deref()
                 .map(str::trim)
                 .filter(|description| !description.is_empty())
-                .unwrap_or("Reset your current usage limits.");
+                .unwrap_or("Reset your current usage limits");
             ResetCreditOption {
                 credit_id: Some(credit.id.clone()),
                 name: reset_title.to_string(),
-                detail: Some(format!("{expiration}.")),
+                detail: Some(expiration),
                 description: reset_description.to_string(),
             }
         })
@@ -71,7 +71,7 @@ pub(super) fn reset_credit_options(
             credit_id: None,
             name: "Full reset".to_string(),
             detail: None,
-            description: "Reset your current usage limits.".to_string(),
+            description: "Reset your current usage limits".to_string(),
         });
     }
 

@@ -249,9 +249,9 @@ impl McpServerElicitationFormRequest {
             (McpServerElicitationResponseMode::FormContent, Vec::new())
         } else if is_message_only_schema {
             let allow_description = if is_tool_approval_action {
-                "Run the tool and continue."
+                "Run the tool and continue"
             } else {
-                "Allow this request and continue."
+                "Allow this request and continue"
             };
             let mut options = vec![McpServerElicitationOption {
                 label: "Allow".to_string(),
@@ -260,9 +260,9 @@ impl McpServerElicitationFormRequest {
             }];
             if approval_supports_persist_mode(meta, APPROVAL_PERSIST_SESSION_VALUE) {
                 let description = if is_tool_approval_action {
-                    "Run the tool and remember this choice for this session."
+                    "Run the tool and remember this choice for this session"
                 } else {
-                    "Allow this request and remember this choice for this session."
+                    "Allow this request and remember this choice for this session"
                 };
                 options.push(McpServerElicitationOption {
                     label: "Allow for this session".to_string(),
@@ -272,9 +272,9 @@ impl McpServerElicitationFormRequest {
             }
             if approval_supports_persist_mode(meta, APPROVAL_PERSIST_ALWAYS_VALUE) {
                 let description = if is_tool_approval_action {
-                    "Run the tool and remember this choice for future tool calls."
+                    "Run the tool and remember this choice for future tool calls"
                 } else {
-                    "Allow this request and remember this choice for future requests."
+                    "Allow this request and remember this choice for future requests"
                 };
                 options.push(McpServerElicitationOption {
                     label: "Always allow".to_string(),
@@ -292,7 +292,7 @@ impl McpServerElicitationFormRequest {
                 options.extend([
                     McpServerElicitationOption {
                         label: "Deny".to_string(),
-                        description: Some("Decline this request and continue.".to_string()),
+                        description: Some("Decline this request and continue".to_string()),
                         value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                     },
                     McpServerElicitationOption {
@@ -1933,12 +1933,12 @@ mod tests {
                         options: vec![
                             McpServerElicitationOption {
                                 label: "Allow".to_string(),
-                                description: Some("Allow this request and continue.".to_string()),
+                                description: Some("Allow this request and continue".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
                                 label: "Deny".to_string(),
-                                description: Some("Decline this request and continue.".to_string()),
+                                description: Some("Decline this request and continue".to_string()),
                                 value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {
@@ -1990,7 +1990,7 @@ mod tests {
                         options: vec![
                             McpServerElicitationOption {
                                 label: "Allow".to_string(),
-                                description: Some("Run the tool and continue.".to_string()),
+                                description: Some("Run the tool and continue".to_string()),
                                 value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
                             },
                             McpServerElicitationOption {

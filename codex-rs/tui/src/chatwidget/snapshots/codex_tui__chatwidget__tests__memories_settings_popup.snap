@@ -6,12 +6,10 @@ expression: popup
   Choose how Codex uses and creates memories. Changes are saved to config.toml
 
 
-› [x] Use memories       Use memories in the following threads. Applied at next
-                         thread.
-  [ ] Generate memories  Generate memories from the following threads. Current
-                         thread included.
-  Reset all memories     Clear local memory files and summaries. Existing
-                         threads stay intact.
+› [x] Use memories       Use memories starting with the next thread
+  [ ] Generate memories  Generate memories from this thread and future threads
+  Reset all memories     Clear local memory files and summaries without changing
+                         existing threads
 
 
   Learn more: https://developers.openai.com/codex/memories

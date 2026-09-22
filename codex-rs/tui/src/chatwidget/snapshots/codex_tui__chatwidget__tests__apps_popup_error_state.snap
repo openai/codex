@@ -6,8 +6,8 @@ expression: popup
   Failed to load apps.
 
 
-     App directory unavailable  The app directory request failed. Retry, or
-                                press Esc to continue.
-› 1. Retry                      Reload installed and available apps.
+     App directory unavailable  Retry the failed app directory request, or press
+                                Esc to continue
+› 1. Retry                      Reload installed and available apps
 
   enter select · esc back

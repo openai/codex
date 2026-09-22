@@ -219,7 +219,7 @@ impl ChatWidget {
             subtitle: Some("Loading installed and available apps...".to_string()),
             items: vec![SelectionItem {
                 name: "Loading apps...".to_string(),
-                description: Some("This updates when the full list is ready.".to_string()),
+                description: Some("This updates when the full list is ready".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -236,7 +236,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: "App directory unavailable".to_string(),
                     description: Some(
-                        "The app directory request failed. Retry, or press Esc to continue."
+                        "Retry the failed app directory request, or press Esc to continue"
                             .to_string(),
                     ),
                     is_disabled: true,
@@ -244,7 +244,7 @@ impl ChatWidget {
                 },
                 SelectionItem {
                     name: "Retry".to_string(),
-                    description: Some("Reload installed and available apps.".to_string()),
+                    description: Some("Reload installed and available apps".to_string()),
                     actions: vec![Box::new(|tx| {
                         tx.send(AppEvent::RefreshConnectors {
                             force_refetch: true,
@@ -295,12 +295,12 @@ impl ChatWidget {
             let is_installed = connector.is_accessible;
             let selected_label = if is_installed {
                 format!(
-                    "{status_label}. Press Enter to open the app page to install, manage, or enable/disable this app."
+                    "{status_label} · Press Enter to open the app page to install, manage, or enable/disable this app"
                 )
             } else {
-                format!("{status_label}. Press Enter to open the app page to install this app.")
+                format!("{status_label} · Press Enter to open the app page to install this app")
             };
-            let missing_label = format!("{status_label}. App link unavailable.");
+            let missing_label = format!("{status_label} · App link unavailable");
             let instructions = if connector.is_accessible {
                 "Manage this app in your browser."
             } else {

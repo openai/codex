@@ -30,7 +30,7 @@ impl ChatWidget {
         let items = vec![
             SelectionItem {
                 name: "List skills".to_string(),
-                description: Some("Tip: press $ to open this list directly.".to_string()),
+                description: Some("Tip: press $ to open this list directly".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenSkillsList);
                 })],
@@ -39,7 +39,7 @@ impl ChatWidget {
             },
             SelectionItem {
                 name: "Enable/Disable Skills".to_string(),
-                description: Some("Enable or disable skills.".to_string()),
+                description: Some("Enable or disable skills".to_string()),
                 actions: vec![Box::new(|tx| {
                     tx.send(AppEvent::OpenManageSkillsPopup);
                 })],
