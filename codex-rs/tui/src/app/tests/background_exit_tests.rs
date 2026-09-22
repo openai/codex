@@ -56,6 +56,13 @@ async fn external_writer_view_preserves_draft_from_keys_and_paste() -> Result<()
         },
     };
     app.ensure_thread_channel(thread_id).mark_external_writer();
+    app.transcript_cells
+        .push(Arc::new(history_cell::new_user_prompt(
+            "Existing prompt".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )));
     app.chat_widget.insert_str("Retained draft");
     app.chat_widget.show_external_writer_thread();
     let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
@@ -85,6 +92,21 @@ async fn external_writer_view_preserves_draft_from_keys_and_paste() -> Result<()
     )
     .await?;
     assert!(app.overlay.is_some());
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyCode::Esc.into()),
+    )
+    .await?;
+    assert!(app.overlay.is_none());
+    assert_eq!(
+        (
+            app.backtrack.primed,
+            app.backtrack.overlay_preview_active,
+            app.chat_widget.composer_text_with_pending(),
+        ),
+        (false, false, "Retained draft".to_string()),
+    );
     Ok(())
 }
 

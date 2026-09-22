@@ -74,6 +74,81 @@ pub(super) fn buffer_text(buffer: &Buffer) -> String {
 }
 
 #[tokio::test]
+async fn external_writer_escape_returns_to_command_center_without_editing() -> Result<()> {
+    for (detailed, scrolled, offline) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (false, false, true),
+    ] {
+        let mut app = crate::app::test_support::make_test_app().await;
+        attach_thread(&mut app, ThreadId::new());
+        app.transcript_cells = vec![user_cell("First prompt"), user_cell("Second prompt")];
+        app.app_server_target = AppServerTarget::Remote {
+            endpoint: crate::resolve_remote_addr("ws://127.0.0.1:4500")?,
+        };
+        app.chat_widget.show_external_writer_thread();
+        if offline {
+            assert!(app.begin_reconnect());
+        }
+        let mut app_server =
+            Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        tui.set_owned_screen(/*owned*/ true)?;
+        if detailed {
+            app.open_transcript_overlay(&mut tui);
+        }
+        if scrolled {
+            app.transcript_view
+                .jump_to_entry(&app.transcript_cells, /*index*/ 0);
+        }
+
+        app.handle_tui_event(
+            &mut tui,
+            &mut app_server,
+            TuiEvent::Key(KeyCode::Esc.into()),
+        )
+        .await?;
+
+        assert!(app.chat_widget.has_active_view());
+        assert_eq!(
+            (
+                app.backtrack.primed,
+                app.backtrack.overlay_preview_active,
+                app.chat_widget.composer_text_with_pending(),
+            ),
+            (false, false, String::new()),
+        );
+        if offline {
+            assert!(app.agents_overview.request_id.is_none());
+            assert!(app.reconnect.presentation == reconnect::ReconnectPresentation::Overview);
+            insta::assert_snapshot!(
+                "external_writer_escape_offline_command_center",
+                crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
+                    crate::chatwidget::tests::helpers::render_bottom_popup(
+                        &app.chat_widget,
+                        /*width*/ 96,
+                    )
+                )
+            );
+        } else if !detailed && !scrolled {
+            insta::assert_snapshot!(
+                "external_writer_escape_command_center",
+                crate::chatwidget::tests::helpers::normalize_agent_center_snapshot(
+                    crate::chatwidget::tests::helpers::render_bottom_popup(
+                        &app.chat_widget,
+                        /*width*/ 96,
+                    )
+                )
+            );
+        }
+        tui.set_owned_screen(/*owned*/ false)?;
+        app_server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_spacing_completion_preserves_the_scrolled_reader() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     app.transcript_cells = vec![Arc::new(history_cell::AgentMessageCell::new(

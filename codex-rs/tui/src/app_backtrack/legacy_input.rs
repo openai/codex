@@ -95,7 +95,13 @@ impl App {
                     code: KeyCode::Esc,
                     kind: KeyEventKind::Press,
                     ..
-                }) => self.begin_overlay_backtrack_preview(tui),
+                }) => {
+                    if self.chat_widget.is_external_writer_view() {
+                        self.close_transcript_overlay(tui);
+                    } else {
+                        self.begin_overlay_backtrack_preview(tui);
+                    }
+                }
                 event => self.overlay_forward_event(tui, event)?,
             }
         }

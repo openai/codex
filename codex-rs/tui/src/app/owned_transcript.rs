@@ -292,6 +292,15 @@ impl App {
         {
             self.chat_widget.end_composer_drag();
         }
+        // Read-only Escape belongs to session navigation, even when the transcript is scrolled.
+        // Search and selection still consume Escape first to dismiss their interaction.
+        if let TuiEvent::Key(key) = event
+            && !self.transcript_view.has_active_interaction()
+            && self.chat_widget.is_external_writer_view()
+            && crate::key_hint::plain(KeyCode::Esc).is_press(*key)
+        {
+            return Ok(false);
+        }
         // Visible shortcut help owns Escape before returning a paused viewport to latest.
         // A transcript search or selection still owns Escape while it replaces the help footer.
         if let TuiEvent::Key(key) = event

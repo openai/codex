@@ -970,7 +970,13 @@ impl App {
                 && self.chat_widget.no_modal_or_popup_active()
                 && self.keymap.app.open_warnings.is_pressed(*key))
         {
-            if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
+            if self.overlay.is_none()
+                && self.chat_widget.no_modal_or_popup_active()
+                && self.chat_widget.is_external_writer_view()
+                && crate::key_hint::plain(KeyCode::Esc).is_press(*key)
+            {
+                self.open_agents_overview(app_server);
+            } else if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
                 self.chat_widget.handle_disconnected_view_key(*key);
                 if self
                     .chat_widget
