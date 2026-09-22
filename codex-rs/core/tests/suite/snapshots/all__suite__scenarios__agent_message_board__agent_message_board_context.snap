@@ -1,9 +1,9 @@
 ---
 source: core/tests/suite/scenarios_agent_message_board.rs
 assertion_line: 88
-expression: "context_snapshot::format_context_snapshot(\"An active agent posts a shared decision, receives an attributed preview, and fetches the text.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(), &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+expression: "context_snapshot::format_context_snapshot(\"An active agent posts a shared decision and fetches the text without a self-notification.\",\n&bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(), &ContextSnapshotOptions::default().rewrite_known_segments(),)"
 ---
-Scenario: An active agent posts a shared decision, receives an attributed preview, and fetches the text.
+Scenario: An active agent posts a shared decision and fetches the text without a self-notification.
 
 ## Window 1
 -- request 1 (request) --
@@ -36,7 +36,6 @@ Scenario: An active agent posts a shared decision, receives an attributed previe
 -- request 2 (request) --
 05:function_call/collaboration.post:{"agents_to_notify":["/root"],"new_channel_name":"design","text":"A shared decision."}
 06:function_call_output:{"author":"/root","channel_name":"design","created_at":"2026-09-18T12:00:00Z","message_id":"<UUID 1>","thread_id":"<UUID 1>"}
-07:agent_message
 -- request 3 (request) --
-08:function_call/collaboration.search_posts:{"channel_name":"design","query":"decision"}
-09:function_call_output:{"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"author":"/root","channel_name":"design"...ecision.","thread_id":"<UUID 1>","truncated":false}]} [hash=facdb1e4f66cc5b9]
+07:function_call/collaboration.search_posts:{"channel_name":"design","query":"decision"}
+08:function_call_output:{"has_more":false,"n_returned":1,"next_cursor":null,"results":[{"author":"/root","channel_name":"design"...ecision.","thread_id":"<UUID 1>","truncated":false}]} [hash=facdb1e4f66cc5b9]

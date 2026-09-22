@@ -115,7 +115,7 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         request_id: "call-1".into(),
         destination: PostDestination::Channel("proofs".into()),
         text: "é🦀 proof".into(),
-        agents_to_notify: vec![child_path.clone(), child_path.clone()],
+        agents_to_notify: vec![AgentPath::root(), child_path.clone(), child_path.clone()],
     };
     let second = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
         .await
@@ -209,11 +209,24 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
         )
         .await
         .unwrap();
+    // Excluding the author must keep its subscription for other agents' replies.
+    let child_reply = resumed
+        .post(
+            child,
+            PostRequest {
+                request_id: "child-reply".into(),
+                destination: PostDestination::Thread(metadata.message_id),
+                text: "acknowledged".into(),
+                agents_to_notify: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
     let mut received = host.notifications.lock().unwrap().clone();
     received.sort_by_key(|(id, post)| (id.to_string(), post.message_id));
     let mut expected = vec![
         (child, metadata.clone()),
-        (root, reply.clone()),
+        (root, child_reply),
         (child, reply),
     ];
     expected.sort_by_key(|(id, post)| (id.to_string(), post.message_id));
@@ -242,10 +255,12 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
+    let child = ThreadId::new();
+    let child_path = AgentPath::root().join("worker").unwrap();
     let host = Arc::new(Host {
         clock: AtomicI64::default(),
         agent_path_calls: AtomicUsize::default(),
-        members: [(root, AgentPath::root())].into(),
+        members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
         fail_notifications: AtomicBool::new(false),
         active: AtomicBool::new(false),
         notifications: Mutex::default(),
@@ -260,7 +275,7 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
         agents_to_notify: vec![AgentPath::root().join("unknown").unwrap()],
     };
     assert!(board.post(root, request.clone()).await.is_err());
-    request.agents_to_notify = vec![AgentPath::root()];
+    request.agents_to_notify = vec![child_path.clone()];
     let posted = board.post(root, request.clone()).await.unwrap();
     assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
     host.active.store(true, Ordering::SeqCst);
@@ -275,7 +290,7 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
         request_id: "reply".into(),
         destination: PostDestination::Thread(posted.thread_id),
         text: "saved even if the notice fails".into(),
-        agents_to_notify: vec![],
+        agents_to_notify: vec![child_path],
     };
     let saved = board.post(root, reply.clone()).await.unwrap();
     host.fail_notifications.store(false, Ordering::SeqCst);
@@ -744,17 +759,8 @@ async fn tools_cover_channel_discussions_subscriptions_and_escaped_previews() {
         let reply: PostMetadata = serde_json::from_str(&replied.log_output()).unwrap();
         last = Some((post, reply));
     }
-    // Default create_channel subscribes the author to roots; post subscribes it
-    // to replies. The unsubscribed child receives neither.
-    assert_eq!(
-        host.notifications
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>(),
-        vec![root; 14]
-    );
+    // The subscribed author receives no self-notices; the child is unsubscribed.
+    assert_eq!(*host.notifications.lock().unwrap(), Vec::new());
     let (last, last_reply) = last.unwrap();
     assert!(
         tool("subscribe")

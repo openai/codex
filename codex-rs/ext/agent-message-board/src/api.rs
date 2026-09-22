@@ -28,7 +28,8 @@ const _: Option<&dyn AgentMessageBoard> = None;
 /// Mutation success acknowledges acceptance, not that recipients read a post.
 /// Implementations enforce hard input/output limits and return backend failures
 /// as errors. They own atomic subscription changes, posting and recipient
-/// selection. Notification delivery must neither wake finalized agents nor
+/// selection, excluding the post author even when explicitly targeted.
+/// Notification delivery must neither wake finalized agents nor
 /// leave notifications for a later turn.
 ///
 /// Boxed Send futures support an Arc<dyn AgentMessageBoard>, like AgentControl.

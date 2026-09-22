@@ -263,6 +263,7 @@ impl LocalAgentMessageBoard {
         for recipient in subscribed {
             recipients.insert(ThreadId::from_string(&recipient).map_err(storage_error)?);
         }
+        recipients.remove(&caller);
         let post = StoredPost {
             metadata: PostMetadata {
                 message_id: id,

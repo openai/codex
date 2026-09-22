@@ -124,7 +124,7 @@ async fn board_requires_persistent_v2_runtime(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn board_active_notice_and_reads_reach_model_context() -> anyhow::Result<()> {
+async fn board_post_and_reads_reach_model_context_without_self_notices() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mock = responses::mount_sse_sequence(&server, vec![
         tool("post-decision", "post", json!({"new_channel_name":"design", "text":"A shared decision.", "agents_to_notify":["/root"]})),
@@ -163,31 +163,10 @@ async fn board_active_notice_and_reads_reach_model_context() -> anyhow::Result<(
             .expect("search result"),
     )?;
     assert_eq!(result["results"][0]["text_preview"], "A shared decision.");
-    let input = requests[1].body_json();
-    let notices = input["input"]
-        .as_array()
-        .context("request input")?
-        .iter()
-        .filter(|item| item["type"] == "agent_message")
-        .map(|item| {
-            (
-                item["author"].clone(),
-                item["recipient"].clone(),
-                item["content"].clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    let message_id = post["message_id"].as_str().context("message ID")?;
-    assert_eq!(
-        notices,
-        vec![(
-            json!("/root"),
-            json!("/root"),
-            json!([{
-                "type": "input_text",
-                "text": format!("Message Type: CHANNEL_POST\nSender: /root\nChannel: design\nMessage ID: {message_id}\nThread ID: {message_id}\nPayload:\nA shared decision."),
-            }])
-        )]
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.body_contains_text("Message Type: CHANNEL_POST"))
     );
     // Cargo and Bazel can enable different serde_json ordering features. Normalize only
     // the snapshot copies so the assertion compares JSON content, not object key order.
@@ -208,7 +187,7 @@ async fn board_active_notice_and_reads_reach_model_context() -> anyhow::Result<(
     insta::assert_snapshot!(
         "agent_message_board_context",
         context_snapshot::format_context_snapshot(
-            "An active agent posts a shared decision, receives an attributed preview, and fetches the text.",
+            "An active agent posts a shared decision and fetches the text without a self-notification.",
             &bodies.iter().map(SnapshotEntry::body).collect::<Vec<_>>(),
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
