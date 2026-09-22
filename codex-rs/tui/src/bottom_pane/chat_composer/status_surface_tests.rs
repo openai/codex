@@ -362,3 +362,25 @@ fn slash_popup_preserves_footer_and_selection_style() {
         .collect();
     assert!(footer_text.contains("transcript status"));
 }
+
+#[test]
+fn activity_shortcut_help_follows_runtime_binding() {
+    let mut snapshots = Vec::new();
+    for configured in [
+        serde_json::json!("f4"),
+        serde_json::json!("ctrl-x t"),
+        serde_json::json!([]),
+    ] {
+        let config = serde_json::from_value(serde_json::json!({
+            "global": {"focus_activity": configured}
+        }))
+        .unwrap();
+        let keymap = crate::keymap::RuntimeKeymap::from_config(&config).unwrap();
+        let mut composer = composer();
+        composer.set_keymap_bindings(&keymap);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+        let (text, _) = render(&composer, /*width*/ 130, /*footer*/ None);
+        snapshots.push(format!("{configured}\n{text}"));
+    }
+    insta::assert_snapshot!(snapshots.join("\n---\n"));
+}

@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 5620
 expression: terminal.backend()
 ---
 "  Keyboard shortcuts                                                                                "
@@ -9,11 +8,12 @@ expression: terminal.backend()
 "  /              Commands             tab     Send message                                          "
 "  @              Mention files        ⌥+,     Less reasoning                                        "
 "  !              Shell command        ⌥+.     More reasoning                                        "
-"  ctrl+x enter   New line             ctrl+c  Quit                                                  "
-"  ctrl+v         Paste image                                                                        "
-"  ctrl+g ctrl+g  External editor      Transcript (open first)                                       "
-"  ctrl+r         Search history       ctrl+t                 Open transcript                        "
-"  esc esc        Edit last message    f3                     Find text                              "
+"  ctrl+x enter   New line             f4      Inspect activity                                      "
+"  ctrl+v         Paste image          ctrl+c  Quit                                                  "
+"  ctrl+g ctrl+g  External editor                                                                    "
+"  ctrl+r         Search history       Transcript (open first)                                       "
+"  esc esc        Edit last message    ctrl+t                 Open transcript                        "
+"                                      f3                     Find text                              "
 "                                      pgup / pgdn            Scroll                                 "
 "                                      ctrl+space             Start selection                        "
 "                                      ctrl+home / ctrl+end   Top / latest                           "

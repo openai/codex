@@ -1,13 +1,11 @@
 //! Local activity disclosure keyed by retained tool identities, independent of text selection.
-//! Controls follow the activity preview; copied text and full-transcript search remain source based.
+//! Controls appear only while activity is focused; copied text and full-transcript search remain source based.
 
 use crate::style::accent_color;
 use std::collections::HashSet;
 
 use crate::bottom_pane::TranscriptFooter;
 use crate::key_hint::KeyBindingListExt;
-use crate::key_hint::key_label_spans;
-use crate::keymap::KeymapContext;
 use crate::keymap::ListAction;
 use crate::keymap::RuntimeKeymap;
 use crossterm::event::KeyEvent;
@@ -362,74 +360,43 @@ impl TranscriptView {
     }
 
     pub(super) fn disclosure_footer(&self, width: u16) -> Option<TranscriptFooter> {
-        if self.detailed || self.mode != HistoryRenderMode::Rich {
+        if !self.is_activity_focused() {
             return None;
         }
         let keymap = &self.disclosure.keymap;
-        let text = if self.is_activity_focused() {
-            let hints: Vec<_> = [
-                (ListAction::MoveUp, "previous"),
-                (ListAction::MoveDown, "next"),
-                (ListAction::Accept, "details"),
-                (ListAction::Cancel, "back"),
-            ]
-            .into_iter()
-            .filter_map(|(action, label)| {
-                keymap.list.primary_hint(action).map(|key| {
-                    let mut spans = key.spans();
-                    spans.push(format!(" {label}").dim());
-                    Line::from(spans)
-                })
+        let hints: Vec<_> = [
+            (ListAction::MoveUp, "previous"),
+            (ListAction::MoveDown, "next"),
+            (ListAction::Accept, "details"),
+            (ListAction::Cancel, "back"),
+        ]
+        .into_iter()
+        .filter_map(|(action, label)| {
+            keymap.list.primary_hint(action).map(|key| {
+                let mut spans = key.spans();
+                spans.push(format!(" {label}").dim());
+                Line::from(spans)
             })
-            .collect();
-            // Drop navigation before the details/back controls, retaining whole remapped chords.
-            crate::footer_hint::first_fitting_line(
-                (0..hints.len()).map(|start| {
-                    let mut spans = Vec::new();
-                    for (index, hint) in hints[start..].iter().enumerate() {
-                        if index > 0 {
-                            spans.push(" · ".dim());
-                        }
-                        spans.extend(hint.spans.clone());
+        })
+        .collect();
+        // Drop navigation before the details/back controls, retaining whole remapped chords.
+        let text = crate::footer_hint::first_fitting_line(
+            (0..hints.len()).map(|start| {
+                let mut spans = Vec::new();
+                for (index, hint) in hints[start..].iter().enumerate() {
+                    if index > 0 {
+                        spans.push(" · ".dim());
                     }
-                    Line::from(spans)
-                }),
-                width,
-            )
-        } else {
-            if !self.visible.iter().any(|row| row.layout.disclosure) {
-                return None;
-            }
-            let key = keymap.primary_hint(KeymapContext::Global, "focus_activity")?;
-            let primary = key.display_label();
-            let alternatives = std::iter::once(primary.clone())
-                .chain(
-                    crate::keymap::user_bindings(&keymap.app.focus_activity)
-                        .iter()
-                        .map(crate::key_hint::KeyBinding::display_label)
-                        .filter(|label| *label != primary),
-                )
-                .take(/*n*/ 2)
-                .collect::<Vec<_>>()
-                .join("/");
-            crate::footer_hint::first_fitting_line(
-                [
-                    (alternatives.as_str(), " inspect activity"),
-                    (alternatives.as_str(), " activity"),
-                    (primary.as_str(), " activity"),
-                ]
-                .map(|(keys, action)| {
-                    let mut spans = key_label_spans(keys);
-                    spans.push(action.dim());
-                    Line::from(spans)
-                }),
-                width,
-            )
-        };
+                    spans.extend(hint.spans.clone());
+                }
+                Line::from(spans)
+            }),
+            width,
+        );
         Some(TranscriptFooter {
             text: text.into(),
             cursor_column: None,
-            is_interactive: self.is_activity_focused(),
+            is_interactive: true,
         })
     }
 }

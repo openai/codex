@@ -222,6 +222,7 @@ pub(super) struct FooterState {
     pub(super) show_warnings_key: Option<ShortcutHint>,
     pub(super) warning_notice_area: std::cell::Cell<Option<Rect>>,
     pub(super) find_transcript_key: Option<ShortcutHint>,
+    pub(super) focus_activity_key: Option<ShortcutHint>,
     pub(super) insert_newline_key: Option<ShortcutHint>,
     pub(super) queue_key: Option<ShortcutHint>,
     pub(super) toggle_shortcuts_key: Option<ShortcutHint>,

@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/footer.rs
-assertion_line: 1240
 expression: terminal.backend()
 ---
 "  Keyboard shortcuts                                                            "
@@ -10,10 +9,11 @@ expression: terminal.backend()
 "  @            Mention files        ⌥+,     Less reasoning                      "
 "  !            Shell command        ⌥+.     More reasoning                      "
 "  shift+enter  New line             f8      Voice                               "
-"  ctrl+v       Paste image          ctrl+c  Quit                                "
-"  ctrl+g       External editor                                                  "
-"  ctrl+r       Search history       Transcript (open first)                     "
-"  esc          Edit last message    ctrl+t                 Open transcript      "
+"  ctrl+v       Paste image          f4      Inspect activity                    "
+"  ctrl+g       External editor      ctrl+c  Quit                                "
+"  ctrl+r       Search history                                                   "
+"  esc          Edit last message    Transcript (open first)                     "
+"                                    ctrl+t                 Open transcript      "
 "                                    f3                     Find text            "
 "                                    pgup / pgdn            Scroll               "
 "                                    ctrl+space             Start selection      "

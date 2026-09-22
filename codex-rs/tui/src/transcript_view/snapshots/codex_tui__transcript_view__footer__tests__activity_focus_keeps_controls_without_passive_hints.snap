@@ -16,9 +16,9 @@ Buffer {
         x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }
-20 columns: f4 inspect activity
-32 columns: f4 inspect activity
-80 columns: f4 inspect activity
+20 columns: <composer hints>
+32 columns: <composer hints>
+80 columns: <composer hints>
 focused
 Buffer {
     area: Rect { x: 0, y: 0, width: 32, height: 3 },
@@ -35,6 +35,9 @@ Buffer {
         x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }
+focused, 20 columns: esc back
+focused, 32 columns: enter details · esc back
+focused, 80 columns: ↑ previous · ↓ next · enter details · esc back
 expanded
 Buffer {
     area: Rect { x: 0, y: 0, width: 32, height: 3 },
@@ -51,6 +54,6 @@ Buffer {
         x: 15, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
     ]
 }
-"ctrl-x t": ctrl+x t inspect activity
-["ctrl-x t","f4"]: ctrl+x t/f4 inspect activity
-[]: unbound
+"ctrl-x t": <composer hints>
+["ctrl-x t","f4"]: <composer hints>
+[]: <composer hints>

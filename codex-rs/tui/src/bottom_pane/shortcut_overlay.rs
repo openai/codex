@@ -75,6 +75,7 @@ pub(super) fn lines(props: &FooterProps, width: u16) -> Vec<Line<'static>> {
     session.push(hints.reasoning_up, "More reasoning");
     session.push(hints.toggle_voice, "Voice");
     session.push(hints.agents, "Agents (empty prompt)");
+    session.push(hints.focus_activity, "Inspect activity");
     session.entries.push(Shortcut::new(
         key_hint::ctrl(KeyCode::Char('c')),
         if props.is_task_running {

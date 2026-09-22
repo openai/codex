@@ -1,19 +1,23 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 5294
 expression: terminal.backend()
 ---
 "  Keyboard shortcuts                                                                                "
 "                                                                                                    "
-"  Compose                           Session                   Transcript (open first)               "
-"  /            Commands             tab     Queue message     ctrl+t                 Open transcript"
-"  @            Mention files        ⌥+,     Less reasoning    f3                     Find text      "
-"  !            Shell command        ⌥+.     More reasoning    pgup / pgdn            Scroll         "
-"  shift+enter  New line             ctrl+c  Quit              ctrl+space             Start selection"
-"  ctrl+v       Paste image                                    ctrl+home / ctrl+end   Top / latest   "
-"  ctrl+g       External editor                                shift+⌥+, / shift+⌥+.  Top / latest   "
-"  ctrl+r       Search history                                                                       "
-"  esc esc      Edit last message                                                                    "
+"  Compose                           Session                                                         "
+"  /            Commands             tab     Queue message                                           "
+"  @            Mention files        ⌥+,     Less reasoning                                          "
+"  !            Shell command        ⌥+.     More reasoning                                          "
+"  shift+enter  New line             f4      Inspect activity                                        "
+"  ctrl+v       Paste image          ctrl+c  Quit                                                    "
+"  ctrl+g       External editor                                                                      "
+"  ctrl+r       Search history       Transcript (open first)                                         "
+"  esc esc      Edit last message    ctrl+t                 Open transcript                          "
+"                                    f3                     Find text                                "
+"                                    pgup / pgdn            Scroll                                   "
+"                                    ctrl+space             Start selection                          "
+"                                    ctrl+home / ctrl+end   Top / latest                             "
+"                                    shift+⌥+, / shift+⌥+.  Top / latest                             "
 "                                                                                                    "
 "  /keymap customize                                                                                 "
 "                                                                                                    "

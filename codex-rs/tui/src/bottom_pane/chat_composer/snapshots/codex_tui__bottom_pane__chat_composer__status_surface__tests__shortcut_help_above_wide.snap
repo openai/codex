@@ -12,13 +12,13 @@ expression: text
 
   Keyboard shortcuts
 
-  Compose                       Session                   Transcript (open first)
-  /        Commands             tab     Send message      ctrl+t                 Open transcript
-  @        Mention files        ⌥+,     Less reasoning    f3                     Find text
-  !        Shell command        ⌥+.     More reasoning    pgup / pgdn            Scroll
-  ctrl+j   New line             ctrl+c  Quit              ctrl+space             Start selection
-  ctrl+v   Paste image                                    ctrl+home / ctrl+end   Top / latest
-  ctrl+g   External editor                                shift+⌥+, / shift+⌥+.  Top / latest
+  Compose                       Session                     Transcript (open first)
+  /        Commands             tab     Send message        ctrl+t                 Open transcript
+  @        Mention files        ⌥+,     Less reasoning      f3                     Find text
+  !        Shell command        ⌥+.     More reasoning      pgup / pgdn            Scroll
+  ctrl+j   New line             f4      Inspect activity    ctrl+space             Start selection
+  ctrl+v   Paste image          ctrl+c  Quit                ctrl+home / ctrl+end   Top / latest
+  ctrl+g   External editor                                  shift+⌥+, / shift+⌥+.  Top / latest
   ctrl+r   Search history
   esc esc  Edit last message
 

@@ -290,7 +290,7 @@ impl HistoryCell for ActivityCell {
 }
 
 #[test]
-fn activity_alternative_focuses_details_and_hints_follow_configured_chords() {
+fn activity_focus_keeps_controls_without_passive_hints() {
     let mut cells: Vec<Arc<dyn HistoryCell>> = Vec::new();
     let cell = Arc::new(ActivityCell::default());
     let mut view = TranscriptView::default();
@@ -314,12 +314,20 @@ fn activity_alternative_focuses_details_and_hints_follow_configured_chords() {
     for width in [20, 32, 80] {
         hints.push(format!(
             "{width} columns: {}",
-            view.footer(width, MotionMode::Reduced).unwrap().text,
+            view.footer(width, MotionMode::Reduced).map_or_else(
+                || "<composer hints>".to_owned(),
+                |footer| footer.text.to_string()
+            ),
         ));
     }
     view.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE), &cells);
     assert!(view.is_activity_focused());
     hints.push(format!("focused\n{:?}", render_live(&mut view)));
+    for width in [20, 32, 80] {
+        let footer = view.footer(width, MotionMode::Reduced).unwrap();
+        assert!(footer.is_interactive);
+        hints.push(format!("focused, {width} columns: {}", footer.text));
+    }
     view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), &cells);
     assert!(view.disclosure.is_expanded(&["sample-activity".to_owned()]));
     let expanded = render_live(&mut view);
@@ -352,9 +360,10 @@ fn activity_alternative_focuses_details_and_hints_follow_configured_chords() {
         view.set_keymap_bindings(&keymap);
         view.jump_to_latest();
         render(&mut view, &cells);
-        let hint = view
-            .footer(/*width*/ 80, MotionMode::Reduced)
-            .map_or_else(|| "unbound".to_owned(), |footer| footer.text.to_string());
+        let hint = view.footer(/*width*/ 80, MotionMode::Reduced).map_or_else(
+            || "<composer hints>".to_owned(),
+            |footer| footer.text.to_string(),
+        );
         hints.push(format!("{configured}: {hint}"));
     }
     insta::assert_snapshot!(hints.join("\n"));

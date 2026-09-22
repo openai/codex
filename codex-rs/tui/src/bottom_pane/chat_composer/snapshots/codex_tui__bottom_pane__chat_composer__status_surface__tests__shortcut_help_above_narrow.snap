@@ -26,6 +26,7 @@ expression: text
   tab     Send message
   ⌥+,     Less reasoning
   ⌥+.     More reasoning
+  f4      Inspect activity
   ctrl+c  Quit
 
   Transcript (open first)
