@@ -1768,6 +1768,38 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         })
         .await?;
         timeout(TIMEOUT, app_server.shutdown_gracefully()).await??;
+        let reviewer_id = responses_state
+            .guardian_requests
+            .lock()
+            .expect("Guardian requests")[0]["client_metadata"]["thread_id"]
+            .as_str()
+            .expect("reviewer ID")
+            .to_owned();
+        let state_db = StateRuntime::init(
+            codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+            "mock_provider".to_owned(),
+        )
+        .await?;
+        let metadata = state_db
+            .get_thread(codex_protocol::ThreadId::from_string(&reviewer_id)?)
+            .await?
+            .expect("reviewer metadata should be persisted");
+        assert_eq!(
+            (
+                metadata.source.as_str(),
+                metadata.title.as_str(),
+                metadata.name.as_deref(),
+                metadata.preview.as_deref(),
+                metadata.first_user_message.as_deref(),
+            ),
+            (
+                r#"{"subagent":{"other":"guardian"}}"#,
+                "Guardian review",
+                None,
+                Some("Approval review"),
+                None
+            ),
+        );
         let events = captured_analytics_events(&analytics_server).await;
         let turn = &turn["event_params"];
         assert_eq!(turn["guardian_v2_enabled"], classifier_in_scope);

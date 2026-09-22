@@ -295,6 +295,7 @@ impl ThreadMetadataBuilder {
             .recency_at
             .map(canonicalize_datetime)
             .unwrap_or(updated_at);
+        let guardian_review = crate::is_guardian_review_source(&self.source);
         ThreadMetadata {
             originator: self.originator.clone(),
             creator_user_id: self.creator_user_id.clone(),
@@ -321,9 +322,14 @@ impl ThreadMetadataBuilder {
             reasoning_effort: None,
             cwd: self.cwd.clone(),
             cli_version: self.cli_version.clone().unwrap_or_default(),
-            title: String::new(),
-            name: None,
-            preview: None,
+            title: if guardian_review {
+                crate::GUARDIAN_THREAD_TITLE.to_string()
+            } else {
+                String::new()
+            },
+            name: (guardian_review && self.history_mode == ThreadHistoryMode::Paginated)
+                .then(|| crate::GUARDIAN_THREAD_TITLE.to_string()),
+            preview: guardian_review.then(|| crate::GUARDIAN_THREAD_PREVIEW.to_string()),
             sandbox_policy,
             approval_mode,
             tokens_used: 0,
@@ -377,7 +383,11 @@ impl ThreadMetadata {
         }
 
         let title = self.title.trim();
-        if title.is_empty() || self.first_user_message.as_deref().map(str::trim) == Some(title) {
+        if title.is_empty()
+            || self.first_user_message.as_deref().map(str::trim) == Some(title)
+            || (title == crate::GUARDIAN_THREAD_TITLE
+                && crate::extract::metadata_is_guardian_review(self))
+        {
             self.title = existing.title.clone();
         }
     }

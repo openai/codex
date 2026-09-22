@@ -2206,7 +2206,7 @@ async fn migration_preserves_legacy_displayed_thread_names() {
     write_rollout(
         home.path(),
         title_thread_id,
-        SessionSource::Cli,
+        SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
         vec![user_message("title question")],
     );
     let index_thread_id = ThreadId::new();
@@ -2216,6 +2216,16 @@ async fn migration_preserves_legacy_displayed_thread_names() {
         SessionSource::Cli,
         vec![user_message("index question")],
     );
+    let guardian_thread_id = ThreadId::new();
+    let unnamed_guardian_thread_id = ThreadId::new();
+    for thread_id in [guardian_thread_id, unnamed_guardian_thread_id] {
+        write_rollout(
+            home.path(),
+            thread_id,
+            SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+            vec![user_message("large synthetic Guardian prompt")],
+        );
+    }
     let store = indexed_store(home.path()).await;
     store
         .update_thread_metadata(UpdateThreadMetadataParams {
@@ -2235,42 +2245,77 @@ async fn migration_preserves_legacy_displayed_thread_names() {
         .await
         .expect("write legacy index name");
 
-    store
-        .migrate_rollouts(apply_options())
+    // Older metadata cleanup also seeded the default name on legacy threads.
+    let state_db = store.state_db().await.expect("state runtime");
+    let mut guardian_metadata = state_db
+        .get_thread(guardian_thread_id)
         .await
-        .expect("migrate named rollouts");
-
-    let page = store
-        .list_threads(ListThreadsParams {
-            page_size: 10,
-            cursor: None,
-            sort_key: ThreadSortKey::CreatedAt,
-            sort_direction: SortDirection::Desc,
-            allowed_sources: Vec::new(),
-            model_providers: None,
-            cwd_filters: None,
-            section: None,
-            project_id: None,
-            archived: false,
-            search_term: None,
-            relation_filter: None,
-            use_state_db_only: true,
-        })
+        .expect("read Guardian metadata")
+        .expect("Guardian metadata");
+    guardian_metadata.name = Some(codex_state::GUARDIAN_THREAD_TITLE.to_string());
+    state_db
+        .upsert_thread(&guardian_metadata)
         .await
-        .expect("list migrated threads");
-    let title_thread = page
-        .items
-        .iter()
-        .find(|thread| thread.thread_id == title_thread_id)
-        .expect("renamed title thread");
-    let index_thread = page
-        .items
-        .iter()
-        .find(|thread| thread.thread_id == index_thread_id)
-        .expect("indexed title thread");
+        .expect("seed legacy Guardian name");
+    codex_rollout::append_thread_name(home.path(), guardian_thread_id, "indexed Guardian name")
+        .await
+        .expect("write legacy Guardian name");
 
-    assert_eq!(title_thread.name.as_deref(), Some("renamed title"));
-    assert_eq!(index_thread.name.as_deref(), Some("indexed title"));
+    for history_mode in [ThreadHistoryMode::Legacy, ThreadHistoryMode::Paginated] {
+        if history_mode == ThreadHistoryMode::Paginated {
+            store
+                .migrate_rollouts(apply_options())
+                .await
+                .expect("migrate named rollouts");
+        }
+        let page = store
+            .list_threads(ListThreadsParams {
+                page_size: 10,
+                cursor: None,
+                sort_key: ThreadSortKey::CreatedAt,
+                sort_direction: SortDirection::Desc,
+                allowed_sources: Vec::new(),
+                model_providers: None,
+                cwd_filters: None,
+                section: None,
+                project_id: None,
+                archived: false,
+                search_term: None,
+                relation_filter: None,
+                use_state_db_only: true,
+            })
+            .await
+            .expect("list threads");
+        for (thread_id, name) in [
+            (title_thread_id, "renamed title"),
+            (index_thread_id, "indexed title"),
+            (guardian_thread_id, "indexed Guardian name"),
+            (unnamed_guardian_thread_id, "Guardian review"),
+        ] {
+            let listed = page
+                .items
+                .iter()
+                .find(|thread| thread.thread_id == thread_id)
+                .expect("listed thread");
+            let read = store
+                .read_thread(crate::ReadThreadParams {
+                    thread_id,
+                    include_archived: false,
+                    include_history: false,
+                })
+                .await
+                .expect("read thread");
+            assert_eq!(
+                (
+                    listed.name.as_deref(),
+                    read.name.as_deref(),
+                    listed.history_mode,
+                    read.history_mode
+                ),
+                (Some(name), Some(name), history_mode, history_mode),
+            );
+        }
+    }
 }
 
 #[tokio::test]

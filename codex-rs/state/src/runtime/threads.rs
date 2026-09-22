@@ -74,7 +74,7 @@ WHERE threads.id = ?
     ) -> anyhow::Result<bool> {
         // Legacy threads display `title`, then fall back to the name index. Paginated threads
         // display `name`; `title` remains derived metadata used for search. Preserve an existing
-        // `name`, otherwise carry over the legacy display name.
+        // `name`, unless it is the Guardian default seeded by metadata cleanup.
         let result = sqlx::query(
             r#"
 UPDATE threads
@@ -82,11 +82,16 @@ SET
     history_mode = 'paginated',
     name = CASE
         WHEN name IS NULL OR trim(name) = '' THEN ?
+        WHEN history_mode = 'legacy'
+            AND source = '{"subagent":{"other":"guardian"}}'
+            AND name = ? THEN COALESCE(?, name)
         ELSE name
     END
 WHERE id = ?
             "#,
         )
+        .bind(legacy_name)
+        .bind(crate::GUARDIAN_THREAD_TITLE)
         .bind(legacy_name)
         .bind(thread_id.to_string())
         .execute(self.pool.as_ref())
