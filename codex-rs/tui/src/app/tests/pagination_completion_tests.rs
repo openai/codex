@@ -19,7 +19,7 @@ use pretty_assertions::assert_eq;
 
 pub(super) async fn completed_history_app(
     names: &[&str],
-) -> Result<(App, tempfile::TempDir, ThreadId)> {
+) -> Result<(Box<App>, tempfile::TempDir, ThreadId)> {
     let mut app = make_test_app().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();

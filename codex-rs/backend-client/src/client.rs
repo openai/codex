@@ -13,8 +13,8 @@ use codex_api::SharedAuthProvider;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::RequestBuilder;
 use codex_http_client::RouteAwareClientPool;
-use codex_http_client::RouteAwareRequestBuilder;
 use codex_http_client::RouteAwareRequestError;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
@@ -271,13 +271,13 @@ impl Client {
         h
     }
 
-    fn request(&self, method: Method, url: &str) -> RouteAwareRequestBuilder {
+    fn request(&self, method: Method, url: &str) -> RequestBuilder {
         self.http.request(method, url)
     }
 
     async fn exec_request(
         &self,
-        req: RouteAwareRequestBuilder,
+        req: RequestBuilder,
         method: &str,
         url: &str,
     ) -> Result<(String, String)> {
@@ -289,7 +289,7 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let body = res.text().await.unwrap_or_default();
+        let body = res.text().await.map_err(anyhow::Error::from)?;
         if !status.is_success() {
             anyhow::bail!("{method} {url} failed: {status}; content-type={ct}; body={body}");
         }
@@ -298,7 +298,7 @@ impl Client {
 
     async fn exec_request_detailed(
         &self,
-        req: RouteAwareRequestBuilder,
+        req: RequestBuilder,
         method: &str,
         url: &str,
     ) -> std::result::Result<(String, String), RequestError> {
@@ -310,7 +310,7 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let body = res.text().await.unwrap_or_default();
+        let body = res.text().await.map_err(anyhow::Error::from)?;
         if !status.is_success() {
             return Err(RequestError::UnexpectedStatus {
                 method: method.to_string(),

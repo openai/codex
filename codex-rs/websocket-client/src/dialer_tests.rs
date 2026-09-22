@@ -198,7 +198,7 @@ async fn direct_route_connects_secure_websocket() {
     )
     .await
     .expect("direct websocket handshake should succeed");
-    drop(WebSocketConnection { inner });
+    drop(test_connection(inner));
 
     target_task.await.expect("target task should finish");
 }
@@ -286,7 +286,7 @@ async fn no_proxy_subprocess_probe() {
     )
     .await
     .expect("websocket handshake should succeed");
-    let mut websocket = WebSocketConnection { inner };
+    let mut websocket = test_connection(inner);
     websocket
         .send(Message::Text("probe".into()))
         .await
@@ -411,7 +411,7 @@ async fn routed_tcp_connections_only_enable_nodelay_when_requested() {
 }
 
 fn websocket_tcp_nodelay(websocket: &WebSocketConnection) -> bool {
-    let ConnectionInner::TransportDefault(stream) = &websocket.inner else {
+    let Some(ConnectionInner::Left(stream)) = &websocket.inner else {
         panic!("default connector should use Tungstenite's transport");
     };
     let MaybeTlsStream::Plain(stream) = stream.get_ref() else {
@@ -645,7 +645,7 @@ async fn assert_proxy_tunnels_secure_websocket(proxy_tls: bool) {
     )
     .await
     .expect("proxied websocket handshake should succeed");
-    drop(WebSocketConnection { inner });
+    drop(test_connection(inner));
 
     target_task.await.expect("target task should finish");
     proxy_task.await.expect("proxy task should finish");
@@ -704,4 +704,12 @@ fn test_tls_configs() -> (Arc<ClientConfig>, TlsAcceptor, CertificateDer<'static
         TlsAcceptor::from(Arc::new(server_config)),
         certificate,
     )
+}
+
+fn test_connection(inner: ConnectionInner) -> WebSocketConnection {
+    let policy = codex_http_client::NetworkPolicy::unmanaged();
+    let lease = policy
+        .acquire(&url::Url::parse("wss://localhost/").unwrap())
+        .unwrap();
+    WebSocketConnection::new(inner, lease)
 }

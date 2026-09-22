@@ -3,8 +3,8 @@ use std::time::Duration;
 use crate::AuthProvider;
 use bytes::Bytes;
 use codex_http_client::HttpResponse;
+use codex_http_client::RequestBuilder;
 use codex_http_client::RouteAwareClientPool;
-use codex_http_client::RouteAwareRequestBuilder;
 use codex_http_client::RouteAwareRequestError;
 use futures::Stream;
 use http::Method;
@@ -162,7 +162,13 @@ pub async fn upload_openai_file(
             source,
         })?;
     let create_status = create_response.status();
-    let create_body = create_response.text().await.unwrap_or_default();
+    let create_body = create_response
+        .text()
+        .await
+        .map_err(|source| OpenAiFileError::Request {
+            url: create_url.clone(),
+            source,
+        })?;
     if !create_status.is_success() {
         return Err(OpenAiFileError::UnexpectedStatus {
             url: create_url,
@@ -275,7 +281,14 @@ pub async fn upload_openai_file(
                 source,
             })?;
         let finalize_status = finalize_response.status();
-        let finalize_body = finalize_response.text().await.unwrap_or_default();
+        let finalize_body =
+            finalize_response
+                .text()
+                .await
+                .map_err(|source| OpenAiFileError::Request {
+                    url: finalize_url.clone(),
+                    source,
+                })?;
         if !finalize_status.is_success() {
             return Err(OpenAiFileError::UnexpectedStatus {
                 url: finalize_url.clone(),
@@ -331,7 +344,7 @@ fn authorized_request(
     auth: &dyn AuthProvider,
     method: Method,
     url: &str,
-) -> RouteAwareRequestBuilder {
+) -> RequestBuilder {
     let mut headers = http::HeaderMap::new();
     auth.add_auth_headers(&mut headers);
 

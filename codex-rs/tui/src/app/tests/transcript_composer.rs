@@ -307,7 +307,7 @@ async fn transcript_flag_off_preserves_viewer_and_backtracking() -> Result<()> {
     Ok(())
 }
 
-async fn assert_transcript_close_repaints_inline_draft(mut app: App) -> Result<()> {
+async fn assert_transcript_close_repaints_inline_draft(mut app: Box<App>) -> Result<()> {
     let mut app_server = start_config_write_test_app_server(&app).await?;
     let mut tui = crate::tui::test_support::make_test_tui()?;
     app.chat_widget.insert_str("EDGE-DRAFT-MUST-SURVIVE");

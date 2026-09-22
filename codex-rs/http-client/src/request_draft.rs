@@ -10,7 +10,7 @@ use http::HeaderValue;
 use http::Method;
 use reqwest::IntoUrl;
 
-use crate::HttpClient;
+use crate::client::TransportClient;
 
 /// Request inputs awaiting construction through reqwest with a selected HTTP client.
 ///
@@ -44,9 +44,14 @@ impl RequestDraft {
         self.headers.push(HeaderUpdate::Replace(headers));
     }
 
-    pub(crate) fn build(self, client: &HttpClient) -> Result<reqwest::Request, reqwest::Error> {
+    pub(crate) fn build(
+        self,
+        client: &TransportClient,
+    ) -> Result<reqwest::Request, reqwest::Error> {
         let mut request = self.request;
-        let mut builder = client.request(request.method().clone(), request.url().clone());
+        let mut builder = client
+            .inner
+            .request(request.method().clone(), request.url().clone());
         for update in self.headers {
             builder = match update {
                 HeaderUpdate::Replace(headers) => builder.headers(headers),

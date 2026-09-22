@@ -1,6 +1,6 @@
 use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::RequestBuilder;
 use codex_http_client::RouteAwareClientPool;
-use codex_http_client::RouteAwareRequestBuilder;
 use http::Method;
 use std::fmt::Debug;
 
@@ -9,12 +9,12 @@ use std::fmt::Debug;
 /// Implementations must keep route selection coupled to the request URL. Returning a transport
 /// client would let callers send a different URL than the one used for route selection.
 pub(crate) trait HttpClientSelector: Debug + Send + Sync {
-    fn request(&self, method: Method, url: &str) -> RouteAwareRequestBuilder;
+    fn request(&self, method: Method, url: &str) -> RequestBuilder;
     fn outbound_proxy_policy(&self) -> OutboundProxyPolicy;
 }
 
 impl HttpClientSelector for RouteAwareClientPool {
-    fn request(&self, method: Method, url: &str) -> RouteAwareRequestBuilder {
+    fn request(&self, method: Method, url: &str) -> RequestBuilder {
         RouteAwareClientPool::request(self, method, url)
     }
 

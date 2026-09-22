@@ -5981,14 +5981,14 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
     assert_app_snapshot!("clear_ui_header_fast_status_fast_capable_models", rendered);
 }
 
-async fn make_test_app() -> App {
+async fn make_test_app() -> Box<App> {
     let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
-    App {
+    Box::new(App {
         feature_write_lock: Arc::default(),
         model_catalog: chat_widget.model_catalog(),
         session_telemetry,
@@ -6079,11 +6079,11 @@ async fn make_test_app() -> App {
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
         recap: recap::RecapState::default(),
-    }
+    })
 }
 
 pub(super) async fn make_test_app_with_channels() -> (
-    App,
+    Box<App>,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
@@ -6094,7 +6094,7 @@ pub(super) async fn make_test_app_with_channels() -> (
     let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     (
-        App {
+        Box::new(App {
             feature_write_lock: Arc::default(),
             model_catalog: chat_widget.model_catalog(),
             session_telemetry,
@@ -6185,7 +6185,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
             recap: recap::RecapState::default(),
-        },
+        }),
         rx,
         op_rx,
     )

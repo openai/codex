@@ -182,10 +182,10 @@ async fn websocket_handshakes_share_routing_cookies_and_respect_cookie_scope() {
             .connect_with_route(
                 request,
                 WebSocketConfig::default(),
-                OutboundProxyRoute::Proxy {
+                std::future::ready(Ok(OutboundProxyRoute::Proxy {
                     url: proxy_url.clone(),
                     no_proxy: None,
-                },
+                })),
                 /*loopback_direct*/ false,
             )
             .await;

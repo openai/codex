@@ -1,7 +1,7 @@
 use super::*;
 use crate::plugin_bundle_archive::PluginBundlePackError;
 use crate::plugin_bundle_archive::pack_plugin_bundle_tar_gz;
-use codex_http_client::RouteAwareRequestBuilder;
+use codex_http_client::RequestBuilder;
 use codex_login::CodexAuth;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use http::Method;
@@ -447,7 +447,13 @@ async fn put_workspace_plugin_upload(
             source,
         })?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response
+        .text()
+        .await
+        .map_err(|source| RemotePluginCatalogError::Request {
+            url: "workspace plugin upload URL".to_string(),
+            source,
+        })?;
     if ![StatusCode::OK, StatusCode::CREATED].contains(&status) {
         return Err(RemotePluginCatalogError::UnexpectedStatus {
             url: "workspace plugin upload URL".to_string(),
@@ -513,7 +519,7 @@ fn archive_plugin_for_upload_with_limit(
 }
 
 async fn send_and_expect_status(
-    request: RouteAwareRequestBuilder,
+    request: RequestBuilder,
     url_for_error: &str,
     expected_statuses: &[StatusCode],
 ) -> Result<(), RemotePluginCatalogError> {
@@ -525,7 +531,13 @@ async fn send_and_expect_status(
             source,
         })?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response
+        .text()
+        .await
+        .map_err(|source| RemotePluginCatalogError::Request {
+            url: url_for_error.to_string(),
+            source,
+        })?;
     if !expected_statuses.contains(&status) {
         return Err(RemotePluginCatalogError::UnexpectedStatus {
             url: url_for_error.to_string(),

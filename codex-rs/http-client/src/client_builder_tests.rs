@@ -37,6 +37,10 @@ async fn custom_ca_fallback_preserves_builder_configuration() {
             })
         });
 
+    let client = HttpClient {
+        backend: HttpClientBackend::Direct(client),
+    };
+
     let response = client
         .get(format!("http://{address}/fallback"))
         .send()

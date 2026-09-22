@@ -7,6 +7,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum TransportError {
+    #[error(transparent)]
+    Policy(#[from] crate::NetworkPolicyDenied),
     #[error("http {status}: {body:?}")]
     Http {
         status: StatusCode,

@@ -27,7 +27,9 @@ use codex_state::SqliteConfig;
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_ne;
 
-async fn history_fixture(item_counts: &[usize]) -> Result<(App, tempfile::TempDir, SessionTarget)> {
+async fn history_fixture(
+    item_counts: &[usize],
+) -> Result<(Box<App>, tempfile::TempDir, SessionTarget)> {
     let mut app = make_test_app().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();

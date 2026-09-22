@@ -8,27 +8,24 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use bytes::Bytes;
-use futures::TryStream;
 use http::HeaderMap;
-use http::HeaderName;
-use http::HeaderValue;
 use http::Method;
 use http::StatusCode;
-use http::header::CONTENT_TYPE;
 use reqwest::IntoUrl;
-use serde::Serialize;
 
 use crate::BuildRouteAwareHttpClientError;
 use crate::ClientRouteClass;
 use crate::HttpClient;
 use crate::HttpClientBuilder;
 use crate::HttpClientFactory;
+use crate::NetworkPolicyDenied;
 use crate::OutboundProxyPolicy;
 use crate::OutboundProxyRoute;
+use crate::RequestBuilder;
 use crate::RouteFailureClass;
-use crate::request_draft::HeaderUpdate;
-use crate::request_draft::RequestDraft;
+use crate::client::HttpClientBackend;
+use crate::client::TransportClient;
+use crate::client_builder::ProxyRouting;
 use crate::tls_backend_fallback::RustlsClientCache;
 
 const MAX_CACHED_ROUTES: usize = 16;
@@ -55,9 +52,10 @@ enum SelectedTlsBackend {
 pub struct RouteAwareClientPool {
     http_client_factory: HttpClientFactory,
     route_class: ClientRouteClass,
-    client_builder: HttpClientBuilder,
+    pub(crate) client_builder: HttpClientBuilder,
+    default_headers: HeaderMap,
     custom_ca_fallback: CustomCaFallback,
-    clients: Arc<Mutex<HashMap<OutboundProxyRoute, HttpClient>>>,
+    clients: Arc<Mutex<HashMap<OutboundProxyRoute, TransportClient>>>,
     rustls_clients: Option<RustlsClientCache>,
 }
 
@@ -83,6 +81,8 @@ pub enum RouteAwareClientPoolError {
 /// Error returned while building, routing, or sending a route-aware request.
 #[derive(Debug, thiserror::Error)]
 pub enum RouteAwareRequestError {
+    #[error(transparent)]
+    Policy(#[from] NetworkPolicyDenied),
     #[error(transparent)]
     Request(#[from] reqwest::Error),
     #[error(transparent)]
@@ -137,6 +137,7 @@ impl RouteAwareRequestError {
                 Some(RouteFailureClass::ProxyResolutionUnavailable)
             }
             Self::Request(_)
+            | Self::Policy(_)
             | Self::Build(_)
             | Self::UnsupportedRedirectScheme(_)
             | Self::TooManyRedirects
@@ -148,6 +149,7 @@ impl RouteAwareRequestError {
         match self {
             Self::Request(error) => error.status(),
             Self::Route(_)
+            | Self::Policy(_)
             | Self::Build(_)
             | Self::UnsupportedRedirectScheme(_)
             | Self::TooManyRedirects
@@ -163,12 +165,23 @@ impl RouteAwareRequestError {
         matches!(self, Self::Request(error) if error.is_connect())
     }
 
+    pub fn is_builder(&self) -> bool {
+        matches!(self, Self::Request(error) if error.is_builder())
+    }
+
     pub fn is_body(&self) -> bool {
         matches!(self, Self::Request(error) if error.is_body())
     }
 
     pub fn is_request(&self) -> bool {
         matches!(self, Self::Request(error) if error.is_request())
+    }
+
+    pub fn url_mut(&mut self) -> Option<&mut reqwest::Url> {
+        match self {
+            Self::Request(error) => error.url_mut(),
+            _ => None,
+        }
     }
 
     /// Removes a request URL from the underlying transport error before it is logged or returned.
@@ -179,135 +192,6 @@ impl RouteAwareRequestError {
             Self::Request(error) => Self::Request(error.without_url()),
             other => other,
         }
-    }
-}
-
-#[must_use = "requests are not sent unless `send` is awaited"]
-pub struct RouteAwareRequestBuilder {
-    pool: RouteAwareClientPool,
-    request: Result<RequestDraft, RouteAwareRequestError>,
-}
-
-impl fmt::Debug for RouteAwareRequestBuilder {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let request = self.request.as_ref().ok();
-        formatter
-            .debug_struct("RouteAwareRequestBuilder")
-            .field("pool", &self.pool)
-            .field("method", &request.map(|request| request.request.method()))
-            .field("url", &request.map(|_| "<redacted>"))
-            .finish_non_exhaustive()
-    }
-}
-
-impl RouteAwareRequestBuilder {
-    fn new<U>(pool: RouteAwareClientPool, method: Method, url: U) -> Self
-    where
-        U: IntoUrl,
-    {
-        let request = RequestDraft::new(method, url).map_err(RouteAwareRequestError::Request);
-        Self { pool, request }
-    }
-
-    pub fn headers(mut self, headers: HeaderMap) -> Self {
-        if let Ok(request) = &mut self.request {
-            request.extend_headers(headers);
-        }
-        self
-    }
-
-    pub fn header<K, V>(mut self, key: K, value: V) -> Self
-    where
-        HeaderName: TryFrom<K>,
-        <HeaderName as TryFrom<K>>::Error: Into<http::Error>,
-        HeaderValue: TryFrom<V>,
-        <HeaderValue as TryFrom<V>>::Error: Into<http::Error>,
-    {
-        if let Ok(request) = &mut self.request {
-            let header = HeaderName::try_from(key)
-                .map_err(Into::into)
-                .and_then(|key| {
-                    HeaderValue::try_from(value)
-                        .map(|value| (key, value))
-                        .map_err(Into::into)
-                });
-            match header {
-                Ok((key, value)) => {
-                    request.headers.push(HeaderUpdate::Append(key, value));
-                }
-                Err(error) => {
-                    self.request = Err(RouteAwareRequestError::Build(error.to_string()));
-                }
-            }
-        }
-        self
-    }
-
-    /// Sets a timeout for the request as a whole.
-    ///
-    /// The budget starts before outbound-route resolution and covers selecting or constructing a
-    /// pooled client, establishing a connection, sending the request, and awaiting the response.
-    /// Use [`HttpClientBuilder::connect_timeout`] when only connection establishment should be
-    /// bounded.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        if let Ok(request) = &mut self.request {
-            *request.request.timeout_mut() = Some(timeout);
-        }
-        self
-    }
-
-    pub fn json<T>(mut self, value: &T) -> Self
-    where
-        T: ?Sized + Serialize,
-    {
-        if let Ok(request) = &mut self.request {
-            match serde_json::to_vec(value) {
-                Ok(body) => {
-                    let has_content_type = request.headers.iter().any(|update| match update {
-                        HeaderUpdate::Replace(headers) => headers.contains_key(CONTENT_TYPE),
-                        HeaderUpdate::Append(name, _) => *name == CONTENT_TYPE,
-                    });
-                    if !has_content_type {
-                        request.headers.push(HeaderUpdate::Append(
-                            CONTENT_TYPE,
-                            HeaderValue::from_static("application/json"),
-                        ));
-                    }
-                    *request.request.body_mut() = Some(body.into());
-                }
-                Err(error) => {
-                    self.request = Err(RouteAwareRequestError::Build(error.to_string()));
-                }
-            }
-        }
-        self
-    }
-
-    pub fn body<B>(mut self, body: B) -> Self
-    where
-        B: Into<reqwest::Body>,
-    {
-        if let Ok(request) = &mut self.request {
-            *request.request.body_mut() = Some(body.into());
-        }
-        self
-    }
-
-    /// Sets a streaming request body without exposing the underlying HTTP implementation.
-    pub fn body_stream<S>(mut self, stream: S) -> Self
-    where
-        S: TryStream + Send + 'static,
-        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-        Bytes: From<S::Ok>,
-    {
-        if let Ok(request) = &mut self.request {
-            *request.request.body_mut() = Some(reqwest::Body::wrap_stream(stream));
-        }
-        self
-    }
-
-    pub async fn send(self) -> Result<reqwest::Response, RouteAwareRequestError> {
-        self.pool.send(self.request?).await
     }
 }
 
@@ -328,6 +212,13 @@ impl RouteAwareClientPool {
     pub fn with_outbound_proxy_policy(mut self, policy: OutboundProxyPolicy) -> Self {
         self.http_client_factory = self.http_client_factory.with_outbound_proxy_policy(policy);
         self
+    }
+
+    /// Exposes the ordinary request builder while sending through this policy-aware pool.
+    pub(crate) fn into_client(self) -> HttpClient {
+        HttpClient {
+            backend: HttpClientBackend::Routed(Arc::new(self)),
+        }
     }
 
     /// Creates a pool with the shared default HTTP transport settings.
@@ -379,19 +270,35 @@ impl RouteAwareClientPool {
         )
     }
 
-    fn with_builder(
+    /// Configures protocol-specific transport behavior without bypassing destination checks.
+    pub fn with_builder(
         http_client_factory: HttpClientFactory,
         route_class: ClientRouteClass,
-        client_builder: HttpClientBuilder,
+        mut client_builder: HttpClientBuilder,
     ) -> Self {
+        let default_headers = client_builder.default_headers.take().unwrap_or_default();
         Self {
             http_client_factory,
             route_class,
             client_builder,
+            default_headers,
             custom_ca_fallback: CustomCaFallback::Disabled,
             clients: Arc::new(Mutex::new(HashMap::new())),
             rustls_clients: None,
         }
+    }
+
+    /// Starts a new account-scoped operation while sharing the existing connection cache.
+    /// Capture this before resolving credentials or reading account-specific content.
+    pub fn for_current_account(&self) -> Self {
+        let mut pool = self.clone();
+        pool.http_client_factory = pool.http_client_factory.clone().with_network_policy(
+            pool.http_client_factory
+                .network_policy()
+                .clone()
+                .for_current_account(),
+        );
+        pool
     }
 
     /// Retries recognized TLS protocol-negotiation failures once using rustls.
@@ -496,46 +403,46 @@ impl RouteAwareClientPool {
         )
     }
 
-    pub fn get<U>(&self, url: U) -> RouteAwareRequestBuilder
+    pub fn get<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::GET, url)
     }
 
-    pub fn post<U>(&self, url: U) -> RouteAwareRequestBuilder
+    pub fn post<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::POST, url)
     }
 
-    pub fn put<U>(&self, url: U) -> RouteAwareRequestBuilder
+    pub fn put<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::PUT, url)
     }
 
-    pub fn delete<U>(&self, url: U) -> RouteAwareRequestBuilder
+    pub fn delete<U>(&self, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
         self.request(Method::DELETE, url)
     }
 
-    pub fn request<U>(&self, method: Method, url: U) -> RouteAwareRequestBuilder
+    pub fn request<U>(&self, method: Method, url: U) -> RequestBuilder
     where
         U: IntoUrl,
     {
-        RouteAwareRequestBuilder::new(self.clone(), method, url)
+        RequestBuilder::routed(Arc::new(self.clone()), method, url)
     }
 
     async fn client_for_url_with_resolver<F, Fut>(
         &self,
         request_url: &str,
         resolve_route: F,
-    ) -> Result<(OutboundProxyRoute, HttpClient, SelectedTlsBackend), RouteAwareClientPoolError>
+    ) -> Result<(OutboundProxyRoute, TransportClient, SelectedTlsBackend), RouteAwareClientPoolError>
     where
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = io::Result<OutboundProxyRoute>>,
@@ -564,16 +471,12 @@ impl RouteAwareClientPool {
         } else {
             self.client_builder.clone()
         };
-        #[expect(
-            deprecated,
-            reason = "explicitly opted-in pools preserve the legacy custom-CA fallback"
-        )]
         let client = match (
             self.http_client_factory.outbound_proxy_policy(),
             self.custom_ca_fallback,
         ) {
             (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::LegacyTransportDefault) => {
-                client_builder.build_with_transport_default_proxy_and_custom_ca_fallback()
+                client_builder.build_with_custom_ca_fallback(ProxyRouting::TransportDefault)
             }
             (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::Disabled)
             | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::Disabled)
@@ -609,13 +512,14 @@ impl RouteAwareClientPool {
         self.client_builder.follows_redirects()
             && (self.http_client_factory.outbound_proxy_policy()
                 == OutboundProxyPolicy::RespectSystemProxy
+                || self.http_client_factory.network_policy().is_managed()
                 || self.rustls_clients.is_some())
     }
 
     fn rustls_client_for_route(
         &self,
         route: &OutboundProxyRoute,
-    ) -> Result<HttpClient, RouteAwareClientPoolError> {
+    ) -> Result<TransportClient, RouteAwareClientPoolError> {
         let mut client_builder = self.client_builder.clone().with_rustls_tls();
         if self.follows_redirects_manually() {
             client_builder = client_builder.without_redirects();
@@ -633,3 +537,7 @@ mod tests;
 #[cfg(test)]
 #[path = "route_aware_tls_fallback_tests.rs"]
 mod tls_fallback_tests;
+
+#[cfg(test)]
+#[path = "route_aware_policy_tests.rs"]
+mod policy_tests;

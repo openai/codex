@@ -53,7 +53,7 @@ pub(crate) async fn connect(
                 tls_config.map(Connector::Rustls),
             )
             .await?;
-            return Ok((ConnectionInner::TransportDefault(stream), response));
+            return Ok((ConnectionInner::Left(stream), response));
         }
         OutboundProxyRoute::Direct => None,
         OutboundProxyRoute::Proxy {
@@ -76,7 +76,7 @@ pub(crate) async fn connect(
             .await
             {
                 Ok((stream, response)) => {
-                    return Ok((ConnectionInner::TransportDefault(stream), response));
+                    return Ok((ConnectionInner::Left(stream), response));
                 }
                 Err(WebSocketError::Url(UrlError::UnsupportedProxyScheme)) => Some(url),
                 Err(error) => return Err(error),
@@ -131,7 +131,7 @@ pub(crate) async fn connect(
         tls_config.map(Connector::Rustls),
     )
     .await?;
-    Ok((ConnectionInner::Routed(stream), response))
+    Ok((ConnectionInner::Right(stream), response))
 }
 
 #[derive(Debug, PartialEq, Eq)]

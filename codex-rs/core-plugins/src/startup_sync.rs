@@ -7,8 +7,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use self::http_client::StartupSyncHttpClient;
-use self::http_client::StartupSyncRequestBuilder;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::RequestBuilder;
 use codex_login::default_client::default_headers;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
@@ -928,7 +928,10 @@ async fn fetch_github_text(
         .await
         .map_err(|err| format!("failed to {context} from {url}: {err}"))?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| format!("failed to {context} from {url}: {err}"))?;
     if !status.is_success() {
         return Err(format!(
             "{context} from {url} failed with status {status}: {body}"
@@ -971,7 +974,10 @@ async fn fetch_public_text(
         .await
         .map_err(|err| format!("failed to {context} from {url}: {err}"))?;
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = response
+        .text()
+        .await
+        .map_err(|err| format!("failed to {context} from {url}: {err}"))?;
     if !status.is_success() {
         return Err(format!(
             "{context} from {url} failed with status {status}: {body}"
@@ -1004,17 +1010,14 @@ async fn fetch_public_bytes(
     Ok(body.to_vec())
 }
 
-fn github_request(http_clients: &StartupSyncHttpClient, url: &str) -> StartupSyncRequestBuilder {
+fn github_request(http_clients: &StartupSyncHttpClient, url: &str) -> RequestBuilder {
     startup_sync_request(http_clients, url)
         .timeout(CURATED_PLUGINS_HTTP_TIMEOUT)
         .header("accept", GITHUB_API_ACCEPT_HEADER)
         .header("x-github-api-version", GITHUB_API_VERSION_HEADER)
 }
 
-fn startup_sync_request(
-    http_clients: &StartupSyncHttpClient,
-    url: &str,
-) -> StartupSyncRequestBuilder {
+fn startup_sync_request(http_clients: &StartupSyncHttpClient, url: &str) -> RequestBuilder {
     http_clients
         .request(Method::GET, url)
         .headers(default_headers())

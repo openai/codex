@@ -9,8 +9,8 @@ use std::error::Error;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use crate::HttpClient;
 use crate::OutboundProxyRoute;
+use crate::client::TransportClient;
 
 const MAX_CACHED_RUSTLS_DESTINATIONS: usize = 16;
 // Schannel maps TLS alert 70 (protocol_version) to SEC_E_UNSUPPORTED_FUNCTION.
@@ -24,7 +24,7 @@ pub(crate) struct RustlsClientCache {
 #[derive(Default)]
 struct RustlsClientCacheState {
     destinations: HashSet<DestinationRoute>,
-    clients: HashMap<OutboundProxyRoute, HttpClient>,
+    clients: HashMap<OutboundProxyRoute, TransportClient>,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -46,7 +46,7 @@ impl RustlsClientCache {
             .contains(&destination)
     }
 
-    pub(crate) fn client_for_route(&self, route: &OutboundProxyRoute) -> Option<HttpClient> {
+    pub(crate) fn client_for_route(&self, route: &OutboundProxyRoute) -> Option<TransportClient> {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -59,7 +59,7 @@ impl RustlsClientCache {
         &self,
         url: &reqwest::Url,
         route: &OutboundProxyRoute,
-        client: HttpClient,
+        client: TransportClient,
     ) {
         let Some(destination) = DestinationRoute::new(url, route) else {
             return;

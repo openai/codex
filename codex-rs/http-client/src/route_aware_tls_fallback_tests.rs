@@ -16,7 +16,6 @@ use rcgen::generate_simple_self_signed;
 use rustls_pki_types::PrivateKeyDer;
 
 use super::ClientRouteClass;
-use super::HttpClient;
 use super::HttpClientFactory;
 use super::Method;
 use super::OutboundProxyPolicy;
@@ -24,11 +23,17 @@ use super::OutboundProxyRoute;
 use super::RouteAwareClientPool;
 use super::RouteAwareRequestError;
 use super::SelectedTlsBackend;
+use crate::client::RequestLogging;
+use crate::client::TransportClient;
 use crate::tls_backend_fallback::should_retry_with_rustls;
 
 const PROTOCOL_VERSION_TLS_ALERT: &[u8] = &[21, 3, 3, 0, 2, 2, 70];
 
-type SuccessfulTlsFallbackServer = (String, HttpClient, mpsc::Receiver<io::Result<Vec<String>>>);
+type SuccessfulTlsFallbackServer = (
+    String,
+    TransportClient,
+    mpsc::Receiver<io::Result<Vec<String>>>,
+);
 
 #[tokio::test]
 async fn default_pool_does_not_retry_a_native_tls_protocol_failure() {
@@ -346,7 +351,7 @@ fn spawn_successful_tls_fallback_server() -> io::Result<SuccessfulTlsFallbackSer
             .with_single_cert(vec![certificate.clone()], private_key)
             .map_err(io::Error::other)?,
     );
-    let trusted_rustls_client = HttpClient::new(
+    let trusted_rustls_client = TransportClient::new(
         reqwest::Client::builder()
             .use_rustls_tls()
             .add_root_certificate(
@@ -356,6 +361,8 @@ fn spawn_successful_tls_fallback_server() -> io::Result<SuccessfulTlsFallbackSer
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(io::Error::other)?,
+        RequestLogging::Enabled,
+        http::HeaderMap::new(),
     );
 
     let listener = TcpListener::bind(("127.0.0.1", 0))?;

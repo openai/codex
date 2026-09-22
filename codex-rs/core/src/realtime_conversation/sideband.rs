@@ -143,7 +143,12 @@ pub(super) fn spawn_webrtc_sideband_input_task(
             if !realtime_active.load(Ordering::Relaxed) || stop_token.is_cancelled() {
                 break;
             }
-            if event_parser != RealtimeEventParser::FramelessBidi {
+            if event_parser != RealtimeEventParser::FramelessBidi
+                || matches!(
+                    &err,
+                    ApiError::Transport(codex_client::TransportError::Policy(_))
+                )
+            {
                 report_realtime_transport_loss(&events_tx, err).await;
                 break;
             }

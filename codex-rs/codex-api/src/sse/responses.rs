@@ -597,7 +597,13 @@ async fn process_sse_with_treatment(
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
-                let _ = tx_event.send(Err(ApiError::Stream(e.to_string()))).await;
+                let error = match e {
+                    eventsource_stream::EventStreamError::Transport(
+                        error @ codex_client::TransportError::Policy(_),
+                    ) => ApiError::Transport(error),
+                    error => ApiError::Stream(error.to_string()),
+                };
+                let _ = tx_event.send(Err(error)).await;
                 return;
             }
             Ok(None) => {

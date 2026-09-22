@@ -19,8 +19,8 @@ use codex_exec_server::LOCAL_FS;
 use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use codex_http_client::RequestBuilder;
 use codex_http_client::RouteAwareClientPool;
-use codex_http_client::RouteAwareRequestBuilder;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -320,7 +320,7 @@ impl RecordingHttpClientSelector {
 }
 
 impl HttpClientSelector for RecordingHttpClientSelector {
-    fn request(&self, method: Method, url: &str) -> RouteAwareRequestBuilder {
+    fn request(&self, method: Method, url: &str) -> RequestBuilder {
         match self.selected_urls.lock() {
             Ok(mut selected_urls) => selected_urls.push(url.to_string()),
             Err(error) => panic!("selected URL recorder lock should not be poisoned: {error}"),

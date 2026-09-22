@@ -125,6 +125,46 @@ async fn rejects_oversized_declared_lengths_before_reading_the_body() {
 }
 
 #[tokio::test]
+async fn bounded_stream_retains_account_revocation() {
+    let (finish, finished) = std::sync::mpsc::channel();
+    let (url, server) = start_server(move |connection| {
+        connection
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\npart\r\n")
+            .unwrap();
+        finished.recv().unwrap();
+    });
+    let controller = crate::NetworkPolicyController::default();
+    let policy = controller.policy();
+    assert!(controller.publish(policy.revision(), crate::DestinationPolicy::Unrestricted));
+    let factory = crate::HttpClientFactory::new(crate::OutboundProxyPolicy::ReqwestDefault)
+        .with_network_policy(policy.clone().for_current_account());
+    let client = factory
+        .build_client(&url, crate::ClientRouteClass::Api)
+        .unwrap();
+    let transport = ReqwestTransport::from_http_client(client);
+    let mut request = Request::new(Method::GET, url);
+    request.response_body_limit_bytes = Some(5);
+    let mut response = transport.stream(request).await.unwrap();
+    assert_eq!(
+        response.bytes.next().await.unwrap().unwrap(),
+        Bytes::from_static(b"part")
+    );
+    policy.invalidate();
+    let error = tokio::time::timeout(Duration::from_secs(/*secs*/ 1), response.bytes.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        TransportError::Policy(crate::NetworkPolicyDenied::Revoked)
+    ));
+    assert!(response.bytes.next().await.is_none());
+    finish.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[tokio::test]
 async fn streaming_limit_counts_across_chunks_and_terminates_on_error() {
     let (continue_tx, continue_rx) = std::sync::mpsc::channel();
     let (url, server) = start_server(move |connection| {

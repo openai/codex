@@ -25,6 +25,20 @@ async fn disabled_request_logging_suppresses_transport_url_and_body() {
     assert!(logs.contains("log capture sentinel"));
     assert!(!logs.contains("url-secret"));
     assert!(!logs.contains("body-secret"));
+
+    let controller = crate::NetworkPolicyController::default();
+    let policy = controller.policy();
+    controller.publish(policy.revision(), crate::DestinationPolicy::Unrestricted);
+    let factory = crate::HttpClientFactory::new(crate::OutboundProxyPolicy::ReqwestDefault)
+        .with_network_policy(policy);
+    let client =
+        crate::RouteAwareClientPool::new(factory, crate::ClientRouteClass::Api).into_client();
+    let logs = capture_transport_logs(client.clone()).await;
+    assert!(logs.contains("url-secret"));
+    let logs = capture_transport_logs(client.clone().without_request_logging()).await;
+    assert!(!logs.contains("url-secret"), "{logs}");
+    assert!(!logs.contains("body-secret"));
+    assert!(capture_transport_logs(client).await.contains("url-secret"));
 }
 
 #[tokio::test]
@@ -72,7 +86,8 @@ async fn capture_transport_logs(client: HttpClient) -> String {
             .with_writer(move || TestLogWriter(Arc::clone(&writer_buffer)))
             .with_filter(
                 tracing_subscriber::filter::Targets::new()
-                    .with_target("codex_http_client::transport", tracing::Level::TRACE),
+                    .with_target("codex_http_client::transport", tracing::Level::TRACE)
+                    .with_target("codex_http_client::client", tracing::Level::DEBUG),
             ),
     );
     let _guard = tracing::subscriber::set_default(subscriber);

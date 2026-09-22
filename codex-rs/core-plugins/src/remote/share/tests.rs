@@ -758,3 +758,69 @@ async fn delete_remote_plugin_share_deletes_workspace_plugin() {
         BTreeMap::new()
     );
 }
+
+#[tokio::test]
+async fn revoked_success_body_is_a_request_error() {
+    for method in [Method::PUT, Method::POST] {
+        use tokio::io::AsyncReadExt;
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/upload", listener.local_addr().unwrap());
+        let controller = codex_http_client::NetworkPolicyController::default();
+        let policy = controller.policy();
+        controller.publish(
+            policy.revision(),
+            codex_http_client::DestinationPolicy::Unrestricted,
+        );
+        let config = RemotePluginServiceConfig::new(
+            url.clone(),
+            crate::test_support::test_http_client_factory().with_network_policy(policy),
+            /*product_sku*/ None,
+        );
+        let server = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\na")
+                .await
+                .unwrap();
+            // Let the client consume the successful headers and wait for the remaining body.
+            tokio::time::sleep(std::time::Duration::from_millis(/*millis*/ 50)).await;
+            controller.publish(
+                controller.policy().revision(),
+                codex_http_client::DestinationPolicy::Restricted {
+                    allowed_hosts: Default::default(),
+                },
+            );
+        };
+        let operation = async {
+            if method == Method::PUT {
+                put_workspace_plugin_upload(&config, &url, Vec::new()).await
+            } else {
+                send_and_expect_status(config.http_request(method, &url), &url, &[StatusCode::OK])
+                    .await
+            }
+        };
+        let (result, ()) =
+            tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), async {
+                tokio::join!(operation, server)
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                result,
+                Err(RemotePluginCatalogError::Request {
+                    source: codex_http_client::RouteAwareRequestError::Policy(
+                        codex_http_client::NetworkPolicyDenied::Revoked
+                    ),
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+    }
+}

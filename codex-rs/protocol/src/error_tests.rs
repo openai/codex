@@ -267,10 +267,10 @@ fn to_error_event_handles_response_stream_failed() {
         .status(StatusCode::TOO_MANY_REQUESTS)
         .body("")
         .unwrap();
-    let source = HttpResponse::from(response)
+    let mut source = HttpResponse::from(response)
         .error_for_status_ref()
-        .unwrap_err()
-        .with_url("http://example.com".parse().unwrap());
+        .unwrap_err();
+    *source.url_mut().unwrap() = "http://example.com".parse().unwrap();
     let err = CodexErr::ResponseStreamFailed(ResponseStreamFailed {
         source,
         request_id: Some("req-123".to_string()),

@@ -66,6 +66,7 @@ pub fn telemetry_transport_error_message(error: &TransportError) -> String {
         TransportError::Connection(err) => err.to_string(),
         TransportError::Network(err) => err.to_string(),
         TransportError::Build(err) => err.to_string(),
+        TransportError::Policy(denied) => denied.to_string(),
     }
 }
 

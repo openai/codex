@@ -128,7 +128,6 @@ pub(super) async fn probe_status(
             .timeout(Duration::from_secs(8))
             .send()
             .await
-            .map_err(RouteAwareRequestError::from)
     } else {
         client
             .request(method, url)

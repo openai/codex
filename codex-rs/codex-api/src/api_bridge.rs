@@ -226,6 +226,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 request_id: None,
             }),
             TransportError::Timeout => CodexErr::RequestTimeout,
+            TransportError::Policy(denied) => CodexErr::Fatal(denied.to_string()),
             TransportError::Connection(source) => {
                 CodexErr::ConnectionFailed(ConnectionFailedError { source })
             }

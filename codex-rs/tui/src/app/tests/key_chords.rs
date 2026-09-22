@@ -25,7 +25,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
-async fn chord_app() -> Result<(App, Tui, AppServerSession)> {
+async fn chord_app() -> Result<(Box<App>, Tui, AppServerSession)> {
     let mut app = make_test_app().await;
     let mut config = TuiKeymap::default();
     config.global.open_transcript = Some(KeybindingsSpec::One(KeybindingSpec(
