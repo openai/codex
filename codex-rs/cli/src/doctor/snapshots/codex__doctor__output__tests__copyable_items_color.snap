@@ -1,0 +1,10 @@
+---
+source: cli/src/doctor/output.rs
+expression: "rendered.replace('\\u{1b}', \"<ESC>\")"
+---
+  <ESC>[38;5;10m✓<ESC>[39m state        <ESC>[2m<ESC>[38;5;117m/tmp/logs_2.sqlite<ESC>[39m, <ESC>[38;5;117m~/goals_1.sqlite<ESC>[39m integrity check; try <ESC>[38;5;117m--summary<ESC>[39m or <ESC>[38;5;117mcodex doctor<ESC>[39m<ESC>[0m
+      <ESC>[38;5;240mlocations               <ESC>[39m see <ESC>[38;5;117m./logs<ESC>[39m, <ESC>[38;5;117m../goals<ESC>[39m. C:\logs, D:/goals. c:\logs, \\server\share\logs, \\?\C:\logs, \\?\UNC\server\share\logs, \\.\pipe\codex, \??\C:\logs, \DosDevices\C:\logs, \rooted. <ESC>[38;5;117mhttp://localhost:8080<ESC>[39m: <ESC>[38;5;117mhttps://example.com<ESC>[39m; <ESC>[38;5;117mwss://example.com<ESC>[39m) and <ESC>[38;5;117m/tmp/my data/logs_2.sqlite<ESC>[39m
+  <ESC>[38;5;214m⚠<ESC>[39m state        <ESC>[38;5;117m/tmp/logs_2.sqlite<ESC>[39m, <ESC>[38;5;117m~/goals_1.sqlite<ESC>[39m integrity check; try <ESC>[38;5;117m--summary<ESC>[39m or <ESC>[38;5;117mcodex doctor<ESC>[39m
+      <ESC>[38;5;240mlocations               <ESC>[39m see <ESC>[38;5;117m./logs<ESC>[39m, <ESC>[38;5;117m../goals<ESC>[39m. C:\logs, D:/goals. c:\logs, \\server\share\logs, \\?\C:\logs, \\?\UNC\server\share\logs, \\.\pipe\codex, \??\C:\logs, \DosDevices\C:\logs, \rooted. <ESC>[38;5;117mhttp://localhost:8080<ESC>[39m: <ESC>[38;5;117mhttps://example.com<ESC>[39m; <ESC>[38;5;117mwss://example.com<ESC>[39m) and <ESC>[38;5;117m/tmp/my data/logs_2.sqlite<ESC>[39m
+  <ESC>[38;5;196m✗<ESC>[39m state        <ESC>[38;5;196m/tmp/logs_2.sqlite<ESC>[39m, <ESC>[38;5;196m~/goals_1.sqlite<ESC>[39m integrity check; try <ESC>[38;5;117m--summary<ESC>[39m or <ESC>[38;5;117mcodex doctor<ESC>[39m
+      <ESC>[38;5;240mlocations               <ESC>[39m see <ESC>[38;5;196m./logs<ESC>[39m, <ESC>[38;5;196m../goals<ESC>[39m. C:\logs, D:/goals. c:\logs, \\server\share\logs, \\?\C:\logs, \\?\UNC\server\share\logs, \\.\pipe\codex, \??\C:\logs, \DosDevices\C:\logs, \rooted. <ESC>[38;5;196mhttp://localhost:8080<ESC>[39m: <ESC>[38;5;196mhttps://example.com<ESC>[39m; <ESC>[38;5;196mwss://example.com<ESC>[39m) and <ESC>[38;5;196m/tmp/my data/logs_2.sqlite<ESC>[39m
