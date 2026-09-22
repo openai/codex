@@ -76,6 +76,7 @@ mod inspection;
 mod interrupt;
 mod legacy;
 mod residency;
+mod resume;
 mod sender_context;
 mod service_tier;
 mod spawn;

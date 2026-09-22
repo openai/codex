@@ -1,11 +1,8 @@
 use super::*;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::next_thread_spawn_depth;
-use crate::session::session::Session;
-use crate::session::turn_context::TurnContext;
 use crate::tools::handlers::multi_agents_spec::create_resume_agent_tool;
 use codex_tools::ToolSpec;
-use std::sync::Arc;
 
 pub(crate) struct Handler;
 
@@ -83,46 +80,36 @@ async fn handle_resume_agent(
         )
         .await;
 
-    let mut status = session
-        .services
-        .agent_control
-        .get_status(receiver_thread_id)
-        .await;
-    let (receiver_agent, error) = if matches!(status, AgentStatus::NotFound) {
-        match Box::pin(try_resume_closed_agent(
-            &session,
-            &turn,
-            receiver_thread_id,
+    let result = async {
+        let config = build_agent_resume_config(&turn).map_err(FunctionCallError::RespondToModel)?;
+        let source = thread_spawn_source(
+            session.thread_id(),
+            &turn.session_source,
             child_depth,
-        ))
+            /*agent_role*/ None,
+            /*task_name*/ None,
+        )?;
+        Box::pin(
+            session
+                .services
+                .agent_control
+                .resume_agent(config, receiver_thread_id, source),
+        )
         .await
-        {
-            Ok(()) => {
-                status = session
-                    .services
-                    .agent_control
-                    .get_status(receiver_thread_id)
-                    .await;
-                (
-                    session
-                        .services
-                        .agent_control
-                        .get_agent_metadata(receiver_thread_id)
-                        .unwrap_or(receiver_agent),
-                    None,
-                )
-            }
-            Err(err) => {
-                status = session
-                    .services
-                    .agent_control
-                    .get_status(receiver_thread_id)
-                    .await;
-                (receiver_agent, Some(err))
-            }
-        }
-    } else {
-        (receiver_agent, None)
+        .map_err(|err| collab_agent_error(receiver_thread_id, err))
+    }
+    .await;
+    let (status, receiver_agent, error) = match result {
+        Ok((agent, _)) => (agent.status, agent.metadata, None),
+        Err(err) => (
+            session
+                .services
+                .agent_control
+                .get_status(receiver_thread_id)
+                .await,
+            receiver_agent,
+            Some(err),
+        ),
     };
     session
         .emit_turn_item_completed(
@@ -187,28 +174,4 @@ impl ToolOutput for ResumeAgentResult {
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         tool_output_code_mode_result(self, "resume_agent")
     }
-}
-
-async fn try_resume_closed_agent(
-    session: &Arc<Session>,
-    turn: &Arc<TurnContext>,
-    receiver_thread_id: ThreadId,
-    child_depth: i32,
-) -> Result<(), FunctionCallError> {
-    let config =
-        build_agent_resume_config(turn.as_ref()).map_err(FunctionCallError::RespondToModel)?;
-    Box::pin(session.services.agent_control.resume_agent_from_rollout(
-        config,
-        receiver_thread_id,
-        thread_spawn_source(
-            session.thread_id(),
-            &turn.session_source,
-            child_depth,
-            /*agent_role*/ None,
-            /*task_name*/ None,
-        )?,
-    ))
-    .await
-    .map(|_| ())
-    .map_err(|err| collab_agent_error(receiver_thread_id, err))
 }
