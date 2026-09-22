@@ -2402,7 +2402,23 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     )
     .await;
 
-    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let (mut session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let mut reviewer_model = session
+        .services
+        .models_manager
+        .get_model_info("codex-auto-review", &turn.config.to_models_manager_config())
+        .await;
+    reviewer_model.comp_hash = Some("test-checkpoint".to_owned());
+    let auth_manager = Arc::clone(&session.services.auth_manager);
+    Arc::get_mut(&mut session)
+        .expect("unshared session")
+        .services
+        .models_manager = Arc::new(StaticModelsManager::new(
+        Some(auth_manager),
+        ModelsResponse {
+            models: vec![reviewer_model],
+        },
+    ));
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be unique");
     update_turn_settings_for_test(turn_mut, |settings| {
         Arc::make_mut(&mut settings.model_info).auto_review_model_override =
@@ -2516,8 +2532,9 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         1,
         "follow-up reminder should be persisted for guardian forks"
     );
+    let (window_number, window_ids) = session.advance_auto_compact_window().await;
     session
-        .replace_history(
+        .replace_compacted_history(
             vec![
                 ResponseItem::Compaction {
                     id: Some(codex_protocol::ResponseItemId::from_server(
@@ -2544,8 +2561,20 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
                 },
-            ],
+            ]
+            .into_iter()
+            .map(codex_history::ResponseItemEnvelope::new)
+            .collect(),
             /*reference_context_item*/ None,
+            /*world_state_baseline*/ None,
+            crate::compact::CompactedHistoryMetadata {
+                message: String::new(),
+                window_number,
+                window_ids,
+                compaction_response_id: None,
+                compaction_model_hash: Some("test-checkpoint".to_owned()),
+                reviewer_compaction_hash: Some("test-checkpoint".to_owned()),
+            },
         )
         .await;
     let third_request = GuardianApprovalRequest::ExecCommand {
@@ -3666,7 +3695,8 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         gate_tx
             .send(())
             .expect("second guardian review gate should still be open");
-        assert_eq!(second_review.await?, ReviewDecision::Approved);
+        // The later user input revokes the in-flight trunk review's authorization version.
+        assert_eq!(second_review.await?, ReviewDecision::Abort);
         let feedback = codex_feedback::guardian_review_failures(&[session.thread_id()])
             .attachment
             .expect("failed ephemeral review survives cleanup and subsequent allowed reviews");

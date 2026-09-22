@@ -62,6 +62,11 @@ async fn review_preserves_user_instructions_until_request_budgeting(
             model.auto_review_model_override = Some("gpt-5.6-luna".to_owned());
         })
         .with_config(|config| {
+            // This test covers the legacy full-transcript instruction budget.
+            config
+                .features
+                .disable(Feature::GuardianThreadContext)
+                .expect("disable thread context for the legacy budget test");
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
         })

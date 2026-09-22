@@ -182,7 +182,8 @@ fn guardian_thread_context_resolves_nested_config_and_profile_overrides() {
     let enabled_context = "[guardianv2]\nthread_context = true";
     let disabled_context = "[guardianv2]\nthread_context = false";
     for (base, profile, enabled) in [
-        ("", "", false),
+        ("", "", true),
+        ("guardianv2 = false", "", true),
         (disabled_context, "", false),
         (enabled_context, "", true),
         (enabled_context, disabled_context, false),
@@ -207,9 +208,7 @@ fn guardian_thread_context_resolves_nested_config_and_profile_overrides() {
             FeatureOverrides::default(),
         );
         let mut expected = Features::with_defaults();
-        if enabled {
-            expected.enable(Feature::GuardianThreadContext);
-        }
+        expected.set_enabled(Feature::GuardianThreadContext, enabled);
         assert_eq!(features.enabled_features(), expected.enabled_features());
     }
 }

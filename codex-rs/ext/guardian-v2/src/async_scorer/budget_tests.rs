@@ -231,7 +231,13 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             })
             .await;
         if matches!(outcome, BudgetOutcome::RequiresSync) {
-            fixture.assert_fails_closed("elevated_risk").await?;
+            let reason = if matches!(evidence, BudgetEvidence::Checkpoint) {
+                // Raw injection supplies no live checkpoint provenance, regardless of the sample.
+                "incompatible_compaction"
+            } else {
+                "elevated_risk"
+            };
+            fixture.assert_fails_closed(reason).await?;
             assert!(
                 server
                     .received_requests()
@@ -275,7 +281,12 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 /*metrics*/ None
             )
             .await,
-            Some(ReviewDecision::Approved)
+            if matches!(evidence, BudgetEvidence::Checkpoint) {
+                // A valid sampled snapshot cannot make an unannotated live checkpoint safe.
+                None
+            } else {
+                Some(ReviewDecision::Approved)
+            }
         );
         fixture.test.codex.shutdown_and_wait().await?;
     }

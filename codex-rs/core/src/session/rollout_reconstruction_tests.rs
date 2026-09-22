@@ -1511,9 +1511,11 @@ async fn bounded_replay_matches_full_replay_after_empty_turn_compactions() {
             vec![
                 RolloutItem::Compacted(CompactedItem {
                     message: String::new(),
-                    replacement_history: Some(annotated(vec![assistant_message(&format!(
-                        "summary-{window_number}"
-                    ))])),
+                    replacement_history: Some(annotated(vec![object!({
+                        "type": "compaction",
+                        "id": format!("checkpoint-{window_number}"),
+                        "encrypted_content": format!("summary-{window_number}"),
+                    })])),
                     retained_context: None,
                     guardian_history: Some(codex_history::GuardianHistoryCheckpoint(vec![
                         user_message("original task"),
@@ -1663,7 +1665,15 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
         acceptance_order: None,
     };
     let mut retained = codex_history::RetainedContext::default();
-    retained.mark_user_messages_incomplete();
+    retained.record_user_message(
+        codex_history::RetainedUserMessage {
+            turn_id: String::new(),
+            message_id: None,
+            text: "before compact".to_owned(),
+            complete: false,
+        },
+        codex_history::RetainedInputSource::Local(None),
+    );
     retained.record(&answer);
     let rollout_items = vec![
         RolloutItem::ResponseItem(user_message("before compact").into()),

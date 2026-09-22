@@ -135,7 +135,7 @@ pub struct GuardianV2ConfigToml {
     /// Legacy setting retained for config compatibility; the backend now controls Guardian billing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub free_guardian: Option<bool>,
-    /// Use thread-owned context for sync and async Guardian. Defaults to false.
+    /// Use thread-owned context for sync and async Guardian. Defaults to true.
     /// Independent of the Guardian v2 `enabled` toggle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_context: Option<bool>,
