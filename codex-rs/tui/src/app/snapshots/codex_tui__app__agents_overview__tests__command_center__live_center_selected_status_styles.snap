@@ -1,0 +1,11 @@
+---
+source: tui/src/app/agent_center_tests.rs
+assertion_line: 98
+expression: "selected_status_styles.join(\"\\n\")"
+---
+○ | Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().reversed()
+○ | Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().reversed()
+! | Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().reversed()
+● | Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().reversed()
+● | Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().reversed()
+○ | Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold().reversed()

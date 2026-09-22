@@ -66,8 +66,39 @@ async fn live_center_columns() {
             thread
         })
         .collect::<Vec<_>>();
-    let view = app.agents_overview_view(threads, Some(current));
+    let mut view = app.agents_overview_view(threads, Some(current));
     insta::assert_snapshot!(screen(&view, /*width*/ 160, /*height*/ 22));
+    let mut selected_status_styles = Vec::new();
+    for _ in 0..fixtures.len() {
+        let area = Rect::new(
+            /*x*/ 0, /*y*/ 0, /*width*/ 160, /*height*/ 22,
+        );
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        view.render(area, &mut buf);
+        let selected_row = buf
+            .content
+            .chunks(usize::from(area.width))
+            .find(|row| row.iter().any(|cell| cell.symbol() == "›"))
+            .unwrap();
+        let marker = selected_row
+            .iter()
+            .position(|cell| cell.symbol() == "›")
+            .unwrap();
+        assert_eq!(
+            selected_row[marker + 2].style(),
+            selected_row[marker].style()
+        );
+        selected_status_styles.push(format!(
+            "{} | {:?}",
+            selected_row[marker + 2].symbol(),
+            selected_row[marker + 2].style()
+        ));
+        view.handle_key_event(KeyCode::Down.into());
+    }
+    insta::assert_snapshot!(
+        "live_center_selected_status_styles",
+        selected_status_styles.join("\n")
+    );
 }
 
 #[tokio::test]

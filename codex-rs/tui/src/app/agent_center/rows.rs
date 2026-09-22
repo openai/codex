@@ -153,7 +153,10 @@ impl AgentsOverviewView {
                 },
                 style,
             );
-            let (status, dot) = Self::status(task);
+            let (status, mut dot) = Self::status(task);
+            if index == self.selected {
+                dot.style = style;
+            }
             line(
                 Line::from(if index == self.selected { "›" } else { " " }).style(style),
                 rect,
