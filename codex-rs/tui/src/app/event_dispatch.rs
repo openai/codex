@@ -392,10 +392,17 @@ impl App {
                 self.pending_open_resume_picker = true;
             }
             AppEvent::OpenExternalAgentConfigMigration => {
+                let cwd = if self.chat_widget.thread_id().is_some()
+                    || !app_server.uses_remote_workspace()
+                {
+                    Some(self.chat_widget.config_ref().cwd.to_path_buf())
+                } else {
+                    app_server.remote_cwd_override().map(Path::to_path_buf)
+                };
                 match crate::external_agent_config_migration::flow::handle_external_agent_config_migration_prompt(
                     tui,
                     app_server,
-                    &self.config,
+                    cwd.as_deref(),
                 )
                 .await
                 {

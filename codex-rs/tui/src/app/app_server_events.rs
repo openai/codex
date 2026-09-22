@@ -337,9 +337,11 @@ impl App {
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(notification) => {
-                let should_report_completion =
-                    app_server_client.consume_external_agent_config_import_completion();
-                if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                let should_report_completion = app_server_client
+                    .consume_external_agent_config_import_completion(&notification.import_id);
+                if !app_server_client.uses_remote_workspace()
+                    && let Err(err) = self.refresh_in_memory_config_from_disk().await
+                {
                     tracing::warn!(
                         error = %err,
                         "failed to refresh config after external agent config import"
