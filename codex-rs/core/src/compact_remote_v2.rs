@@ -572,6 +572,7 @@ fn is_retained_for_remote_compaction_v2(
                 content.first(),
                 Some(AgentMessageInputContent::InputText { text })
                     if text.starts_with("Message Type: MESSAGE\n")
+                        || text.starts_with("Message Type: CHANNEL_POST\n")
             );
         let is_completion = matches!(
             content.first(),

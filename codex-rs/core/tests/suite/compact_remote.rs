@@ -912,6 +912,19 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
             start_options: Default::default(),
         })
         .await?;
+    let channel_progress = "Message Type: CHANNEL_POST\nSender: /root/child\nChannel: progress\nMessage ID: aaaabbbbcccc\nThread ID: aaaabbbbcccc\nPayload:\nchild channel progress";
+    codex
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::root().join("child").expect("valid child path"),
+                AgentPath::root(),
+                Vec::new(),
+                channel_progress.to_string(),
+                /*trigger_turn*/ false,
+            ),
+            start_options: Default::default(),
+        })
+        .await?;
     codex
         .submit(Op::InterAgentCommunication {
             communication: InterAgentCommunication::new(
@@ -1016,6 +1029,12 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         compact_request
             .inputs_of_type("agent_message")
             .iter()
+            .any(|item| item["content"][0]["text"].as_str() == Some(channel_progress))
+    );
+    assert!(
+        compact_request
+            .inputs_of_type("agent_message")
+            .iter()
             .any(|item| item.to_string().contains("child completion")),
         "expected v2 compaction input to include the child completion"
     );
@@ -1105,6 +1124,12 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
             .iter()
             .all(|item| !item.to_string().contains("child progress")),
         "expected v2 follow-up request to omit the child progress update"
+    );
+    assert!(
+        follow_up_request
+            .inputs_of_type("agent_message")
+            .iter()
+            .all(|item| item["content"][0]["text"].as_str() != Some(channel_progress))
     );
     assert!(
         follow_up_request
