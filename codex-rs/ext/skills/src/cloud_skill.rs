@@ -1,4 +1,5 @@
-//! Attempts cloud discovery once during cancellable regular-turn startup.
+//! Reuses warning-free cloud catalogs until their Apps resource generation changes.
+//! Partial catalogs are retried during the next cancellable regular-turn startup.
 //! Snapshot readers never discover or retry. Failures may retain a same-auth-scope
 //! catalog; missing or invalidated catalogs remain empty until the next turn.
 

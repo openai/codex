@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientAuthKey;
+use codex_mcp::McpResourceServerCacheKey;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
 use crate::catalog::SkillAuthority;
@@ -37,15 +38,23 @@ pub(crate) enum ExecutorCatalogSelection {
 }
 
 /// Keeps cloud metadata and contents within one published auth scope and Apps availability state.
-/// A successful turn refresh replaces the Arc so late reads cannot populate its successor.
+/// Warning-free discovery is reused until the Apps resource generation changes.
+/// A successful refresh replaces the Arc so late reads cannot populate its successor.
 pub(crate) struct CloudSkillGeneration {
     pub(crate) auth_cache_key: Option<McpResourceClientAuthKey>,
+    pub(crate) resource_cache_key: Option<McpResourceServerCacheKey>,
     pub(crate) mcp_resources: Option<McpResourceClient>,
     pub(crate) catalog: Option<SkillCatalog>,
     pub(crate) resources: Mutex<CloudResourceCache>,
 }
 
 impl CloudSkillGeneration {
+    pub(crate) fn current_resource_cache_key(&self) -> Option<McpResourceServerCacheKey> {
+        self.mcp_resources
+            .as_ref()
+            .and_then(|client| client.server_cache_key(codex_mcp::CODEX_APPS_MCP_SERVER_NAME))
+    }
+
     pub(crate) fn is_current(&self) -> bool {
         self.auth_cache_key
             == self.mcp_resources.as_ref().map(|client| {

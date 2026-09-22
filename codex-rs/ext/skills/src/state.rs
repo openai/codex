@@ -301,6 +301,7 @@ impl SkillsThreadState {
 
         let next_cache = Arc::new(CloudSkillGeneration {
             auth_cache_key: cache_key,
+            resource_cache_key: None,
             mcp_resources: mcp_resources.cloned(),
             catalog: None,
             resources: Mutex::new(CloudResourceCache::default()),
@@ -310,7 +311,7 @@ impl SkillsThreadState {
     }
 
     /// The serialized turn-start lifecycle is the only discovery writer.
-    /// Attempt once per turn; readers never retry, including after a failed refresh.
+    /// Reuse warning-free discovery until invalidated; retry failures and partial catalogs next turn.
     #[tracing::instrument(name = "skills.cloud.refresh_cloud_catalog", level = "info", skip_all)]
     pub(crate) async fn refresh_cloud_catalog(
         &self,
@@ -323,6 +324,16 @@ impl SkillsThreadState {
         // Switch generations before the fallible lookup; only same-auth-scope failures
         // may retain previously authorized metadata and contents.
         let cache = self.cloud_cache(query.mcp_resources.as_deref());
+        let resource_cache_key = cache.current_resource_cache_key();
+        if cache.is_current()
+            && cache
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.warnings.is_empty())
+            && cache.resource_cache_key == resource_cache_key
+        {
+            return Ok(());
+        }
         let mut catalog = providers.list_cloud_for_turn(query).await?;
         catalog.entries.sort_by(|a, b| a.id.0.cmp(&b.id.0));
         let mut catalogs = self
@@ -330,6 +341,7 @@ impl SkillsThreadState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !cache.is_current()
+            || cache.current_resource_cache_key() != resource_cache_key
             || !catalogs
                 .cloud_cache
                 .as_ref()
@@ -341,6 +353,7 @@ impl SkillsThreadState {
         }
         catalogs.cloud_cache = Some(Arc::new(CloudSkillGeneration {
             auth_cache_key: cache.auth_cache_key.clone(),
+            resource_cache_key,
             mcp_resources: cache.mcp_resources.clone(),
             catalog: Some(catalog),
             resources: Mutex::new(CloudResourceCache::default()),

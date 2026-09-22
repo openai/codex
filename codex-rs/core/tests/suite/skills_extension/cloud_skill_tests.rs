@@ -704,9 +704,9 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
                 responses::ev_completed("resp-orchestrator-skill"),
             ]),
             responses::sse(vec![
-                responses::ev_response_created("resp-orchestrator-skill-after-refresh"),
-                responses::ev_assistant_message("msg-orchestrator-skill-after-refresh", "Done"),
-                responses::ev_completed("resp-orchestrator-skill-after-refresh"),
+                responses::ev_response_created("resp-orchestrator-skill-next-turn"),
+                responses::ev_assistant_message("msg-orchestrator-skill-next-turn", "Done"),
+                responses::ev_completed("resp-orchestrator-skill-next-turn"),
             ]),
         ],
     )
@@ -812,8 +812,7 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
         vec![SKILL_MAIN_PROMPT_URI, SKILL_REFERENCE_URI]
     );
 
-    test.codex.submit(Op::RefreshMcpServers).await?;
-    test.submit_turn(&format!("Use ${SKILL_NAME} after refreshing MCP"))
+    test.submit_turn(&format!("Use ${SKILL_NAME} on the next turn"))
         .await?;
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 6);
@@ -826,6 +825,7 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
     assert!(skill_fragments[0].contains(&format!("<name>{SKILL_NAME}</name>")));
     assert!(skill_fragments[0].contains(SKILL_MARKER));
     assert!(skill_fragments[0].contains(SKILL_REFERENCE_URI));
+    // Partial discovery retries on the next turn without an MCP or auth invalidation.
     assert_eq!(
         *provider.reads.lock().await,
         vec![
