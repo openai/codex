@@ -1,8 +1,10 @@
 //! Exercises board tools through the runtime, including resume and active-only notices.
 
 use anyhow::Context;
+use codex_agent_message_board_extension::PostMetadata;
 use codex_core::TurnInputRequest;
 use codex_features::Feature;
+use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
@@ -13,12 +15,17 @@ use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use tokio::sync::oneshot;
 
 enum BoardClock {
     Available,
@@ -318,6 +325,278 @@ async fn board_is_shared_with_children_survives_resume_and_skips_idle_notices() 
         serde_json::from_str(&output).with_context(|| format!("resumed read result: {output}"))?;
     assert_eq!(result["text"], "Worker's durable decision.");
     assert_eq!(result["author"], "/root/worker");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn board_unsubscribe_survives_post_and_resume_until_resubscribed() -> anyhow::Result<()> {
+    let server = responses::start_mock_server().await;
+    let root = test_codex()
+        .with_config(configure)
+        .build_with_auto_env(&server)
+        .await?;
+    let posted = responses::mount_sse_sequence(
+        &server,
+        vec![
+            tool(
+                "start-discussion",
+                "post",
+                json!({"new_channel_name":"design","text":"A shared decision."}),
+            ),
+            done(),
+        ],
+    )
+    .await;
+    root.submit_turn("Start a discussion.").await?;
+    let post: Value = serde_json::from_str(
+        &posted
+            .function_call_output_text("start-discussion")
+            .context("initial post result")?,
+    )?;
+    let thread_id = &post["thread_id"];
+    let opted_out = responses::mount_sse_sequence(
+        &server,
+        vec![
+            tool("opt-out", "unsubscribe", json!({"thread_id":thread_id})),
+            tool(
+                "last-detail",
+                "post",
+                json!({"thread_id":thread_id,"text":"One last detail."}),
+            ),
+            done(),
+        ],
+    )
+    .await;
+    root.submit_turn("Unsubscribe and add one last detail.")
+        .await?;
+    let subscription: Value = serde_json::from_str(
+        &opted_out
+            .function_call_output_text("opt-out")
+            .context("unsubscribe result")?,
+    )?;
+    assert_eq!(subscription["enabled"], false);
+    let _: PostMetadata = serde_json::from_str(
+        &opted_out
+            .function_call_output_text("last-detail")
+            .context("post after unsubscribe")?,
+    )?;
+
+    let response = |body| vec![StreamingSseChunk { gate: None, body }];
+    let (release_wait, wait_gate) = oneshot::channel();
+    let mut streams = vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_function_call_with_namespace(
+                    "spawn-worker",
+                    "collaboration",
+                    "spawn_agent",
+                    &json!({"task_name":"worker","message":"Say ready.","fork_turns":"none"})
+                        .to_string(),
+                )]),
+            },
+            StreamingSseChunk {
+                // Dispatch wait only after spawn, while keeping the completion in this batch.
+                gate: Some(wait_gate),
+                body: sse(vec![
+                    ev_function_call_with_namespace(
+                        "settle-worker",
+                        "collaboration",
+                        "wait_agent",
+                        "{}",
+                    ),
+                    ev_completed("spawn-and-wait"),
+                ]),
+            },
+        ],
+        response(done()),
+        response(done()),
+    ];
+    let mut phases = Vec::new();
+    for (phase, subscribed) in [("opted-out", false), ("resubscribed", true)] {
+        if subscribed {
+            streams.push(response(tool(
+                "opt-in",
+                "subscribe",
+                json!({"thread_id":thread_id}),
+            )));
+        }
+        let (release, gate) = oneshot::channel();
+        let mut working = ev_assistant_message(phase, "Waiting for the worker's reply.");
+        working["item"]["phase"] = json!("commentary");
+        streams.push(vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created(phase), working]),
+            },
+            StreamingSseChunk {
+                gate: Some(gate),
+                // TurnComplete precedes parent notification. Drain the worker's final mail
+                // before advancing phases, and force a follow-up so silence is observable.
+                body: tool(&format!("checkpoint-{phase}"), "wait_agent", json!({})),
+            },
+        ]);
+        streams.push(response(tool(
+            &format!("reply-{phase}"),
+            "post",
+            json!({"thread_id":thread_id,"text":format!("Reply while {phase}.")}),
+        )));
+        streams.push(response(done()));
+        streams.push(response(done()));
+        phases.push((phase, subscribed, release));
+    }
+    let (streaming, _) = start_streaming_sse_server(streams).await;
+    let base_url = format!("{}/v1", streaming.uri());
+    let resumed = test_codex()
+        .with_config(move |config| {
+            configure(config);
+            config.model_provider.base_url = Some(base_url);
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("read raw request bodies from the gated mock");
+        })
+        .restart(&server, &root)
+        .await?;
+    resumed
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Spawn a worker and finish your turn.".into(),
+            text_elements: vec![],
+        }]))
+        .await?;
+    let child_id = wait_for_event_match(&resumed.codex, |event| match event {
+        EventMsg::ItemCompleted(event) => match &event.item {
+            TurnItem::SubAgentActivity(activity) if activity.id == "spawn-worker" => {
+                Some(activity.agent_thread_id)
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+    .await;
+    release_wait.send(()).expect("release wait after spawn");
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let child = resumed.thread_manager.get_thread(child_id).await?;
+    wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert!(
+        streaming
+            .requests()
+            .await
+            .iter()
+            .any(|body| { String::from_utf8_lossy(body).contains("Message Type: FINAL_ANSWER") })
+    );
+
+    for (phase_index, (phase, subscribed, release)) in phases.into_iter().enumerate() {
+        resumed
+            .codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: format!("Observe the discussion while {phase}."),
+                text_elements: vec![],
+            }]))
+            .await?;
+        let turn_id = wait_for_event_match(&resumed.codex, |event| match event {
+            EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+            _ => None,
+        })
+        .await;
+        // The gate keeps the recipient active until the child's post and fanout finish.
+        wait_for_event(&resumed.codex, |event| {
+            matches!(event, EventMsg::ItemCompleted(event)
+                if matches!(&event.item, TurnItem::AgentMessage(message) if message.id == phase))
+        })
+        .await;
+        child
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: format!("Reply to the discussion while {phase}."),
+                text_elements: vec![],
+            }]))
+            .await?;
+        wait_for_event(&child, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+        let requests = streaming
+            .requests()
+            .await
+            .iter()
+            .map(|body| serde_json::from_slice::<Value>(body))
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        let reply_call = format!("reply-{phase}");
+        let output = requests
+            .iter()
+            .filter_map(|request| request["input"].as_array())
+            .flatten()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == reply_call)
+            .context("child post output")?;
+        let reply: PostMetadata =
+            serde_json::from_str(output["output"].as_str().context("child post result")?)?;
+        assert_eq!(reply.author.as_str(), "/root/worker");
+        release.send(()).expect("release active recipient");
+        wait_for_event(&resumed.codex, |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+
+        let requests = streaming
+            .requests()
+            .await
+            .iter()
+            .map(|body| serde_json::from_slice::<Value>(body))
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        // A delivered notice can start the recipient's next request before the child finishes.
+        let request = requests
+            .iter()
+            .rfind(|request| request["client_metadata"]["turn_id"] == turn_id)
+            .context("recipient request")?;
+        let input = request["input"].as_array().context("recipient input")?;
+        assert_eq!(
+            input
+                .iter()
+                .filter(|item| {
+                    item["type"] == "agent_message"
+                        && item["author"] == "/root/worker"
+                        && item["content"]
+                            .to_string()
+                            .contains("Message Type: FINAL_ANSWER")
+                })
+                .count(),
+            phase_index + 2,
+            "worker completion must be drained before leaving phase: {phase}"
+        );
+        let notices = input
+            .iter()
+            .filter(|item| {
+                item["type"] == "agent_message"
+                    && item["content"]
+                        .to_string()
+                        .contains("Message Type: CHANNEL_POST")
+            })
+            .map(|item| {
+                (
+                    item["author"].clone(),
+                    item["recipient"].clone(),
+                    item["content"].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = if subscribed {
+            vec![(
+                json!("/root/worker"),
+                json!("/root"),
+                json!([{"type":"input_text","text":format!(
+                    "Message Type: CHANNEL_POST\nSender: /root/worker\nChannel: design\nMessage ID: {}\nThread ID: {}\nPayload:\nReply while {phase}.",
+                    reply.message_id, reply.thread_id,
+                )}]),
+            )]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(notices, expected, "phase: {phase}");
+    }
+    child.shutdown_and_wait().await?;
+    resumed.codex.shutdown_and_wait().await?;
+    streaming.shutdown().await;
     Ok(())
 }
 
