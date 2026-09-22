@@ -167,15 +167,20 @@ impl ExecutedToolCallRecorderState {
             self.output_cells
                 .retain(|_, cell_id| self.cells.contains_key(cell_id));
         }
-        while (self.cells.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS
-            && !self.cells.contains_key(cell_id))
-            || self.pending_nested_calls >= MAX_PENDING_EXECUTED_TOOL_CALLS
-        {
+        loop {
+            let needs_cell_slot = self.cells.len() >= MAX_PENDING_EXECUTED_TOOL_CALLS
+                && !self.cells.contains_key(cell_id);
+            if !needs_cell_slot && self.pending_nested_calls < MAX_PENDING_EXECUTED_TOOL_CALLS {
+                break;
+            }
+
             let output_cells = self.output_cells.values().collect::<HashSet<_>>();
             let finished_cell = self.cells.iter().find_map(|(id, cell)| {
                 // Preserve late records until pressure, and never discard the cell
                 // whose output is about to make those records attachable again.
+                // Empty cells can free cell slots, but not pending-call slots.
                 (id != cell_id
+                    && (needs_cell_slot || !cell.pending_calls.is_empty())
                     && matches!(
                         cell.completion,
                         CellCompletion::Complete | CellCompletion::Incomplete

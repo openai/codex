@@ -714,7 +714,7 @@ fn empty_inventory_revalidates_history_on_retry() {
 
 #[test]
 fn empty_inventory_wait_requires_a_fresh_session() {
-    for fresh in [true, false] {
+    for (fresh, pending_pressure) in [(true, false), (false, false), (true, true), (false, true)] {
         let history = if fresh {
             InitialHistory::New
         } else {
@@ -727,12 +727,45 @@ fn empty_inventory_wait_requires_a_fresh_session() {
         let mut retry_cache = HashMap::new();
         recorder.attach_to_prompt(&mut prompt, &mut retry_cache);
         assert!(prompt[1].executed_tool_call_metadata().is_none());
+        if pending_pressure {
+            // Model a finished empty cell whose original output mapping was consumed.
+            // Register another cell under pending-call pressure before its next wait.
+            recorder.finish_cell_recording(&cell);
+            let busy_cell = CellId::new("busy-cell".to_string());
+            recorder.start_cell(&busy_cell, "busy-exec");
+            for index in 0..MAX_PENDING_EXECUTED_TOOL_CALLS {
+                record_nested_call(&recorder, &busy_cell, &format!("busy-{index}"));
+            }
+            {
+                let state = recorder.lock_state();
+                let state = state.as_ref().unwrap();
+                assert_eq!(state.pending_nested_calls, MAX_PENDING_EXECUTED_TOOL_CALLS);
+                assert!(state.cells.len() < MAX_PENDING_EXECUTED_TOOL_CALLS);
+                assert!(!state.output_cells.values().any(|id| id == &cell));
+                let empty = state.cells.get(&cell).unwrap();
+                assert!(matches!(empty.completion, CellCompletion::Complete));
+                assert!(empty.pending_calls.is_empty());
+            }
+            recorder.register_cell(&busy_cell, "busy-wait");
+            recorder.finish_cell_recording(&busy_cell);
+            let mut busy_prompt = vec![
+                exec_input("busy-exec"),
+                exec_output("busy-exec"),
+                wait_input("busy-wait", &busy_cell),
+                output("busy-wait"),
+            ];
+            recorder.attach_to_prompt(&mut busy_prompt, &mut HashMap::new());
+        }
         recorder.register_cell(&cell, "wait");
         recorder.finish_cell_recording(&cell);
         prompt.extend([wait_input("wait", &cell), output("wait")]);
         recorder.attach_to_prompt(&mut prompt, &mut retry_cache);
         assert!(!has_direct_call_metadata(&prompt[3]));
-        assert_eq!(tool_calls_complete(&prompt[3]), fresh.then_some(true));
+        assert_eq!(
+            tool_calls_complete(&prompt[3]),
+            fresh.then_some(true),
+            "fresh={fresh}, pending_pressure={pending_pressure}",
+        );
         if fresh {
             assert_eq!(
                 serde_json::to_value(prompt[3].executed_tool_call_metadata()).unwrap(),

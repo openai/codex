@@ -2552,17 +2552,19 @@ async fn code_mode_resumed_wait_does_not_certify_a_reused_runtime_cell() -> Resu
     Ok(())
 }
 
-struct MappingPressureObserver {
+struct ExecCompletionObserver {
+    call_id_prefix: &'static str,
+    expected_count: usize,
     finished: AtomicUsize,
     release: Mutex<Option<oneshot::Sender<()>>>,
 }
 
-impl ToolLifecycleContributor for MappingPressureObserver {
+impl ToolLifecycleContributor for ExecCompletionObserver {
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
-            if input.tool_name.name == "exec" && input.call_id.starts_with("seed-") {
+            if input.tool_name.name == "exec" && input.call_id.starts_with(self.call_id_prefix) {
                 assert_eq!(input.outcome, ToolCallOutcome::Completed { success: true });
-                if self.finished.fetch_add(1, Ordering::SeqCst) == 511 {
+                if self.finished.fetch_add(1, Ordering::SeqCst) + 1 == self.expected_count {
                     self.release
                         .lock()
                         .unwrap()
@@ -2620,7 +2622,9 @@ async fn code_mode_recovers_complete_inventory_after_orphaned_mapping_pressure()
     ])
     .await;
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-    extensions.tool_lifecycle_contributor(Arc::new(MappingPressureObserver {
+    extensions.tool_lifecycle_contributor(Arc::new(ExecCompletionObserver {
+        call_id_prefix: "seed-",
+        expected_count: 512,
         finished: AtomicUsize::new(0),
         release: Mutex::new(Some(release)),
     }));
@@ -2665,6 +2669,132 @@ async fn code_mode_recovers_complete_inventory_after_orphaned_mapping_pressure()
         serde_json::json!([{"name": "test_sync_tool", "arguments": {}}]),
     );
     assert_eq!(metadata["cell_id"], "call-fresh");
+    assert_eq!(metadata["tool_calls_complete"], true);
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_wait_serializes_empty_inventory_under_pending_call_pressure() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // The recorder unit test covers eviction ordering. This host test covers wait
+    // serialization under pressure; the empty cell is still recording until wait.
+    let (release, pressure_reached) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_custom_tool_call(
+                    "call-empty",
+                    "exec",
+                    "yield_control(); await new Promise(() => {});",
+                ),
+                ev_completed("resp-empty"),
+            ]),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_custom_tool_call(
+                    "call-pressure",
+                    "exec",
+                    r#"// @exec: {"yield_time_ms": 60000}
+for (let index = 0; index < 256; index++) await tools.test_sync_tool({});
+text("pressure ready");"#,
+                )]),
+            },
+            StreamingSseChunk {
+                // Finish the pressure cell before waiting, but keep this response
+                // open so no follow-up request can drain its pending inventory.
+                gate: Some(pressure_reached),
+                body: sse(vec![
+                    responses::ev_function_call(
+                        "call-wait",
+                        "wait",
+                        r#"{"cell_id":"1","terminate":true}"#,
+                    ),
+                    ev_completed("resp-pressure"),
+                ]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        }],
+    ])
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(Arc::new(ExecCompletionObserver {
+        call_id_prefix: "call-pressure",
+        expected_count: 1,
+        finished: AtomicUsize::new(0),
+        release: Mutex::new(Some(release)),
+    }));
+    let base_url = format!("{}/v1", server.uri());
+    let config_server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url);
+            let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
+            let _ = config.features.disable(Feature::RemoteCompactionV2);
+        })
+        .build_with_auto_env(&config_server)
+        .await?;
+    test.submit_turn("Wait for an empty cell while the pending-call budget is full")
+        .await?;
+    test.codex.shutdown_and_wait().await?;
+
+    let requests = server
+        .requests()
+        .await
+        .iter()
+        .map(|request| serde_json::from_slice::<Value>(request))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(requests.len(), 3);
+    let output_for = |request_index: usize, call_id: &str| {
+        requests[request_index]["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| {
+                item["call_id"] == call_id
+                    && matches!(
+                        item["type"].as_str(),
+                        Some("custom_tool_call_output" | "function_call_output")
+                    )
+            })
+            .unwrap()
+    };
+    let initial = output_for(/*request_index*/ 1, "call-empty");
+    assert_eq!(
+        extract_running_cell_id(initial["output"].as_str().unwrap()),
+        "1",
+    );
+    assert!(
+        initial["internal_chat_message_metadata_passthrough"]
+            .get("tool_calls_complete")
+            .is_none()
+    );
+    let pressure = &output_for(/*request_index*/ 2, "call-pressure")["internal_chat_message_metadata_passthrough"];
+    assert_eq!(
+        pressure["executed_tool_calls"],
+        serde_json::json!(vec![
+            serde_json::json!({"name": "test_sync_tool", "arguments": {}});
+            256
+        ]),
+    );
+    assert_eq!(pressure["tool_calls_complete"], true);
+    let metadata =
+        &output_for(/*request_index*/ 2, "call-wait")["internal_chat_message_metadata_passthrough"];
+    assert_eq!(metadata["cell_id"], "call-empty");
+    assert_eq!(metadata["executed_tool_calls"], serde_json::json!([]));
     assert_eq!(metadata["tool_calls_complete"], true);
     server.shutdown().await;
     Ok(())
