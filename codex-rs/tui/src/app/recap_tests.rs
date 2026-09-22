@@ -698,6 +698,34 @@ fn recap_history_cell_wraps_in_narrow_terminals() {
     ");
 }
 
+#[tokio::test]
+async fn recap_history_uses_one_separator_before_following_message() {
+    let mut app = make_test_app().await;
+    app.transcript_cells = vec![
+        Arc::new(
+            ThreadRecapHistoryCell::new("The draft is ready.".into())
+                .with_next_action(Some("Review the changes.".into())),
+        ),
+        Arc::new(AgentMessageCell::new(
+            vec!["Follow-up response.".into()],
+            /*is_first_line*/ true,
+        )),
+    ];
+    let rendered = app
+        .render_transcript_lines_for_reflow(/*width*/ 80)
+        .lines
+        .iter()
+        .map(|line| line.line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered, @r"
+      ↳ Recap: The draft is ready.
+               Next: Review the changes.
+
+    • Follow-up response.
+    ");
+}
+
 #[test]
 fn recap_history_cell_preserves_unicode_and_url_tokens() {
     let cell = ThreadRecapHistoryCell::new(

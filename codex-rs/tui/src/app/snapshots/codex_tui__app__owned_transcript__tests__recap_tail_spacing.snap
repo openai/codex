@@ -1,0 +1,174 @@
+---
+source: tui/src/app/owned_transcript_tests.rs
+expression: "normalize_snapshot_paths(snapshots.join(\"\\n\\n\"))"
+---
+80x10, Recap at tail
+History 20
+
+  ↳ Recap: The draft is ready.
+
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x10, Message after recap
+
+  ↳ Recap: The draft is ready.
+
+• Follow-up response.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x10, Live message after recap
+
+  ↳ Recap: The draft is ready.
+
+• Streaming response.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x12, Recap at tail
+History 19
+History 20
+
+  ↳ Recap: The draft is ready.
+           Next: Review the changes.
+
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x12, Message after recap
+History 20
+
+  ↳ Recap: The draft is ready.
+           Next: Review the changes.
+
+• Follow-up response.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x12, Live message after recap
+History 20
+
+  ↳ Recap: The draft is ready.
+           Next: Review the changes.
+
+• Streaming response.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+32x12, Recap at tail
+History 20
+
+  ↳ Recap: The draft is ready.
+           Next: Review the
+           changes.
+
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/proje…
+  ? for shortcuts
+
+32x12, Message after recap
+
+  ↳ Recap: The draft is ready.
+           Next: Review the
+           changes.
+
+• Follow-up response.
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/proje…
+  ? for shortcuts
+
+32x12, Live message after recap
+
+  ↳ Recap: The draft is ready.
+           Next: Review the
+           changes.
+
+• Streaming response.
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/proje…
+  ? for shortcuts
+
+80x7, Recap at tail
+           Next: Review the changes.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x7, Message after recap
+• Follow-up response.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+80x7, Live message after recap
+• Streaming response.
+                                    Tip: Use /mcp to list configured MCP tools.
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/project
+  ? for shortcuts
+
+32x6, Recap at tail
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/proje…
+  ? for shortcuts
+
+32x6, Message after recap
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/proje…
+  ? for shortcuts
+
+32x6, Live message after recap
+
+
+› Ask Codex to do anything
+
+  gpt-test default · /tmp/proje…
+  ? for shortcuts
