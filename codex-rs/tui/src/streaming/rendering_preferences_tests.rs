@@ -6,6 +6,52 @@ use codex_config::types::TuiRendering;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn lists_match_incremental_and_emitted_responses() {
+    let cwd = std::env::temp_dir();
+    let source = concat!(
+        "- [ ] First task with enough words to wrap\n",
+        "  - [x] Nested task\n- [X] Done\n\n",
+        "> 9. [ ] [link](https://example.com)\n> 10. [x] Done\n\n",
+        "After.\n\nOne.\n\nTwo.\n\nThree.\n"
+    );
+    for lists in [true, false] {
+        preferences::init(TuiRendering {
+            lists,
+            ..Default::default()
+        });
+        let mut stream = StreamCore::new(
+            Some(24),
+            &cwd,
+            HistoryRenderMode::Rich,
+            /*inline_visualization_context*/ None,
+        );
+        let render = |source: &str| {
+            render_source(
+                source,
+                Some(24),
+                &cwd,
+                HistoryRenderMode::Rich,
+                /*inline_visualization_context*/ None,
+            )
+        };
+        let mut emitted = Vec::new();
+        let mut committed = String::new();
+        // Split inside markers as well as words to exercise partial task-list input.
+        for character in source.chars() {
+            committed.push(character);
+            stream.push_delta(&character.to_string());
+            emitted.extend(stream.tick_batch(usize::MAX));
+            if character == '\n' {
+                assert_eq!(stream.render.lines, render(&committed));
+            }
+        }
+        let (remaining, _) = stream.finalize_remaining();
+        emitted.extend(remaining);
+        assert_eq!(emitted, render(source), "lists={lists}");
+    }
+}
+
+#[test]
 fn rendering_preferences_match_incremental_final_and_emitted_responses() {
     let cwd = std::env::temp_dir();
     let source = concat!(
@@ -24,6 +70,7 @@ fn rendering_preferences_match_incremental_final_and_emitted_responses() {
                     mermaid,
                     math,
                     tables,
+                    ..Default::default()
                 });
                 // A disabled table must retain even the prose preceding it inside its fence.
                 let mut source = if tables {

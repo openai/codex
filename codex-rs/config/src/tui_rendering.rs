@@ -15,6 +15,8 @@ pub struct TuiRendering {
     pub math: bool,
     /// Render pipe tables, including tables inside Markdown fences.
     pub tables: bool,
+    /// Render Markdown bullets and task-list markers as Unicode symbols.
+    pub lists: bool,
 }
 
 impl Default for TuiRendering {
@@ -23,6 +25,7 @@ impl Default for TuiRendering {
             mermaid: true,
             math: true,
             tables: true,
+            lists: true,
         }
     }
 }

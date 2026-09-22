@@ -14,17 +14,17 @@ Image: alt text
 > 
 > > Blockquote level 2 with inline code
 
-- Unordered list item 1
-    - Nested bullet with italics inner
+• Unordered list item 1
+    • Nested bullet with italics inner
 
-- Unordered list item 2 with strikethrough
+• Unordered list item 2 with strikethrough
 
 1. Ordered item one
 2. Ordered item two with sublist:
     1. Alt-numbered subitem
 
-- [ ] Task: unchecked
-- [x] Task: checked with link home (https://example.org)
+☐ Task: unchecked
+☑ Task: checked with link home (https://example.org)
 
 ———
 

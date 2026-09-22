@@ -14,7 +14,7 @@ expression: "markdown_text(source, 60)"
 > │         ├◄────┘
 > └─────────┘
 
-- Diagram:
+• Diagram:
 
   ┌───┐  ┌───┐
   │ A │  │ B │

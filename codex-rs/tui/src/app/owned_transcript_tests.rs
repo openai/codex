@@ -153,10 +153,10 @@ async fn list_spacing_completion_preserves_the_scrolled_reader() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     app.transcript_cells = vec![Arc::new(history_cell::AgentMessageCell::new(
         vec![
-            "- First item wraps onto".into(),
+            "• First item wraps onto".into(),
             "  a second row".into(),
-            "- b".into(),
-            "- c".into(),
+            "• b".into(),
+            "• c".into(),
         ],
         /*is_first_line*/ true,
     ))];
@@ -174,7 +174,7 @@ async fn list_spacing_completion_preserves_the_scrolled_reader() -> Result<()> {
         .scroll(&app.transcript_cells, /*rows*/ 3);
     app.transcript_view
         .render(area, &mut before, &app.transcript_cells);
-    assert!(buffer_text(&before).contains("- c"));
+    assert!(buffer_text(&before).contains("• c"));
     app.handle_consolidate_agent_message(
         &mut tui,
         "- First item wraps onto a second row\n- b\n- c".into(),

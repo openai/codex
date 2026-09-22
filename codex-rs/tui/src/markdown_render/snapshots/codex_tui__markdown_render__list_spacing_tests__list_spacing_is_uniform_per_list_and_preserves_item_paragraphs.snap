@@ -24,86 +24,86 @@ Uniform:
 ---
 
 Compact:
-- Parent
-    - Short
-    - Small
-- Other
+• Parent
+    • Short
+    • Small
+• Other
 
-> - Quote
-> - This quoted item has
+> • Quote
+> • This quoted item has
 >   enough words to wrap
-> - End
+> • End
 
 ---
 
 Uniform:
-- Parent
-    - Short
-    - Small
+• Parent
+    • Short
+    • Small
 
-- Other
+• Other
 
-> - Quote
+> • Quote
 >
-> - This quoted item has
+> • This quoted item has
 >   enough words to wrap
 >
-> - End
+> • End
 
 ---
 
 Compact:
-- First paragraph
+• First paragraph
 
   Second paragraph
-- Next
-- Last
+• Next
+• Last
 
 ---
 
 Uniform:
-- First paragraph
+• First paragraph
 
   Second paragraph
 
-- Next
+• Next
 
-- Last
+• Last
 
 ---
 
 Compact:
-- One
--
+• One
+•
   code
-- Three
+• Three
 
   after paragraph
 
 ---
 
 Uniform:
-- One
+• One
 
--
+•
   code
 
-- Three
+• Three
 
   after paragraph
 
 ---
 
 Compact:
-- https://example.com/a-very-long-path-with-many-segments
-- Short
-- End
+• https://example.com/a-very-long-path-with-many-segments
+• Short
+• End
 
 ---
 
 Uniform:
-- https://example.com/a-very-long-path-with-many-segments
+• https://example.com/a-very-long-path-with-many-segments
 
-- Short
+• Short
 
-- End
+• End

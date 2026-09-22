@@ -1,15 +1,14 @@
 ---
 source: tui/src/markdown_render/preferences_tests.rs
-assertion_line: 34
 expression: "snapshot.join(\"\\n\\n---\\n\\n\")"
 ---
-TuiRendering { mermaid: false, math: true, tables: true }
+TuiRendering { mermaid: false, math: true, tables: true, lists: true }
 flowchart LR
 A[Request] --> B[Reply]
 
 ---
 
-TuiRendering { mermaid: true, math: false, tables: true }
+TuiRendering { mermaid: true, math: false, tables: true, lists: true }
 Inline $\alpha_1$ and \(x^{2}\).
 
 \[
@@ -18,7 +17,14 @@ Inline $\alpha_1$ and \(x^{2}\).
 
 ---
 
-TuiRendering { mermaid: true, math: true, tables: false }
+TuiRendering { mermaid: true, math: true, tables: false, lists: true }
 | **Name** | Value |
 |---|---|
 | `a` | path\_1 &amp; \* |
+
+---
+
+TuiRendering { mermaid: true, math: true, tables: true, lists: false }
+- [ ] Pending
+- [x] Done
+- Ordinary

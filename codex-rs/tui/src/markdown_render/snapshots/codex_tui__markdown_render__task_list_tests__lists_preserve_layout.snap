@@ -1,0 +1,73 @@
+---
+source: tui/src/markdown_render/task_list_tests.rs
+expression: "stages.join(\"\\n\\n---\\n\\n\")"
+---
+☐ Unchecked
+☑ Checked
+☑ Uppercase
+• Ordinary
+---
+☐ Parent task with
+  enough words to wrap
+    ☑ Nested task
+    • Ordinary child
+
+☑ Done
+---
+9. ☐ Numbered task with
+     enough words to
+     wrap
+
+10. ☑ Done
+11. Ordinary
+---
+> ☐ Quoted task with
+>   enough words to wrap
+> 
+> ☑ Done
+---
+☐ First paragraph
+
+  Second paragraph
+
+☑ Next task
+---
+• [ ]
+• [x]
+---
+☑ Bold, italic, and code
+
+- [x] inline
+
+- [x] fenced
+
+[ ] Plain text
+
+• [x] Escaped
+---
+☐ 
+    • child
+
+☑ # title
+☑ > quote
+☑ 
+
+  ———
+---
+•     
+      [x] code, not a task
+---
+☑ <b>done</b>
+• Parent
+    ☑ 
+
+  Continued paragraph
+---
+☑  <div>done</div>
+---
+☑ <div>done</div>
+---
+> • Parent
+>     ☑ 
+>   
+>   Continued paragraph

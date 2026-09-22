@@ -108,6 +108,7 @@ shimmer = false
 mermaid = false
 math = false
 tables = false
+lists = false
 [history]
 persistence = "none"
 max_bytes = 4096
@@ -146,6 +147,7 @@ fast_default_opt_out = true
                 mermaid: false,
                 math: false,
                 tables: false,
+                lists: false,
             };
             expected.show_tooltips = false;
             expected.show_server_version_notice = false;

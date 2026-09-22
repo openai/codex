@@ -4513,6 +4513,7 @@
             }
           ],
           "default": {
+            "lists": true,
             "math": true,
             "mermaid": true,
             "tables": true
@@ -5656,6 +5657,11 @@
       "additionalProperties": false,
       "description": "Optional rich renderers. Disabled renderers preserve the original source.",
       "properties": {
+        "lists": {
+          "default": true,
+          "description": "Render Markdown bullets and task-list markers as Unicode symbols.",
+          "type": "boolean"
+        },
         "math": {
           "default": true,
           "description": "Render math expressions using Unicode notation.",

@@ -46,6 +46,10 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
+    options.set(
+        Options::ENABLE_TASKLISTS,
+        super::preferences::current().lists,
+    );
     let citations = FileCitations::new(input, options);
     let math = MathMarkdown::new(&citations.markdown, options, width);
     let parser = Parser::new_ext(&math.markdown, options);

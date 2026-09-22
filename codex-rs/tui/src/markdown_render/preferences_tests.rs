@@ -12,6 +12,7 @@ fn disabled_renderers_preserve_source_independently() {
         "```mermaid\nflowchart LR\nA[Request] --> B[Reply]\n```\n",
         "Inline $\\alpha_1$ and \\(x^{2}\\).\n\n\\[\n\\frac{a}{b}\n\\]\n",
         "| **Name** | Value |\n|---|---|\n| `a` | path\\_1 &amp; \\* |\n",
+        "- [ ] Pending\n- [x] Done\n- Ordinary\n",
     ];
     let defaults = samples.map(render_markdown_text);
     let mut snapshot = Vec::new();
@@ -28,11 +29,21 @@ fn disabled_renderers_preserve_source_independently() {
             tables: false,
             ..Default::default()
         },
+        TuiRendering {
+            lists: false,
+            ..Default::default()
+        },
     ] {
         init(rendering);
         for (index, source) in samples.iter().enumerate() {
             let rendered = render_markdown_text(source);
-            if [rendering.mermaid, rendering.math, rendering.tables][index] {
+            if [
+                rendering.mermaid,
+                rendering.math,
+                rendering.tables,
+                rendering.lists,
+            ][index]
+            {
                 assert_eq!(rendered, defaults[index]);
             } else {
                 snapshot.push(format!("{rendering:?}\n{rendered}"));
