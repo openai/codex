@@ -1,5 +1,6 @@
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
+use codex_api::ImageRequestError;
 use codex_api::ImageResponse;
 use codex_api::ImagesClient;
 use codex_api::ReqwestTransport;
@@ -16,14 +17,17 @@ const X_CODEX_IMAGE_TURN_ID_HEADER: &str = "x-codex-image-turn-id";
 pub(crate) struct ImageBackendError {
     message: String,
     codex_error: CodexErr,
+    imagegen_request_id: Option<String>,
 }
 
 impl ImageBackendError {
-    fn from_api(error: codex_api::ApiError) -> Self {
+    fn from_image_request(error: ImageRequestError) -> Self {
+        let (error, imagegen_request_id) = error.into_parts();
         let message = error.to_string();
         Self {
             message,
             codex_error: map_api_error(error),
+            imagegen_request_id,
         }
     }
 
@@ -31,6 +35,7 @@ impl ImageBackendError {
         Self {
             codex_error: CodexErr::Stream(message.clone()),
             message,
+            imagegen_request_id: None,
         }
     }
 
@@ -40,6 +45,10 @@ impl ImageBackendError {
 
     pub(crate) fn codex_error(&self) -> &CodexErr {
         &self.codex_error
+    }
+
+    pub(crate) fn imagegen_request_id(&self) -> Option<&str> {
+        self.imagegen_request_id.as_deref()
     }
 }
 
@@ -90,7 +99,7 @@ impl CodexImagesBackend {
                 image_request_headers(self.originator.as_deref(), turn_id),
             )
             .await
-            .map_err(ImageBackendError::from_api)
+            .map_err(ImageBackendError::from_image_request)
     }
 
     /// Sends a standalone image edit request through the configured Images client.
@@ -106,7 +115,7 @@ impl CodexImagesBackend {
                 image_request_headers(self.originator.as_deref(), turn_id),
             )
             .await
-            .map_err(ImageBackendError::from_api)
+            .map_err(ImageBackendError::from_image_request)
     }
 }
 

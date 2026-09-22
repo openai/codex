@@ -396,7 +396,11 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
         .and(path("/api/codex/images/generations"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("image backend failed"))
+        .respond_with(
+            ResponseTemplate::new(500)
+                .insert_header("x-codex-imagegen-request-id", "req-imagegen-failed-123")
+                .set_body_string("image backend failed"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -470,6 +474,17 @@ async fn standalone_image_generation_failure_emits_terminal_item() -> Result<()>
         Some(
             "image generation failed: http 500 Internal Server Error: Some(\"image backend failed\")"
         )
+    );
+
+    let event = wait_for_analytics_event(
+        &server,
+        DEFAULT_READ_TIMEOUT,
+        "codex_image_generation_event",
+    )
+    .await?;
+    assert_eq!(
+        event["event_params"]["imagegen_request_id"],
+        json!("req-imagegen-failed-123")
     );
 
     Ok(())

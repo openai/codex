@@ -174,6 +174,7 @@ impl ImageGenerationTool {
             (
                 format!("image generation failed: {}", error.message()),
                 usage_limit_failure(error.codex_error()),
+                error.imagegen_request_id().map(str::to_string),
             )
         })
         .and_then(|(response, imagegen_request_id)| {
@@ -182,23 +183,23 @@ impl ImageGenerationTool {
                 Some(ImageBackground::Opaque) => Some(false),
                 Some(ImageBackground::Auto) | None => None,
             };
-            response
-                .data
-                .into_iter()
-                .next()
-                .map(|data| {
-                    (
-                        data.b64_json,
-                        transparent_background,
-                        imagegen_request_id,
-                        data.generation_id,
-                    )
-                })
-                .ok_or_else(|| ("image generation returned no image data".to_string(), None))
+            match response.data.into_iter().next() {
+                Some(data) => Ok((
+                    data.b64_json,
+                    transparent_background,
+                    imagegen_request_id,
+                    data.generation_id,
+                )),
+                None => Err((
+                    "image generation returned no image data".to_string(),
+                    None,
+                    imagegen_request_id,
+                )),
+            }
         });
         let (result, transparent_background, imagegen_request_id, generation_id) = match result {
             Ok(result) => result,
-            Err((message, failure)) => {
+            Err((message, failure, imagegen_request_id)) => {
                 let item = ImageGenerationItem {
                     id: call.call_id.clone(),
                     status: "failed".to_string(),
@@ -207,7 +208,7 @@ impl ImageGenerationTool {
                     transparent_background: None,
                     failure,
                     saved_path: None,
-                    imagegen_request_id: None,
+                    imagegen_request_id,
                     generation_id: None,
                 };
                 let legacy_event = legacy_end_event(&item);
