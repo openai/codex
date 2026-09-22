@@ -13,6 +13,106 @@ use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
+#[test]
+fn selection_at_bottom_restores_footer_without_resuming_following() {
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(PlainHistoryCell::new(vec![
+        "one".into(),
+        "two".into(),
+        "three".into(),
+        "four".into(),
+        "needle final".into(),
+    ]))];
+    let mut observations = Vec::new();
+    for history in [
+        TranscriptHistoryState::Partial,
+        TranscriptHistoryState::Complete,
+    ] {
+        let mut view = TranscriptView {
+            history,
+            ..TranscriptView::default()
+        };
+        let initial = render(&mut view, &cells);
+        assert!(view.tail_visible);
+        assert!(view.is_following());
+        assert!(view.footer(/*width*/ 120, MotionMode::Reduced).is_none());
+
+        for (label, events) in [
+            (
+                "selected at bottom",
+                vec![
+                    (MouseEventKind::Down(MouseButton::Left), 0, 2),
+                    (MouseEventKind::Drag(MouseButton::Left), 6, 2),
+                    (MouseEventKind::Up(MouseButton::Left), 6, 2),
+                ],
+            ),
+            (
+                "clicked away",
+                vec![
+                    (MouseEventKind::Down(MouseButton::Left), 0, 1),
+                    (MouseEventKind::Up(MouseButton::Left), 0, 1),
+                ],
+            ),
+            (
+                "scrolled down at bottom",
+                vec![(MouseEventKind::ScrollDown, 0, 1)],
+            ),
+        ] {
+            let mut buffer = initial.clone();
+            for (kind, column, row) in events {
+                view.handle_mouse(
+                    MouseEvent {
+                        kind,
+                        column,
+                        row,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    &cells,
+                );
+                buffer = render(&mut view, &cells);
+            }
+            assert!(view.tail_visible);
+            assert_eq!(
+                crate::transcript_view::tests::text(&buffer),
+                crate::transcript_view::tests::text(&initial),
+            );
+            let selected = label == "selected at bottom";
+            assert_eq!(
+                view.selected_text(&cells).as_deref(),
+                selected.then_some("needle"),
+            );
+            assert_eq!(view.is_following(), label == "scrolled down at bottom");
+            let footer = view.footer(/*width*/ 120, MotionMode::Reduced);
+            let hint = footer.map_or_else(
+                || "<composer hints>".to_owned(),
+                |footer| footer.text.to_string(),
+            );
+            observations.push(format!("{history:?}, {label}: {hint}"));
+        }
+        view.scroll(&cells, /*rows*/ -1);
+        render(&mut view, &cells);
+        view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
+        view.end_drag();
+        render(&mut view, &cells);
+        assert!(!view.tail_visible);
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("two\n"));
+        let footer = view.footer(/*width*/ 120, MotionMode::Reduced).unwrap();
+        observations.push(format!(
+            "{history:?}, selected above bottom: {}",
+            footer.text
+        ));
+    }
+    insta::assert_snapshot!(observations.join("\n"), @"
+    Partial, selected at bottom: ctrl+c copy · enter copy & follow · esc clear
+    Partial, clicked away: <composer hints>
+    Partial, scrolled down at bottom: <composer hints>
+    Partial, selected above bottom: Earlier messages available.  ctrl+c copy · enter copy & follow · esc clear
+    Complete, selected at bottom: ctrl+c copy · enter copy & follow · esc clear
+    Complete, clicked away: <composer hints>
+    Complete, scrolled down at bottom: <composer hints>
+    Complete, selected above bottom: ctrl+c copy · enter copy & follow · esc clear
+    ");
+}
+
 fn render(view: &mut TranscriptView, cells: &[Arc<dyn HistoryCell>]) -> Buffer {
     let area = Rect::new(
         /*x*/ 0, /*y*/ 0, /*width*/ 32, /*height*/ 3,
@@ -115,6 +215,16 @@ fn loading_preserves_selected_content_and_copy_action() {
         Some("selected words".to_string())
     );
     view.history = TranscriptHistoryState::Failed;
+    assert_eq!(
+        view.footer(/*width*/ 120, MotionMode::Reduced)
+            .unwrap()
+            .text
+            .to_string(),
+        format!(
+            "ctrl+c copy · enter copy & follow · esc clear · Retry: {}",
+            JumpTarget::Beginning.hint_label(),
+        ),
+    );
     insta::assert_snapshot!(view.footer(/*width*/ 38, MotionMode::Reduced).unwrap().text.to_string(),
         @"enter copy & follow · esc clear");
 }

@@ -33,13 +33,7 @@ fn visible_updates_and_empty_tail_cells_do_not_report_activity() {
     assert!(view.unseen_activity);
     render(&mut view, &cells, /*height*/ 8);
     assert!(!view.unseen_activity);
-    assert_eq!(
-        view.footer(/*width*/ 80, MotionMode::Reduced)
-            .unwrap()
-            .text
-            .to_string(),
-        "esc latest"
-    );
+    assert!(view.footer(/*width*/ 80, MotionMode::Reduced).is_none());
 }
 
 #[test]
