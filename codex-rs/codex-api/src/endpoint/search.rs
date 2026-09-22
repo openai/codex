@@ -11,6 +11,9 @@ use http::Method;
 use serde_json::to_value;
 use std::sync::Arc;
 
+/// The provider-relative endpoint for standalone web search.
+pub const SEARCH_ENDPOINT: &str = "alpha/search";
+
 pub struct SearchClient<T: HttpTransport> {
     session: EndpointSession<T>,
 }
@@ -28,10 +31,6 @@ impl<T: HttpTransport> SearchClient<T> {
         }
     }
 
-    fn path() -> &'static str {
-        "alpha/search"
-    }
-
     pub async fn search(
         &self,
         request: &SearchRequest,
@@ -41,7 +40,7 @@ impl<T: HttpTransport> SearchClient<T> {
             .map_err(|e| ApiError::Stream(format!("failed to encode search request: {e}")))?;
         let resp = self
             .session
-            .execute(Method::POST, Self::path(), extra_headers, Some(body))
+            .execute(Method::POST, SEARCH_ENDPOINT, extra_headers, Some(body))
             .await?;
         serde_json::from_slice(&resp.body)
             .map_err(|e| ApiError::Stream(format!("failed to decode search response: {e}")))

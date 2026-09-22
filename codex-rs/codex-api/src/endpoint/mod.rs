@@ -30,4 +30,5 @@ pub use responses_websocket::ResponsesWebsocketClient;
 pub use responses_websocket::ResponsesWebsocketClose;
 pub use responses_websocket::ResponsesWebsocketConnection;
 pub use responses_websocket::ResponsesWebsocketProbe;
+pub use search::SEARCH_ENDPOINT;
 pub use search::SearchClient;
