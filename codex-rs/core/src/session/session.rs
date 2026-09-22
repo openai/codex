@@ -1680,6 +1680,7 @@ impl Session {
                 selected_capability_roots,
                 mcp_thread_init,
                 client_mcp_extensions,
+                local_agent_runtime: agent_control.runtime.clone(),
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,

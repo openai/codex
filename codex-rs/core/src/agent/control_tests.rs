@@ -209,7 +209,13 @@ fn register_session_root_skips_threads_with_explicit_parent() {
 
     control.register_session_root(ThreadId::new(), Some(ThreadId::new()));
 
-    assert_eq!(control.state.agent_id_for_path(&AgentPath::root()), None);
+    assert_eq!(
+        control
+            .runtime
+            .registry
+            .agent_id_for_path(&AgentPath::root()),
+        None
+    );
 }
 
 fn spawn_agent_call(call_id: &str) -> ResponseItem {

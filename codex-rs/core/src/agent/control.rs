@@ -2,7 +2,6 @@ use crate::TurnInputRequest;
 use crate::TurnInputSubmission;
 use crate::TurnStartOptions;
 use crate::agent::AgentStatus;
-use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
@@ -14,7 +13,6 @@ use crate::config::Config;
 use crate::config::RolloutBudgetConfig;
 use crate::context::SubagentNotification;
 use crate::environment_selection::TurnEnvironmentSnapshot;
-use crate::rollout_budget::RolloutBudget;
 use crate::session::emit_subagent_session_started;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::session_prefix::format_subagent_context_line;
@@ -24,7 +22,6 @@ use crate::thread_manager::ThreadManagerState;
 use crate::thread_manager::default_thread_id_generator;
 use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use crate::turn_timing::now_unix_timestamp_ms;
-use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
@@ -60,13 +57,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::sync::Weak;
 use tracing::warn;
 use uuid::Uuid;
 
-use self::execution::AgentExecutionLimiter;
-use self::residency::V2Residency;
+pub(crate) use self::runtime::LocalAgentRuntime;
 
 mod api;
 mod budget;
@@ -78,6 +73,7 @@ mod interrupt;
 mod legacy;
 mod residency;
 mod resume;
+mod runtime;
 mod sender_context;
 mod service_tier;
 mod spawn;
@@ -88,31 +84,14 @@ mod watch;
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
 const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
-/// Control-plane handle for multi-agent operations.
-/// `LocalAgentControl` is held by each session (via `SessionServices`). It provides capability to
-/// spawn new agents and the inter-agent communication layer.
-/// An `LocalAgentControl` instance is intended to be created at most once per root thread/session
-/// tree. That same `LocalAgentControl` is then shared with every sub-agent spawned from that root,
-/// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
+/// Per-session controller handle for a local agent tree.
+/// Handles retain a session identity and share their tree's `LocalAgentRuntime`.
+/// Local startup preserves that state when creating or resuming children.
 #[derive(Clone)]
 pub(crate) struct LocalAgentControl {
     /// session_id is equal to the root thread's ID.
     session_id: SessionId,
-    /// Weak handle back to the global thread registry/state.
-    /// This is `Weak` to avoid reference cycles and shadow persistence of the form
-    /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
-    manager: Weak<ThreadManagerState>,
-    /// Captured at construction so delegates retain their manager's allocation policy.
-    thread_id_generator: ThreadIdGenerator,
-    state: Arc<AgentRegistry>,
-    v2_residency: Arc<V2Residency>,
-    agent_execution_limiter: Arc<AgentExecutionLimiter>,
-    /// Session-scoped state shared by the root thread and every cloned sub-agent control handle.
-    rollout_budget: Arc<RolloutBudget>,
-    /// The user-selected root routing tier, shared by the entire agent tree.
-    root_service_tier: Arc<ArcSwapOption<String>>,
-    /// Retains the root's opt-in instruction provider even when the root is unloaded.
-    shared_thread_instructions_provider: Arc<OnceLock<Arc<dyn ThreadInstructionsProvider>>>,
+    pub(crate) runtime: LocalAgentRuntime,
 }
 
 impl Default for LocalAgentControl {
@@ -132,26 +111,15 @@ impl LocalAgentControl {
         thread_id_generator: ThreadIdGenerator,
         rollout_budget: Option<RolloutBudgetConfig>,
     ) -> Self {
-        let control = Self {
+        Self {
             session_id: SessionId::default(),
-            manager,
-            thread_id_generator,
-            state: Arc::default(),
-            v2_residency: Arc::default(),
-            agent_execution_limiter: Arc::default(),
-            rollout_budget: Arc::default(),
-            root_service_tier: Arc::new(ArcSwapOption::from(None)),
-            shared_thread_instructions_provider: Arc::default(),
-        };
-        if let Some(rollout_budget) = rollout_budget {
-            control.rollout_budget.configure(rollout_budget);
+            runtime: LocalAgentRuntime::new(manager, thread_id_generator, rollout_budget),
         }
-        control
     }
 
     pub(crate) fn with_session_id(mut self, session_id: SessionId, max_threads: usize) -> Self {
         self.session_id = session_id;
-        self.agent_execution_limiter.initialize(max_threads);
+        self.runtime.agent_execution_limiter.initialize(max_threads);
         self
     }
 
@@ -160,7 +128,7 @@ impl LocalAgentControl {
     }
 
     pub(crate) fn generate_thread_id(&self) -> ThreadId {
-        (self.thread_id_generator)()
+        (self.runtime.thread_id_generator)()
     }
 
     pub(crate) fn root_thread_instructions_provider(
@@ -168,7 +136,7 @@ impl LocalAgentControl {
         root_thread_id: ThreadId,
         provider: Option<Arc<dyn ThreadInstructionsProvider>>,
     ) -> Option<Arc<dyn ThreadInstructionsProvider>> {
-        let provider = match self.manager.upgrade() {
+        let provider = match self.runtime.manager.upgrade() {
             Some(manager) => manager.shared_thread_instructions_provider(root_thread_id, provider),
             None => provider,
         };
@@ -177,6 +145,7 @@ impl LocalAgentControl {
             .filter(|provider| provider.share_with_subagents())
         {
             let _ = self
+                .runtime
                 .shared_thread_instructions_provider
                 .set(Arc::clone(provider));
         }
@@ -381,7 +350,7 @@ impl LocalAgentControl {
         {
             let _ = state.remove_thread(&agent_id).await;
             self.forget_v2_residency(agent_id);
-            self.state.release_spawned_thread(agent_id);
+            self.runtime.registry.release_spawned_thread(agent_id);
         }
         result
     }
@@ -404,16 +373,19 @@ impl LocalAgentControl {
         current_parent_thread_id: Option<ThreadId>,
     ) {
         if current_parent_thread_id.is_none() {
-            self.state.register_root_thread(current_thread_id);
+            self.runtime
+                .registry
+                .register_root_thread(current_thread_id);
         }
     }
 
     pub(crate) fn get_agent_metadata(&self, agent_id: ThreadId) -> Option<AgentMetadata> {
-        self.state.agent_metadata_for_thread(agent_id)
+        self.runtime.registry.agent_metadata_for_thread(agent_id)
     }
 
     pub(crate) fn ensure_agent_known(&self, agent_id: ThreadId) -> CodexResult<AgentMetadata> {
-        self.state
+        self.runtime
+            .registry
             .agent_metadata_for_thread(agent_id)
             .ok_or_else(|| CodexErr::ThreadNotFound(agent_id))
     }
@@ -451,7 +423,8 @@ impl LocalAgentControl {
         }
 
         let Some(parent_path) = self
-            .state
+            .runtime
+            .registry
             .agent_metadata_for_thread(parent_thread_id)
             .and_then(|metadata| metadata.agent_path)
         else {
@@ -459,7 +432,8 @@ impl LocalAgentControl {
         };
         let parent_prefix = format!("{parent_path}/");
         let mut agent_paths = self
-            .state
+            .runtime
+            .registry
             .live_agents()
             .into_iter()
             .filter_map(|metadata| metadata.agent_path)
@@ -512,7 +486,7 @@ impl LocalAgentControl {
             })
             .transpose()?;
 
-        let mut live_agents = self.state.live_agents();
+        let mut live_agents = self.runtime.registry.live_agents();
         live_agents.sort_by(|left, right| {
             left.agent_path
                 .as_deref()
@@ -531,7 +505,7 @@ impl LocalAgentControl {
         if resolved_prefix
             .as_ref()
             .is_none_or(|prefix| agent_matches_prefix(Some(&root_path), prefix))
-            && let Some(root_thread_id) = self.state.agent_id_for_path(&root_path)
+            && let Some(root_thread_id) = self.runtime.registry.agent_id_for_path(&root_path)
             && let Ok(root_thread) = state.get_thread(root_thread_id).await
         {
             agents.push(LiveAgent {
@@ -706,7 +680,7 @@ impl LocalAgentControl {
         preferred_agent_nickname: Option<String>,
     ) -> CodexResult<(SessionSource, AgentMetadata)> {
         if depth == 1 {
-            self.state.register_root_thread(parent_thread_id);
+            self.runtime.registry.register_root_thread(parent_thread_id);
         }
         let agent_metadata = self.prepare_agent_metadata(
             reservation,
@@ -726,7 +700,8 @@ impl LocalAgentControl {
     }
 
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
-        self.manager
+        self.runtime
+            .manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
     }
@@ -798,7 +773,8 @@ impl LocalAgentControl {
                 .or_default()
                 .push((
                     child_thread_id,
-                    self.state
+                    self.runtime
+                        .registry
                         .agent_metadata_for_thread(child_thread_id)
                         .unwrap_or(AgentMetadata {
                             agent_id: Some(child_thread_id),

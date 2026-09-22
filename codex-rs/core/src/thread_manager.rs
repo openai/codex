@@ -1091,7 +1091,11 @@ impl ThreadManager {
         options.internal_parent = Some(InternalSessionParent {
             thread_id: parent_thread_id,
             auth_manager: Arc::clone(&parent.session.services.auth_manager),
-            agent_control: parent.session.services.agent_control.clone(),
+            agent_control: parent
+                .session
+                .services
+                .local_agent_runtime
+                .control(parent.session.session_id()),
             originator: parent.config_snapshot().await.originator,
             inherited_instructions,
         });
@@ -1234,7 +1238,11 @@ impl ThreadManager {
             ))
         })?;
         let config = parent.session.get_config().await.as_ref().clone();
-        let agent_control = parent.session.services.agent_control.clone();
+        let agent_control = parent
+            .session
+            .services
+            .local_agent_runtime
+            .control(parent.session.session_id());
         agent_control
             .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
             .await
@@ -1695,7 +1703,7 @@ impl ThreadManagerState {
             thread
                 .session
                 .services
-                .agent_control
+                .local_agent_runtime
                 .pin_v2_residency(self, &thread)
                 .await?
         } else {

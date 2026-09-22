@@ -1,4 +1,5 @@
 use super::LocalAgentControl;
+use super::LocalAgentRuntime;
 use crate::agent::AgentStatus;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -55,7 +56,7 @@ impl LocalAgentControl {
         let capacity = config
             .effective_agent_max_threads(MultiAgentVersion::V2)
             .unwrap_or(usize::MAX);
-        Arc::clone(&self.v2_residency)
+        Arc::clone(&self.runtime.residency)
             .reserve_slot(state, capacity, protected_thread_id)
             .await
     }
@@ -66,10 +67,16 @@ impl LocalAgentControl {
         thread_id: ThreadId,
     ) {
         if let Ok(thread) = state.get_thread(thread_id).await {
-            let _ = self.pin_v2_residency(state, &thread).await;
+            let _ = self.runtime.pin_v2_residency(state, &thread).await;
         }
     }
 
+    pub(super) fn forget_v2_residency(&self, thread_id: ThreadId) {
+        self.runtime.residency.remove(thread_id);
+    }
+}
+
+impl LocalAgentRuntime {
     /// Pins and touches the registered runtime without waiting for unrelated eviction.
     pub(crate) async fn pin_v2_residency(
         &self,
@@ -84,12 +91,8 @@ impl LocalAgentControl {
         if !Arc::ptr_eq(thread, &state.get_thread(thread_id).await?) {
             return Err(CodexErr::ThreadNotFound(thread_id));
         }
-        self.v2_residency.touch(thread_id);
+        self.residency.touch(thread_id);
         Ok(Some(guard))
-    }
-
-    pub(super) fn forget_v2_residency(&self, thread_id: ThreadId) {
-        self.v2_residency.remove(thread_id);
     }
 }
 
@@ -195,8 +198,8 @@ impl V2Residency {
                 candidate_thread
                     .session
                     .services
-                    .agent_control
-                    .state
+                    .local_agent_runtime
+                    .registry
                     .save_evicted_environments(candidate_thread_id, environments);
                 // Keep publication excluded until both entries have been removed.
                 threads.remove(&candidate_thread_id);

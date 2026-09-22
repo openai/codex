@@ -38,7 +38,10 @@ impl LocalAgentControl {
         &self,
         thread_id: ThreadId,
     ) -> Option<GuardianRootSnapshot> {
-        let root_thread_id = self.state.agent_id_for_path(&AgentPath::root())?;
+        let root_thread_id = self
+            .runtime
+            .registry
+            .agent_id_for_path(&AgentPath::root())?;
         if root_thread_id == thread_id {
             return None;
         }

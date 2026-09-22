@@ -47,7 +47,7 @@ impl LocalAgentControl {
         let agent_path = current_agent_path
             .resolve(agent_reference)
             .map_err(CodexErr::UnsupportedOperation)?;
-        if let Some(thread_id) = self.state.agent_id_for_path(&agent_path) {
+        if let Some(thread_id) = self.runtime.registry.agent_id_for_path(&agent_path) {
             return Ok(thread_id);
         }
         Err(CodexErr::UnsupportedOperation(format!(
