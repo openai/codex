@@ -603,7 +603,7 @@ requires_openai_auth = false
 supports_websockets = false
 
 [notice.model_migrations]
-"gpt-5.4" = "gpt-5.6-terra"
+"gpt-5.4" = "gpt-6-sol"
 
 [projects."{repo_root_display}"]
 trust_level = "trusted"
