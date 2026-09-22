@@ -40,7 +40,7 @@ Settings:
 
     User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
 
-    <OMITTED 155 LINES; ~4895 TOKENS; hash=fd5ef18a80f62502>
+    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
 
     - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
     - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
@@ -64,15 +64,12 @@ Settings:
 
         Use the `request_user_input` tool only when it is listed in the available tools for this turn.
 
-        In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.
-
         Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
 
         If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
 
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
-
-        If explicit user input is required for another reason before progress can safely continue, do not use th... as a textual assistant message.</collaboration_mode> [hash=8213052bde4a62b2]
+        </collaboration_mode>
 03:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
@@ -137,7 +134,7 @@ Settings: same as window 1
 
     User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
 
-    <OMITTED 155 LINES; ~4895 TOKENS; hash=fd5ef18a80f62502>
+    <OMITTED 155 LINES; ~4935 TOKENS; hash=5573869716192298>
 
     - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
     - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
@@ -161,15 +158,12 @@ Settings: same as window 1
 
         Use the `request_user_input` tool only when it is listed in the available tools for this turn.
 
-        In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions.
-
         Use the `request_user_input` tool only for optional questions where the answer would materially improve the quality of the work.
 
         If `request_user_input` returns no answers, continue with best judgment instead of asking again or treating the turn as blocked.
 
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
-
-        If explicit user input is required for another reason before progress can safely continue, do not use th... as a textual assistant message.</collaboration_mode> [hash=8213052bde4a62b2]
+        </collaboration_mode>
 03:message/developer:
     <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
 
