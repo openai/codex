@@ -236,6 +236,7 @@ async fn gateway_refresh_preserves_primary_auth_and_hides_issuer_errors() {
                 Ok(_) => panic!("issuer failure should fail auth"),
                 Err(error) => error,
             };
+            assert!(error.retry_delay(/*retry_count*/ 1).is_some());
             assert_eq!(
                 error.to_string(),
                 "Gateway OAuth authentication failed; check the gateway configuration and credential store."
@@ -522,5 +523,62 @@ async fn gateway_setup_errors_are_reported_when_authentication_is_requested() {
         error.details(),
         codex_protocol::error::CodexErrorDetails::InvalidRequest(_)
     ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn gateway_login_states_stop_request_retries() {
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let primary = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::from_api_key("primary-token"),
+        home.path().to_path_buf(),
+    );
+    let info = ModelProviderInfo {
+        gateway_oauth: Some(GatewayOAuthConfig {
+            authorization_url: format!("{}/authorize", server.uri()),
+            token_url: format!("{}/token", server.uri()),
+            client_id: "client".into(),
+            resource: None,
+            scopes: vec![],
+            redirect_port: None,
+            delivery: GatewayOAuthDelivery::Header {
+                name: "x-gateway-auth".into(),
+                scheme: "Bearer".into(),
+            },
+        }),
+        ..ModelProviderInfo::create_openai_provider(Some(server.uri()))
+    };
+    let login_control = codex_login::GatewayLoginControl::for_runtime(&primary.runtime_config());
+    login_control.require_explicit_login();
+    let provider = create_model_provider(info, Some(primary));
+    let gateway = provider.gateway_auth_manager().unwrap().unwrap();
+    let error = provider.api_auth().await.err().expect("login required");
+    assert_eq!(
+        (error.to_string(), error.retry_delay(/*retry_count*/ 1)),
+        (
+            codex_login::GatewayAuthError::LoginRequired.to_string(),
+            None
+        ),
+    );
+    let cancel = tokio::sync::Notify::new();
+    let (url_tx, url_rx) = tokio::sync::oneshot::channel();
+    let login = gateway.login_with_browser(cancel.notified(), |_| {
+        let _ = url_tx.send(());
+    });
+    let check = async {
+        url_rx.await.unwrap();
+        let error = provider.api_auth().await.err().expect("login in progress");
+        assert_eq!(
+            (error.to_string(), error.retry_delay(/*retry_count*/ 1)),
+            (
+                codex_login::GatewayAuthError::LoginInProgress.to_string(),
+                None
+            ),
+        );
+        cancel.notify_one();
+    };
+    let (result, ()) = tokio::join!(login, check);
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Interrupted);
     assert!(server.received_requests().await.unwrap().is_empty());
 }

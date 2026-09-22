@@ -23,6 +23,12 @@ use super::StoredToken;
 use super::callback::CallbackListener;
 use crate::test_support::transport_default_auth_route_config;
 
+#[path = "gateway_auth_login_tests.rs"]
+mod login_tests;
+
+#[path = "gateway_auth_storage_tests.rs"]
+mod storage_tests;
+
 fn client(
     config: GatewayAuthConfig,
     keyring: Arc<MockKeyringStore>,
@@ -35,6 +41,7 @@ fn client(
         keyring,
     )
     .expect("gateway auth manager");
+    manager.control.require_explicit_login();
     (manager, home)
 }
 
@@ -414,7 +421,13 @@ async fn query_credentials_are_not_exposed_by_echoed_errors_or_truncated_request
                         json!({"error_description": format!("Unknown input: {secret}")}),
                     ),
             )
-            .expect(/*r*/ 1)
+            .expect(
+                if matches!(location, QueryLocation::AuthorizationEndpoint) {
+                    2
+                } else {
+                    1
+                },
+            )
             .mount(&server)
             .await;
         let mut oauth = config(&server);
@@ -440,6 +453,27 @@ async fn query_credentials_are_not_exposed_by_echoed_errors_or_truncated_request
         assert!(message.contains("returned HTTP 503"));
         assert!(message.contains("provider response details omitted"));
         assert!(!message.contains("query-secret"));
+        if matches!(location, QueryLocation::AuthorizationEndpoint) {
+            let mut events = manager.state.status_tx.subscribe();
+            let error = manager
+                .login_with_browser(std::future::pending(), complete_browser_authorization)
+                .await
+                .unwrap_err();
+            let message =
+                "Gateway sign-in failed; check the gateway configuration and credential store.";
+            assert_eq!(error.to_string(), message);
+            let failed = crate::GatewayAuthStatus::Failed {
+                message: message.into(),
+            };
+            assert_eq!(manager.status().await.unwrap(), failed);
+            assert_eq!(
+                events.try_recv().unwrap().status,
+                crate::GatewayAuthStatus::Started
+            );
+            let event = events.try_recv().unwrap();
+            assert_eq!(event.status, failed);
+            assert!(!format!("{error:?} {event:?}").contains("query-secret"));
+        }
     }
 }
 
@@ -645,36 +679,6 @@ async fn ignores_mismatched_callback_state_even_for_provider_errors() {
 }
 
 #[tokio::test]
-async fn cancelled_callback_wait_releases_its_configured_port() {
-    let available_port = TcpListener::bind("127.0.0.1:0").expect("available callback port");
-    let port = available_port
-        .local_addr()
-        .expect("callback address")
-        .port();
-    drop(available_port);
-    let listener =
-        CallbackListener::new(Some(port), "expected-state".to_string()).expect("callback listener");
-
-    let callback_wait = tokio::spawn(async move {
-        let mut listener = listener;
-        listener.wait().await
-    });
-    callback_wait.abort();
-    let _ = callback_wait.await;
-
-    tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
-        loop {
-            if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("cancelled callback released its listener");
-}
-
-#[tokio::test]
 async fn rejects_insecure_or_credentialed_endpoints() {
     let keyring = Arc::new(MockKeyringStore::default());
     let mut oauth = loopback_config();
@@ -707,86 +711,114 @@ fn accepts_ipv4_and_ipv6_loopback_endpoints() {
 }
 
 #[tokio::test]
-async fn cancelled_refresh_still_persists_and_caches_rotated_credentials() {
+async fn cancelled_refresh_still_records_rotated_or_rejected_credentials() {
     use tokio::io::AsyncBufReadExt;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("token listener");
-    let endpoint = format!(
-        "http://{}/token",
-        listener.local_addr().expect("token address")
-    );
-    let (accepted, received) = tokio::sync::oneshot::channel();
-    let (release, response_ready) = tokio::sync::oneshot::channel();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.expect("token request");
-        let mut reader = tokio::io::BufReader::new(&mut stream);
-        let mut content_length = 0;
-        loop {
-            let mut line = String::new();
-            assert!(
-                reader.read_line(&mut line).await.expect("request header") > 0,
-                "incomplete request headers"
-            );
-            if line == "\r\n" {
-                break;
-            }
-            if let Some(length) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                content_length = length.trim().parse().expect("body length");
-            }
-        }
-        reader
-            .read_exact(&mut vec![0; content_length])
+    for rejected in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
-            .expect("complete grant");
-        accepted.send(()).expect("provider accepted rotation");
-        response_ready
-            .await
-            .expect("caller cancelled before response");
-        let body =
-            json!({"access_token": "new-access", "refresh_token": "new-refresh"}).to_string();
-        stream
+            .expect("token listener");
+        let endpoint = format!(
+            "http://{}/token",
+            listener.local_addr().expect("token address")
+        );
+        let (accepted, received) = tokio::sync::oneshot::channel();
+        let (release, response_ready) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("token request");
+            let mut reader = tokio::io::BufReader::new(&mut stream);
+            let mut content_length = 0;
+            loop {
+                let mut line = String::new();
+                assert!(
+                    reader.read_line(&mut line).await.expect("request header") > 0,
+                    "incomplete request headers"
+                );
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(length) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = length.trim().parse().expect("body length");
+                }
+            }
+            reader
+                .read_exact(&mut vec![0; content_length])
+                .await
+                .expect("complete grant");
+            accepted.send(()).expect("provider accepted rotation");
+            response_ready
+                .await
+                .expect("caller cancelled before response");
+            let (status, body) = if rejected {
+                (
+                    "400 Bad Request",
+                    json!({"error": "invalid_grant"}).to_string(),
+                )
+            } else {
+                (
+                    "200 OK",
+                    json!({"access_token": "new-access", "refresh_token": "new-refresh"})
+                        .to_string(),
+                )
+            };
+            stream
             .write_all(
                 format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .as_bytes(),
             )
             .await
             .expect("rotated credentials");
-    });
-    let keyring = Arc::new(MockKeyringStore::default());
-    let mut oauth = loopback_config();
-    oauth.token_url = endpoint;
-    let (manager, _home) = client(oauth, keyring.clone());
-    save_token(
-        &manager,
-        "old-access",
-        Some("old-refresh"),
-        Utc::now().timestamp() - 1,
-    );
-    let caller = manager.clone();
-    let task = tokio::spawn(async move { caller.resolve_access_token().await });
-    received.await.expect("accepted refresh");
-    task.abort();
-    assert!(task.await.expect_err("cancelled caller").is_cancelled());
-    release.send(()).expect("release response");
-    server.await.expect("token response task");
-    // Taking the same cache lock waits for the detached transaction to finish persisting.
-    let cached = manager.state.cached_token.lock().await;
-    let expected = json!({"access_token": "new-access", "refresh_token": "new-refresh"});
-    assert_eq!(
-        serde_json::to_value(cached.token.as_ref()).expect("cached token"),
-        expected
-    );
-    assert_eq!(
-        serde_json::to_value(manager.load_token().expect("persisted token"))
-            .expect("stored credential"),
-        expected
-    );
+        });
+        let keyring = Arc::new(MockKeyringStore::default());
+        let mut oauth = loopback_config();
+        oauth.token_url = endpoint;
+        let (manager, _home) = client(oauth, keyring.clone());
+        save_token(
+            &manager,
+            "old-access",
+            Some("old-refresh"),
+            Utc::now().timestamp() + 3600,
+        );
+        let caller = manager.clone();
+        let task = tokio::spawn(async move { caller.refresh_access_token("old-access").await });
+        received.await.expect("accepted refresh");
+        task.abort();
+        assert!(task.await.expect_err("cancelled caller").is_cancelled());
+        release.send(()).expect("release response");
+        server.await.expect("token response task");
+        // Taking the same cache lock waits for the detached transaction to finish persisting.
+        let cached = Arc::clone(&manager.state.cached_token).lock_owned().await;
+        if rejected {
+            drop(cached);
+            assert_eq!(
+                manager.status().await.unwrap(),
+                crate::GatewayAuthStatus::NotReady
+            );
+            assert_eq!(
+                manager.resolve_access_token().await.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        } else {
+            let expected = json!({"access_token": "new-access", "refresh_token": "new-refresh"});
+            assert_eq!(
+                serde_json::to_value(cached.token.as_ref()).expect("cached token"),
+                expected
+            );
+            assert_eq!(
+                serde_json::to_value(manager.load_token().expect("persisted token"))
+                    .expect("stored credential"),
+                expected
+            );
+            assert_eq!(
+                manager.status().await.unwrap(),
+                crate::GatewayAuthStatus::Succeeded
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -824,7 +856,7 @@ async fn only_explicit_refresh_grant_rejections_request_reauthorization() {
 
         match (status, error_code) {
             (400, Some("invalid_grant" | "unauthorized_client" | "unsupported_grant_type")) => {
-                assert!(matches!(result, Ok(super::RefreshOutcome::Authorize)));
+                assert!(matches!(result, Ok(super::RefreshOutcome::LoginRequired)));
             }
             _ => {
                 let message = result
@@ -889,7 +921,7 @@ async fn invalid_grant_recovers_external_credentials_with_a_bounded_retry() {
                     .refresh(&mut cached, &super::RefreshPolicy::WhenExpired)
                     .await
                     .expect("bounded recovery"),
-                super::RefreshOutcome::Authorize
+                super::RefreshOutcome::LoginRequired
             ));
         } else {
             let expected = if retry_status.is_some() {

@@ -76,4 +76,9 @@ pub use outbound_proxy::AuthRouteConfig;
 pub use token_data::TokenData;
 
 pub use gateway_auth::GatewayAuthConfig;
+pub use gateway_auth::GatewayAuthError;
 pub use gateway_auth::GatewayAuthManager;
+pub use gateway_auth::GatewayAuthStatus;
+pub use gateway_auth::GatewayAuthStatusChange;
+pub use gateway_auth::GatewayLoginControl;
+pub use gateway_auth::subscribe_gateway_auth_status;

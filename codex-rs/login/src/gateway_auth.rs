@@ -1,4 +1,4 @@
-//! Owns gateway credentials and coordinates refresh and browser login through shared OAuth operations.
+//! Owns gateway credentials, token refresh, and policy-controlled browser authorization.
 //! Credential I/O runs off the async worker and writes retain the store lock through cancellation.
 //! Rotated credentials survive caller cancellation and remain pending until persistence succeeds.
 
@@ -34,10 +34,17 @@ use url::Url;
 
 #[path = "gateway_auth_callback.rs"]
 mod callback;
+#[path = "gateway_auth_login.rs"]
+mod login;
 #[path = "gateway_auth_storage.rs"]
 mod storage;
 #[path = "gateway_auth_token.rs"]
 mod token;
+
+pub use login::GatewayAuthStatus;
+pub use login::GatewayAuthStatusChange;
+pub use login::GatewayLoginControl;
+pub use login::subscribe_gateway_auth_status;
 
 use callback::CallbackListener;
 use storage::GatewayAuthStorage;
@@ -46,6 +53,15 @@ use token::TokenResponse;
 
 const REFRESH_SKEW_SECONDS: i64 = 30;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 20);
+
+/// Gateway authentication states that require user action rather than request retries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum GatewayAuthError {
+    #[error("Gateway sign-in required. Choose Sign in or Reconnect, then retry your request")]
+    LoginRequired,
+    #[error("Gateway authentication is in progress; retry after sign-in")]
+    LoginInProgress,
+}
 
 /// Public-client OAuth settings for a model provider.
 #[derive(Clone, PartialEq, Eq)]
@@ -61,6 +77,7 @@ pub struct GatewayAuthConfig {
 /// Resolves and persists an OAuth access token for a model provider.
 #[derive(Clone)]
 pub struct GatewayAuthManager {
+    control: Arc<GatewayLoginControl>,
     state: Arc<GatewayAuthState>,
 }
 
@@ -83,7 +100,7 @@ impl RefreshPolicy {
 
 enum RefreshOutcome {
     AccessToken(String),
-    Authorize,
+    LoginRequired,
 }
 
 struct GatewayAuthState {
@@ -92,14 +109,20 @@ struct GatewayAuthState {
     storage: GatewayAuthStorage,
     http_client: HttpClient,
     cached_token: Arc<Mutex<GatewayAuthCache>>,
+    // Reserve explicit login independently of background credential reads and refreshes.
+    login_attempt: Arc<Mutex<()>>,
+    status: tokio::sync::watch::Sender<Option<login::GatewayAuthStatusSnapshot>>,
+    status_tx: tokio::sync::broadcast::Sender<GatewayAuthStatusChange>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct GatewayAuthCache {
     token: Option<StoredToken>,
     // Retain rotated credentials across a failed save. The prior persisted token remains
     // available for comparison so retrying cannot overwrite a newer external login.
     pending: Option<StoredToken>,
+    // A failed recovery requires replacement credentials, even before local expiry.
+    login_required: Option<StoredToken>,
 }
 
 impl GatewayAuthManager {
@@ -121,57 +144,121 @@ impl GatewayAuthManager {
             )
             .map_err(|_| io::Error::other("failed to create provider OAuth HTTP client"))?;
         Ok(Self {
+            control: GatewayLoginControl::for_host(&codex_home, http_client_factory),
             state: Arc::new(GatewayAuthState {
                 config,
+                status_tx: login::status_sender_for_host(&codex_home, http_client_factory),
                 storage: GatewayAuthStorage::new(codex_home.clone(), keyring),
                 codex_home,
                 http_client,
                 cached_token: Arc::new(Mutex::new(GatewayAuthCache::default())),
+                login_attempt: Arc::new(Mutex::new(())),
+                status: tokio::sync::watch::channel(/*init*/ None).0,
             }),
         })
     }
 
-    /// Returns a cached access token or refreshes/authorizes when it is no longer usable.
+    /// Returns a usable token, refreshing or starting browser login according to the host policy.
     pub async fn resolve_access_token(&self) -> io::Result<String> {
-        self.resolve(RefreshPolicy::WhenExpired).await
+        self.resolve_with_browser(RefreshPolicy::WhenExpired, login::open_browser)
+            .await
     }
 
     /// Recovers after a request rejects `rejected_access_token`, reusing a usable replacement
-    /// from storage or refreshing/authorizing when necessary. Pass the access token used by the
-    /// failed request; callers must bound retries and decide whether the request is safe to replay.
+    /// from storage or refreshing/authorizing according to the host policy.
+    /// Pass the token used by the failed request; callers must bound retries and decide
+    /// whether the request is safe to replay.
     pub async fn refresh_access_token(&self, rejected_access_token: &str) -> io::Result<String> {
-        self.resolve(RefreshPolicy::AfterRejection(
-            rejected_access_token.to_owned(),
-        ))
+        self.resolve_with_browser(
+            RefreshPolicy::AfterRejection(rejected_access_token.to_owned()),
+            login::open_browser,
+        )
         .await
     }
 
-    async fn resolve(&self, policy: RefreshPolicy) -> io::Result<String> {
+    async fn resolve_with_browser(
+        &self,
+        policy: RefreshPolicy,
+        open_browser: impl FnOnce(&Url),
+    ) -> io::Result<String> {
         validate_config(&self.state.config)?;
-        let mut cached = Arc::clone(&self.state.cached_token).lock_owned().await;
-        if cached.token.is_none() && cached.pending.is_none() {
+        let mut cached = self.lock_cached_token().await?;
+        let terminal_status = self.state.status.borrow().as_ref().is_some_and(|snapshot| {
+            matches!(
+                snapshot.status,
+                GatewayAuthStatus::NotReady | GatewayAuthStatus::Failed { .. }
+            )
+        });
+        // A cached token may predate the failed login. Only persisted replacements can clear it.
+        if cached.pending.is_none()
+            && (cached.token.is_none() || terminal_status || cached.login_required.is_some())
+        {
             cached.token = self.load_token_async().await?;
+        }
+        if cached.pending.is_none()
+            && cached.login_required.is_some()
+            && cached.token == cached.login_required
+        {
+            if !self
+                .control
+                .explicit_login
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return self.authorize_with_browser(&mut cached, open_browser).await;
+            }
+            return Err(self.login_required_error(cached.token.as_ref()));
         }
         if cached.pending.is_none()
             && matches!(policy, RefreshPolicy::WhenExpired)
             && let Some(token) = cached.token.as_ref()
             && token_is_usable(token)
         {
-            return Ok(token.access_token.clone());
+            let terminal_matches = self.state.status.borrow().as_ref().is_some_and(|snapshot| {
+                matches!(
+                    snapshot.status,
+                    GatewayAuthStatus::NotReady | GatewayAuthStatus::Failed { .. }
+                ) && snapshot.credential.as_ref() == Some(token)
+            });
+            if !terminal_matches {
+                self.publish_status(GatewayAuthStatus::Succeeded, Some(token));
+            }
+            let access_token = token.access_token.clone();
+            cached.login_required = None;
+            return Ok(access_token);
         }
         // The provider may rotate its token before the HTTP response arrives. Keep the
         // refresh, persistence, and cache update alive if the caller drops this future.
         let manager = self.clone();
         let (mut cached, result) = tokio::spawn(async move {
-            let result = manager.refresh(&mut cached, &policy).await;
+            let result = match manager.refresh(&mut cached, &policy).await {
+                Err(error) => Err(error),
+                Ok(RefreshOutcome::AccessToken(access_token)) => {
+                    cached.login_required = None;
+                    manager.publish_status(GatewayAuthStatus::Succeeded, cached.token.as_ref());
+                    Ok(access_token)
+                }
+                Ok(RefreshOutcome::LoginRequired) => {
+                    cached.login_required = cached.token.clone();
+                    Err(manager.login_required_error(cached.token.as_ref()))
+                }
+            };
             (cached, result)
         })
         .await
         .map_err(|_| io::Error::other("provider OAuth refresh task failed"))?;
-        match result? {
-            RefreshOutcome::AccessToken(access_token) => Ok(access_token),
-            RefreshOutcome::Authorize => self.authorize(&mut cached).await,
+        if result.as_ref().is_err_and(|error| {
+            error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<GatewayAuthError>())
+                == Some(&GatewayAuthError::LoginRequired)
+        }) && !self
+            .control
+            .explicit_login
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return self.authorize_with_browser(&mut cached, open_browser).await;
         }
+        result
     }
 
     async fn persist_pending(
@@ -196,6 +283,7 @@ impl GatewayAuthManager {
         .map_err(|_| io::Error::other("provider OAuth credential save task failed"))??;
         let access_token = token.access_token.clone();
         cached.token = cached.pending.take();
+        cached.login_required = None;
         Ok(access_token)
     }
 
@@ -253,7 +341,7 @@ impl GatewayAuthManager {
                         ) =>
                 {
                     // Some public clients receive refresh tokens despite being unable to use
-                    // that grant. Reauthorize after explicit rejection without disabling refresh.
+                    // that grant. Require browser login after rejection without disabling refresh.
                     // Also recover updates from clients that predate the credential lock.
                     if self.load_token_async().await? == cached.token {
                         break;
@@ -279,7 +367,7 @@ impl GatewayAuthManager {
                 return Ok(RefreshOutcome::AccessToken(token.access_token.clone()));
             }
         }
-        Ok(RefreshOutcome::Authorize)
+        Ok(RefreshOutcome::LoginRequired)
     }
 
     fn credential_id(&self) -> String {
@@ -325,16 +413,6 @@ impl GatewayAuthManager {
         let value = serde_json::to_string(token)
             .map_err(|_| io::Error::other("failed to encode provider OAuth credentials"))?;
         self.state.storage.save(&self.credential_id(), &value)
-    }
-
-    async fn authorize(&self, cached: &mut GatewayAuthCache) -> io::Result<String> {
-        self.authorize_with_browser(cached, |authorization_url| {
-            eprintln!("Authorize the model provider by opening this URL:\n{authorization_url}\n");
-            if webbrowser::open(authorization_url.as_str()).is_err() {
-                eprintln!("Browser launch failed; open the URL above manually.");
-            }
-        })
-        .await
     }
 
     async fn authorize_with_browser(
@@ -390,7 +468,9 @@ impl GatewayAuthManager {
                 )
             })?;
         cached.pending = Some(response.into_stored(/*previous_refresh_token*/ None)?);
-        self.persist_pending(cached, &credential_lock).await
+        let access_token = self.persist_pending(cached, &credential_lock).await?;
+        self.publish_status(GatewayAuthStatus::Succeeded, cached.token.as_ref());
+        Ok(access_token)
     }
 
     fn oauth(&self) -> OAuthClient<'_> {
