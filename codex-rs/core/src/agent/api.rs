@@ -24,108 +24,121 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
+use codex_rollout_trace::ThreadTraceContext;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use std::num::NonZeroU32;
 
-/// Initial observation followed by changes, with no gap between the two. Observation failures
-/// are errors, not terminal agent states. Backends own reconnection and reconciliation.
+/// An initial runtime snapshot followed by coalesced status changes. The local stream
+/// ends when that runtime's status channel closes; it does not follow a later reload.
 pub type StatusSubscription = BoxStream<'static, Result<AgentInfo>>;
 
 // Keep dynamic dispatch a compile-time property of the contract.
 const _: Option<&dyn AgentControl> = None;
 
-/// Coordinates one agent tree through a local or host backend.
+/// Coordinates agent operations and shared state through a local or host backend.
 ///
-/// Every operation validates tree membership and caller authority, including calls made
-/// through stale controller handles. Unknown IDs return `ThreadNotFound`; invalid or
-/// unresolved references return `UnsupportedOperation`, preserving existing resolution
-/// errors. Backend failures must not be reported as missing targets or successful operations.
-/// Mutation success acknowledges acceptance, not completion of the requested agent work.
-///
-/// Implementations preserve MAv2 wake modes and keep loading, capacity checks and delivery
-/// behind complete operations. Hosts own transport, durable acceptance, retry identities
-/// and recovery. Those mechanisms and channel operations are separate implementation work.
+/// Implementations preserve the existing wake modes and keep loading and delivery behind
+/// complete operations. Successful delivery means accepted, not read by the model. The
+/// local backend retains its current best-effort reporting and runtime observation policy;
+/// remote ownership, retries and recovery are separate backend work.
 /// Boxed Send futures allow callers to use `Arc<dyn AgentControl>`.
 pub trait AgentControl: Send + Sync {
-    fn identity(&self) -> ControlIdentity;
+    fn identity(&self) -> SessionId;
 
-    /// Allocate, register and start a child, then accept its initial input. Return effective
-    /// settings so callers do not need a second configuration lookup.
-    fn spawn(&self, request: SpawnRequest) -> BoxFuture<'_, Result<AgentInfo>>;
+    /// Start a child and accept its initial input, returning its effective settings.
+    fn spawn(
+        &self,
+        request: SpawnRequest,
+    ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>>;
 
-    /// Explicitly reopen an agent under the caller's authority and captured settings.
-    /// Reloading required for message delivery belongs inside `send`.
+    /// Reopen an absent runtime with the captured settings and session source. An already
+    /// loaded runtime keeps its current settings. Legacy ID-based resume can reopen a
+    /// stored thread that is not in the controller's registry.
     fn resume(
         &self,
         caller: ThreadId,
         target: AgentTarget,
         config: Config,
-    ) -> BoxFuture<'_, Result<AgentInfo>>;
+        source: SessionSource,
+    ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>>;
 
-    /// Resolve, authorize, reload if needed and accept input with its original attribution
-    /// and wake mode. Queue-only messages cannot start an idle agent; follow-ups cannot
-    /// target the root. Acceptance does not mean the model has read the input.
+    /// Resolve, reload if needed and accept input. Agent messages retain their attribution
+    /// and wake mode: queue-only messages do not start work and follow-ups cannot target
+    /// the root. Legacy user input can address loaded threads outside the agent registry.
     fn send(&self, request: SendRequest) -> BoxFuture<'_, Result<DeliveryReceipt>>;
 
-    /// Stop current work without closing the agent. Return its pre-interrupt snapshot.
-    fn interrupt(&self, caller: ThreadId, target: AgentTarget) -> BoxFuture<'_, Result<AgentInfo>>;
+    /// Stop current work and return the pre-interrupt snapshot. V2 rejects root/self
+    /// targets and tolerates known unloaded agents; other modes retain direct-ID interruption.
+    fn interrupt(
+        &self,
+        caller: ThreadId,
+        target: AgentTarget,
+        version: MultiAgentVersion,
+    ) -> BoxFuture<'_, Result<AgentInfo>>;
 
-    /// Close the agent and its descendants. Return its pre-close snapshot.
+    /// Close the agent and its live descendants, returning its pre-close snapshot.
     fn close(&self, caller: ThreadId, target: AgentTarget) -> BoxFuture<'_, Result<AgentInfo>>;
 
-    /// Read identity, runtime state and effective settings without loading a dormant agent.
+    /// Read runtime settings or known unloaded metadata without loading an agent.
     fn inspect(&self, caller: ThreadId, target: AgentTarget) -> BoxFuture<'_, Result<AgentInfo>>;
 
-    /// Return a bounded membership page. Callers own model and UI formatting.
-    fn list(&self, caller: ThreadId, query: AgentQuery) -> BoxFuture<'_, Result<AgentPage>>;
+    /// List loaded agents using the caller's captured source to resolve a path prefix.
+    /// Callers own model and UI formatting.
+    fn list<'a>(
+        &'a self,
+        source: &'a SessionSource,
+        path_prefix: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Vec<LiveAgent>>>;
 
-    /// Subscribe without loading a dormant agent. Unavailability must remain visible.
+    /// Subscribe to a loaded runtime without restoring it.
     fn watch(
         &self,
         caller: ThreadId,
         target: AgentTarget,
     ) -> BoxFuture<'_, Result<StatusSubscription>>;
 
-    /// Atomically reserve tree-wide execution capacity. Unlimited turns return no guard.
-    /// Cancellation during acquisition must release any partial reservation. This contract
-    /// does not require changing the local policy from rejecting at capacity to waiting.
+    /// Check capacity before accepting work. This advisory check does not reserve a slot.
+    fn check_turn_admission(
+        &self,
+        version: MultiAgentVersion,
+        source: &SessionSource,
+    ) -> Result<()>;
+
+    /// Track a turn's execution until its guard drops. Local admission keeps the existing
+    /// separate capacity check and running count; it does not atomically reserve capacity.
+    /// Root and non-V2 turns return no guard.
     fn admit_turn(
         &self,
-        thread_id: ThreadId,
-        turn_id: String,
         version: MultiAgentVersion,
         source: SessionSource,
     ) -> BoxFuture<'_, Result<Option<AgentExecutionGuard>>>;
 
-    /// Account for an inference response, including compaction. Retried reports for the
-    /// same thread, turn and response must not charge the budget twice. As in the existing
-    /// rollout-budget path, `SessionBudgetExceeded` means the usage was recorded and the
-    /// budget is exhausted; retries must preserve that result without charging again.
-    fn record_usage(
+    /// Account for one inference response, including compaction. Each call records usage;
+    /// callers report it once. `SessionBudgetExceeded` means the usage was recorded and
+    /// the shared budget is now exhausted.
+    fn record_usage(&self, usage: TokenUsage) -> BoxFuture<'_, Result<()>>;
+
+    /// Report the terminal result to the parent and completion activity to the task
+    /// initiator. Local delivery remains best effort and uses the reporting runtime's
+    /// diagnostic trace; it is not deduplicated.
+    fn turn_finished<'a>(
+        &'a self,
+        outcome: AgentTurnOutcome,
+        trace: &'a ThreadTraceContext,
+    ) -> BoxFuture<'a, Result<()>>;
+
+    /// Read the latest shared service tier for use at normal runtime config update points.
+    fn service_tier(&self) -> Option<String>;
+
+    /// Publish a shared setting when the runtime accepts a root-owned config update.
+    fn propagate_config_update(&self, update: AgentConfigUpdate) -> BoxFuture<'_, Result<()>>;
+
+    /// Read the existing bounded root evidence for a worker. The local backend returns
+    /// `None` for the root, a non-V2 tree, or an unavailable root runtime.
+    fn get_guardian_package(
         &self,
-        thread_id: ThreadId,
-        turn_id: String,
-        response_id: String,
-        usage: TokenUsage,
-    ) -> BoxFuture<'_, Result<()>>;
-
-    /// Accept the terminal result and own completion delivery to the parent and task
-    /// initiator. Retrying the same thread/turn outcome must not duplicate delivery.
-    fn turn_finished(&self, outcome: AgentTurnOutcome) -> BoxFuture<'_, Result<()>>;
-
-    /// Publish a root-owned update for live agents and later starts/resumes. Only the root
-    /// may change shared settings; runtimes read their own effective configuration.
-    fn propagate_config_update(
-        &self,
-        caller: ThreadId,
-        update: AgentConfigUpdate,
-    ) -> BoxFuture<'_, Result<()>>;
-
-    /// Read authoritative root evidence, including source, completeness and revision.
-    /// Fetch failures are errors. Approval consumers must revalidate the evidence revision
-    /// before accepting an approval; this read alone does not grant authorization.
-    fn get_guardian_package(&self, agent: ThreadId) -> BoxFuture<'_, Result<GuardianRootSnapshot>>;
+        agent: ThreadId,
+    ) -> BoxFuture<'_, Result<Option<GuardianRootSnapshot>>>;
 
     fn pending_budget_reminder<'a>(
         &'a self,
@@ -142,15 +155,8 @@ pub trait AgentControl: Send + Sync {
     ) -> BoxFuture<'a, Result<()>>;
 }
 
-/// Persistent tree identity and its current owner generation. Clones and reconnects keep
-/// the generation; a replacement owner changes it and fences the previous owner.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ControlIdentity {
-    pub session_id: SessionId,
-    pub generation: uuid::Uuid,
-}
-
-/// References resolve relative to the caller. IDs still require membership checks.
+/// References resolve relative to the registered caller. IDs retain each operation's
+/// existing lookup policy, including legacy access to unregistered loaded threads.
 #[derive(Clone, Debug)]
 pub enum AgentTarget {
     Id(ThreadId),
@@ -219,34 +225,6 @@ pub struct DeliveryReceipt {
     pub metadata: AgentMetadata,
     /// Acceptance identifier, not evidence that the recipient processed the input.
     pub submission_id: String,
-}
-
-#[derive(Clone, Debug)]
-pub enum AgentScope {
-    Tree,
-    Children(AgentTarget),
-    /// Includes the target itself.
-    Subtree(AgentTarget),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum AgentVisibility {
-    Known,
-    Loaded,
-}
-
-pub struct AgentQuery {
-    pub scope: AgentScope,
-    pub visibility: AgentVisibility,
-    /// Opaque backend cursor. Pages are observations, not a locked tree snapshot.
-    pub cursor: Option<String>,
-    /// Requested maximum; backends must also enforce their own hard page-size cap.
-    pub limit: NonZeroU32,
-}
-
-pub struct AgentPage {
-    pub agents: Vec<AgentInfo>,
-    pub next_cursor: Option<String>,
 }
 
 pub struct AgentTurnOutcome {

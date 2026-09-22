@@ -68,6 +68,7 @@ use uuid::Uuid;
 use self::execution::AgentExecutionLimiter;
 use self::residency::V2Residency;
 
+mod api;
 mod budget;
 mod completion;
 mod delivery;
