@@ -133,6 +133,17 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
     );
     drop(first);
 
+    // Reopen an older database, preserving its existing subscriptions.
+    let legacy_pool = sqlite
+        .open_read_write_pool(&dir.path().join("agent_message_board_1.sqlite"))
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE subscription_opt_outs")
+        .execute(&legacy_pool)
+        .await
+        .unwrap();
+    legacy_pool.close().await;
+
     let resumed = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
         .await
         .unwrap();
@@ -232,6 +243,99 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
     expected.sort_by_key(|(id, post)| (id.to_string(), post.message_id));
     assert_eq!(received, expected);
 
+    resumed
+        .set_subscription(
+            root,
+            SubscriptionRequest {
+                target: SubscriptionTarget::Thread(metadata.thread_id),
+                target_agent: None,
+                change: SubscriptionChange::Unsubscribe,
+            },
+        )
+        .await
+        .unwrap();
+    drop(resumed);
+    let resumed = LocalAgentMessageBoard::open(&sqlite, tree, host.clone())
+        .await
+        .unwrap();
+    resumed
+        .post(
+            root,
+            PostRequest {
+                request_id: "still-opted-out".into(),
+                destination: PostDestination::Thread(metadata.thread_id),
+                text: "one more reply without resubscribing".into(),
+                agents_to_notify: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    // The old reader's query must also see the opt-out after participation.
+    let legacy_pool = sqlite
+        .open_read_write_pool(&dir.path().join("agent_message_board_1.sqlite"))
+        .await
+        .unwrap();
+    let legacy_subscribers: Vec<String> =
+        sqlx::query_scalar("SELECT agent FROM subscriptions WHERE board=? AND target=?")
+            .bind(tree.to_string())
+            .bind(serde_json::to_string(&SubscriptionTarget::Thread(metadata.thread_id)).unwrap())
+            .fetch_all(&legacy_pool)
+            .await
+            .unwrap();
+    assert_eq!(legacy_subscribers, vec![child.to_string()]);
+    legacy_pool.close().await;
+    host.notifications.lock().unwrap().clear();
+    for (index, agents_to_notify) in [Vec::new(), vec![AgentPath::root()], Vec::new()]
+        .into_iter()
+        .enumerate()
+    {
+        let reply = resumed
+            .post(
+                child,
+                PostRequest {
+                    request_id: format!("after-unsubscribe-{index}"),
+                    destination: PostDestination::Thread(metadata.thread_id),
+                    text: "reply after opt-out".into(),
+                    agents_to_notify,
+                },
+            )
+            .await
+            .unwrap();
+        let expected = if index == 1 {
+            vec![(root, reply)]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(
+            std::mem::take(&mut *host.notifications.lock().unwrap()),
+            expected
+        );
+    }
+    resumed
+        .set_subscription(
+            root,
+            SubscriptionRequest {
+                target: SubscriptionTarget::Thread(metadata.thread_id),
+                target_agent: None,
+                change: SubscriptionChange::Subscribe,
+            },
+        )
+        .await
+        .unwrap();
+    let reply = resumed
+        .post(
+            child,
+            PostRequest {
+                request_id: "resubscribed".into(),
+                destination: PostDestination::Thread(metadata.thread_id),
+                text: "notifications restored".into(),
+                agents_to_notify: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(*host.notifications.lock().unwrap(), vec![(root, reply)]);
+
     let other = LocalAgentMessageBoard::open(&sqlite, SessionId::new(), host.clone())
         .await
         .unwrap();
@@ -248,6 +352,19 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
             .await
             .is_err()
     );
+    LocalAgentMessageBoard::delete_boards(&sqlite, &[tree])
+        .await
+        .unwrap();
+    let pool = sqlite
+        .open_read_write_pool(&dir.path().join("agent_message_board_1.sqlite"))
+        .await
+        .unwrap();
+    let remaining_opt_outs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM subscription_opt_outs")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(remaining_opt_outs, 0);
+    pool.close().await;
 }
 
 #[tokio::test]

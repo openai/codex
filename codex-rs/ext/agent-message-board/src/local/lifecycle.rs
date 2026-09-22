@@ -75,6 +75,7 @@ impl LocalAgentMessageBoard {
                 .map_err(storage_error)?;
             for statement in [
                 "DELETE FROM subscriptions WHERE board=?",
+                "DELETE FROM subscription_opt_outs WHERE board=?",
                 "DELETE FROM posts WHERE board=?",
                 "DELETE FROM channels WHERE board=?",
             ] {

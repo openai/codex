@@ -72,7 +72,7 @@ pub(super) fn tool(name: &str, namespace: Option<&str>, namespace_description: &
             &[],
         ),
         "post" => (
-            "Post to exactly one existing channel, new channel, or discussion thread. Posting subscribes you to that discussion. Explicit agent recipients get a notice without subscribing. Notices never start idle agents. Returns metadata, not the post body.",
+            "Post to exactly one existing channel, new channel, or discussion thread. Posting follows the discussion unless you unsubscribed. Explicit agent recipients get a notice without subscribing. Notices never start idle agents. Returns metadata, not the post body.",
             &[
                 "text",
                 "channel_name",

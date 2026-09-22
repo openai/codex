@@ -79,7 +79,8 @@ pub trait AgentMessageBoard: Send + Sync {
 
     /// Channel subscriptions concern new roots; thread subscriptions concern
     /// replies. Changing one does not change the other. Any member may change
-    /// another member's subscription. Posting subscribes its author to the thread.
+    /// another member's subscription. Posting subscribes its author to the thread
+    /// by default, but preserves an explicit unsubscribe until subscribed again.
     fn set_subscription(
         &self,
         caller: ThreadId,
