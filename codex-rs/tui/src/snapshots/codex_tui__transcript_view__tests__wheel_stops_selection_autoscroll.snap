@@ -1,18 +1,17 @@
 ---
-source: tui/src/transcript_view/tests.rs
-assertion_line: 265
+source: tui/src/transcript_view_tests.rs
 expression: "frames.join(\"\\n\\n\")"
 ---
+row 15
+row 16
+row 17
 row 18
 row 19
 row 20
-row 21
-row 22
-row 23
 
-row 26
-row 27
-row 28
 row 29
 row 30
 row 31
+row 32
+row 33
+row 34

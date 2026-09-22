@@ -340,7 +340,7 @@ fn single_row_scrolling_crosses_an_entry_separator_in_both_directions() {
 }
 
 #[test]
-fn clicking_an_edge_does_not_start_selection_autoscroll() {
+fn selecting_within_an_edge_row_does_not_start_selection_autoscroll() {
     let cells = vec![cell(
         (0..40)
             .map(|row| format!("row {row:02}\n"))
@@ -367,6 +367,64 @@ fn clicking_an_edge_does_not_start_selection_autoscroll() {
                 before
             );
         }
+        view.handle_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Drag(MouseButton::Left),
+                column: 3,
+                row: edge,
+                modifiers: KeyModifiers::NONE,
+            },
+            &cells,
+        );
+        let selected = render(&mut view, &cells, /*width*/ 20, /*height*/ 6);
+        assert_eq!(text(&selected), text(&before));
+        assert_eq!(view.selected_text(&cells).as_deref(), Some("row"));
+        for _ in 0..10 {
+            assert!(!view.tick_selection(&cells));
+            assert_eq!(
+                render(&mut view, &cells, /*width*/ 20, /*height*/ 6),
+                selected
+            );
+            assert_eq!(view.selected_text(&cells).as_deref(), Some("row"));
+        }
+        insta::assert_snapshot!(
+            format!("horizontal_selection_at_edge_{edge}"),
+            text(&selected)
+        );
+        let drag = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 3,
+            row: edge,
+            modifiers: KeyModifiers::NONE,
+        };
+        view.handle_mouse(
+            MouseEvent {
+                kind: if edge == 0 {
+                    MouseEventKind::ScrollUp
+                } else {
+                    MouseEventKind::ScrollDown
+                },
+                ..drag
+            },
+            &cells,
+        );
+        render(&mut view, &cells, /*width*/ 20, /*height*/ 6);
+        view.handle_mouse(drag, &cells);
+        assert!(!view.tick_selection(&cells));
+        // A deliberate vertical drag can return to its starting edge and still autoscroll.
+        for row in [2, edge] {
+            view.handle_mouse(
+                MouseEvent {
+                    kind: MouseEventKind::Drag(MouseButton::Left),
+                    column: 3,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                },
+                &cells,
+            );
+            render(&mut view, &cells, /*width*/ 20, /*height*/ 6);
+        }
+        assert!(view.tick_selection(&cells));
     }
 }
 
@@ -393,6 +451,10 @@ fn wheel_scrolling_pauses_selection_autoscroll_until_the_next_drag() {
             row: edge,
             modifiers: KeyModifiers::NONE,
         };
+        // Wheel input before the first drag must not lose the original physical row.
+        view.handle_mouse(MouseEvent { kind, ..drag }, &cells);
+        assert!(!view.tick_selection(&cells));
+        render(&mut view, &cells, /*width*/ 20, /*height*/ 6);
         view.handle_mouse(drag, &cells);
         assert!(view.tick_selection(&cells));
         render(&mut view, &cells, /*width*/ 20, /*height*/ 6);

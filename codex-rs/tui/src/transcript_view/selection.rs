@@ -14,6 +14,8 @@ pub(super) struct Selection {
     pub(super) end: Anchor,
     pub(super) dragging: bool,
     pub(super) moved: bool,
+    moved_vertically: bool,
+    pointer_origin_row: u16,
     pub(super) resume_on_empty: bool,
     pub(super) pointer: Option<ScreenPosition>,
     pub(super) pressed_link: Option<String>,
@@ -56,6 +58,8 @@ impl TranscriptView {
             preferred_column: None,
             dragging: true,
             moved: false,
+            moved_vertically: false,
+            pointer_origin_row: row,
             resume_on_empty: was_following,
             pointer: Some(ScreenPosition::new(column, row)),
             pressed_link: None,
@@ -123,6 +127,7 @@ impl TranscriptView {
         };
         selection.snapshot.pinned.entry(end.key).or_insert(layout);
         selection.moved = true;
+        selection.moved_vertically |= selection.pointer_origin_row != row;
         selection.pointer = Some(ScreenPosition::new(column, row));
         selection.preferred_column = None;
         self.pin_selection_range(&cells, &mut selection);
@@ -272,7 +277,8 @@ impl TranscriptView {
         let Some(selection) = self
             .selection
             .as_ref()
-            .filter(|selection| selection.dragging && selection.moved)
+            // Horizontal selection on an edge row must not move the text under the pointer.
+            .filter(|selection| selection.dragging && selection.moved_vertically)
         else {
             return false;
         };

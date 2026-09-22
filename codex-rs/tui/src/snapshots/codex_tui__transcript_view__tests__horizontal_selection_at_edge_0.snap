@@ -1,0 +1,10 @@
+---
+source: tui/src/transcript_view_tests.rs
+expression: text(&selected)
+---
+row 22
+row 23
+row 24
+row 25
+row 26
+row 27
