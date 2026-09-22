@@ -3,6 +3,7 @@ use crate::CodexThread;
 use crate::StateDbHandle;
 use crate::ThreadManager;
 use crate::agent::agent_status_from_event;
+use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;

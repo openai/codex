@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
@@ -181,8 +182,10 @@ async fn handle_spawn_agent(
         } else {
             None
         };
-    let (spawned_agent, agent_snapshot) =
-        Box::pin(session.services.agent_control.spawn(SpawnRequest {
+    let (spawned_agent, agent_snapshot) = session
+        .services
+        .agent_control
+        .spawn(SpawnRequest {
             caller: session.thread_id,
             config,
             input: AgentInput::Message {
@@ -201,7 +204,7 @@ async fn handle_spawn_agent(
                 multi_agent_v2_usage_hints,
                 cyber_access_program: turn.cyber_access_program,
             },
-        }))
+        })
         .await
         .map_err(collab_spawn_error)?;
     let new_thread_id = spawned_agent.thread_id;

@@ -1,10 +1,12 @@
-//! Adapts the existing local operations to the shared controller interface.
+//! Implements shared controller operations using the existing local runtime helpers.
 //! Runtime loading, message delivery and shared state remain in their existing modules.
 
 use super::LocalAgentControl;
+use super::spawn::SpawnInitialInput;
 use crate::agent::api::AgentConfigUpdate;
 use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInfo;
+use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::AgentTurnOutcome;
 use crate::agent::api::DeliveryReceipt;
@@ -13,12 +15,17 @@ use crate::agent::api::SpawnRequest;
 use crate::agent::api::StatusSubscription;
 use crate::agent::types::AgentExecutionGuard;
 use crate::agent::types::LiveAgent;
+use crate::agent::types::MessageDeliveryMode;
+use crate::agent_communication::AgentCommunicationContext;
+use crate::agent_communication::AgentCommunicationKind;
 use crate::codex_thread::GuardianRootSnapshot;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::rollout_budget::RolloutBudgetReminder;
+use codex_protocol::AgentPath;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
@@ -35,7 +42,42 @@ impl AgentControl for LocalAgentControl {
         &self,
         request: SpawnRequest,
     ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>> {
-        Box::pin(LocalAgentControl::spawn(self, request))
+        Box::pin(async move {
+            let SpawnRequest {
+                caller,
+                config,
+                input,
+                source,
+                options,
+            } = request;
+            let input = match input {
+                AgentInput::UserInput(input) => SpawnInitialInput::UserInput(input),
+                AgentInput::Message { message, mode } => {
+                    if mode != MessageDeliveryMode::TriggerTurn {
+                        return Err(CodexErr::InvalidRequest(
+                            "spawn input must start the child turn".to_string(),
+                        ));
+                    }
+                    let recipient = source.get_agent_path().ok_or_else(|| {
+                        CodexErr::InvalidRequest(
+                            "spawned agent is missing a canonical task name".to_string(),
+                        )
+                    })?;
+                    let author = recipient
+                        .as_str()
+                        .rsplit_once('/')
+                        .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+                        .ok_or_else(|| {
+                            CodexErr::InvalidRequest("spawn input needs a child path".to_string())
+                        })?;
+                    SpawnInitialInput::InterAgentCommunication(
+                        message.into_communication(author, recipient, mode),
+                        AgentCommunicationContext::new(AgentCommunicationKind::Spawn, caller),
+                    )
+                }
+            };
+            Box::pin(self.spawn_agent_internal(config, input, Some(source), options)).await
+        })
     }
 
     fn resume(
@@ -52,7 +94,70 @@ impl AgentControl for LocalAgentControl {
     }
 
     fn send(&self, request: SendRequest) -> BoxFuture<'_, Result<DeliveryReceipt>> {
-        Box::pin(LocalAgentControl::send(self, request))
+        Box::pin(async move {
+            let SendRequest {
+                caller,
+                target,
+                resume_config,
+                input,
+                mut start_options,
+            } = request;
+            let target = self.resolve_target(caller, &target)?;
+            let (metadata, submission_id) = match input {
+                AgentInput::UserInput(input) => {
+                    let receiver = self.get_agent_metadata(target);
+                    if receiver.is_some() {
+                        self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                            .await?;
+                    }
+                    let submission_id = self.send_input(target, input, start_options).await?;
+                    (receiver.unwrap_or_default(), submission_id)
+                }
+                AgentInput::Message { message, mode } => {
+                    let receiver = self.ensure_agent_known(target)?;
+                    let author = self
+                        .ensure_agent_known(caller)?
+                        .agent_path
+                        .unwrap_or_else(AgentPath::root);
+                    if mode == MessageDeliveryMode::TriggerTurn
+                        && receiver.agent_path.as_ref().is_some_and(AgentPath::is_root)
+                    {
+                        return Err(CodexErr::UnsupportedOperation(
+                            "Follow-up tasks can't target the root agent".to_string(),
+                        ));
+                    }
+                    let receiver_path = receiver.agent_path.clone().ok_or_else(|| {
+                        CodexErr::UnsupportedOperation(
+                            "target agent is missing an agent_path".to_string(),
+                        )
+                    })?;
+                    self.ensure_v2_agent_loaded(resume_config, target, /*parent*/ None)
+                        .await?;
+                    let communication = message.into_communication(author, receiver_path, mode);
+                    let kind = match mode {
+                        MessageDeliveryMode::QueueOnly => {
+                            start_options.parent_turn_id = None;
+                            AgentCommunicationKind::Message
+                        }
+                        MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,
+                    };
+                    let submission_id = self
+                        .send_inter_agent_communication(
+                            target,
+                            communication,
+                            AgentCommunicationContext::new(kind, caller),
+                            start_options,
+                        )
+                        .await?;
+                    (receiver, submission_id)
+                }
+            };
+            Ok(DeliveryReceipt {
+                thread_id: target,
+                metadata,
+                submission_id,
+            })
+        })
     }
 
     fn interrupt(
@@ -82,7 +187,10 @@ impl AgentControl for LocalAgentControl {
     }
 
     fn inspect(&self, caller: ThreadId, target: AgentTarget) -> BoxFuture<'_, Result<AgentInfo>> {
-        Box::pin(LocalAgentControl::inspect(self, caller, target))
+        Box::pin(async move {
+            let target = self.resolve_target(caller, &target)?;
+            self.inspect_agent(target).await
+        })
     }
 
     fn list<'a>(

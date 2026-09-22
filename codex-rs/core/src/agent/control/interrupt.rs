@@ -5,7 +5,6 @@
 
 use super::LocalAgentControl;
 use crate::agent::api::AgentInfo;
-use crate::agent::api::AgentTarget;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
@@ -38,7 +37,7 @@ impl LocalAgentControl {
         receiver_agent.agent_path.as_ref().ok_or_else(|| {
             CodexErr::UnsupportedOperation("target agent is missing an agent_path".to_string())
         })?;
-        let snapshot = self.inspect(caller, AgentTarget::Id(target)).await?;
+        let snapshot = self.inspect_agent(target).await?;
         match self.interrupt_agent(target).await {
             Ok(_) => {}
             Err(err)
