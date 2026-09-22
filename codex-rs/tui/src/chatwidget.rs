@@ -718,6 +718,8 @@ pub(crate) struct ChatWidget {
     active_side_conversation: bool,
     blocks_direct_input: bool,
     external_writer_view: bool,
+    /// Covers both queued and executing forks so repeated shortcuts cannot queue another one.
+    pub(crate) fork_in_progress: bool,
     misalignment_policy_violation: Option<misalignment_policy::MisalignmentViolation>,
     normal_placeholder_text: String,
     side_placeholder_text: String,

@@ -31,6 +31,10 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        // Release the shortcut's input guard even when a fork is rejected below.
+        if matches!(event, AppEvent::ForkCurrentSession { .. }) {
+            self.chat_widget.fork_in_progress = false;
+        }
         if self.reconnect.offline
             && !matches!(
                 &event,
@@ -450,16 +454,16 @@ impl App {
                 return self.delete_current_thread(tui, app_server).await;
             }
             AppEvent::ForkCurrentSession { name } => {
+                let from_locked_thread = self.chat_widget.is_external_writer_view();
+                let source = if from_locked_thread {
+                    "locked_thread_shortcut"
+                } else {
+                    "slash_command"
+                };
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,
-                    &[("source", "slash_command")],
-                );
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                    self.chat_widget.rollout_path().as_deref(),
+                    &[("source", source)],
                 );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
@@ -470,6 +474,12 @@ impl App {
                         );
                         return Ok(AppRunControl::Continue);
                     }
+                    self.chat_widget.fork_in_progress = true;
+                    // This handler awaits the fork outside the draw loop. Paint before waiting.
+                    let screen_size = tui.terminal.last_known_screen_size;
+                    self.handle_draw_pre_render(tui, screen_size)?;
+                    self.chat_widget.pre_draw_tick();
+                    self.render_chat_widget_frame(tui, screen_size)?;
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
                     let mut fork_config = self.config.clone();
@@ -492,6 +502,9 @@ impl App {
                         selected_profile.as_ref(),
                     ).await {
                         Ok(mut forked) => {
+                            let retained_input = from_locked_thread
+                                .then(|| self.chat_widget.capture_thread_input_state())
+                                .flatten();
                             let name_error = if let Some(name) = name {
                                 match app_server
                                     .thread_set_name(forked.session.thread_id, name.clone())
@@ -519,23 +532,15 @@ impl App {
                                 .await
                             {
                                 Ok(()) => {
+                                    // Keep local input without replacing the fork's running state.
+                                    self.chat_widget.restore_reconnected_input(retained_input);
                                     if let Some(err) = name_error {
                                         self.chat_widget.add_error_message(err);
                                     }
-                                    if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> = Vec::new();
-                                        if let Some(usage_line) = summary.usage_line {
-                                            lines.push(usage_line.into());
-                                        }
-                                        if let Some(command) = summary.resume_hint {
-                                            let spans = vec![
-                                                "To continue this session, run ".into(),
-                                                command.cyan(),
-                                            ];
-                                            lines.push(spans.into());
-                                        }
-                                        self.chat_widget.add_plain_history_lines(lines);
-                                    }
+                                    self.chat_widget.add_info_message(
+                                        "Fork created. You can continue here.".to_string(),
+                                        /*hint*/ None,
+                                    );
                                 }
                                 Err(err) => {
                                     self.chat_widget.add_error_message(format!(
@@ -550,6 +555,13 @@ impl App {
                             ));
                         }
                     }
+                    if from_locked_thread {
+                        // Repeated locked-view shortcuts must not act on the resulting view.
+                        if let Err(err) = tui.discard_pending_input_before_interactive_screen() {
+                            tracing::warn!(%err, "failed to discard input after forking");
+                        }
+                        tui.schedule_screen_size_recheck(Duration::ZERO);
+                    }
                 } else {
                     self.chat_widget.add_error_message(
                         "A thread must contain at least one turn before it can be forked."
@@ -557,6 +569,7 @@ impl App {
                     );
                 }
 
+                self.chat_widget.fork_in_progress = false;
                 self.chat_widget.maybe_send_next_queued_input();
                 tui.frame_requester().schedule_frame();
             }

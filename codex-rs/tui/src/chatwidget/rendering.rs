@@ -88,7 +88,10 @@ impl ExternalWriterNotice {
     }
 
     fn footer_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut items = vec![("r".to_string(), "retry".to_string())];
+        let mut items = vec![
+            ("r".to_string(), "retry".to_string()),
+            ("f".to_string(), "fork".to_string()),
+        ];
         let escape = crate::key_hint::plain(KeyCode::Esc).display_label();
         let mut quit_keys = vec![
             crate::key_hint::ctrl(KeyCode::Char('c')).display_label(),
@@ -209,7 +212,13 @@ impl ChatWidget {
         command_popup_placement: crate::bottom_pane::CommandPopupPlacement,
         composer_gap: Option<&'a crate::bottom_pane::ComposerGap>,
     ) -> RenderableItem<'a> {
-        if self.external_writer_view && !self.bottom_pane.has_active_view() {
+        if self.fork_in_progress {
+            RenderableItem::Owned(Box::new(
+                Paragraph::new("Forking conversation…".dim()).inset(Insets::tlbr(
+                    /*top*/ 1, /*left*/ 2, /*bottom*/ 1, /*right*/ 2,
+                )),
+            ))
+        } else if self.external_writer_view && !self.bottom_pane.has_active_view() {
             RenderableItem::Owned(Box::new(ExternalWriterNotice {
                 command_center_available: self.remote_connection.is_some(),
                 transcript_hint: self.bottom_pane.transcript_shortcut_hint(),

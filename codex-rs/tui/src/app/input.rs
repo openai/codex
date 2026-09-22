@@ -346,6 +346,9 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
+        if self.chat_widget.fork_in_progress {
+            return;
+        }
         if self.chat_widget.is_external_writer_view()
             && self.overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
@@ -372,6 +375,14 @@ impl App {
             };
             if quit {
                 self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+                return;
+            }
+            if matches!(key_event.code, KeyCode::Char('f' | 'F'))
+                && (modifiers == KeyModifiers::NONE || modifiers == KeyModifiers::SHIFT)
+            {
+                self.chat_widget.fork_in_progress = true;
+                self.app_event_tx
+                    .send(AppEvent::ForkCurrentSession { name: None });
                 return;
             }
             if matches!(key_event.code, KeyCode::Char('r' | 'R'))

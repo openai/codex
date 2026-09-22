@@ -1,0 +1,6 @@
+---
+source: tui/src/app/tests/external_writer_fork_tests.rs
+assertion_line: 183
+expression: "messages.join(\"\\n\")"
+---
+• Fork created. You can continue here.

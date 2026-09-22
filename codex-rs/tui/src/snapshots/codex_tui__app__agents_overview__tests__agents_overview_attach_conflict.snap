@@ -5,4 +5,4 @@ expression: "render_bottom_popup(&app.chat_widget, 96)"
   🔒   This conversation is open in another app                                      r to retry
       Close it there and press R to continue here.
 
-   r retry   esc command center   ctrl+c/q exit   ctrl+t transcript
+   r retry   f fork   esc command center   ctrl+c/q exit   ctrl+t transcript

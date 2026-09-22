@@ -226,6 +226,7 @@ impl ChatWidget {
             active_side_conversation: false,
             blocks_direct_input: false,
             external_writer_view: false,
+            fork_in_progress: false,
             misalignment_policy_violation: None,
             normal_placeholder_text: placeholder,
             side_placeholder_text: side_placeholder,
