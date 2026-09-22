@@ -252,6 +252,7 @@ async fn read_mcp_skill_resource(app_server: &mut TestAppServer, thread_id: &str
             server: "codex_apps".to_string(),
             uri: SKILL_MAIN_PROMPT_URI.to_string(),
             connector_id: None,
+            target: None,
         })
         .await?;
     let response: McpResourceReadResponse =

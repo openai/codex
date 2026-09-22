@@ -14648,6 +14648,17 @@
           "server": {
             "type": "string"
           },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpResourceReadTarget"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Explicit hosted app/account. Omit to retain legacy resource discovery."
+          },
           "threadId": {
             "type": [
               "string",
@@ -14686,6 +14697,25 @@
           "contents"
         ],
         "title": "McpResourceReadResponse",
+        "type": "object"
+      },
+      "McpResourceReadTarget": {
+        "properties": {
+          "connectorId": {
+            "type": "string"
+          },
+          "linkId": {
+            "description": "Null explicitly requests no-auth access, subject to the app's resource policy.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connectorId",
+          "linkId"
+        ],
         "type": "object"
       },
       "McpServerConnectionStatus": {

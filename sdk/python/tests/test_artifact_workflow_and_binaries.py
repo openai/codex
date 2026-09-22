@@ -536,6 +536,18 @@ def test_generated_chatgpt_account_email_is_required_nullable() -> None:
         ChatgptAccount.model_validate({"planType": "pro", "type": "chatgpt"})
 
 
+@pytest.mark.parametrize("link_id", ["link_calendar", None])
+def test_generated_resource_read_target_requires_explicit_account(link_id: str | None) -> None:
+    from openai_codex.generated.v2_all import McpResourceReadTarget
+
+    payload = {"connectorId": "calendar", "linkId": link_id}
+    target = McpResourceReadTarget.model_validate(payload)
+    assert target.model_dump(by_alias=True) == payload
+
+    with pytest.raises(ValidationError):
+        McpResourceReadTarget.model_validate({"connectorId": "calendar"})
+
+
 def test_generated_inline_image_class_names_remain_stable() -> None:
     """Keep the existing Python class names when image references expand."""
     from openai_codex.generated.v2_all import (

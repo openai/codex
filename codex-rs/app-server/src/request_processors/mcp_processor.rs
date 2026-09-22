@@ -450,20 +450,40 @@ impl McpRequestProcessor {
             server,
             uri,
             connector_id,
+            target,
         } = params;
         let mut resource_params = ReadResourceRequestParams::new(uri);
+        let mut meta = serde_json::Map::new();
         if let Some(connector_id) = connector_id {
-            resource_params.meta = Some(
-                serde_json::Map::from_iter([(
-                    "x-codex-turn-metadata".to_string(),
-                    serde_json::json!({
-                        "mcp_request_meta": {
-                            "selected_connector_ids": [connector_id],
-                        },
-                    }),
-                )])
-                .into(),
+            meta.insert(
+                "x-codex-turn-metadata".to_string(),
+                serde_json::json!({
+                    "mcp_request_meta": {"selected_connector_ids": [connector_id]},
+                }),
             );
+        }
+        if origin_call_id.is_none()
+            && let Some(target) = target
+        {
+            if server != codex_mcp::CODEX_APPS_MCP_SERVER_NAME
+                || target.connector_id.trim().is_empty()
+                || target
+                    .link_id
+                    .as_ref()
+                    .is_some_and(|id| id.trim().is_empty() || id.starts_with("synthetic_link::"))
+            {
+                return Err(invalid_request(
+                    "target requires codex_apps, a connectorId, and a real linkId or null",
+                ));
+            }
+            meta.insert(
+                "connector_id".to_string(),
+                serde_json::json!(target.connector_id),
+            );
+            meta.insert("link_id".to_string(), serde_json::json!(target.link_id));
+        }
+        if !meta.is_empty() {
+            resource_params.meta = Some(meta.into());
         }
 
         if let Some(thread_id) = thread_id {

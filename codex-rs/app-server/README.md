@@ -66,6 +66,12 @@ stdio servers. The existing `mcp_2026_07_28` flag still governs eligible other
 servers, regardless of whether their names or URLs resemble hosted Apps.
 App-server does not persist this selection.
 
+## Hosted resource reads
+
+`mcpServer/resource/read` accepts `target: {connectorId, linkId}` for direct hosted app reads without tool discovery. A string `linkId` selects that account; `null` explicitly requests no-auth access subject to backend policy. Do not infer no-auth access from unknown or synthetic links.
+
+`originCallId` with `threadId` takes precedence and retains the originating app/account scope. Requests without `target` retain discovery; `connectorId` continues to restrict reads to that connector. Direct targets require backend support for app/account resource reads.
+
 # Project trust
 
 `thread/start` does not persist project trust for a directory where configuration

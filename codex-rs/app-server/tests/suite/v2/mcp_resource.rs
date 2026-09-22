@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::pin::pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -28,6 +29,7 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::McpResourceContent;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpResourceReadResponse;
+use codex_app_server_protocol::McpResourceReadTarget;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::ProjectCreateParams;
@@ -150,7 +152,7 @@ const SKILL_REFERENCE_CONTENTS: &str =
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
     let responses_server = responses::start_mock_server().await;
-    let (apps_server_url, _apps_server_calls, apps_server_handle) =
+    let (apps_server_url, apps_server_calls, apps_server_handle) =
         start_resource_apps_mcp_server().await?;
     let responses_server_uri = responses_server.uri();
     let (_codex_home, mut mcp) = start_resource_test_app_server(
@@ -166,19 +168,54 @@ async fn mcp_resource_read_returns_resource_contents() -> Result<()> {
             ..Default::default()
         })
         .await?;
-    let read_response: McpResourceReadResponse = mcp
-        .request(|request_id| ClientRequest::McpResourceRead {
-            request_id,
-            params: McpResourceReadParams {
-                thread_id: Some(thread.id),
-                origin_call_id: None,
-                server: "codex_apps".to_string(),
-                uri: TEST_RESOURCE_URI.to_string(),
-                connector_id: None,
-            },
-        })
-        .await?;
-    assert_eq!(read_response, expected_resource_read_response());
+    for thread_id in [Some(thread.id), None] {
+        for target in [
+            None,
+            Some(McpResourceReadTarget {
+                connector_id: "calendar".to_string(),
+                link_id: Some("link_calendar".to_string()),
+            }),
+            Some(McpResourceReadTarget {
+                connector_id: "calendar".to_string(),
+                link_id: None,
+            }),
+        ] {
+            let read_response: McpResourceReadResponse = mcp
+                .request(|request_id| ClientRequest::McpResourceRead {
+                    request_id,
+                    params: McpResourceReadParams {
+                        thread_id: thread_id.clone(),
+                        origin_call_id: None,
+                        server: "codex_apps".to_string(),
+                        uri: TEST_RESOURCE_URI.to_string(),
+                        connector_id: None,
+                        target: target.clone(),
+                    },
+                })
+                .await?;
+            assert_eq!(read_response, expected_resource_read_response());
+            let metadata = apps_server_calls
+                .read_metadata
+                .lock()
+                .expect("read metadata lock");
+            let metadata = metadata
+                .last()
+                .expect("resource read reached the MCP server");
+            assert_eq!(
+                (
+                    metadata.get("connector_id").cloned(),
+                    metadata.get("link_id").cloned()
+                ),
+                match &target {
+                    Some(target) => (
+                        Some(json!(target.connector_id)),
+                        Some(json!(target.link_id)),
+                    ),
+                    None => (None, None),
+                },
+            );
+        }
+    }
 
     apps_server_handle.abort();
     let _ = apps_server_handle.await;
@@ -237,6 +274,7 @@ async fn mcp_resource_read_preserves_protocol_errors(protocol: ProtocolVersion) 
                     server: server.to_string(),
                     uri: TEST_ERROR_RESOURCE_URI.to_string(),
                     connector_id: None,
+                    target: None,
                 })
                 .await?;
             let error = timeout(
@@ -452,6 +490,7 @@ apps = true
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
                 connector_id: None,
+                target: None,
             },
         })
         .await?;
@@ -465,6 +504,7 @@ apps = true
                 server: "codex_apps".to_string(),
                 uri: TEST_ELICITATION_RESOURCE_URI.to_string(),
                 connector_id: None,
+                target: None,
             },
         })
         .await?;
@@ -506,6 +546,7 @@ async fn mcp_resource_read_returns_error_for_unknown_thread() -> Result<()> {
                 server: "codex_apps".to_string(),
                 uri: TEST_RESOURCE_URI.to_string(),
                 connector_id: None,
+                target: None,
             },
         })
         .await;
@@ -630,6 +671,7 @@ async fn metadata_and_mcp_requests_complete_while_unrelated_resume_loads_config(
                         server: "resource_server".to_string(),
                         uri: TEST_RESOURCE_URI.to_string(),
                         connector_id: None,
+                        target: None,
                     },
                 }),
                 sender.request(ClientRequest::McpServerToolCall {
@@ -1300,6 +1342,7 @@ fn expected_resource_read_response() -> McpResourceReadResponse {
 
 #[derive(Debug, Default)]
 pub(super) struct ResourceAppsMcpCalls {
+    read_metadata: Mutex<Vec<serde_json::Map<String, serde_json::Value>>>,
     list_resources: AtomicUsize,
     main_prompt_reads: AtomicUsize,
     reference_reads: AtomicUsize,
@@ -1446,6 +1489,11 @@ impl ServerHandler for ResourceAppsMcpServer {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, rmcp::ErrorData> {
+        self.calls
+            .read_metadata
+            .lock()
+            .expect("read metadata lock")
+            .push(context.meta.0.0.clone());
         let uri = request.uri;
         if uri == TEST_ERROR_RESOURCE_URI {
             return Err(rmcp::ErrorData::new(

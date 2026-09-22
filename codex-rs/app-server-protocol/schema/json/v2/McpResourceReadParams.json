@@ -1,5 +1,26 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpResourceReadTarget": {
+      "properties": {
+        "connectorId": {
+          "type": "string"
+        },
+        "linkId": {
+          "description": "Null explicitly requests no-auth access, subject to the app's resource policy.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "connectorId",
+        "linkId"
+      ],
+      "type": "object"
+    }
+  },
   "properties": {
     "connectorId": {
       "type": [
@@ -16,6 +37,17 @@
     },
     "server": {
       "type": "string"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McpResourceReadTarget"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Explicit hosted app/account. Omit to retain legacy resource discovery."
     },
     "threadId": {
       "type": [
