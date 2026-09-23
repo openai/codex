@@ -71,6 +71,16 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
     chat.queue_user_message(UserMessage::from("queued follow-up"));
     chat.bottom_pane
         .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
+    chat.add_async_questions(
+        "question",
+        &[codex_protocol::items::AsyncUserInputQuestion {
+            title: "Which way?".into(),
+            options: None,
+        }],
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("answer".into());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
     drain_insert_history(&mut rx);
 
     handle_error(

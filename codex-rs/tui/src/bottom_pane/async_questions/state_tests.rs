@@ -29,6 +29,25 @@ fn editor() -> AsyncQuestions {
 }
 
 #[test]
+fn taking_pending_drafts_preserves_order_expands_pastes_and_skips_blank_drafts() {
+    let mut editor = editor();
+    editor.set_expanded(/*expanded*/ true);
+    let large_answer = "typed answer ".repeat(/*n*/ 200);
+    editor.handle_paste(large_answer.clone());
+    editor.navigate(/*forward*/ true);
+    editor.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+    editor.handle_paste(" other answer ".into());
+    editor.append("blank", &[question("Blank?", /*options*/ None)]);
+
+    assert_eq!(
+        editor.take_pending_drafts(),
+        vec![large_answer.trim().to_string(), "other answer".to_string()]
+    );
+    assert_eq!((editor.unanswered_count(), editor.expanded), (0, false));
+    assert!(editor.submission.is_none());
+}
+
+#[test]
 fn replay_preserves_drafts_and_does_not_reopen_handled_questions() {
     let mut original = editor();
     original.set_expanded(/*expanded*/ true);

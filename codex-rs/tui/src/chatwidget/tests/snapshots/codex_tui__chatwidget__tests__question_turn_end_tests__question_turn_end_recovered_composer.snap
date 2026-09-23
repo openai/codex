@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/question_turn_end_tests.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+› $tool existing draft
+  Over-ear
+  Under 250
+
+  GPT-5.6-Sol default · /tmp/project

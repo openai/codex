@@ -1,5 +1,9 @@
 //! Embed the composer in question rows, resetting history navigation when drafts change.
+//! Recovered appends cancel pending Vim commands before moving the cursor and stay out of dot repeat.
+//! Normal-mode recovery is one undoable edit; active insert/replace sessions keep their grouping.
+//! Paste payloads stay intact and sparkle stays dismissed.
 
+use super::super::textarea::VimPersistentState;
 use super::*;
 
 impl ComposerDraft {
@@ -14,6 +18,39 @@ impl ComposerDraft {
 }
 
 impl ChatComposer {
+    pub(in crate::bottom_pane) fn append_recovered_drafts(&mut self, drafts: &str) {
+        self.flush_pending_input();
+        self.dismiss_sparkle();
+        if self.draft.textarea.is_vim_operator_pending() {
+            self.draft.textarea.enter_vim_normal_mode();
+        }
+        self.finish_vim_edit();
+        let mut vim_state = VimPersistentState::default();
+        self.draft
+            .textarea
+            .swap_vim_persistent_state(&mut vim_state);
+        let started_vim_edit = self.begin_direct_vim_edit();
+        self.move_cursor_to_end();
+        if !self.current_text().is_empty() {
+            self.insert_str("\n");
+        }
+        let char_count = drafts.chars().count();
+        if char_count > LARGE_PASTE_CHAR_THRESHOLD {
+            let placeholder = self.next_large_paste_placeholder(char_count);
+            self.draft.textarea.insert_element(&placeholder);
+            self.draft.pending_pastes.push((placeholder, drafts.into()));
+            self.sync_popups();
+        } else {
+            self.insert_str(drafts);
+        }
+        self.draft
+            .textarea
+            .swap_vim_persistent_state(&mut vim_state);
+        if started_vim_edit {
+            self.finish_vim_edit();
+        }
+    }
+
     pub(in crate::bottom_pane) fn restore_inline_draft(&mut self, draft: ComposerDraft) {
         self.history.reset_navigation();
         self.restore_draft(draft);

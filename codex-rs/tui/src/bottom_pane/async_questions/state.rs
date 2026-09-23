@@ -1,4 +1,4 @@
-//! Pending async questions retain drafts until handled locally or answered by another client.
+//! Pending async questions retain drafts until handled locally, answered by another client, or a live turn ends.
 //! Message IDs survive removal so replay cannot reopen an answered or skipped question.
 
 use super::*;
@@ -204,6 +204,20 @@ impl AsyncQuestions {
         self.visible_options.set((0, 0));
         self.restore_current_draft();
         self.composer.reset_vim_mode();
+    }
+
+    /// Recover unsent typed answers before clearing all pending questions.
+    pub(crate) fn take_pending_drafts(&mut self) -> Vec<String> {
+        self.save_current_draft();
+        let drafts = self
+            .state
+            .pending
+            .iter()
+            .map(|question| question.draft.text_with_pending().trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect();
+        self.clear_pending();
+        drafts
     }
 
     pub(crate) fn capture(&mut self) -> QuestionState {

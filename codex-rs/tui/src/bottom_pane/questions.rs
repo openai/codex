@@ -42,6 +42,28 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Capture answers and settle the main draft before turn finalization can restore input.
+    pub(crate) fn take_question_drafts(&mut self) -> Option<Vec<String>> {
+        let questions = self.questions.as_mut()?;
+        // The question editor closes at turn end; recover its typed answer, not a history preview.
+        questions.composer.cancel_history_search();
+        let drafts = questions.take_pending_drafts();
+        if !drafts.is_empty() {
+            self.composer.cancel_history_search();
+            self.composer.flush_pending_input();
+        }
+        Some(drafts)
+    }
+
+    /// Append recovered answers after turn finalization, retaining existing composer elements.
+    pub(crate) fn append_question_drafts(&mut self, drafts: &[String]) {
+        if drafts.is_empty() {
+            return;
+        }
+        self.composer.append_recovered_drafts(&drafts.join("\n"));
+        self.request_redraw();
+    }
+
     pub(super) fn question_summary(&self, now: Instant) -> Option<Vec<Line<'static>>> {
         let questions = self
             .questions

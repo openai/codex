@@ -79,6 +79,78 @@ fn undo_and_redo_group_complete_vim_edits() {
 }
 
 #[test]
+fn recovered_answers_undo_as_one_vim_edit() {
+    for answer in [
+        "answer".to_owned(),
+        "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1),
+    ] {
+        let mut composer = vim_composer("abc");
+        keys(&mut composer, "iX");
+        escape(&mut composer);
+        let before = composer.draft_snapshot();
+        composer.append_recovered_drafts(&answer);
+        keys(&mut composer, "u");
+        assert_eq!(composer.draft_snapshot(), before);
+        keys(&mut composer, ".");
+        assert_eq!(composer.current_text(), "XXabc");
+
+        for (command, mode, edited) in [("iX", "Insert", "Xabc"), ("RX", "Replace", "Xbc")] {
+            let mut composer = vim_composer("abc");
+            let before = composer.draft_snapshot();
+            keys(&mut composer, command);
+            composer.append_recovered_drafts(&answer);
+            assert_eq!(
+                (
+                    composer.current_text_with_pending(),
+                    composer.draft.textarea.vim_mode_label(),
+                ),
+                (format!("{edited}\n{answer}"), Some(mode))
+            );
+            escape(&mut composer);
+            let after = composer.draft_snapshot();
+            keys(&mut composer, "u");
+            assert_eq!(composer.draft_snapshot(), before);
+            ctrl_r(&mut composer);
+            assert_eq!(composer.draft_snapshot(), after);
+            keys(&mut composer, "u");
+            keys(&mut composer, ".");
+            assert_eq!(composer.current_text(), edited);
+        }
+        for command in ["", "d", "/draft", "?draft", "d/draft", "c?draft", "y/draft"] {
+            let mut composer = vim_composer("existing draft");
+            let before = composer.draft_snapshot();
+            keys(&mut composer, command);
+            composer.append_recovered_drafts(&answer);
+            assert_eq!(
+                (
+                    composer.current_text_with_pending(),
+                    composer.draft.textarea.vim_query().is_some(),
+                    composer.draft.textarea.is_vim_operator_pending(),
+                ),
+                (format!("existing draft\n{answer}"), false, false)
+            );
+            let after = composer.draft_snapshot();
+            keys(&mut composer, "u");
+            assert_eq!(composer.draft_snapshot(), before);
+            ctrl_r(&mut composer);
+            assert_eq!(composer.draft_snapshot(), after);
+        }
+    }
+    snapshot_composer_state_with_width(
+        "recovered_answer_cancels_vim_search",
+        /*width*/ 40,
+        /*enhanced_keys_supported*/ false,
+        |composer| {
+            composer.set_disable_paste_burst(/*disabled*/ true);
+            composer.set_text_content("existing draft".into(), Vec::new(), Vec::new());
+            composer.set_vim_enabled(/*enabled*/ true);
+            keys(composer, "d/draft");
+            composer.append_recovered_drafts("answer");
+        },
+    );
+}
+
+#[test]
 fn undo_preserves_repeat_and_pending_operator_bindings() {
     let mut composer = vim_composer("alpha beta gamma");
     keys(&mut composer, "dw.u");
