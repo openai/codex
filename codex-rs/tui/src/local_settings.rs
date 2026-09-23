@@ -10,9 +10,13 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::TerminalResizeReflowConfig;
 use crate::legacy_core::config::TerminalResizeReflowMaxRows;
 use crate::transcript_mode::TranscriptMode;
+use codex_config::types::CopyOnSelect;
 use codex_config::types::History;
 use codex_config::types::Notice;
 use codex_config::types::Tui;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalInfo;
+use codex_terminal_detection::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +76,7 @@ impl LocalSettings {
                 question_esc_back: config.tui_question_esc_back,
                 raw_output_mode: config.tui_raw_output_mode,
                 fullscreen_transcript: config.tui_fullscreen_transcript,
+                copy_on_select: config.tui_copy_on_select,
                 alternate_screen: config.tui_alternate_screen,
                 status_line: config.tui_status_line.clone(),
                 status_line_use_colors: config.tui_status_line_use_colors,
@@ -120,6 +125,25 @@ impl LocalSettings {
         settings.transcript_mode = self.transcript_mode;
         settings.tui.alternate_screen = self.tui.alternate_screen;
         settings
+    }
+
+    /// Prefer explicit overrides; tmux/Zellij always default to copying on release.
+    /// Direct macOS terminals default on except Ghostty/Kitty, which forward Cmd-C.
+    pub(crate) fn copy_on_select(&self, terminal: &TerminalInfo) -> bool {
+        match self.tui.copy_on_select {
+            CopyOnSelect::Always => true,
+            CopyOnSelect::Never => false,
+            CopyOnSelect::Auto => match terminal.multiplexer {
+                Some(Multiplexer::Tmux { .. } | Multiplexer::Zellij { .. }) => true,
+                None if cfg!(target_os = "macos") => {
+                    !matches!(terminal.name, TerminalName::Ghostty | TerminalName::Kitty)
+                }
+                None => matches!(
+                    terminal.name,
+                    TerminalName::Iterm2 | TerminalName::AppleTerminal
+                ),
+            },
+        }
     }
 
     pub(crate) fn terminal_resize_reflow(&self) -> TerminalResizeReflowConfig {

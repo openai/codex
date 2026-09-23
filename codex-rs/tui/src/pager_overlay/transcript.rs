@@ -426,14 +426,20 @@ impl TranscriptOverlay {
     fn apply_action(&mut self, tui: &mut tui::Tui, action: ViewAction) {
         self.notice = None;
         let resume_following = matches!(action, ViewAction::CopyAndFollow(_));
+        let copy_on_select = matches!(action, ViewAction::CopyOnSelect(_));
         match action {
             ViewAction::Changed => {}
-            ViewAction::Copy(text) | ViewAction::CopyAndFollow(text) => {
-                let result = self
-                    .view
-                    .copy_selected_text_with(&self.cells, &text, |text| {
-                        tui.copy_transcript_selection(text)
-                    });
+            ViewAction::Copy(text)
+            | ViewAction::CopyOnSelect(text)
+            | ViewAction::CopyAndFollow(text) => {
+                let result = if copy_on_select {
+                    tui.copy_transcript_selection(&text)
+                } else {
+                    self.view
+                        .copy_selected_text_with(&self.cells, &text, |text| {
+                            tui.copy_transcript_selection(text)
+                        })
+                };
                 if resume_following
                     && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Confirmed))
                 {

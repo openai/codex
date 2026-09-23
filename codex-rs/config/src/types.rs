@@ -710,6 +710,19 @@ pub enum TuiPetAnchor {
     ScreenBottom,
 }
 
+/// When transcript mouse selections are copied on release.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CopyOnSelect {
+    /// Use the terminal-specific default.
+    #[default]
+    Auto,
+    /// Copy every nonempty transcript mouse selection on release.
+    Always,
+    /// Require an explicit copy action.
+    Never,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiNotificationSettings {
@@ -802,6 +815,12 @@ pub struct Tui {
     /// Defaults to `true`; alternate-screen restrictions take precedence.
     #[serde(default = "default_true")]
     pub fullscreen_transcript: bool,
+
+    /// Copy selected transcript text when the mouse button is released.
+    /// Defaults to `auto`: enabled in tmux/Zellij and in direct macOS terminals except Ghostty/Kitty.
+    /// On other platforms, direct terminals default off except iTerm2/Terminal.app.
+    #[serde(default)]
+    pub copy_on_select: CopyOnSelect,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///

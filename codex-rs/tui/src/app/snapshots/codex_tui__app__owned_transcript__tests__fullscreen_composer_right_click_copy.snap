@@ -1,19 +1,30 @@
 ---
 source: tui/src/app/owned_transcript_tests.rs
-assertion_line: 1245
 expression: "format!(\"{}\\n\\n{}\", selection_frames.join(\"\\n\\n\"),\nnormalize_snapshot_paths(buffer_text(crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal))))"
 ---
-keyboard Err("clipboard unavailable")
+cmd-c Err("clipboard unavailable")
 hello world
 ^^^^^······
 
-keyboard Ok(Unconfirmed)
+cmd-c Ok(Unconfirmed)
 hello world
 ^^^^^······
 
-keyboard Ok(Confirmed)
+cmd-c Ok(Confirmed)
+hello world
+···········
+
+ctrl-c Err("clipboard unavailable")
 hello world
 ^^^^^······
+
+ctrl-c Ok(Unconfirmed)
+hello world
+^^^^^······
+
+ctrl-c Ok(Confirmed)
+hello world
+···········
 
 right-click Err("clipboard unavailable")
 hello world

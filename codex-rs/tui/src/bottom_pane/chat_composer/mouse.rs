@@ -1,7 +1,7 @@
 //! Mouse gestures flush pending typing before layout and hit testing. Left dragging selects
 //! editable text using the textarea's last rendered viewport and hides completion suggestions.
 //! Double/triple clicks select words/logical lines using the transcript's shared gesture rules.
-//! Copy preserves the draft; confirmed right-click copies clear selection, keyboard copies retain it.
+//! Copy preserves the draft and cursor; confirmed copies clear selection for every gesture.
 
 use super::*;
 use crate::clipboard_copy::CopyStatus;
@@ -36,7 +36,7 @@ impl ChatComposer {
         let text = &self.draft.textarea.text()[range];
         let char_count = text.chars().count();
         let result = copy(text);
-        if matches!(event, TuiEvent::Mouse(_)) && result == Ok(CopyStatus::Confirmed) {
+        if result == Ok(CopyStatus::Confirmed) {
             self.draft.textarea.set_cursor(self.draft.textarea.cursor());
         }
         Some((char_count, result))

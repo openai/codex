@@ -1,6 +1,8 @@
 //! Transcript gestures leave ordinary typing and composer editing with the existing input path.
 //! Stationary link clicks open on release; dragging or scrolling keeps the gesture in selection.
 //! Shift-click extends the existing selection from its original text unit.
+//! Optional automatic copying happens only when a nonempty mouse selection is released.
+//! Automatic copies retain the selection; explicit copies clear it after confirmed delivery.
 
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
@@ -17,6 +19,7 @@ use super::*;
 pub(crate) enum ViewAction {
     Changed,
     Copy(String),
+    CopyOnSelect(String),
     CopyAndFollow(String),
     OpenLink(String),
 }
@@ -258,11 +261,17 @@ impl TranscriptView {
                     self.extend_selection(event.column, event.row);
                 }
                 self.end_drag();
-                if self.selected_text(cells).is_none() {
+                let selected = self.selected_text(cells);
+                if selected.is_none() {
                     self.end_selection(cells);
                 }
                 if let Some(link) = link {
                     return Some(ViewAction::OpenLink(link));
+                }
+                if self.copy_on_select
+                    && let Some(text) = selected.filter(|text| !text.is_empty())
+                {
+                    return Some(ViewAction::CopyOnSelect(text));
                 }
             }
             _ => return None,

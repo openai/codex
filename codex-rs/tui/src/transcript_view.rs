@@ -84,6 +84,7 @@ struct VisibleRow {
 
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
+    pub(crate) copy_on_select: bool,
     position: Position,
     follow_control: follow_control::FollowControl,
     copy_feedback: Option<composer_gap::CopyFeedback>,
@@ -114,6 +115,7 @@ pub(crate) struct TranscriptView {
 impl Default for TranscriptView {
     fn default() -> Self {
         Self {
+            copy_on_select: false,
             position: Position::Latest,
             follow_control: follow_control::FollowControl::default(),
             copy_feedback: None,
@@ -589,3 +591,7 @@ impl TranscriptView {
 #[cfg(test)]
 #[path = "transcript_view_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transcript_view/copy_on_select_tests.rs"]
+mod copy_on_select_tests;
