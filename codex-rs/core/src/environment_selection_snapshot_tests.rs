@@ -5,6 +5,7 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::sandbox::SandboxType;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -20,16 +21,15 @@ async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
         workspace_roots: vec![cwd],
         config: EnvironmentConfigState::Pending,
     };
-    let config = tests::test_environment_config();
     let environments = ThreadEnvironments::new(
         Arc::new(EnvironmentManager::default_for_tests()),
         crate::shell::default_user_shell(),
-        |_| config.clone(),
+        ThreadEnvironmentDefaults::new(tests::test_environment_config(), SandboxType::None),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
-    environments.update_selections(&[selection], |_| config.clone());
+    environments.update_selections(&[selection]);
     let starting = environments
         .snapshot()
         .await
@@ -39,7 +39,7 @@ async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
         .clone();
     let held_snapshot = environments.snapshot();
 
-    environments.update_selections(&[], |_| config.clone());
+    environments.update_selections(&[]);
 
     let error = timeout(Duration::from_secs(5), starting.wait_until_ready())
         .await
@@ -83,32 +83,28 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
         Some(broker),
         /*prefer_executor_snapshots*/ false,
     );
-    let config = tests::test_environment_config();
     let environments = Arc::new(ThreadEnvironments::new(
         Arc::new(EnvironmentManager::default_for_tests()),
         crate::shell::default_user_shell(),
-        |_| config.clone(),
+        ThreadEnvironmentDefaults::new(tests::test_environment_config(), SandboxType::None),
         shell_snapshot,
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     ));
-    environments.update_selections(
-        &[TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: cwd_uri.clone(),
-            workspace_roots: vec![cwd_uri],
-            config: EnvironmentConfigState::FromThread,
-        }],
-        |_| config.clone(),
-    );
-    let resolution = environments.environments.lock().unwrap()[0]
+    environments.update_selections(&[TurnEnvironmentSelection {
+        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: cwd_uri.clone(),
+        workspace_roots: vec![cwd_uri],
+        config: EnvironmentConfigState::FromThread,
+    }]);
+    let resolution = environments.state.lock().unwrap().environments[0]
         .resolution
         .clone();
     let resolved = resolution.await.expect("local is ready");
     let (refresh_paused_tx, refresh_paused_rx) = oneshot::channel();
     let (resume_refresh_tx, resume_refresh_rx) = std::sync::mpsc::channel();
     // Pause the credential refresh while it is using the current list.
-    environments.environments.lock().unwrap()[0].resolution = async move {
+    environments.state.lock().unwrap().environments[0].resolution = async move {
         refresh_paused_tx.send(()).expect("signal refresh paused");
         resume_refresh_rx.recv().expect("resume refresh");
         Ok(resolved)
@@ -128,7 +124,7 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
     let removing = Arc::clone(&environments);
     let mut removal = tokio::task::spawn_blocking(move || {
         removal_started_tx.send(()).expect("signal removal started");
-        removing.update_selections(&[], |_| config.clone());
+        removing.update_selections(&[]);
     });
     timeout(Duration::from_secs(/*secs*/ 5), removal_started_rx)
         .await

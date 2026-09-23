@@ -385,17 +385,19 @@ mod tests {
             .expect("ready primary environment");
         let selection = environment.selection();
         let environment_config = environment.config().clone();
+        let local_windows_sandbox_type = environment_config.windows_sandbox_type;
         let environments = crate::environment_selection::ThreadEnvironments::new(
             session.services.turn_environments.environment_manager(),
             crate::shell::default_user_shell(),
-            |_| environment_config.clone(),
+            crate::session::ThreadEnvironmentDefaults::new(
+                environment_config,
+                local_windows_sandbox_type,
+            ),
             crate::shell_snapshot::ShellSnapshot::disabled(),
             Default::default(),
             /*non_blocking_snapshots*/ true,
         );
-        environments.update_selections(std::slice::from_ref(&selection), |_| {
-            environment_config.clone()
-        });
+        environments.update_selections(std::slice::from_ref(&selection));
         turn_context.initial_environments = environments.snapshot().await;
         turn_context
             .initial_environments

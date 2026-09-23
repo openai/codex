@@ -264,6 +264,7 @@ mod turn_input;
 mod turn_suspension;
 mod world_state;
 use self::code_mode_warning::unsupported_code_mode_warning;
+pub(crate) use self::environment::ThreadEnvironmentDefaults;
 #[cfg(test)]
 use self::handlers::submission_dispatch_span;
 use self::handlers::submission_loop;
@@ -1901,18 +1902,11 @@ impl Session {
             let root_service_tier_changed = updated.parent_thread_id.is_none()
                 && state.session_configuration.step_settings.service_tier
                     != updated.step_settings.service_tier;
-            let environment_config = updated.inferred_environment_config();
             let mcp_inputs_changed = self.mcp_inputs_differ(&state.session_configuration, &updated);
             if mcp_inputs_changed {
                 self.mark_mcp_runtime_dirty();
             }
-            if state.session_configuration.inferred_environment_config() != environment_config {
-                self.services
-                    .turn_environments
-                    .update_thread_config(|environment| {
-                        updated.inferred_environment_config_for(environment)
-                    });
-            }
+            // Save new environment defaults for future turns. The running turn keeps its own.
             state.session_configuration = updated;
             if root_service_tier_changed {
                 self.services.agent_control.set_root_service_tier(

@@ -5002,14 +5002,15 @@ async fn resolved_environments_for_configuration(
     let turn_environments = ThreadEnvironments::new(
         Arc::clone(&environment_manager),
         default_user_shell(),
-        |environment| session_configuration.inferred_environment_config_for(environment),
+        ThreadEnvironmentDefaults::new(
+            session_configuration.inferred_environment_config(),
+            session_configuration.windows_sandbox_type,
+        ),
         ShellSnapshot::disabled(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
-    turn_environments.update_selections(environment_selections, |environment| {
-        session_configuration.inferred_environment_config_for(environment)
-    });
+    turn_environments.update_selections(environment_selections);
     (environment_manager, turn_environments.snapshot().await)
 }
 
@@ -5959,7 +5960,23 @@ async fn permission_profile_updates_apply_to_next_turn_environment() {
                 .update_settings(updates)
                 .await
                 .expect("permission profile update should succeed");
-            session.new_default_turn().await
+            assert_eq!(
+                session
+                    .services
+                    .turn_environments
+                    .snapshot()
+                    .await
+                    .primary()
+                    .expect("current environment")
+                    .config(),
+                &active_environment_config,
+            );
+            session
+                .new_turn_with_default_settings(
+                    "permission-profile-update".to_string(),
+                    Default::default(),
+                )
+                .await
         };
         let next_environment = next_turn
             .initial_environments
@@ -6400,7 +6417,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
-        |environment| session_configuration.inferred_environment_config_for(environment),
+        ThreadEnvironmentDefaults::new(
+            session_configuration.inferred_environment_config(),
+            session_configuration.windows_sandbox_type,
+        ),
         ShellSnapshot::disabled(),
         resolved_environments,
         /*non_blocking_snapshots*/ false,
@@ -8667,7 +8687,10 @@ where
     let turn_environments = Arc::new(ThreadEnvironments::new(
         environment_manager,
         default_user_shell(),
-        |environment| session_configuration.inferred_environment_config_for(environment),
+        ThreadEnvironmentDefaults::new(
+            session_configuration.inferred_environment_config(),
+            session_configuration.windows_sandbox_type,
+        ),
         ShellSnapshot::disabled(),
         resolved_turn_environments.clone(),
         /*non_blocking_snapshots*/ false,
@@ -9100,15 +9123,12 @@ async fn mcp_elicitation_reviewer_uses_active_reviewer_and_latest_runtime_policy
     )
     .await;
     assert_eq!(old_turn.config.approvals_reviewer, ApprovalsReviewer::User);
+    let task = NeverEndingTask {
+        kind: TaskKind::Regular,
+        listen_to_cancellation_token: true,
+    };
     session
-        .spawn_task(
-            Arc::clone(&old_turn),
-            Vec::new(),
-            NeverEndingTask {
-                kind: TaskKind::Regular,
-                listen_to_cancellation_token: true,
-            },
-        )
+        .spawn_task(Arc::clone(&old_turn), Vec::new(), task)
         .await;
 
     session.mark_mcp_runtime_dirty();
@@ -9212,9 +9232,41 @@ async fn mcp_elicitation_reviewer_uses_active_reviewer_and_latest_runtime_policy
             .await
             .expect("elicitation review should succeed"),
         Some(ElicitationResponse {
+            action: ElicitationAction::Decline,
+            content: None,
+            meta: Some(json!({ "approvals_reviewer": "auto_review" })),
+        })
+    );
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let (next_turn, _) = session
+        .new_turn_with_sub_id(
+            "next-turn".to_string(),
+            SessionSettingsUpdate {
+                step_settings: StepSettingsUpdate {
+                    approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Default::default(),
+        )
+        .await
+        .expect("next turn should start with the same reviewer");
+    session
+        .spawn_task(Arc::clone(&next_turn), Vec::new(), task)
+        .await;
+    session.refresh_mcp_if_dirty().await;
+    assert_eq!(
+        session
+            .mcp_elicitation_reviewer()
+            .review(request.clone())
+            .await
+            .expect("elicitation review should succeed"),
+        Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: Some(json!({})),
-            meta: None,
+            meta: Some(json!({ "approvals_reviewer": "auto_review" })),
         })
     );
 
@@ -9225,7 +9277,7 @@ async fn mcp_elicitation_reviewer_uses_active_reviewer_and_latest_runtime_policy
         .into_iter()
         .next()
         .expect("session should select its executor environment");
-    let mut owner_config = old_turn
+    let mut owner_config = next_turn
         .initial_environments
         .primary()
         .expect("ready environment")
@@ -9237,6 +9289,11 @@ async fn mcp_elicitation_reviewer_uses_active_reviewer_and_latest_runtime_policy
         .environment_ready(&selection, owner_config)
         .await
         .expect("attachment owner should install its restricted permissions");
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    let restricted_turn = session
+        .new_turn_with_default_settings("owner-restricted".to_string(), Default::default())
+        .await;
+    session.spawn_task(restricted_turn, Vec::new(), task).await;
     session.refresh_mcp_if_dirty().await;
     assert_eq!(
         session

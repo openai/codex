@@ -10,6 +10,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::sandbox::SandboxType;
 
 use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
@@ -18,6 +19,31 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::session::session::Session;
 use crate::session::session::SessionConfiguration;
 use crate::session::session::SessionSettingsUpdate;
+
+/// Defaults for environments that inherit their configuration from the running turn.
+pub(crate) struct ThreadEnvironmentDefaults {
+    pub(crate) common: EnvironmentConfig,
+    // Chosen once when the session starts; it does not apply to remote environments.
+    local_windows_sandbox_type: SandboxType,
+}
+
+impl ThreadEnvironmentDefaults {
+    pub(crate) fn new(common: EnvironmentConfig, local_windows_sandbox_type: SandboxType) -> Self {
+        Self {
+            common,
+            local_windows_sandbox_type,
+        }
+    }
+
+    pub(crate) fn for_selection(&self, selection: &TurnEnvironmentSelection) -> EnvironmentConfig {
+        let mut config = self.common.clone();
+        config.workspace_roots = selection.workspace_roots.clone();
+        if selection.environment_id == LOCAL_ENVIRONMENT_ID {
+            config.windows_sandbox_type = self.local_windows_sandbox_type;
+        }
+        config
+    }
+}
 
 pub(super) fn validate_environment_selections(
     selections: &[TurnEnvironmentSelection],
@@ -157,12 +183,14 @@ impl Session {
                         environment.config = latest.config.clone();
                     }
                 }
+                // Apply the saved defaults even if this turn selects the same environments.
+                self.services
+                    .turn_environments
+                    .set_active_thread_defaults(configuration.inferred_environment_config());
                 if environments != self.services.turn_environments.selections() {
                     self.services
                         .turn_environments
-                        .update_selections(&environments, |environment| {
-                            configuration.inferred_environment_config_for(environment)
-                        });
+                        .update_selections(&environments);
                 }
             }
             self.services.turn_environments.snapshot()
@@ -257,13 +285,7 @@ impl Session {
         if update_current {
             // Invalidate MCP before installed configuration can wake a waiting turn.
             self.mark_mcp_runtime_dirty();
-            self.services
-                .turn_environments
-                .update_selections(&current, |environment| {
-                    state
-                        .session_configuration
-                        .inferred_environment_config_for(environment)
-                });
+            self.services.turn_environments.update_selections(&current);
         }
         Ok(())
     }

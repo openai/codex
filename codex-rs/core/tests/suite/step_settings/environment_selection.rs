@@ -114,3 +114,59 @@ async fn model_update_preserves_active_environment_and_next_turn_uses_new_select
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inherited_permission_update_applies_to_the_next_turn_not_the_next_step() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            paused_response("before-permission-update", "pause"),
+            sse_completed("current-turn-done"),
+            sse_completed("next-turn-done"),
+        ],
+    )
+    .await;
+    let test = direct_tool_settings_test()
+        .with_config(|config| {
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set restricted thread permissions");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let paused = start_paused_turn(&test.codex).await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            permission_profile: Some(PermissionProfile::Disabled),
+            ..Default::default()
+        },
+    )
+    .await?;
+    answer_paused_turn(&test.codex, &paused.turn_id).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_text_turn("start the next turn").await?;
+
+    let unrestricted = responses
+        .requests()
+        .iter()
+        .map(|request| {
+            let filesystem = request
+                .message_input_texts("user")
+                .into_iter()
+                .rfind(|text| text.contains("<filesystem>"))
+                .expect("model request includes filesystem permissions");
+            filesystem.contains("<file_system type=\"unrestricted\"")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(unrestricted, [false, false, true]);
+    Ok(())
+}

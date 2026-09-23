@@ -2,6 +2,8 @@ use super::*;
 #[cfg(unix)]
 use crate::config::NetworkProxySpec;
 #[cfg(unix)]
+use crate::session::ThreadEnvironmentDefaults;
+#[cfg(unix)]
 use crate::tools::runtimes::RuntimePathPrepends;
 #[cfg(unix)]
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
@@ -313,20 +315,17 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
     let environments = ThreadEnvironments::new(
         Arc::clone(&manager),
         shell.clone(),
-        |_| config.clone(),
+        ThreadEnvironmentDefaults::new(config.clone(), config.windows_sandbox_type),
         snapshot_builder.clone(),
         TurnEnvironmentSnapshot::default(),
         /*non_blocking_snapshots*/ false,
     );
-    environments.update_selections(
-        &[TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: PathUri::from_abs_path(&dir.path().abs()),
-            workspace_roots: Vec::new(),
-            config: EnvironmentConfigState::FromThread,
-        }],
-        |_| config.clone(),
-    );
+    environments.update_selections(&[TurnEnvironmentSelection {
+        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd: PathUri::from_abs_path(&dir.path().abs()),
+        workspace_roots: Vec::new(),
+        config: EnvironmentConfigState::FromThread,
+    }]);
     for (state, expect_snapshot) in [
         (SnapshotCredentialBrokerState::Starting, false),
         (SnapshotCredentialBrokerState::Inactive, true),
@@ -354,7 +353,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
                 .shell_environment_policy
                 .r#set
                 .insert("CORP_REGION".into(), "west".into());
-            environments.update_thread_config(|_| config.clone());
+            environments.set_active_thread_defaults(config.clone());
             let updated = environments.snapshot().await;
             assert!(!Arc::ptr_eq(
                 &environment.shell_snapshot_cache,
@@ -366,7 +365,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
             let child = ThreadEnvironments::new(
                 Arc::clone(&manager),
                 shell.clone(),
-                |_| config.clone(),
+                ThreadEnvironmentDefaults::new(config.clone(), config.windows_sandbox_type),
                 snapshot_builder.clone(),
                 updated.clone(),
                 /*non_blocking_snapshots*/ false,
@@ -393,7 +392,7 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
     environments.set_snapshot_credential_broker(SnapshotCredentialBrokerState::Ready(
         started_proxy.proxy(),
     ));
-    environments.update_thread_config(|_| config.clone());
+    environments.set_active_thread_defaults(config.clone());
     let turn = environments.snapshot().await;
     let environment = turn.primary().expect("brokered environment");
     let mut tool_config = crate::config::ConfigBuilder::without_managed_config_for_tests()
