@@ -36,6 +36,7 @@ mod remote_process;
 mod resolved_capability;
 mod rpc;
 mod rpc_server_requests;
+mod rpc_timing;
 mod runtime_paths;
 mod sandbox_selection;
 mod sandboxed_file_open;

@@ -68,11 +68,14 @@ impl JsonRpcConnectionEvent {
         };
 
         let queued_at = Instant::now();
+        // Record phase offsets from receipt because detached work can keep the span open.
         let request_span = tracing::info_span!(
             "codex.exec_server.request",
             otel.kind = "server",
             otel.name = "unknown",
             method = request.method.as_str(),
+            rpc.dispatch_offset_ns = tracing::field::Empty,
+            rpc.response_enqueue_offset_ns = tracing::field::Empty,
             result = tracing::field::Empty,
         );
         if let Some(trace) = &request.trace

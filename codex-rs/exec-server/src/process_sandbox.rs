@@ -36,6 +36,7 @@ use codex_utils_path_uri::PathUri;
 #[cfg(unix)]
 use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
 use crate::ExecServerRuntimePaths;
+use crate::process_telemetry::trace_process_id;
 use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
@@ -77,6 +78,11 @@ impl PreparedExecRequest {
     }
 }
 
+#[tracing::instrument(
+    name = "codex.exec_server.process_prepare_sandbox",
+    skip_all,
+    fields(process.id = trace_process_id(params.process_id.as_str())),
+)]
 pub(crate) async fn prepare_exec_request_with_telemetry(
     params: &ExecParams,
     env: HashMap<String, String>,

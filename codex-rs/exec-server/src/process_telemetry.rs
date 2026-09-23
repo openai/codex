@@ -1,5 +1,5 @@
-//! Emits bounded process lifecycle telemetry using identity captured at launch.
-//! Reconnects and later process operations must not replace that identity.
+//! Emits process lifecycle telemetry and bounds process identifiers recorded by tracing.
+//! Lifecycle events retain the identity captured at launch across reconnects and later operations.
 
 use std::sync::Arc;
 
@@ -75,4 +75,8 @@ impl ProcessTelemetry {
             reason,
         );
     }
+}
+
+pub(crate) fn trace_process_id(process_id: &str) -> Option<&str> {
+    (!process_id.is_empty() && process_id.len() <= 64).then_some(process_id)
 }

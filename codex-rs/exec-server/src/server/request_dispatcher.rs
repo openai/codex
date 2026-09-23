@@ -182,6 +182,10 @@ impl RequestDispatcher {
             self.telemetry
                 .request_queue_completed(method, queued_at.elapsed());
             request_span.record("otel.name", method);
+            request_span.record(
+                "rpc.dispatch_offset_ns",
+                i64::try_from(queued_at.elapsed().as_nanos()).unwrap_or(i64::MAX),
+            );
             if self
                 .outgoing_tx
                 .send(RpcServerOutboundMessage::Error {
@@ -203,6 +207,10 @@ impl RequestDispatcher {
                 );
                 return RequestTaskResult::ConnectionClosed;
             }
+            request_span.record(
+                "rpc.response_enqueue_offset_ns",
+                i64::try_from(queued_at.elapsed().as_nanos()).unwrap_or(i64::MAX),
+            );
             request_span.record("result", "error");
             self.telemetry.request_completed(
                 method,
@@ -221,6 +229,10 @@ impl RequestDispatcher {
         let mut disconnected_rx = self.disconnected_rx.clone();
         let telemetry = self.telemetry.clone();
         let task = async move {
+            request_span.record(
+                "rpc.dispatch_offset_ns",
+                i64::try_from(queued_at.elapsed().as_nanos()).unwrap_or(i64::MAX),
+            );
             telemetry.request_queue_completed(
                 method,
                 queued_at.elapsed().saturating_sub(route_setup_duration),
@@ -240,10 +252,19 @@ impl RequestDispatcher {
             };
             let result = request_result(&message);
             let response_sent = match message {
-                Some(message) => tokio::select! {
-                    result = outgoing_tx.send(message) => result.is_ok(),
-                    _ = disconnected_rx.changed() => false,
-                },
+                Some(message) => {
+                    let response_sent = tokio::select! {
+                        result = outgoing_tx.send(message) => result.is_ok(),
+                        _ = disconnected_rx.changed() => false,
+                    };
+                    if response_sent {
+                        request_span.record(
+                            "rpc.response_enqueue_offset_ns",
+                            i64::try_from(queued_at.elapsed().as_nanos()).unwrap_or(i64::MAX),
+                        );
+                    }
+                    response_sent
+                }
                 None => true,
             };
             if !response_sent {

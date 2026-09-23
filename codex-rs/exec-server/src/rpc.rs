@@ -36,6 +36,7 @@ use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 use crate::rpc_server_requests::RpcServerRequestSender;
+use crate::rpc_timing::RpcCompletion;
 
 #[cfg(test)]
 #[path = "rpc_client_metrics_tests.rs"]
@@ -60,7 +61,7 @@ pub(crate) enum RpcCallError {
     PendingRequestLimitExceeded { limit: usize },
 }
 
-type PendingRequest = oneshot::Sender<Result<Value, RpcCallError>>;
+type PendingRequest = oneshot::Sender<RpcCompletion>;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type RequestRoute<S> = Box<
     dyn Fn(Arc<S>, JSONRPCRequest) -> BoxFuture<Option<RpcServerOutboundMessage>> + Send + Sync,
@@ -666,7 +667,13 @@ impl RpcClient {
             self.pending.lock().await.remove(&request_id);
             return Err(RpcCallError::Closed);
         }
-
+        tracing::event!(
+            name: "codex.exec_server.request_enqueued",
+            target: "codex_otel.trace_safe",
+            tracing::Level::INFO,
+            event.name = "codex.exec_server.request_enqueued",
+            rpc.method = method,
+        );
         // Do not race in-flight requests directly against the transport-close
         // watch value. The connection reader receives JSON-RPC messages and
         // the terminal disconnect event on one ordered queue, then drains any
@@ -686,11 +693,9 @@ impl RpcClient {
                 }
             },
         };
-        let result: Result<Value, RpcCallError> = response.map_err(|_| RpcCallError::Closed)?;
-        let response = match result {
-            Ok(response) => response,
-            Err(error) => return Err(error),
-        };
+        let completion = response.map_err(|_| RpcCallError::Closed)?;
+        completion.record_receipt(method);
+        let response = completion.result?;
         serde_json::from_value(response).map_err(RpcCallError::Json)
     }
 
@@ -821,12 +826,12 @@ async fn handle_server_message(
     match message {
         JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
             if let Some(pending) = pending.lock().await.remove(&id) {
-                let _ = pending.send(Ok(result));
+                let _ = pending.send(RpcCompletion::new(Ok(result)));
             }
         }
         JSONRPCMessage::Error(JSONRPCError { id, error }) => {
             if let Some(pending) = pending.lock().await.remove(&id) {
-                let _ = pending.send(Err(RpcCallError::Server(error)));
+                let _ = pending.send(RpcCompletion::new(Err(RpcCallError::Server(error))));
             }
         }
         JSONRPCMessage::Notification(notification) => {
@@ -857,7 +862,7 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
             .collect::<Vec<_>>()
     };
     for pending in pending {
-        let _ = pending.send(Err(RpcCallError::Closed));
+        let _ = pending.send(RpcCompletion::new(Err(RpcCallError::Closed)));
     }
 }
 

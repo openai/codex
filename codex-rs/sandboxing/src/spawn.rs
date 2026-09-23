@@ -41,6 +41,7 @@ pub struct SpawnRequest<'a> {
 }
 
 /// Spawn a process using the backend selected by the prepared sandbox request.
+#[tracing::instrument(name = "codex.process.spawn", skip_all)]
 pub async fn spawn_process(request: SpawnRequest<'_>) -> Result<SpawnedProcess> {
     let tty = request.tty;
     let finish_spawn = |spawned| {
