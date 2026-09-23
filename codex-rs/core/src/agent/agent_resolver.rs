@@ -11,15 +11,15 @@ pub(crate) async fn resolve_agent_target(
     turn: &Arc<TurnContext>,
     target: &str,
 ) -> Result<ThreadId, FunctionCallError> {
-    register_session_root(session, turn);
-    if let Ok(thread_id) = ThreadId::from_string(target) {
-        return Ok(thread_id);
-    }
-
     session
         .services
-        .local_agent_runtime
-        .resolve_agent_reference(session.thread_id, &turn.session_source, target)
+        .agent_control
+        .resolve(
+            session.thread_id,
+            turn.parent_thread_id,
+            &turn.session_source,
+            target,
+        )
         .await
         .map_err(|err| match err.details() {
             CodexErrorDetails::UnsupportedOperation(message) => {
@@ -27,11 +27,4 @@ pub(crate) async fn resolve_agent_target(
             }
             _ => FunctionCallError::RespondToModel(err.to_string()),
         })
-}
-
-fn register_session_root(session: &Arc<Session>, turn: &Arc<TurnContext>) {
-    session
-        .services
-        .local_agent_runtime
-        .register_session_root(session.thread_id, turn.parent_thread_id);
 }

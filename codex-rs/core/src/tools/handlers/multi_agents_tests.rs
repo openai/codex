@@ -1043,6 +1043,10 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
         .expect("test config should allow feature update");
     set_turn_config(&mut turn, config);
 
+    // V2 tools and model context must use the controller's tree, even when the
+    // caller's local runtime has no registry entries.
+    session.services.local_agent_runtime = crate::agent::LocalAgentControl::default().runtime;
+
     let session = Arc::new(session);
     let turn = Arc::new(turn);
     let spawn_output = SpawnAgentHandlerV2::default()
@@ -1065,8 +1069,13 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
 
     let child_thread_id = session
         .services
-        .local_agent_runtime
-        .resolve_agent_reference(session.thread_id, &turn.session_source, "test_process")
+        .agent_control
+        .resolve(
+            session.thread_id,
+            turn.parent_thread_id,
+            &turn.session_source,
+            "test_process",
+        )
         .await
         .expect("relative path should resolve");
     let child_snapshot = manager
@@ -1092,6 +1101,15 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                         && communication.trigger_turn
             )
     }));
+
+    let world_state = session
+        .build_world_state_for_step(&StepContext::for_test(Arc::clone(&turn)))
+        .await
+        .expect("world state should build");
+    assert_eq!(
+        world_state.snapshot().into_object()["environments"]["subagents"],
+        json!(r#"<agent name="/root/test_process" />"#),
+    );
 
     SendMessageHandlerV2
         .handle(invocation(

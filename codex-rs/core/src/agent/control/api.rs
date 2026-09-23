@@ -30,10 +30,29 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_rollout_trace::ThreadTraceContext;
 use futures::future::BoxFuture;
+use std::collections::HashSet;
 
 impl AgentControl for LocalAgentControl {
     fn identity(&self) -> SessionId {
         self.session_id()
+    }
+
+    fn resolve<'a>(
+        &'a self,
+        caller: ThreadId,
+        parent: Option<ThreadId>,
+        source: &'a SessionSource,
+        target: &'a str,
+    ) -> BoxFuture<'a, Result<ThreadId>> {
+        Box::pin(async move {
+            self.runtime.register_session_root(caller, parent);
+            if let Ok(thread_id) = ThreadId::from_string(target) {
+                return Ok(thread_id);
+            }
+            self.runtime
+                .resolve_agent_reference(caller, source, target)
+                .await
+        })
     }
 
     fn spawn(
@@ -167,10 +186,53 @@ impl AgentControl for LocalAgentControl {
 
     fn list<'a>(
         &'a self,
+        caller: ThreadId,
+        parent: Option<ThreadId>,
         source: &'a SessionSource,
         path_prefix: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Vec<LiveAgent>>> {
-        Box::pin(self.list_agents(source, path_prefix))
+        Box::pin(async move {
+            self.runtime.register_session_root(caller, parent);
+            self.list_agents(source, path_prefix).await
+        })
+    }
+
+    fn child_agent_paths(&self, parent: ThreadId) -> BoxFuture<'_, Vec<AgentPath>> {
+        Box::pin(async move {
+            let Some(parent_path) = self
+                .runtime
+                .registry
+                .agent_metadata_for_thread(parent)
+                .and_then(|metadata| metadata.agent_path)
+            else {
+                return Vec::new();
+            };
+            let parent_prefix = format!("{parent_path}/");
+            let mut agent_paths = self
+                .runtime
+                .registry
+                .live_agents()
+                .into_iter()
+                .filter_map(|metadata| metadata.agent_path)
+                .filter(|path| {
+                    path.as_str()
+                        .strip_prefix(&parent_prefix)
+                        .is_some_and(|name| !name.contains('/'))
+                })
+                .collect::<Vec<_>>();
+            let loaded_paths = self
+                .runtime
+                .open_thread_spawn_children(parent)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(_, metadata)| metadata.agent_path)
+                .collect::<HashSet<_>>();
+            agent_paths.sort();
+            // Stable sorting preserves alphabetical order within each group.
+            agent_paths.sort_by_key(|path| !loaded_paths.contains(path));
+            agent_paths
+        })
     }
 
     fn check_turn_admission(

@@ -1,4 +1,4 @@
-//! Local registry lookups for startup, host context and loaded descendant checks.
+//! Local registry lookups for startup, legacy context and loaded descendant checks.
 //! These use the same local registry and thread manager as lifecycle operations.
 
 use super::LocalAgentRuntime;
@@ -8,13 +8,8 @@ use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
-use codex_protocol::protocol::MultiAgentVersion;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
-
-const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
-const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
 impl LocalAgentRuntime {
     pub(crate) fn register_session_root(
@@ -42,73 +37,25 @@ impl LocalAgentRuntime {
         Ok(thread_ids)
     }
 
-    pub(crate) async fn format_environment_context_subagents(
+    pub(crate) async fn format_legacy_environment_context_subagents(
         &self,
         parent_thread_id: ThreadId,
-        multi_agent_version: MultiAgentVersion,
     ) -> String {
-        if multi_agent_version != MultiAgentVersion::V2 {
-            let Ok(agents) = self.open_thread_spawn_children(parent_thread_id).await else {
-                return String::new();
-            };
-            return agents
-                .into_iter()
-                .map(|(thread_id, metadata)| {
-                    let reference = metadata
-                        .agent_path
-                        .as_ref()
-                        .map(|path| path.name().to_string())
-                        .unwrap_or_else(|| thread_id.to_string());
-                    format_subagent_context_line(&reference, metadata.agent_nickname.as_deref())
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-        }
-
-        let Some(parent_path) = self
-            .registry
-            .agent_metadata_for_thread(parent_thread_id)
-            .and_then(|metadata| metadata.agent_path)
-        else {
+        let Ok(agents) = self.open_thread_spawn_children(parent_thread_id).await else {
             return String::new();
         };
-        let parent_prefix = format!("{parent_path}/");
-        let mut agent_paths = self
-            .registry
-            .live_agents()
+        agents
             .into_iter()
-            .filter_map(|metadata| metadata.agent_path)
-            .filter(|path| {
-                path.as_str()
-                    .strip_prefix(&parent_prefix)
-                    .is_some_and(|name| !name.contains('/'))
+            .map(|(thread_id, metadata)| {
+                let reference = metadata
+                    .agent_path
+                    .as_ref()
+                    .map(|path| path.name().to_string())
+                    .unwrap_or_else(|| thread_id.to_string());
+                format_subagent_context_line(&reference, metadata.agent_nickname.as_deref())
             })
-            .collect::<Vec<_>>();
-        let loaded_paths = self
-            .open_thread_spawn_children(parent_thread_id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|(_, metadata)| metadata.agent_path)
-            .collect::<HashSet<_>>();
-        agent_paths.sort();
-        // Stable sorting preserves alphabetical order within each group.
-        agent_paths.sort_by_key(|path| !loaded_paths.contains(path));
-
-        let mut lines = Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
-        let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
-        for agent_path in agent_paths {
-            if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
-                break;
-            }
-            let line = format!(r#"<agent name="{agent_path}" />"#);
-            let line_bytes = "    \n".len() + line.len();
-            if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
-                rendered_bytes += line_bytes;
-                lines.push(line);
-            }
-        }
-        lines.join("\n")
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub(super) async fn open_thread_spawn_children(
