@@ -1906,3 +1906,32 @@ fn set_file_mtime(path: &Path, age: Duration) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_rejects_nul_script_before_execution() -> Result<()> {
+    let root = tempdir()?;
+    let shell = Shell {
+        shell_type: ShellType::Sh,
+        shell_path: PathBuf::from("/bin/sh"),
+    };
+    let error = run_script_with_timeout(
+        &shell,
+        "printf ran > ran\0",
+        Duration::from_secs(5),
+        SnapshotShellMode::NonLogin,
+        &root.path().abs(),
+        /*credential_broker*/ None,
+        /*sandbox*/ None,
+    )
+    .await
+    .expect_err("invalid snapshot script must fail to spawn");
+    assert_eq!(
+        error
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind),
+        Some(std::io::ErrorKind::InvalidInput)
+    );
+    assert!(!root.path().join("ran").exists());
+    Ok(())
+}

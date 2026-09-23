@@ -1053,20 +1053,39 @@ async fn run_script_with_timeout(
     handler.args(&args[1..]);
     handler.stdin(Stdio::null());
     handler.current_dir(cwd);
+    #[cfg(unix)]
+    {
+        // The shared launcher needs the complete child environment.
+        handler.env_clear();
+        handler.envs(std::env::vars_os());
+    }
     if let Some(env) = prepared_env {
         handler.env_clear();
         handler.envs(env);
     }
     codex_protocol::shell_environment::scrub_non_inheritable_env_vars(handler.as_std_mut());
     #[cfg(unix)]
-    unsafe {
-        handler.pre_exec(|| {
-            codex_utils_pty::process_group::detach_from_tty()?;
-            Ok(())
-        });
-    }
-    handler.kill_on_drop(true);
-    let output = timeout(snapshot_timeout, handler.output())
+    let output = {
+        let settings = handler.as_std();
+        // Preserve original inputs: std replaces strings containing NUL bytes.
+        let mut command = codex_utils_pty::Command::new(&args[0]);
+        command
+            .args(&args[1..])
+            .envs(
+                settings
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            )
+            .current_dir(cwd)
+            .stdin(codex_utils_pty::ChildStdin::File(
+                std::fs::File::open("/dev/null")?.into(),
+            ))
+            .process_mode(codex_utils_pty::ProcessMode::NewSession);
+        async move { command.spawn()?.wait_with_output().await }
+    };
+    #[cfg(not(unix))]
+    let output = handler.kill_on_drop(true).output();
+    let output = timeout(snapshot_timeout, output)
         .await
         .map_err(|_| anyhow!("Snapshot command timed out for {shell_name}"))?
         .with_context(|| format!("Failed to execute {shell_name}"))?;
