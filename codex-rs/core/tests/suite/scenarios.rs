@@ -88,6 +88,9 @@ mod guardian_extra_policy;
 #[path = "scenarios_indirect_namespace_prefixes.rs"]
 mod indirect_namespace_prefixes;
 
+#[path = "scenarios_mcp_resource_messages.rs"]
+mod mcp_resource_messages;
+
 #[path = "scenarios_preparation.rs"]
 mod preparation;
 

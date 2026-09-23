@@ -40,6 +40,7 @@ use codex_protocol::openai_models::CollaborationModeMessages;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ConfirmationPolicies;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::McpResourceToolMessages;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelTokenBudgetConfig;
 use codex_protocol::openai_models::ModelsResponse;
@@ -3089,6 +3090,17 @@ async fn captured_step_settings_and_history_reach_extension_executor(
 async fn captured_step_controls_mcp_resource_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
     core_test_support::skip_if_wine_exec!(Ok(()), "requires a Windows test_stdio_server binary");
+    let parameters = |model: &str| {
+        json!({
+            "type": "object",
+            "properties": {
+                "server": {"type": "string"},
+                "uri": {"type": "string", "description": format!("Resource URI for {model}.")},
+            },
+            "required": ["server", "uri"],
+            "additionalProperties": false,
+        })
+    };
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(
         &server,
@@ -3116,6 +3128,19 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
             for model in &mut config.model_catalog.as_mut().expect("models").models {
                 model.truncation_policy =
                     TruncationPolicyConfig::bytes(if model.slug == MODEL_B { 80 } else { 8_000 });
+                model
+                    .model_messages
+                    .as_mut()
+                    .expect("model messages")
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .mcp_resources = Some(McpResourceToolMessages {
+                    read_mcp_resource: Some(ToolMessage {
+                        description: Some(format!("Read resource for {}.", model.slug)),
+                        parameters: Some(parameters(&model.slug).to_string()),
+                    }),
+                    ..Default::default()
+                });
             }
             config
                 .mcp_servers
@@ -3148,7 +3173,35 @@ async fn captured_step_controls_mcp_resource_output() -> Result<()> {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    let output = responses.requests()[2]
+    let requests = responses.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                let body = request.body_json();
+                let tool = body["tools"]
+                    .as_array()
+                    .expect("request tools")
+                    .iter()
+                    .find(|tool| tool["name"] == "read_mcp_resource")
+                    .expect("resource tool");
+                (body["model"].clone(), tool.clone())
+            })
+            .collect::<Vec<_>>(),
+        [MODEL_A, MODEL_B, MODEL_B]
+            .map(|model| (
+                json!(model),
+                json!({
+                    "type": "function",
+                    "name": "read_mcp_resource",
+                    "description": format!("Read resource for {model}."),
+                    "parameters": parameters(model),
+                    "strict": false,
+                })
+            ))
+            .to_vec(),
+    );
+    let output = requests[2]
         .function_call_output_text("resource-b")
         .expect("resource output");
     assert!(output.starts_with("{\"server\":\"resources\""), "{output}");

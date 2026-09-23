@@ -4,6 +4,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
@@ -15,7 +16,9 @@ use super::parse_args_with_default;
 use super::parse_arguments;
 use super::run_resource_operation;
 
-pub struct ListMcpResourcesHandler;
+pub struct ListMcpResourcesHandler {
+    spec: ToolSpec,
+}
 
 impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
     fn tool_name(&self) -> ToolName {
@@ -23,7 +26,7 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
     }
 
     fn spec(&self) -> ToolSpec {
-        create_list_mcp_resources_tool()
+        self.spec.clone()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -39,6 +42,12 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
 }
 
 impl ListMcpResourcesHandler {
+    pub fn new(messages: Option<&ToolMessage>) -> Self {
+        Self {
+            spec: create_list_mcp_resources_tool(messages),
+        }
+    }
+
     async fn handle_call(
         &self,
         invocation: ToolInvocation,
