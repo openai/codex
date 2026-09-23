@@ -364,14 +364,14 @@ async fn experimental_context_requires_capable_model_and_codex_backend(
     Ok(())
 }
 
-#[test_case(false, true, false; "explicit_history_notes_unsupported")]
-#[test_case(false, true, true; "explicit_history_notes_supported")]
+#[test_case(false, true, false; "explicit_history_notes_without_experimental_capability")]
+#[test_case(false, true, true; "explicit_history_notes_with_experimental_capability")]
 #[test_case(false, false, false; "explicit_standalone_token_budget")]
-#[test_case(true, true, false; "model_default_history_notes_unsupported")]
-#[test_case(true, true, true; "model_default_history_notes_supported")]
+#[test_case(true, true, false; "model_default_history_notes_without_experimental_capability")]
+#[test_case(true, true, true; "model_default_history_notes_with_experimental_capability")]
 #[test_case(true, false, false; "model_default_standalone_token_budget")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn token_budget_history_notes_requires_capable_starting_model(
+async fn token_budget_history_notes_can_be_enabled_without_experimental_context(
     use_model_defaults: bool,
     use_history_notes: bool,
     supports_context: bool,
@@ -380,7 +380,7 @@ async fn token_budget_history_notes_requires_capable_starting_model(
 
     let server = start_mock_server().await;
     let backend_url = format!("{}/backend-api/codex", server.uri());
-    let result = test_codex()
+    let mut builder = test_codex()
         .with_auth(CodexAuth::from_external_chatgpt_tokens(
             "header.e30.signature",
             "account-123",
@@ -411,30 +411,50 @@ async fn token_budget_history_notes_requires_capable_starting_model(
         .with_config(move |config| {
             config.model_provider.base_url = Some(backend_url);
             config.model_context_window = Some(CONFIGURED_CONTEXT_WINDOW);
-        })
-        .build_with_auto_env(&server)
-        .await;
+        });
+    let test = builder.build_with_auto_env(&server).await?;
 
-    if use_history_notes && !supports_context {
-        let error = result
-            .err()
-            .expect("unsupported history/notes must fail at startup");
-        assert!(error.to_string().contains(
-            "features.token_budget.use_history_notes_extension is not supported by model `gpt-5.2`"
-        ));
-        return Ok(());
-    }
-
-    let test = result?;
-    let response = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let response = mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+    )
+    .await;
     test.submit_turn("inspect token-budget activation").await?;
-    let request = response.single_request();
-    assert!(
-        tool_names(&request)
-            .iter()
-            .any(|name| name == "new_context")
-    );
-    assert_eq!(token_budget_contexts(&request).len(), 1);
+    // Builder overrides are consumed by the initial build. Reapply the model and
+    // provider settings so the cold resume exercises the same activation defaults.
+    let initial_config = test.config.clone();
+    let resumed = builder
+        .with_config(move |config| {
+            config.model = initial_config.model;
+            config.model_catalog = initial_config.model_catalog;
+            config.model_provider = initial_config.model_provider;
+            config.model_context_window = initial_config.model_context_window;
+        })
+        .restart(&server, &test)
+        .await?;
+    resumed
+        .submit_turn("inspect token-budget activation after restart")
+        .await?;
+
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        assert!(
+            tool_names(&request)
+                .iter()
+                .any(|name| name == "new_context")
+        );
+        assert_eq!(token_budget_contexts(&request).len(), 1);
+        let turn_metadata: Value = serde_json::from_str(
+            &request
+                .header("x-codex-turn-metadata")
+                .expect("request should include turn metadata"),
+        )?;
+        assert_eq!(
+            turn_metadata["history_ingest_requested"].as_bool(),
+            use_history_notes.then_some(true)
+        );
+    }
     Ok(())
 }
 

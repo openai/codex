@@ -30,13 +30,15 @@ const THREAD_HINT: &str =
     "Recent notes (up to 5, most-recent first):\n- /root/notes/latest.md (2 lines, 14 UTF-8 bytes)";
 const BRIDGE_HINT: &str = "unstructured notes/thread_hint fixture result";
 
-#[test_case(true, 200, THREAD_HINT; "native_hint")]
-#[test_case(true, 200, ""; "no_notes")]
-#[test_case(true, 503, THREAD_HINT; "native_failure_does_not_use_bridge")]
-#[test_case(false, 200, THREAD_HINT; "bridge_hint")]
+#[test_case(true, true, 200, THREAD_HINT; "native_hint")]
+#[test_case(true, false, 200, THREAD_HINT; "native_hint_without_experimental_capability")]
+#[test_case(true, true, 200, ""; "no_notes")]
+#[test_case(true, true, 503, THREAD_HINT; "native_failure_does_not_use_bridge")]
+#[test_case(false, true, 200, THREAD_HINT; "bridge_hint")]
 #[tokio::test]
 async fn app_server_uses_configured_notes_backend_for_context_window_hints(
     use_history_notes_extension: bool,
+    supports_experimental_context: bool,
     hint_status: u16,
     hint_text: &str,
 ) -> Result<()> {
@@ -115,7 +117,7 @@ async fn app_server_uses_configured_notes_backend_for_context_window_hints(
     let codex_home = TempDir::new()?;
     let config = load_default_config_for_test(&codex_home).await;
     let mut model = codex_core::test_support::construct_model_info_offline("mock-model", &config);
-    model.supports_experimental_context = true;
+    model.supports_experimental_context = supports_experimental_context;
     let catalog_path = codex_home.path().join("models.json");
     std::fs::write(
         &catalog_path,
@@ -132,7 +134,7 @@ async fn app_server_uses_configured_notes_backend_for_context_window_hints(
         .with_provider_base_url(&format!("{}/backend-api/codex", server.uri()))
         .with_provider_config("supports_websockets = false\nrequires_openai_auth = true")
         .with_extra_config(&format!(
-            "[features.token_budget]\nenabled = true\nuse_history_notes_extension = {use_history_notes_extension}\n\n[mcp_servers.notes]\nurl = \"{}/mcp\"\nstartup_timeout_sec = 10\n",
+            "[features.context_management]\nexperimental_mode = false\n\n[features.token_budget]\nenabled = true\nuse_history_notes_extension = {use_history_notes_extension}\n\n[mcp_servers.notes]\nurl = \"{}/mcp\"\nstartup_timeout_sec = 10\n",
             server.uri(),
         ))
         .write(codex_home.path())?;
