@@ -6,7 +6,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use codex_api::AuthProvider;
+use codex_http_client::DestinationPolicy;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::NetworkPolicyController;
 use codex_http_client::OutboundProxyPolicy;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -282,8 +284,14 @@ async fn direct_registration_uses_proxy_policy_without_logging_secrets() -> Resu
 }
 
 #[tokio::test]
-async fn direct_registration_failure_stops_initial_and_conflict_attempts() -> Result<()> {
-    for successful_registrations in [0, 1] {
+async fn direct_registration_handles_policy_outages_and_permanent_failures() -> Result<()> {
+    for (successful_registrations, policy_unavailable) in [(0, false), (1, false), (0, true)] {
+        let controller = NetworkPolicyController::default();
+        let policy = controller.policy();
+        controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+        if policy_unavailable && successful_registrations == 0 {
+            controller.unavailable(policy.revision());
+        }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let websocket_url = format!("ws://{}/connect", listener.local_addr()?);
         let registry = MockServer::start().await;
@@ -294,7 +302,7 @@ async fn direct_registration_failure_stops_initial_and_conflict_attempts() -> Re
             ))
             .respond_with(move |_: &wiremock::Request| {
                 let attempt = registration_count.fetch_add(1, Ordering::Relaxed);
-                if attempt < successful_registrations {
+                if policy_unavailable || attempt < successful_registrations {
                     ResponseTemplate::new(200).set_body_json(serde_json::json!({
                         "environment_id": "environment-requested",
                         "transport": DIRECT_TRANSPORT,
@@ -313,7 +321,8 @@ async fn direct_registration_failure_stops_initial_and_conflict_attempts() -> Re
             "environment-requested".to_string(),
             RemoteEnvironmentTransport::Direct,
             Arc::new(StaticAuthProvider),
-            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+                .with_network_policy(policy.clone().for_current_account()),
         )?;
         let runtime_paths = ExecServerRuntimePaths::new(
             std::env::current_exe()?,
@@ -328,6 +337,18 @@ async fn direct_registration_failure_stops_initial_and_conflict_attempts() -> Re
                 .write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\n\r\n")
                 .await?;
             socket.shutdown().await?;
+        }
+        if policy_unavailable {
+            timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .expect_err("unavailable policy opened a connection");
+            controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+            let (socket, _) = timeout(Duration::from_secs(5), listener.accept()).await??;
+            let _websocket = tokio_tungstenite::accept_async(socket).await?;
+            registry.verify().await;
+            task.abort();
+            let _ = task.await;
+            continue;
         }
         let error = timeout(Duration::from_secs(5), task)
             .await??

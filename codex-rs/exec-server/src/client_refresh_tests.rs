@@ -881,3 +881,58 @@ async fn retirement_rejects_pending_process_start_before_stream_cleanup() -> Res
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn application_policy_registry_denial_does_not_poison_later_noise_startup() -> Result<()> {
+    let _clock = freeze_clock();
+    let executor = Executor::start(Validator::default()).await?;
+    let registry = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path(
+            "/cloud/environment/environment/connect",
+        ))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "environment_id": "environment",
+                "url": executor.target.url,
+                "security_profile": "noise_hybrid_ik_v1",
+                "executor_registration_id": executor.target.registration,
+                "executor_public_key": executor.target.identity.public_key(),
+                "harness_key_authorization": "authorization",
+            })),
+        )
+        .expect(1)
+        .mount(&registry)
+        .await;
+    let controller = codex_http_client::NetworkPolicyController::default();
+    let policy = controller.policy();
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        .with_network_policy(policy.clone());
+    let provider = crate::remote::NoiseRendezvousEnvironmentConfig::new(
+        registry.uri(),
+        "environment".into(),
+        "registry-token".into(),
+        /*chatgpt_account_id*/ None,
+    )?
+    .into_connect_provider(factory.clone())?;
+    let client = LazyRemoteExecServerClient::new(
+        ExecServerTransportParams::NoiseRendezvous {
+            provider,
+            identity: NoiseChannelIdentity::generate()?,
+        },
+        factory,
+    );
+    let error = client.get().await.err().unwrap();
+    assert_eq!(
+        error.application_network_policy_denial(),
+        Some(codex_http_client::NetworkPolicyDenied::Unavailable)
+    );
+    assert!(!crate::client::is_retryable_recovery_error(&error));
+    assert!(registry.received_requests().await.unwrap().is_empty());
+    controller.publish(
+        policy.revision(),
+        codex_http_client::DestinationPolicy::Unrestricted,
+    );
+    client.get().await?;
+    Ok(())
+}

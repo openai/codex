@@ -187,7 +187,7 @@ impl ExecutorCapabilityDiscoveryCache {
                 let response = match environment.discover_capability_roots(params).await {
                     Ok(response) => response,
                     Err(error) => {
-                        let retryable = crate::client::is_retryable_recovery_error(&error);
+                        let retryable = crate::client::can_retry_connection_attempt(&error);
                         let error = error.to_string();
                         return selected_roots
                             .into_iter()

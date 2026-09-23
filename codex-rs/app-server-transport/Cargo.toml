@@ -13,6 +13,8 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-http-client = { workspace = true }
+codex-websocket-client = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",

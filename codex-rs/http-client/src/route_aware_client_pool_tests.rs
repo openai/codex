@@ -12,6 +12,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use bytes::Bytes;
+use futures::FutureExt;
 use futures::stream;
 use http::HeaderValue;
 use pretty_assertions::assert_eq;
@@ -708,6 +709,75 @@ async fn request_timeout_covers_route_selection() {
 
     assert!(matches!(error, RouteAwareRequestError::Timeout));
     assert_eq!(resolver_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn managed_request_timeout_covers_queued_transport_construction() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(/*val*/ 1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(/*nonblocking*/ true).unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let blocker = tokio::task::spawn_blocking(move || {
+            started_tx.send(()).unwrap();
+            let _ = release_rx.recv();
+        });
+        started_rx.await.unwrap();
+
+        let controller = crate::NetworkPolicyController::default();
+        let policy = controller.policy();
+        controller.publish(policy.revision(), crate::DestinationPolicy::Unrestricted);
+        let pool = RouteAwareClientPool::new(
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault).with_network_policy(policy),
+            ClientRouteClass::Api,
+        );
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let requests = (0..8).map(|_| {
+            pool.get(&url)
+                .timeout(Duration::from_millis(/*millis*/ 200))
+                .send()
+        });
+        for result in futures::future::join_all(requests).await {
+            assert!(result.unwrap_err().is_timeout());
+        }
+        assert!(pool.client_build.try_lock().is_err());
+        assert!(pool.clients.lock().unwrap().is_empty());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(release_tx);
+        blocker.await.unwrap();
+
+        let build_finished =
+            tokio::time::timeout(Duration::from_secs(/*secs*/ 5), pool.client_build.lock())
+                .await
+                .unwrap();
+        assert!(
+            pool.clients
+                .lock()
+                .unwrap()
+                .contains_key(&OutboundProxyRoute::TransportDefault)
+        );
+        let (_, _, backend) = pool
+            .client_for_url_with_resolver(&url, |_| async {
+                Ok(OutboundProxyRoute::TransportDefault)
+            })
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        assert_eq!(backend, SelectedTlsBackend::TransportDefault);
+        drop(build_finished);
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    });
 }
 
 #[tokio::test]

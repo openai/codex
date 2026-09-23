@@ -453,3 +453,52 @@ async fn capability_discovery_retries_after_executor_reconnects() -> anyhow::Res
     assert!(!cache.take_recovered_discovery());
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capability_discovery_retries_after_application_network_policy_recovers()
+-> anyhow::Result<()> {
+    let server = exec_server().await?;
+    let controller = codex_http_client::NetworkPolicyController::default();
+    let policy = controller.policy();
+    let manager = Arc::new(EnvironmentManager::without_environments(
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+            .with_network_policy(policy.clone()),
+    ));
+    manager.upsert_environment(
+        "recovering".to_string(),
+        server.websocket_url().to_string(),
+        /*connect_timeout*/ None,
+    )?;
+    let cache = ExecutorCapabilityDiscoveryCache::new(manager);
+    let skill_root = tempfile::tempdir()?;
+    let selected_roots = vec![SelectedCapabilityRoot {
+        id: "recovering-skill".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: "recovering".to_string(),
+            path: PathUri::from_host_native_path(skill_root.path())?,
+        },
+    }];
+
+    let failed = cache.snapshot(&selected_roots, &HashMap::new()).await;
+    let error = failed.roots()[0].result.as_ref().unwrap_err();
+    assert!(error.contains("application network policy"), "{error}");
+    assert!(!cache.take_recovered_discovery());
+
+    controller.publish(
+        policy.revision(),
+        codex_http_client::DestinationPolicy::Unrestricted,
+    );
+    let recovered = timeout(
+        Duration::from_secs(/*secs*/ 10),
+        cache.snapshot(&selected_roots, &HashMap::new()),
+    )
+    .await?;
+    let discovery = recovered.roots()[0]
+        .result
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    assert_eq!(discovery.id, "recovering-skill");
+    assert!(cache.take_recovered_discovery());
+    assert!(!cache.take_recovered_discovery());
+    Ok(())
+}

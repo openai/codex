@@ -253,8 +253,8 @@ impl Inner {
     pub(super) async fn rpc_client(self: &Arc<Self>) -> Result<Arc<RpcClient>, ExecServerError> {
         let mut connection_changed = self.connection_changed.subscribe();
         loop {
-            if let Some(message) = self.failure_message() {
-                return Err(ExecServerError::Disconnected(message));
+            if let Some(message) = self.connection_failure() {
+                return Err(message.into());
             }
 
             let rpc_client = {
@@ -310,10 +310,10 @@ impl Inner {
     }
 
     pub(super) fn is_failed(&self) -> bool {
-        self.failure_message().is_some()
+        self.connection_failure().is_some()
     }
 
-    pub(super) fn failure_message(&self) -> Option<String> {
+    pub(super) fn connection_failure(&self) -> Option<super::ConnectionFailure> {
         let connection = self
             .connection
             .lock()
@@ -372,11 +372,13 @@ impl Inner {
             let message = format!(
                 "{disconnect_message}; failed to resume exec-server session: recovery timed out after {SESSION_RECOVERY_TIMEOUT:?}"
             );
-            self.fail(message).await;
+            self.fail(super::ConnectionFailure::Disconnected(message))
+                .await;
             return;
         }
         if self.reconnect_strategy.is_none() {
-            self.fail(disconnect_message).await;
+            self.fail(super::ConnectionFailure::Disconnected(disconnect_message))
+                .await;
             return;
         }
 
@@ -384,7 +386,8 @@ impl Inner {
             let message = format!(
                 "{disconnect_message}; failed to resume exec-server session: missing session id"
             );
-            self.fail(message).await;
+            self.fail(super::ConnectionFailure::Disconnected(message))
+                .await;
             return;
         };
         let uses_registry_backoff = matches!(
@@ -399,10 +402,15 @@ impl Inner {
                         return;
                     }
                 }
-                Ok(Err(error)) if !is_retryable_recovery_error(&error) => {
-                    break error.to_string();
+                Ok(Err(error)) => {
+                    if let Some(denial) = error.application_network_policy_denial() {
+                        self.fail(super::ConnectionFailure::Policy(denial)).await;
+                        return;
+                    }
+                    if !is_retryable_recovery_error(&error) {
+                        break error.to_string();
+                    }
                 }
-                Ok(Err(_)) => {}
                 Err(_) => {
                     break format!("recovery timed out after {SESSION_RECOVERY_TIMEOUT:?}");
                 }
@@ -425,7 +433,8 @@ impl Inner {
 
         let message =
             format!("{disconnect_message}; failed to resume exec-server session: {last_error}");
-        self.fail(message).await;
+        self.fail(super::ConnectionFailure::Disconnected(message))
+            .await;
     }
 
     async fn wait_for_process_starts(&self) {
@@ -570,7 +579,7 @@ impl Inner {
         Ok(())
     }
 
-    async fn fail(self: &Arc<Self>, message: String) {
+    async fn fail(self: &Arc<Self>, message: super::ConnectionFailure) {
         let (message, newly_failed) = {
             let mut connection = self
                 .connection
@@ -586,7 +595,7 @@ impl Inner {
         };
         if newly_failed {
             self.notify_connection_changed();
-            fail_all_in_flight_work(self, message.clone()).await;
+            fail_all_in_flight_work(self, message.to_string()).await;
         }
     }
 }
@@ -849,6 +858,9 @@ impl ExecServerClient {
 }
 
 pub(crate) fn is_retryable_recovery_error(error: &ExecServerError) -> bool {
+    if error.application_network_policy_denial().is_some() {
+        return false;
+    }
     if let ExecServerError::ConnectionAttempt(error) = error {
         return is_retryable_recovery_error(error.as_ref());
     }

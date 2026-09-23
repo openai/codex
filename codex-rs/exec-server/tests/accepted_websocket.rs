@@ -40,7 +40,10 @@ use codex_exec_server_protocol::JSONRPCMessage;
 use codex_exec_server_protocol::JSONRPCNotification;
 use codex_exec_server_protocol::JSONRPCRequest;
 use codex_exec_server_protocol::JSONRPCResponse;
+use codex_http_client::DestinationPolicy;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::NetworkPolicy;
+use codex_http_client::NetworkPolicyController;
 use codex_http_client::OutboundProxyPolicy;
 use codex_utils_path_uri::PathUri;
 use common::exec_server::DisconnectableWebSocketProxy;
@@ -132,8 +135,12 @@ async fn accepted_websocket_environment_info_uses_initialization_metadata() -> R
     Ok(())
 }
 
+#[test_case::test_case(false; "transport_disconnect")]
+#[test_case::test_case(true; "policy_unavailable")]
 #[tokio::test]
-async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor() -> Result<()> {
+async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor(
+    policy_unavailable: bool,
+) -> Result<()> {
     let (websocket_url, mut accepted_sockets, server_task) = start_acceptor().await?;
     let proxy = DisconnectableWebSocketProxy::new(&websocket_url).await?;
     let registry = MockServer::start().await;
@@ -150,7 +157,15 @@ async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor
         .mount(&registry)
         .await;
 
-    let http_client_factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault);
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+    let http_client_factory = HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        .with_network_policy(if policy_unavailable {
+            policy.clone().for_current_account()
+        } else {
+            NetworkPolicy::unmanaged()
+        });
     let config = RemoteEnvironmentConfig::new_with_transport(
         registry.uri(),
         "environment-1".to_string(),
@@ -289,6 +304,19 @@ async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor
             EnvironmentConnectionState::Connected
         );
         proxy.pause_and_disconnect().await?;
+        if policy_unavailable {
+            controller.unavailable(policy.revision());
+            assert!(
+                timeout(Duration::from_secs(/*secs*/ 1), accepted_sockets.recv())
+                    .await
+                    .is_err(),
+                "unavailable policy reconnected"
+            );
+            assert!(
+                !executor_task.is_finished(),
+                "policy outage stopped the runner"
+            );
+        }
         timeout(
             TEST_TIMEOUT,
             connection_state.wait_for(|state| *state == EnvironmentConnectionState::Disconnected),
@@ -319,6 +347,7 @@ async fn accepted_websocket_interoperates_and_recovers_with_real_direct_executor
                 .is_err(),
             "process reads should wait while recovery is in progress"
         );
+        controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
         proxy.resume()?;
         let replacement = timeout(TEST_TIMEOUT, accepted_sockets.recv())
             .await?

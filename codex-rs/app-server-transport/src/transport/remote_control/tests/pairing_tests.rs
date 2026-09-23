@@ -1,9 +1,15 @@
 use super::super::protocol::RemoteControlPairingStatusRequest;
 use super::super::protocol::StartRemoteControlPairingRequest;
 use super::*;
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthKeyringBackendKind;
 use pretty_assertions::assert_eq;
 use std::io;
+
+fn http_client_factory() -> HttpClientFactory {
+    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+}
 
 fn remote_control_enrollment(
     remote_control_url: &str,
@@ -107,7 +113,10 @@ async fn pairing_error(status: &'static str, body: &'static str) -> (String, Str
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .start_pairing(StartRemoteControlPairingRequest { manual_code: false })
+        .start_pairing(
+            &http_client_factory(),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
         .await
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");
@@ -125,7 +134,10 @@ async fn pairing_response_error(body: serde_json::Value) -> String {
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .start_pairing(StartRemoteControlPairingRequest { manual_code: false })
+        .start_pairing(
+            &http_client_factory(),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
         .await
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");
@@ -152,10 +164,13 @@ async fn pairing_status_error(status: &'static str, body: &'static str) -> (io::
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .pairing_status(RemoteControlPairingStatusRequest {
-            pairing_code: Some("pairing-code".to_string()),
-            manual_pairing_code: None,
-        })
+        .pairing_status(
+            &http_client_factory(),
+            RemoteControlPairingStatusRequest {
+                pairing_code: Some("pairing-code".to_string()),
+                manual_pairing_code: None,
+            },
+        )
         .await
         .expect_err("pairing status should fail");
     server_task.await.expect("server task should finish");
@@ -395,10 +410,13 @@ async fn remote_control_pairing_status_returns_pending() {
     });
 
     let response = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .pairing_status(RemoteControlPairingStatusRequest {
-            pairing_code: Some("pairing-code".to_string()),
-            manual_pairing_code: None,
-        })
+        .pairing_status(
+            &http_client_factory(),
+            RemoteControlPairingStatusRequest {
+                pairing_code: Some("pairing-code".to_string()),
+                manual_pairing_code: None,
+            },
+        )
         .await
         .expect("pairing status should succeed");
     server_task.await.expect("server task should finish");
@@ -427,10 +445,13 @@ async fn remote_control_pairing_status_accepts_manual_pairing_code() {
     });
 
     let response = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .pairing_status(RemoteControlPairingStatusRequest {
-            pairing_code: None,
-            manual_pairing_code: Some("ABCD-EFGH".to_string()),
-        })
+        .pairing_status(
+            &http_client_factory(),
+            RemoteControlPairingStatusRequest {
+                pairing_code: None,
+                manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            },
+        )
         .await
         .expect("pairing status should succeed");
     server_task.await.expect("server task should finish");
@@ -454,10 +475,13 @@ async fn remote_control_pairing_status_returns_claimed() {
     });
 
     let response = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .pairing_status(RemoteControlPairingStatusRequest {
-            pairing_code: Some("pairing-code".to_string()),
-            manual_pairing_code: None,
-        })
+        .pairing_status(
+            &http_client_factory(),
+            RemoteControlPairingStatusRequest {
+                pairing_code: Some("pairing-code".to_string()),
+                manual_pairing_code: None,
+            },
+        )
         .await
         .expect("pairing status should succeed");
     server_task.await.expect("server task should finish");

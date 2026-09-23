@@ -7,8 +7,8 @@ license.workspace = true
 [lib]
 doctest = false
 
-# Compiled through #[path] in src/client.rs; cargo-shear 1.11.2 does not normalize
-# the ../tests path and incorrectly reports this linked unit-test module as unlinked.
+# cargo-shear 1.11.2 misresolves this #[path] module in src/client.rs.
+# The module is compiled and exercised by the exec-server unit test target.
 [package.metadata.cargo-shear]
 ignored-paths = ["tests/unit/client_provisioning_tests.rs"]
 

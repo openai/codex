@@ -17,6 +17,7 @@ use tracing::warn;
 pub(super) struct RemoteControlAuth {
     manager: Arc<AuthManager>,
     pub(super) owner: crate::ConnectionAuth,
+    pub(super) network_policy: codex_http_client::NetworkPolicy,
 }
 
 pub(super) struct RemoteControlRecovery {
@@ -32,7 +33,14 @@ impl RemoteControlAuth {
                 .auth_cached()
                 .is_some_and(|auth| auth.uses_codex_backend() && auth.get_account_id().is_some());
             if owner.is_current() {
-                return (Self { manager, owner }, authenticated);
+                return (
+                    Self {
+                        network_policy: manager.application_network_policy(),
+                        manager,
+                        owner,
+                    },
+                    authenticated,
+                );
             }
         }
     }
@@ -56,6 +64,7 @@ impl RemoteControlAuth {
 pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 
 pub(super) struct RemoteControlConnectionAuth {
+    pub(super) http_client_factory: codex_http_client::HttpClientFactory,
     pub(super) auth_provider: SharedAuthProvider,
     pub(super) account_id: String,
 }
@@ -90,8 +99,9 @@ async fn load_auth_manager(
     auth_manager: &Arc<AuthManager>,
 ) -> io::Result<RemoteControlConnectionAuth> {
     let mut reloaded = false;
-    let auth = loop {
-        let Some(auth) = auth_manager.auth().await else {
+    let (auth, http_client_factory) = loop {
+        let Some((auth, http_client_factory)) = auth_manager.auth_with_http_client_factory().await
+        else {
             if reloaded {
                 return Err(io::Error::new(
                     ErrorKind::PermissionDenied,
@@ -103,14 +113,14 @@ async fn load_auth_manager(
             continue;
         };
         if !auth.uses_codex_backend() {
-            break auth;
+            break (auth, http_client_factory);
         }
         if auth.get_account_id().is_none() && !reloaded {
             auth_manager.reload().await;
             reloaded = true;
             continue;
         }
-        break auth;
+        break (auth, http_client_factory);
     };
 
     if !auth.uses_codex_backend() {
@@ -121,6 +131,7 @@ async fn load_auth_manager(
     }
 
     Ok(RemoteControlConnectionAuth {
+        http_client_factory,
         auth_provider: codex_model_provider::auth_provider_from_auth(&auth),
         account_id: auth.get_account_id().ok_or_else(|| {
             io::Error::new(
@@ -129,6 +140,38 @@ async fn load_auth_manager(
             )
         })?,
     })
+}
+
+pub(super) async fn request_client(
+    factory: &codex_http_client::HttpClientFactory,
+    endpoint: &str,
+) -> io::Result<codex_http_client::HttpClient> {
+    codex_login::default_client::create_client_for_route_without_request_logging_async(
+        factory.clone(),
+        endpoint.to_string(),
+        codex_http_client::ClientRouteClass::Api,
+    )
+    .await
+}
+
+pub(super) fn is_policy_denial(error: &io::Error) -> bool {
+    let Some(cause) = error.get_ref() else {
+        return false;
+    };
+    cause.is::<codex_http_client::NetworkPolicyDenied>()
+}
+
+pub(super) fn is_auth_error(error: &io::Error) -> bool {
+    error.kind() == ErrorKind::PermissionDenied && !is_policy_denial(error)
+}
+
+pub(super) fn request_error(error: codex_http_client::HttpError) -> io::Error {
+    match error {
+        codex_http_client::HttpError::Policy(denied) => {
+            io::Error::new(ErrorKind::PermissionDenied, denied)
+        }
+        error => io::Error::other(error),
+    }
 }
 
 pub(super) async fn recover_remote_control_auth(
@@ -213,6 +256,9 @@ mod tests {
         provider_account_ids: Vec<&'static str>,
     ) -> RemoteControlConnectionAuth {
         RemoteControlConnectionAuth {
+            http_client_factory: codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
             auth_provider: Arc::new(TestAuthProvider {
                 account_ids: provider_account_ids,
             }),

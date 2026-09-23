@@ -148,9 +148,14 @@ mod provisioning_tests;
 mod recovery;
 #[path = "client_refresh.rs"]
 mod refresh;
+pub(crate) use connection_failure::can_retry_connection_attempt;
 #[cfg(test)]
 pub(crate) use recovery::is_environment_offline_error;
 pub(crate) use recovery::is_retryable_recovery_error;
+
+#[path = "client/connection_failure.rs"]
+mod connection_failure;
+use connection_failure::ConnectionFailure;
 pub(crate) use recovery::is_retryable_registry_error;
 pub(crate) use recovery::registry_recovery_retry_delay;
 use refresh::ConnectionAttempt;
@@ -300,7 +305,7 @@ struct ConnectionState {
 enum ConnectionStatus {
     Connected(Arc<RpcClient>),
     Recovering,
-    Failed(String),
+    Failed(ConnectionFailure),
 }
 
 impl ConnectionState {
@@ -321,7 +326,8 @@ impl ConnectionState {
         let _ = self
             .environment_connection_state_tx
             .send_if_modified(|current| {
-                if *current == state {
+                // A terminal failure must wake callers waiting on recovery.
+                if *current == state && !matches!(self.status, ConnectionStatus::Failed(_)) {
                     false
                 } else {
                     *current = state;
@@ -539,7 +545,7 @@ impl LazyRemoteExecServerClient {
                 || self.startup.result.get().is_some_and(|result| {
                     result
                         .as_ref()
-                        .is_err_and(|error| recovery::is_retryable_recovery_error(error))
+                        .is_err_and(|error| can_retry_connection_attempt(error))
                 })) {
             Box::pin(self.reconnect()).await
         } else {
@@ -666,6 +672,8 @@ pub enum ExecServerError {
     WebSocketConfiguration(String),
     #[error("timed out waiting for exec-server initialize handshake after {timeout:?}")]
     InitializeTimedOut { timeout: Duration },
+    #[error(transparent)]
+    ApplicationNetworkPolicy(#[from] codex_http_client::NetworkPolicyDenied),
     #[error("exec-server transport closed")]
     Closed,
     #[error("{0}")]
@@ -744,9 +752,7 @@ impl ExecServerClient {
             ConnectionStatus::Connected(_) | ConnectionStatus::Recovering => Err(
                 ExecServerError::Disconnected("exec-server environment is recovering".to_string()),
             ),
-            ConnectionStatus::Failed(message) => {
-                Err(ExecServerError::Disconnected(message.clone()))
-            }
+            ConnectionStatus::Failed(message) => Err(message.clone().into()),
         }
     }
 
@@ -1178,9 +1184,7 @@ impl ExecServerClient {
                 Some(Ok(()))
             }
             ConnectionStatus::Connected(_) | ConnectionStatus::Recovering => None,
-            ConnectionStatus::Failed(message) => {
-                Some(Err(ExecServerError::Disconnected(message.clone())))
-            }
+            ConnectionStatus::Failed(message) => Some(Err(message.clone().into())),
         }
     }
 
@@ -1680,8 +1684,8 @@ impl Inner {
         // Do not register a process session that can never receive environment
         // notifications. Without this check, remote MCP startup could create a
         // dead session and wait for process output that will never arrive.
-        if let Some(message) = self.failure_message() {
-            return Err(ExecServerError::Disconnected(message));
+        if let Some(message) = self.connection_failure() {
+            return Err(message.into());
         }
         let sessions = self.sessions.load();
         if sessions.contains_key(process_id) {

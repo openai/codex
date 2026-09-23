@@ -1251,11 +1251,14 @@ impl PairingRemoteControlBackend {
                 )
                 .await?;
 
-                let request_after_enroll = read_http_request(&listener).await?;
-                let pair_http_request = if request_after_enroll.request_line.starts_with("GET ") {
-                    read_http_request(&listener).await?
-                } else {
-                    request_after_enroll
+                let mut websocket_connections = Vec::new();
+                let pair_http_request = loop {
+                    let request = read_http_request(&listener).await?;
+                    if request.request_line.starts_with("GET ") {
+                        websocket_connections.push(request);
+                    } else {
+                        break request;
+                    }
                 };
                 respond_with_json(
                     pair_http_request.reader.into_inner(),
@@ -1272,7 +1275,14 @@ impl PairingRemoteControlBackend {
                     serde_json::json!({ "pairing_code": "pairing-code" }),
                     serde_json::json!({ "manual_pairing_code": "ABCD-EFGH" }),
                 ] {
-                    let status_http_request = read_http_request(&listener).await?;
+                    let status_http_request = loop {
+                        let request = read_http_request(&listener).await?;
+                        if request.request_line.starts_with("GET ") {
+                            websocket_connections.push(request);
+                        } else {
+                            break request;
+                        }
+                    };
                     assert_eq!(
                         status_http_request.request_line,
                         "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"

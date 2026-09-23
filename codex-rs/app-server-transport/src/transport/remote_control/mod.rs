@@ -488,8 +488,11 @@ impl RemoteControlSession {
             manual_code: params.manual_code,
         };
         self.current_enrollment.check_retry_after()?;
-        let pairing_response = match enrollment.start_pairing(pairing_request()).await {
-            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+        let pairing_response = match enrollment
+            .start_pairing(&auth.http_client_factory, pairing_request())
+            .await
+        {
+            Err(err) if auth::is_auth_error(&err) => {
                 clear_pairing_server_token(&mut current_enrollment, &mut enrollment)?;
                 refresh_pairing_enrollment(
                     &mut current_enrollment,
@@ -500,7 +503,9 @@ impl RemoteControlSession {
                 )
                 .await?;
                 self.current_enrollment.check_retry_after()?;
-                enrollment.start_pairing(pairing_request()).await
+                enrollment
+                    .start_pairing(&auth.http_client_factory, pairing_request())
+                    .await
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 enrollment = self
@@ -514,7 +519,9 @@ impl RemoteControlSession {
                     )
                     .await?;
                 self.current_enrollment.check_retry_after()?;
-                enrollment.start_pairing(pairing_request()).await
+                enrollment
+                    .start_pairing(&auth.http_client_factory, pairing_request())
+                    .await
             }
             pairing_response => pairing_response,
         };
@@ -535,7 +542,7 @@ impl RemoteControlSession {
                     .await?;
                     return Err(pairing_unavailable_error());
                 }
-                io::ErrorKind::PermissionDenied => {
+                io::ErrorKind::PermissionDenied if auth::is_auth_error(err) => {
                     clear_pairing_server_token(&mut current_enrollment, &mut enrollment)?;
                     return Err(pairing_unavailable_error());
                 }
@@ -724,23 +731,27 @@ impl RemoteControlSession {
         let pairing_status_request =
             || protocol::RemoteControlPairingStatusRequest::from(status_code.clone());
         self.current_enrollment.check_retry_after()?;
-        let pairing_status_response =
-            match enrollment.pairing_status(pairing_status_request()).await {
-                Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-                    clear_pairing_server_token(&mut current_enrollment, &mut enrollment)?;
-                    refresh_pairing_enrollment(
-                        &mut current_enrollment,
-                        &self.auth_manager,
-                        &mut auth,
-                        &installation_id,
-                        &mut enrollment,
-                    )
-                    .await?;
-                    self.current_enrollment.check_retry_after()?;
-                    enrollment.pairing_status(pairing_status_request()).await
-                }
-                pairing_status_response => pairing_status_response,
-            };
+        let pairing_status_response = match enrollment
+            .pairing_status(&auth.http_client_factory, pairing_status_request())
+            .await
+        {
+            Err(err) if auth::is_auth_error(&err) => {
+                clear_pairing_server_token(&mut current_enrollment, &mut enrollment)?;
+                refresh_pairing_enrollment(
+                    &mut current_enrollment,
+                    &self.auth_manager,
+                    &mut auth,
+                    &installation_id,
+                    &mut enrollment,
+                )
+                .await?;
+                self.current_enrollment.check_retry_after()?;
+                enrollment
+                    .pairing_status(&auth.http_client_factory, pairing_status_request())
+                    .await
+            }
+            pairing_status_response => pairing_status_response,
+        };
         if let Err(err) = &pairing_status_response {
             if server_api::remote_control_retry_at(err).is_some() {
                 return self
@@ -760,7 +771,7 @@ impl RemoteControlSession {
                     .await?;
                     return Err(pairing_unavailable_error());
                 }
-                io::ErrorKind::PermissionDenied => {
+                io::ErrorKind::PermissionDenied if auth::is_auth_error(err) => {
                     clear_pairing_server_token(&mut current_enrollment, &mut enrollment)?;
                     return Err(pairing_unavailable_error());
                 }
@@ -847,7 +858,7 @@ async fn enroll_pairing_server(
         .await
     {
         Ok(enrollment) => return Ok(enrollment),
-        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+        Err(err) if auth::is_auth_error(&err) => {
             let mut auth_recovery = auth_manager.unauthorized_recovery();
             let mut auth_change_rx = auth_manager.auth_change_receiver();
             if !recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
@@ -893,10 +904,7 @@ async fn refresh_pairing_enrollment(
 ) -> io::Result<()> {
     current_enrollment.state.check_retry_after()?;
     let mut refresh_result = refresh_remote_control_server(auth, installation_id, enrollment).await;
-    if refresh_result
-        .as_ref()
-        .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
-    {
+    if refresh_result.as_ref().is_err_and(auth::is_auth_error) {
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         if recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
@@ -916,10 +924,7 @@ async fn refresh_pairing_enrollment(
             enrollment.clear_server_token();
         }
     }
-    if refresh_result
-        .as_ref()
-        .is_err_and(|err| err.kind() == io::ErrorKind::PermissionDenied)
-    {
+    if refresh_result.as_ref().is_err_and(auth::is_auth_error) {
         enrollment.clear_server_token();
     }
     if !replace_current_enrollment(current_enrollment, enrollment) {

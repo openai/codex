@@ -1,3 +1,4 @@
+use super::auth::request_client;
 use super::pairing_unavailable_error;
 use super::protocol::RemoteControlPairingStatusRequest;
 use super::protocol::RemoteControlPairingStatusResponse as BackendRemoteControlPairingStatusResponse;
@@ -10,7 +11,7 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlPairingStatusResponse;
-use codex_login::default_client::create_client_without_request_logging;
+use codex_http_client::HttpClientFactory;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use std::io;
@@ -50,6 +51,7 @@ pub(super) enum RemoteControlServerTokenRefreshRequirement {
 impl RemoteControlEnrollment {
     pub(super) async fn start_pairing(
         &self,
+        http_client_factory: &HttpClientFactory,
         request: StartRemoteControlPairingRequest,
     ) -> io::Result<RemoteControlPairingStartResponse> {
         if self.server_token_refresh_requirement()
@@ -62,23 +64,24 @@ impl RemoteControlEnrollment {
             .as_deref()
             .ok_or_else(pairing_unavailable_error)?;
 
-        let response = create_client_without_request_logging()
+        let response = request_client(http_client_factory, &self.remote_control_target.pair_url)
+            .await?
             .post(&self.remote_control_target.pair_url)
             .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
             .bearer_auth(remote_control_token)
             .json(&request)
             .send()
             .await
-            .map_err(|err| {
-                io::Error::other(format!(
-                    "failed to start remote control pairing at `{}`: {err}",
-                    self.remote_control_target.pair_url
-                ))
-            })?;
+            .map_err(super::auth::request_error)?;
         let headers = response.headers().clone();
         let status = response.status();
         let retry_at = retry_after_with_jitter(&headers, OffsetDateTime::now_utc());
         let body = response.bytes().await.map_err(|err| {
+            if matches!(err, codex_http_client::HttpError::Policy(_))
+                && !(retry_at.is_some() && matches!(status.as_u16(), 429 | 503))
+            {
+                return super::auth::request_error(err);
+            }
             pairing_response_error(
                 format!(
                     "failed to read remote control pairing response from `{}`: {err}",
@@ -153,6 +156,7 @@ impl RemoteControlEnrollment {
 
     pub(super) async fn pairing_status(
         &self,
+        http_client_factory: &HttpClientFactory,
         request: RemoteControlPairingStatusRequest,
     ) -> io::Result<RemoteControlPairingStatusResponse> {
         if self.server_token_refresh_requirement()
@@ -165,23 +169,27 @@ impl RemoteControlEnrollment {
             .as_deref()
             .ok_or_else(pairing_unavailable_error)?;
 
-        let response = create_client_without_request_logging()
-            .post(&self.remote_control_target.pair_status_url)
-            .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
-            .bearer_auth(remote_control_token)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|err| {
-                io::Error::other(format!(
-                    "failed to check remote control pairing status at `{}`: {err}",
-                    self.remote_control_target.pair_status_url
-                ))
-            })?;
+        let response = request_client(
+            http_client_factory,
+            &self.remote_control_target.pair_status_url,
+        )
+        .await?
+        .post(&self.remote_control_target.pair_status_url)
+        .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
+        .bearer_auth(remote_control_token)
+        .json(&request)
+        .send()
+        .await
+        .map_err(super::auth::request_error)?;
         let headers = response.headers().clone();
         let status = response.status();
         let retry_at = retry_after_with_jitter(&headers, OffsetDateTime::now_utc());
         let body = response.bytes().await.map_err(|err| {
+            if matches!(err, codex_http_client::HttpError::Policy(_))
+                && !(retry_at.is_some() && matches!(status.as_u16(), 429 | 503))
+            {
+                return super::auth::request_error(err);
+            }
             pairing_response_error(
                 format!(
                     "failed to read remote control pairing status response from `{}`: {err}",
@@ -710,6 +718,9 @@ mod tests {
         let err = enroll_remote_control_server(
             &remote_control_target,
             &RemoteControlConnectionAuth {
+                http_client_factory: codex_http_client::HttpClientFactory::new(
+                    codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+                ),
                 auth_provider: codex_model_provider::unauthenticated_auth_provider(),
                 account_id: "account_id".to_string(),
             },

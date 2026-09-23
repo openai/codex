@@ -51,15 +51,11 @@ use std::collections::VecDeque;
 use std::io;
 use std::io::ErrorKind;
 use std::sync::Arc;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
@@ -296,7 +292,7 @@ struct RemoteControlEnrollmentAuthContext<'a, 'b> {
 }
 
 enum ConnectOutcome {
-    Connected(Box<WebSocketStream<MaybeTlsStream<TcpStream>>>),
+    Connected(Box<codex_websocket_client::WebSocketConnection>),
     Disabled,
     Shutdown,
 }
@@ -722,6 +718,7 @@ impl RemoteControlWebsocket {
                 desired_state_tx: &self.desired_state_tx,
                 persistence: &self.persistence,
             };
+            let mut policy_changes = self.auth_manager.network_policy.changes();
             let auth_context = RemoteControlAuthContext {
                 auth_manager: &self.auth_manager,
                 auth_recovery: &mut self.auth_recovery,
@@ -774,6 +771,17 @@ impl RemoteControlWebsocket {
                 Err(err) => {
                     if !self.desired_state_rx.borrow().is_enabled() {
                         return ConnectOutcome::Disabled;
+                    }
+                    if super::auth::is_policy_denial(&err) {
+                        self.status_publisher
+                            .publish_status(RemoteControlConnectionStatus::Errored);
+                        if let Some(changes) = &mut policy_changes {
+                            tokio::select! {
+                                _ = shutdown_token.cancelled() => return ConnectOutcome::Shutdown,
+                                _ = self.desired_state_rx.wait_for(|state| !state.is_enabled()) => return ConnectOutcome::Disabled,
+                                _ = changes.changed() => continue,
+                            }
+                        }
                     }
                     let server_retry_delay = remote_control_retry_delay(&err);
                     let reconnect_delay = if err.kind() == ErrorKind::WouldBlock {
@@ -839,7 +847,7 @@ impl RemoteControlWebsocket {
 
     async fn run_connection(
         &self,
-        websocket_connection: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        websocket_connection: codex_websocket_client::WebSocketConnection,
         shutdown_token: CancellationToken,
     ) -> ConnectionEndReason {
         if !self.auth_manager.owner.is_current() {
@@ -917,7 +925,7 @@ impl RemoteControlWebsocket {
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
         used_rx: watch::Receiver<usize>,
         websocket_writer: SplitSink<
-            WebSocketStream<MaybeTlsStream<TcpStream>>,
+            codex_websocket_client::WebSocketConnection,
             tungstenite::Message,
         >,
         ping_interval: std::time::Duration,
@@ -948,7 +956,7 @@ impl RemoteControlWebsocket {
         server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
         mut used_rx: watch::Receiver<usize>,
         mut websocket_writer: SplitSink<
-            WebSocketStream<MaybeTlsStream<TcpStream>>,
+            codex_websocket_client::WebSocketConnection,
             tungstenite::Message,
         >,
         ping_interval: std::time::Duration,
@@ -1080,7 +1088,7 @@ impl RemoteControlWebsocket {
     async fn run_websocket_reader(
         client_tracker: Arc<Mutex<ClientTracker>>,
         state: Arc<Mutex<WebsocketState>>,
-        websocket_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        websocket_reader: SplitStream<codex_websocket_client::WebSocketConnection>,
         pong_timeout: std::time::Duration,
         shutdown_token: CancellationToken,
     ) {
@@ -1106,7 +1114,7 @@ impl RemoteControlWebsocket {
     async fn run_websocket_reader_inner(
         client_tracker: Arc<Mutex<ClientTracker>>,
         state: Arc<Mutex<WebsocketState>>,
-        mut websocket_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        mut websocket_reader: SplitStream<codex_websocket_client::WebSocketConnection>,
         pong_timeout: std::time::Duration,
         shutdown_token: CancellationToken,
     ) -> io::Result<()> {
@@ -1350,7 +1358,7 @@ pub(super) async fn connect_remote_control_websocket(
     connect_options: RemoteControlConnectOptions<'_>,
     status_publisher: &RemoteControlStatusPublisher,
 ) -> io::Result<(
-    WebSocketStream<MaybeTlsStream<TcpStream>>,
+    codex_websocket_client::WebSocketConnection,
     tungstenite::http::Response<()>,
 )> {
     ensure_rustls_crypto_provider();
@@ -1381,24 +1389,43 @@ pub(super) async fn connect_remote_control_websocket(
     .await?;
 
     current_enrollment.check_retry_after()?;
-    let websocket_connect_result = tokio::time::timeout(
-        REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT,
-        connect_async(request),
-    )
-    .await
-    .map_err(|_| {
-        io::Error::new(
-            ErrorKind::TimedOut,
-            format!(
-                "timed out connecting to remote control websocket at `{}` after {:?}",
-                remote_control_target.websocket_url, REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT
-            ),
-        )
-    })?;
+    let websocket_connect_result =
+        tokio::time::timeout(REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT, async {
+            let factory = auth.http_client_factory.clone();
+            let connector = tokio::task::spawn_blocking(move || {
+                codex_websocket_client::WebSocketConnector::new(&factory).or_else(|_| {
+                    codex_websocket_client::WebSocketConnector::new_with_tls_mode(
+                        &factory,
+                        codex_websocket_client::WebSocketTlsMode::TungsteniteDefault,
+                    )
+                })
+            })
+            .await
+            .map_err(io::Error::other)?
+            .map_err(io::Error::other)?;
+            Ok::<_, io::Error>(
+                connector
+                    .connect(request, tungstenite::protocol::WebSocketConfig::default())
+                    .await,
+            )
+        })
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                ErrorKind::TimedOut,
+                format!(
+                    "timed out connecting to remote control websocket at `{}` after {:?}",
+                    remote_control_target.websocket_url, REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT
+                ),
+            )
+        })??;
 
     match websocket_connect_result {
         Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
         Err(err) => {
+            if let Some(denied) = codex_websocket_client::network_policy_denial(&err) {
+                return Err(io::Error::new(ErrorKind::PermissionDenied, denied));
+            }
             match &err {
                 tungstenite::Error::Http(response)
                     if websocket_response_reports_missing_remote_app_server(response) =>
@@ -1500,7 +1527,7 @@ async fn prepare_remote_control_enrollment(
     let auth = match load_remote_control_auth(auth_context.auth_manager).await {
         Ok(auth) => auth,
         Err(err) => {
-            if err.kind() == ErrorKind::PermissionDenied {
+            if super::auth::is_auth_error(&err) {
                 *enrollment = None;
                 status_publisher.publish_environment_id(/*environment_id*/ None);
             }
@@ -1603,7 +1630,7 @@ async fn prepare_remote_control_enrollment(
                 )
                 .await?;
             }
-            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+            Err(err) if super::auth::is_auth_error(&err) => {
                 if recover_remote_control_auth(
                     auth_context.auth_recovery,
                     auth_context.auth_change_rx,
@@ -1728,7 +1755,7 @@ async fn enroll_and_persist_remote_control_server(
     {
         Ok(new_enrollment) => new_enrollment,
         Err(err)
-            if err.kind() == ErrorKind::PermissionDenied
+            if super::auth::is_auth_error(&err)
                 && recover_remote_control_auth(
                     auth_context.recovery.auth_recovery,
                     auth_context.recovery.auth_change_rx,
@@ -1825,6 +1852,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::time::Duration;
     use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
     use tokio_tungstenite::accept_async;
 
     // Windows Bazel CI can take longer than a few seconds for the websocket
@@ -2048,6 +2076,32 @@ mod tests {
             personal_access_token: None,
             bedrock_api_key: None,
             bedrock_access_keys: None,
+        }
+    }
+
+    #[test]
+    fn remote_control_websocket_reaches_server_with_invalid_custom_ca() {
+        let temp = TempDir::new().unwrap();
+        let invalid_ca = temp.path().join("invalid.pem");
+        std::fs::write(&invalid_ca, "not a certificate").unwrap();
+        for variable in ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "transport::remote_control::websocket::tests::connect_remote_control_websocket_includes_http_error_details",
+                ])
+                .env_remove("CODEX_CA_CERTIFICATE")
+                .env_remove("SSL_CERT_FILE")
+                .env(variable, &invalid_ca)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{variable}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
         }
     }
 
@@ -3471,18 +3525,26 @@ mod tests {
     }
 
     async fn connected_websocket_pair() -> (
-        WebSocketStream<MaybeTlsStream<TcpStream>>,
+        codex_websocket_client::WebSocketConnection,
         WebSocketStream<TcpStream>,
     ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("listener should bind");
-        let connect_task = tokio::spawn(connect_async(format!(
-            "ws://{}",
-            listener
-                .local_addr()
-                .expect("listener should have a local addr")
-        )));
+        let url = format!("ws://{}", listener.local_addr().expect("local address"));
+        let connect_task = tokio::spawn(async move {
+            codex_websocket_client::WebSocketConnector::new(
+                &codex_http_client::HttpClientFactory::new(
+                    codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+                ),
+            )
+            .unwrap()
+            .connect(
+                url.into_client_request().unwrap(),
+                tungstenite::protocol::WebSocketConfig::default(),
+            )
+            .await
+        });
         let (server_stream, _) = listener
             .accept()
             .await

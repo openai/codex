@@ -269,7 +269,9 @@ impl Inner {
                 ConnectionStatus::Recovering | ConnectionStatus::Failed(_) => None,
             };
             self.retired.cancel();
-            connection.set_status(ConnectionStatus::Failed(message.clone()));
+            connection.set_status(ConnectionStatus::Failed(
+                super::ConnectionFailure::Disconnected(message.clone()),
+            ));
             rpc_client
         };
         self.connection_changed.send_replace(());

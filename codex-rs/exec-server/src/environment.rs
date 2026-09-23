@@ -1021,19 +1021,28 @@ impl Environment {
                         tracing::warn!(%error, "replaying capability discovery after executor recovery");
                         let recovered =
                             tokio::time::timeout(std::time::Duration::from_secs(8), async {
-                                while self.readiness_result().is_none_or(|result| result.is_err()) {
+                                loop {
+                                    match self.readiness_result() {
+                                        Some(Ok(())) => return Some(Ok(())),
+                                        Some(Err(error))
+                                            if !crate::client::is_retryable_recovery_error(
+                                                &error,
+                                            ) =>
+                                        {
+                                            return Some(Err(error));
+                                        }
+                                        Some(Err(_)) | None => {}
+                                    }
                                     if connection_state.changed().await.is_err() {
-                                        return false;
+                                        return None;
                                     }
                                 }
-                                true
                             })
-                            .await
-                            .unwrap_or(false);
-                        if recovered {
-                            discover().await
-                        } else {
-                            Err(error)
+                            .await;
+                        match recovered {
+                            Ok(Some(Ok(()))) => discover().await,
+                            Ok(Some(Err(error))) => Err(error),
+                            Ok(None) | Err(_) => Err(error),
                         }
                     }
                     response => response,

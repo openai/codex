@@ -57,6 +57,7 @@ pub struct RouteAwareClientPool {
     default_headers: HeaderMap,
     custom_ca_fallback: CustomCaFallback,
     clients: Arc<Mutex<HashMap<OutboundProxyRoute, TransportClient>>>,
+    client_build: Arc<tokio::sync::Mutex<()>>,
     rustls_clients: Option<RustlsClientCache>,
 }
 
@@ -77,6 +78,8 @@ pub enum RouteAwareClientPoolError {
     Resolve(#[source] io::Error),
     #[error(transparent)]
     Build(#[from] BuildRouteAwareHttpClientError),
+    #[error("HTTP transport construction task failed: {0}")]
+    BuildTask(#[source] tokio::task::JoinError),
 }
 
 /// Error returned while building, routing, or sending a route-aware request.
@@ -138,7 +141,8 @@ impl RouteAwareRequestError {
             Self::Route(RouteAwareClientPoolError::Resolve(_)) => {
                 Some(RouteFailureClass::ProxyResolutionUnavailable)
             }
-            Self::Request(_)
+            Self::Route(RouteAwareClientPoolError::BuildTask(_))
+            | Self::Request(_)
             | Self::Policy(_)
             | Self::Build(_)
             | Self::UnsupportedRedirectScheme(_)
@@ -286,6 +290,7 @@ impl RouteAwareClientPool {
             default_headers,
             custom_ca_fallback: CustomCaFallback::Disabled,
             clients: Arc::new(Mutex::new(HashMap::new())),
+            client_build: Arc::default(),
             rustls_clients: None,
         }
     }
@@ -469,57 +474,74 @@ impl RouteAwareClientPool {
         {
             return Ok((route, client, SelectedTlsBackend::RustlsFallback));
         }
-        let clients = match self.clients.lock() {
-            Ok(clients) => clients,
-            Err(error) => panic!("route-aware client cache lock should not be poisoned: {error}"),
-        };
-        if let Some(client) = clients.get(&route) {
-            return Ok((route, client.clone(), SelectedTlsBackend::TransportDefault));
+        {
+            let clients = match self.clients.lock() {
+                Ok(clients) => clients,
+                Err(error) => {
+                    panic!("route-aware client cache lock should not be poisoned: {error}")
+                }
+            };
+            if let Some(client) = clients.get(&route) {
+                return Ok((route, client.clone(), SelectedTlsBackend::TransportDefault));
+            }
         }
-        drop(clients);
 
+        let build_permit = Arc::clone(&self.client_build).lock_owned().await;
+        {
+            let clients = self.clients.lock().unwrap_or_else(|error| {
+                panic!("route-aware client cache lock should not be poisoned: {error}")
+            });
+            if let Some(client) = clients.get(&route) {
+                return Ok((route, client.clone(), SelectedTlsBackend::TransportDefault));
+            }
+        }
         let client_builder = if self.follows_redirects_manually() {
             self.client_builder.clone().without_redirects()
         } else {
             self.client_builder.clone()
         };
-        let client = match (
-            self.http_client_factory.outbound_proxy_policy(),
-            self.custom_ca_fallback,
-        ) {
-            (_, CustomCaFallback::LegacyDirect) => {
-                client_builder.build_with_custom_ca_fallback(ProxyRouting::Direct)
+        let pool = self.clone();
+        let build_route = route.clone();
+        let client = tokio::task::spawn_blocking(move || {
+            // A timed-out caller must not release the slot or discard a successful build.
+            let _build_permit = build_permit;
+            let client = match (
+                pool.http_client_factory.outbound_proxy_policy(),
+                pool.custom_ca_fallback,
+            ) {
+                (_, CustomCaFallback::LegacyDirect) => {
+                    Ok(client_builder.build_with_custom_ca_fallback(ProxyRouting::Direct))
+                }
+                (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::LegacyTransportDefault) => {
+                    Ok(
+                        client_builder
+                            .build_with_custom_ca_fallback(ProxyRouting::TransportDefault),
+                    )
+                }
+                (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::Disabled)
+                | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::Disabled)
+                | (
+                    OutboundProxyPolicy::RespectSystemProxy,
+                    CustomCaFallback::LegacyTransportDefault,
+                ) => client_builder.build_for_resolved_route(
+                    &pool.http_client_factory,
+                    pool.route_class,
+                    &build_route,
+                ),
+            }?;
+            let mut clients = pool.clients.lock().unwrap_or_else(|error| {
+                panic!("route-aware client cache lock should not be poisoned: {error}")
+            });
+            if clients.len() >= MAX_CACHED_ROUTES
+                && let Some(route_to_evict) = clients.keys().next().cloned()
+            {
+                clients.remove(&route_to_evict);
             }
-            (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::LegacyTransportDefault) => {
-                client_builder.build_with_custom_ca_fallback(ProxyRouting::TransportDefault)
-            }
-            (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::Disabled)
-            | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::Disabled)
-            | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::LegacyTransportDefault) => {
-                client_builder.build_for_resolved_route(
-                    &self.http_client_factory,
-                    self.route_class,
-                    &route,
-                )?
-            }
-        };
-        let mut clients = match self.clients.lock() {
-            Ok(clients) => clients,
-            Err(error) => panic!("route-aware client cache lock should not be poisoned: {error}"),
-        };
-        if let Some(existing_client) = clients.get(&route) {
-            return Ok((
-                route,
-                existing_client.clone(),
-                SelectedTlsBackend::TransportDefault,
-            ));
-        }
-        if clients.len() >= MAX_CACHED_ROUTES
-            && let Some(route_to_evict) = clients.keys().next().cloned()
-        {
-            clients.remove(&route_to_evict);
-        }
-        clients.insert(route.clone(), client.clone());
+            clients.insert(build_route, client.clone());
+            Ok::<_, BuildRouteAwareHttpClientError>(client)
+        })
+        .await
+        .map_err(RouteAwareClientPoolError::BuildTask)??;
         Ok((route, client, SelectedTlsBackend::TransportDefault))
     }
 
