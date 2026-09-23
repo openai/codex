@@ -8919,6 +8919,94 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
 }
 
 #[tokio::test]
+async fn cancelled_step_capture_finishes_warning_delivery() {
+    struct WarningProvider {
+        warnings: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl codex_extension_api::ThreadInstructionsProvider for WarningProvider {
+        fn load_thread_instructions(&self) -> codex_extension_api::LoadInstructionsFuture<'_> {
+            Box::pin(async {
+                codex_extension_api::LoadedUserInstructions {
+                    instructions: None,
+                    warnings: std::mem::take(&mut *self.warnings.lock().expect("warnings")),
+                }
+            })
+        }
+    }
+
+    let warnings = vec![
+        "first provider warning".to_string(),
+        "second provider warning".to_string(),
+    ];
+    let warning_fields = |event: Event| match event.msg {
+        EventMsg::Warning(warning) => (event.id, warning.message),
+        other => panic!("expected a warning, got {other:?}"),
+    };
+    let (mut session, mut turn) = make_session_and_context().await;
+    Arc::make_mut(&mut turn.config).project_doc_max_bytes = 0;
+    session.services.agents_md_manager = Arc::new(AgentsMdManager::new(SessionInstructions {
+        thread_provider: Some(Arc::new(WarningProvider {
+            warnings: std::sync::Mutex::new(warnings.clone()),
+        })),
+        ..Default::default()
+    }));
+    attach_thread_persistence(&mut session).await;
+    let (tx, rx) = async_channel::bounded(/*cap*/ 1);
+    session.tx_event = tx;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let cancellation = CancellationToken::new();
+    let mut capture = Box::pin(tokio::task::unconstrained(
+        session.capture_step_context(Arc::clone(&turn), &cancellation),
+    ));
+    let first_warning = tokio::select! {
+        _ = &mut capture => panic!("capture must wait to deliver both warnings"),
+        event = timeout(Duration::from_secs(5), rx.recv()) => {
+            event.expect("first warning arrives").expect("event channel open")
+        }
+    };
+    assert_eq!(
+        warning_fields(first_warning.clone()),
+        (INITIAL_SUBMIT_ID.to_owned(), warnings[0].clone()),
+    );
+
+    // Keep the second warning blocked while cancellation is observed.
+    session
+        .tx_event
+        .try_send(first_warning.clone())
+        .expect("fill event channel");
+    cancellation.cancel();
+    assert!(futures::poll!(capture.as_mut()).is_pending());
+    assert_eq!(
+        warning_fields(rx.recv().await.expect("release event delivery")),
+        warning_fields(first_warning),
+    );
+    let Err(error) = capture.await else {
+        panic!("cancelled step cannot be published");
+    };
+    assert!(matches!(error.details(), CodexErrorDetails::TurnAborted));
+    assert_eq!(
+        warning_fields(
+            rx.try_recv()
+                .expect("second warning delivered before returning")
+        ),
+        (INITIAL_SUBMIT_ID.to_owned(), warnings[1].clone()),
+    );
+    assert!(
+        turn.extension_data
+            .get::<codex_extension_api::SelectedPluginSnapshot>()
+            .is_none()
+    );
+
+    session
+        .capture_step_context(turn, &CancellationToken::new())
+        .await
+        .expect("next capture succeeds without repeating consumed warnings");
+    assert!(rx.is_empty());
+}
+
+#[tokio::test]
 async fn refresh_mcp_servers_uses_latest_state_for_existing_turns() {
     let (session, turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
