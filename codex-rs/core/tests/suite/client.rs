@@ -2357,43 +2357,46 @@ async fn powershell_shell_version_is_model_visible_only_when_enabled() -> anyhow
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_configured_max_effort_in_request() -> anyhow::Result<()> {
+async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
-    let server = MockServer::start().await;
+    for (effort, expected) in [
+        ("max", json!("max")),
+        ("0", json!(0)),
+        ("64", json!(64)),
+        ("future", json!("future")),
+        ("-1", json!("-1")),
+        ("18446744073709551616", json!("18446744073709551616")),
+    ] {
+        let server = MockServer::start().await;
+        let resp_mock = mount_sse_once(
+            &server,
+            sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+        )
+        .await;
+        let TestCodex { codex, .. } = test_codex()
+            .with_model("gpt-5.4")
+            .with_pre_build_hook(move |home| {
+                std::fs::write(
+                    home.join("config.toml"),
+                    format!("model_reasoning_effort = \"{effort}\"\n"),
+                )
+                .expect("write test config");
+            })
+            .build_with_auto_env(&server)
+            .await?;
 
-    let resp_mock = mount_sse_once(
-        &server,
-        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
-    )
-    .await;
-    let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5.4")
-        .with_config(|config| {
-            config.model_reasoning_effort = Some(ReasoningEffort::Max);
-        })
-        .build(&server)
-        .await?;
+        codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }]))
+            .await
+            .unwrap();
 
-    codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "hello".into(),
-            text_elements: Vec::new(),
-        }]))
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let request = resp_mock.single_request();
-    let request_body = request.body_json();
-
-    assert_eq!(
-        request_body
-            .get("reasoning")
-            .and_then(|t| t.get("effort"))
-            .and_then(|v| v.as_str()),
-        Some("max")
-    );
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+        let request = resp_mock.single_request();
+        assert_eq!(request.body_json()["reasoning"]["effort"], expected);
+    }
 
     Ok(())
 }
