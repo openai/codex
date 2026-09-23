@@ -1136,9 +1136,9 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
     let test = builder.build_with_auto_env(&server).await?;
 
     let call_id = "uexec-full-lifecycle";
-    // This timing force the long-standing PTY
+    // Print before the subscriber attaches, then keep the process alive.
     let args = json!({
-        "cmd": "sleep 0.5; printf 'HELLO-FULL-LIFECYCLE'",
+        "cmd": "printf 'EARLY-OUTPUT'; sleep 0.5; printf 'HELLO-FULL-LIFECYCLE'",
         "yield_time_ms": 1000,
     });
 
@@ -1205,10 +1205,9 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
         end_event.process_id.is_some(),
         "end event should include process_id emitted by background watcher"
     );
-    assert!(
-        end_event.aggregated_output.contains("HELLO-FULL-LIFECYCLE"),
-        "aggregated_output should contain the full PTY transcript; got {:?}",
-        end_event.aggregated_output
+    assert_eq!(
+        end_event.aggregated_output,
+        "EARLY-OUTPUTHELLO-FULL-LIFECYCLE"
     );
     Ok(())
 }

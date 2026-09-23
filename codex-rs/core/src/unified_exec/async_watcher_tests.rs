@@ -8,6 +8,7 @@ use super::start_streaming_output;
 use super::utf8_boundary;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::unified_exec::UnifiedExecContext;
+use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::NoopSpawnLifecycle;
 use crate::unified_exec::process::UnifiedExecProcess;
@@ -58,8 +59,7 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
         tokio_util::sync::CancellationToken::new(),
         "streaming-output-test".to_string(),
     );
-    let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
-    start_streaming_output(&process, &context, Arc::clone(&transcript));
+    let transcript = process.transcript();
 
     Ok(StreamingOutputHarness {
         process,
@@ -71,6 +71,76 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
     })
 }
 
+#[test_case::test_case(b""; "no_late_output")]
+#[test_case::test_case(b"late\n"; "with_late_output")]
+#[tokio::test]
+async fn completed_output_preserves_bytes_before_subscription(
+    late_output: &[u8],
+) -> anyhow::Result<()> {
+    let StreamingOutputHarness {
+        process,
+        stdout_tx,
+        exit_tx,
+        transcript,
+        context,
+        rx_event,
+    } = streaming_output_harness().await?;
+
+    let collected = process.output_handles().output_notify.notified();
+    tokio::pin!(collected);
+    collected.as_mut().enable();
+    stdout_tx.send(b"early\n".to_vec())?;
+    collected.await;
+
+    let model_output = UnifiedExecProcessManager::collect_output_until_deadline(
+        process.output_handles(),
+        /*pause_state*/ None,
+        Instant::now(),
+    )
+    .await;
+    assert_eq!(model_output.to_bytes(), b"early\n");
+
+    start_streaming_output(&process, &context);
+    #[allow(deprecated)]
+    let cwd = context.step_context.turn.cwd.clone().into();
+    spawn_exit_watcher(
+        Arc::clone(&process),
+        &context,
+        vec!["proof".to_string()],
+        cwd,
+        /*process_id*/ 123,
+        /*plugin_attribution*/ None,
+        transcript,
+        Instant::now(),
+        /*network_denial_monitor*/ None,
+        /*plugin_metrics_sidecar*/ None,
+    );
+    stdout_tx.send(late_output.to_vec())?;
+    drop(stdout_tx);
+    exit_tx.send(0).expect("send exit");
+
+    let item = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let EventMsg::ItemCompleted(completed) = rx_event.recv().await?.msg
+                && let TurnItem::CommandExecution(item) = completed.item
+            {
+                return Ok::<_, async_channel::RecvError>(item);
+            }
+        }
+    })
+    .await??;
+    let expected_output = String::from_utf8([b"early\n".as_slice(), late_output].concat())?;
+    assert_eq!(
+        (item.status, item.exit_code, item.aggregated_output),
+        (
+            CommandExecutionStatus::Completed,
+            Some(0),
+            Some(expected_output)
+        )
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn streaming_output_preserves_multibyte_characters_across_chunks() -> anyhow::Result<()> {
     let StreamingOutputHarness {
@@ -79,8 +149,9 @@ async fn streaming_output_preserves_multibyte_characters_across_chunks() -> anyh
         exit_tx,
         transcript,
         rx_event,
-        ..
+        context,
     } = streaming_output_harness().await?;
+    start_streaming_output(&process, &context);
     let output_drained = process.output_drained_notify();
     let drained = output_drained.notified();
     tokio::pin!(drained);
@@ -121,8 +192,10 @@ async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyho
         stdout_tx,
         exit_tx,
         transcript,
+        context,
         ..
     } = streaming_output_harness().await?;
+    start_streaming_output(&process, &context);
     let output_drained = process.output_drained_notify();
     let drained = output_drained.notified();
     tokio::pin!(drained);
@@ -161,8 +234,9 @@ async fn streaming_output_keeps_grace_as_fallback_without_close() -> anyhow::Res
         exit_tx,
         transcript,
         rx_event,
-        ..
+        context,
     } = streaming_output_harness().await?;
+    start_streaming_output(&process, &context);
     let output_drained = process.output_drained_notify();
     let drained = output_drained.notified();
     tokio::pin!(drained);
@@ -211,6 +285,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         mut context,
         rx_event,
     } = streaming_output_harness().await?;
+    start_streaming_output(&process, &context);
 
     tokio::time::pause();
     let process_for_late_denial = Arc::clone(&process);
@@ -311,12 +386,10 @@ fn utf8_boundary_batches_malformed_output() {
 }
 
 #[tokio::test]
-async fn streaming_output_bounds_invalid_bytes_and_keeps_the_full_transcript() {
+async fn streaming_output_bounds_invalid_bytes() {
     let (session, turn, rx_event) = make_session_and_context_with_rx().await;
-    let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
     let mut output = Buffer::<8> {
         pending: Vec::new(),
-        transcript: Arc::clone(&transcript),
         emitter: Emitter {
             remaining_deltas: 2,
             session,
@@ -344,12 +417,5 @@ async fn streaming_output_bounds_invalid_bytes_and_keeps_the_full_transcript() {
             b"\xff\xff\xff\xff\xff\xff".to_vec(),
             b"\xf0\x9f\x98\x80\xff\xff\xff".to_vec(),
         ]
-    );
-
-    let mut expected_transcript = bytes.to_vec();
-    expected_transcript.extend([0xfe, 0xfe]);
-    assert_eq!(
-        transcript.lock().await.to_bytes_with_omission_marker(),
-        expected_transcript
     );
 }
