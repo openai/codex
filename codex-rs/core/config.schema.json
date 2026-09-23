@@ -2663,6 +2663,10 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "disable_direct_message": {
+          "description": "Disable the model's direct-message tools; spawning and automatic child results remain available.",
+          "type": "boolean"
+        },
         "enabled": {
           "type": "boolean"
         },
