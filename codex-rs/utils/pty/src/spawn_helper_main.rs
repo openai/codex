@@ -62,6 +62,8 @@ pub(super) fn dispatch(mut args: impl Iterator<Item = std::ffi::OsString>) -> ! 
         // Allocation is safe in this fresh, single-threaded image. CLOEXEC
         // leaves the report socket open until the target actually execs.
         crate::pty::close_inherited_fds_except(&inherited_fds);
+        #[cfg(test)]
+        crate::spawn_helper_tests::pause_handshake("environment")?;
         let mut size = [0; 4];
         control.read_exact(&mut size)?;
         let size = u32::from_le_bytes(size) as usize;
@@ -83,8 +85,12 @@ pub(super) fn dispatch(mut args: impl Iterator<Item = std::ffi::OsString>) -> ! 
                 std::ffi::OsStr::from_bytes(&entry[separator + 1..]),
             );
         }
+        #[cfg(test)]
+        crate::spawn_helper_tests::pause_handshake("report")?;
         control.write_all(&[REPORT_PREFIX])?;
         reported = true;
+        #[cfg(test)]
+        crate::spawn_helper_tests::pause_handshake("exec")?;
         Err(command.exec())
     })();
     if !reported {
