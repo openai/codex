@@ -135,6 +135,29 @@ fn recovered_answers_undo_as_one_vim_edit() {
             ctrl_r(&mut composer);
             assert_eq!(composer.draft_snapshot(), after);
         }
+
+        let mut composer = vim_composer("abc");
+        composer
+            .history
+            .record_local_submission(HistoryEntry::new("archived prompt".into()));
+        keys(&mut composer, "x");
+        let before = composer.draft_snapshot();
+        keys(&mut composer, "d");
+        ctrl_r(&mut composer);
+        keys(&mut composer, "archive");
+        composer.edit_stored_draft(|composer| composer.append_recovered_drafts(&answer));
+        assert_eq!(composer.current_text(), "archived prompt");
+        assert!(composer.history_search_active());
+        escape(&mut composer);
+        assert_eq!(
+            composer.current_text_with_pending(),
+            format!("bc\n{answer}")
+        );
+        let after = composer.draft_snapshot();
+        keys(&mut composer, "u");
+        assert_eq!(composer.draft_snapshot(), before);
+        ctrl_r(&mut composer);
+        assert_eq!(composer.draft_snapshot(), after);
     }
     snapshot_composer_state_with_width(
         "recovered_answer_cancels_vim_search",

@@ -178,6 +178,62 @@ async fn misalignment_policy_failure_stops_the_thread_and_renders_once() {
     assert!(chat.bottom_pane.has_active_view());
 }
 
+#[tokio::test]
+async fn misalignment_turn_end_discards_history_search_and_question_drafts() {
+    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    handle_turn_started(&mut chat, "turn");
+    chat.bottom_pane
+        .handle_paste("blocked draft ".repeat(/*n*/ 200));
+    chat.bottom_pane
+        .set_remote_image_urls(vec!["https://example.com/blocked.png".into()]);
+    chat.add_async_questions(
+        "question",
+        &[codex_protocol::items::AsyncUserInputQuestion {
+            title: "Which way?".into(),
+            options: None,
+        }],
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    chat.bottom_pane.handle_paste("answer".into());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: app_server_turn(
+                "turn",
+                AppServerTurnStatus::Failed,
+                /*duration_ms*/ None,
+                Some(AppServerTurnError {
+                    misalignment: Some(review_details()),
+                    message: ERROR_MESSAGE.into(),
+                    codex_error_info: Some(CodexErrorInfo::MisalignmentPolicyViolation),
+                    additional_details: None,
+                }),
+            ),
+        }),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.capture_thread_input_state().unwrap().composer, None);
+    assert_eq!(chat.bottom_pane.question_editor().unanswered_count(), 0);
+    chat.clear_misalignment_for_new_turn(
+        "acknowledged-turn",
+        MisalignmentTurnSource::AcknowledgedContinuation,
+    );
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    assert_eq!(chat.capture_thread_input_state().unwrap().composer, None);
+    assert_chatwidget_snapshot!(
+        "misalignment_turn_end_cleared_composer",
+        normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+    );
+    assert!(ops.try_recv().is_err());
+}
+
 fn review_details() -> codex_app_server_protocol::MisalignmentErrorDetails {
     codex_app_server_protocol::MisalignmentErrorDetails {
         error_type: Some("new_category".to_string()),

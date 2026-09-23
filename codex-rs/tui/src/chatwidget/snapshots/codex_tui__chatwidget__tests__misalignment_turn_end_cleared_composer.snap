@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/misalignment_policy_tests.rs
+assertion_line: 236
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
+---
+› Ask Codex to do anything
+
+  esc esc to edit previous message

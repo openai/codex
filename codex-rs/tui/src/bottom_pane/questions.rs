@@ -48,8 +48,7 @@ impl BottomPane {
         // The question editor closes at turn end; recover its typed answer, not a history preview.
         questions.composer.cancel_history_search();
         let drafts = questions.take_pending_drafts();
-        if !drafts.is_empty() {
-            self.composer.cancel_history_search();
+        if !drafts.is_empty() && !self.composer.history_search_active() {
             self.composer.flush_pending_input();
         }
         Some(drafts)
@@ -60,7 +59,8 @@ impl BottomPane {
         if drafts.is_empty() {
             return;
         }
-        self.composer.append_recovered_drafts(&drafts.join("\n"));
+        self.composer
+            .edit_stored_draft(|composer| composer.append_recovered_drafts(&drafts.join("\n")));
         self.request_redraw();
     }
 

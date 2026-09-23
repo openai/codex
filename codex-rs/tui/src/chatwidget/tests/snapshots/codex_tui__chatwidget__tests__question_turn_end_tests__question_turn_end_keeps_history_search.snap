@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/question_turn_end_tests.rs
+assertion_line: 191
+expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80))"
+---
+› earlier prompt
+
+  reverse-i-search: e  enter accept · esc cancel

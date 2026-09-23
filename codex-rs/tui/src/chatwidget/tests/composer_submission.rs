@@ -210,9 +210,16 @@ async fn rejected_hidden_shell_paste_preserves_colliding_draft_paste() {
     let draft_payload = format!("draft {}", "y".repeat(1000));
     chat.handle_paste(draft_payload.clone());
     chat.set_model("");
+    chat.bottom_pane
+        .record_replayed_user_message_history(crate::bottom_pane::HistoryEntry::new(
+            "earlier prompt".into(),
+        ));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Char('e')));
 
     handle_turn_completed(&mut chat, "turn-1", /*duration_ms*/ None);
     chat.set_model(&model);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     assert_hidden_shell_payload_is_literal(op_rx.try_recv(), format!("{payload}\n{draft_payload}"));

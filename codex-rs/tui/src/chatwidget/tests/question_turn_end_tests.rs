@@ -98,6 +98,11 @@ async fn question_turn_end_recovers_collapsed_drafts_on_completion_and_failure()
         for ch in "main".chars() {
             chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
         }
+        chat.bottom_pane.record_replayed_user_message_history(
+            crate::bottom_pane::HistoryEntry::new("earlier prompt".into()),
+        );
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char('e')));
         if status == AppServerTurnStatus::Failed {
             chat.input_queue
                 .queued_user_messages
@@ -130,6 +135,9 @@ async fn question_turn_end_recovers_collapsed_drafts_on_completion_and_failure()
             }),
             /*replay_kind*/ None,
         );
+        assert_eq!(chat.bottom_pane.composer_text(), "earlier prompt");
+        assert!(!chat.bottom_pane.no_modal_or_popup_active());
+        chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
         assert_recovered_draft(&mut chat, "main\nanswer");
         assert!(ops.try_recv().is_err());
     }
@@ -137,29 +145,90 @@ async fn question_turn_end_recovers_collapsed_drafts_on_completion_and_failure()
 
 #[tokio::test]
 async fn question_turn_end_recovers_after_interruption_restores_queued_input() {
-    let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
-    handle_turn_started(&mut chat, "turn");
-    chat.bottom_pane.set_disable_paste_burst(/*disabled*/ false);
-    chat.bottom_pane
-        .set_composer_text("main draft".into(), Vec::new(), Vec::new());
-    questions(&mut chat, "question");
-    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-    chat.bottom_pane.handle_paste("answer".into());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
-    chat.handle_key_event(KeyEvent::from(KeyCode::Char('+')));
-    chat.input_queue
-        .queued_user_messages
-        .push_back(UserMessage::from("queued prompt").into());
-    chat.input_queue
-        .pending_steers
-        .push_back(pending_steer("pending steer"));
-    handle_turn_interrupted(&mut chat, "turn");
-    assert_recovered_draft(
-        &mut chat,
-        "pending steer\nqueued prompt\nmain draft+\nanswer",
-    );
-    assert!(!chat.has_queued_follow_up_messages());
-    assert!(ops.try_recv().is_err());
+    enum MainInput {
+        HistoryAccept,
+        HistoryCancel,
+        BufferedTyping,
+    }
+    for main_input in [
+        MainInput::HistoryAccept,
+        MainInput::HistoryCancel,
+        MainInput::BufferedTyping,
+    ] {
+        let (mut chat, _rx, mut ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        handle_turn_started(&mut chat, "turn");
+        chat.bottom_pane.set_disable_paste_burst(/*disabled*/ false);
+        chat.bottom_pane
+            .set_composer_text("main draft".into(), Vec::new(), Vec::new());
+        questions(&mut chat, "question");
+        chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        chat.bottom_pane.handle_paste("answer".into());
+        chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+        let main_draft = match main_input {
+            MainInput::HistoryAccept | MainInput::HistoryCancel => {
+                chat.bottom_pane.record_replayed_user_message_history(
+                    crate::bottom_pane::HistoryEntry::new("earlier prompt".into()),
+                );
+                chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+                chat.handle_key_event(KeyEvent::from(KeyCode::Char('e')));
+                assert_eq!(chat.bottom_pane.composer_text(), "earlier prompt");
+                if matches!(main_input, MainInput::HistoryAccept) {
+                    "earlier prompt"
+                } else {
+                    "main draft"
+                }
+            }
+            MainInput::BufferedTyping => {
+                chat.handle_key_event(KeyEvent::from(KeyCode::Char('+')));
+                "main draft+"
+            }
+        };
+        chat.input_queue
+            .queued_user_messages
+            .push_back(UserMessage::from("queued prompt").into());
+        chat.input_queue
+            .pending_steers
+            .push_back(pending_steer("pending steer"));
+        handle_turn_interrupted(&mut chat, "turn");
+        if !matches!(main_input, MainInput::BufferedTyping) {
+            assert_eq!(chat.bottom_pane.composer_text(), "earlier prompt");
+            assert!(!chat.bottom_pane.no_modal_or_popup_active());
+            assert_eq!(
+                chat.capture_thread_input_state()
+                    .unwrap()
+                    .composer
+                    .unwrap()
+                    .text,
+                "pending steer\nqueued prompt\nmain draft\nanswer"
+            );
+            // A query miss and unsuccessful Enter must retain both the search and the answers.
+            chat.handle_key_event(KeyEvent::from(KeyCode::Char('z')));
+            chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+            assert!(!chat.bottom_pane.no_modal_or_popup_active());
+            assert_eq!(chat.bottom_pane.composer_text(), "main draft");
+            chat.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+            if matches!(main_input, MainInput::HistoryAccept) {
+                insta::assert_snapshot!(
+                    "question_turn_end_keeps_history_search",
+                    normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80))
+                );
+            }
+            chat.handle_key_event(match main_input {
+                MainInput::HistoryAccept => KeyEvent::from(KeyCode::Enter),
+                _ => KeyEvent::from(KeyCode::Esc),
+            });
+        }
+        if matches!(main_input, MainInput::HistoryAccept) {
+            assert_recovered_draft(&mut chat, "earlier prompt");
+        } else {
+            assert_recovered_draft(
+                &mut chat,
+                &format!("pending steer\nqueued prompt\n{main_draft}\nanswer"),
+            );
+        }
+        assert!(!chat.has_queued_follow_up_messages());
+        assert!(ops.try_recv().is_err());
+    }
 }
 
 fn assert_recovered_draft(chat: &mut ChatWidget, text: &str) {

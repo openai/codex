@@ -724,6 +724,7 @@ fn history_search_preserves_a_held_sparkle_command_without_reclassifying_it() {
                 assert_eq!(pane.composer.sparkle.draft.get(), SparkleDraft::Command);
                 pane.handle_paste("history".into());
                 assert_eq!(pane.composer.current_text(), "history prompt");
+                pane.set_composer_pending_pastes(Vec::new());
                 assert_eq!(pane.composer.sparkle.draft.get(), SparkleDraft::Command);
                 let searching = draw(&pane.composer, /*width*/ 80, during).0;
                 assert!(dots(&searching).is_empty());
@@ -787,16 +788,17 @@ fn cancelling_history_search_preserves_a_typed_command_despite_attachment_previe
 }
 
 #[test]
-fn replacing_a_draft_outside_the_history_preview_dismisses_sparkles_during_search() {
+fn fresh_draft_replacement_ends_search_and_dismisses_sparkles() {
     let mut pane = pane();
     pane.mark_fresh_task_for_sparkle("gpt-5.5", &enabled());
     pane.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
     assert!(pane.composer.history_search_active());
     pane.composer
         .set_text_content("external draft".into(), Vec::new(), Vec::new());
+    assert!(!pane.composer.history_search_active());
     assert_eq!(pane.composer.sparkle.draft.get(), SparkleDraft::Dismissed);
     key(&mut pane, KeyCode::Esc);
-    assert!(pane.composer.is_empty());
+    assert_eq!(pane.composer.current_text(), "external draft");
     assert_eq!(pane.composer.sparkle.draft.get(), SparkleDraft::Dismissed);
 }
 
