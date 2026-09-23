@@ -20,12 +20,12 @@ pub(super) struct CodeModeToolCallGuard {
     started_at_ms: u64,
     status: CodeModeToolCallStatus,
     handler_span: Span,
+    extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
 }
 
 impl CodeModeToolCallGuard {
     pub(super) fn new(
-        analytics: AnalyticsEventsClient,
-        thread_id: String,
+        session: &crate::session::session::Session,
         turn_id: String,
         turn_metadata: Arc<dyn TurnAnalyticsMetadata>,
         call_id: String,
@@ -33,8 +33,8 @@ impl CodeModeToolCallGuard {
         handler_span: Span,
     ) -> Self {
         Self {
-            analytics,
-            thread_id,
+            analytics: session.services.analytics_events_client.clone(),
+            thread_id: session.thread_id.to_string(),
             turn_id,
             turn_metadata,
             call_id,
@@ -43,6 +43,7 @@ impl CodeModeToolCallGuard {
             started_at_ms: codex_analytics::now_unix_millis(),
             status: CodeModeToolCallStatus::Interrupted,
             handler_span,
+            extensions: Arc::clone(&session.services.extensions),
         }
     }
 
@@ -58,6 +59,15 @@ impl CodeModeToolCallGuard {
     }
 
     pub(super) fn record_code_mode_host_duration(&self, duration: Duration) {
+        for observer in self.extensions.tool_lifecycle_contributors() {
+            observer.on_tool_timing(codex_extension_api::ToolTimingInput {
+                thread_id: &self.thread_id,
+                turn_id: &self.turn_id,
+                call_id: &self.call_id,
+                boundary: codex_extension_api::ToolTimingBoundary::HostOperation,
+                duration,
+            });
+        }
         let Ok(code_mode_host_duration_ns) = u64::try_from(duration.as_nanos()) else {
             return;
         };

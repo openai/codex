@@ -38,6 +38,7 @@ struct ToolCallTimingGuard {
     turn_id: String,
     call_id: String,
     tool_name: codex_tools::ToolName,
+    extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
 }
 
 #[derive(Clone)]
@@ -143,14 +144,24 @@ impl ToolCallRuntime {
         let lock = Arc::clone(&self.parallel_execution);
         let invocation_cancellation_token = cancellation_token.clone();
         let started = Instant::now();
-        let tool_call_timing_guard = ToolCallTimingGuard::capture(
+        let mut tool_call_timing_guard = ToolCallTimingGuard::capture(
             started,
             &session.thread_id,
             &turn.sub_id,
             &call,
             &source,
-            turn.config.code_mode.experimental_show_cell_overhead,
+            Arc::clone(&session.services.extensions),
         );
+        if let Some(guard) = tool_call_timing_guard.as_mut() {
+            for observer in session.services.extensions.tool_lifecycle_contributors() {
+                observer.on_tool_dispatch(codex_extension_api::ToolDispatchInput {
+                    thread_id: &guard.conversation_id,
+                    turn_id: &guard.turn_id,
+                    call_id: &guard.call_id,
+                    tool_name: &guard.tool_name,
+                });
+            }
+        }
         let execution_started_at = tool_call_timing_guard
             .as_ref()
             .map(|timing| Arc::clone(&timing.execution_started_at));
@@ -340,7 +351,7 @@ impl ToolCallTimingGuard {
         turn_id: &str,
         call: &ToolCall,
         source: &ToolCallSource,
-        experimental_show_cell_overhead: bool,
+        extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     ) -> Option<Self> {
         // Code-mode calls are nested within a direct code-mode tool call whose
         // timing already includes them. Suppress nested guards so consumers do
@@ -348,8 +359,7 @@ impl ToolCallTimingGuard {
         if !matches!(
             source,
             ToolCallSource::Direct | ToolCallSource::DirectPlaintextMessage
-        ) || (!experimental_show_cell_overhead && !tracing::enabled!(tracing::Level::INFO))
-        {
+        ) {
             return None;
         }
 
@@ -360,6 +370,7 @@ impl ToolCallTimingGuard {
             turn_id: turn_id.to_string(),
             call_id: call.call_id.clone(),
             tool_name: call.tool_name.clone(),
+            extensions,
         })
     }
 
@@ -375,6 +386,17 @@ impl ToolCallTimingGuard {
             .get()
             .copied()
             .filter(|execution_started_at| *execution_started_at <= completed_at);
+        for observer in self.extensions.tool_lifecycle_contributors() {
+            observer.on_tool_timing(codex_extension_api::ToolTimingInput {
+                thread_id: &self.conversation_id,
+                turn_id: &self.turn_id,
+                call_id: &self.call_id,
+                boundary: codex_extension_api::ToolTimingBoundary::Handler,
+                duration: execution_started_at
+                    .map(|start| completed_at.duration_since(start))
+                    .unwrap_or_default(),
+            });
+        }
         let duration_ms = |duration: std::time::Duration| u64::try_from(duration.as_millis()).ok();
         let total_duration_ms = duration_ms(completed_at.duration_since(started_at));
         let dispatch_duration_ms = execution_started_at.map_or_else(
@@ -470,7 +492,7 @@ mod tests {
                 "turn-id",
                 &call,
                 &ToolCallSource::Direct,
-                /*experimental_show_cell_overhead*/ false,
+                codex_extension_api::empty_extension_registry(),
             );
             assert!(
                 direct_guard.is_some(),
@@ -487,7 +509,7 @@ mod tests {
                     cell_id: "cell-1".to_string(),
                     runtime_tool_call_id: "runtime-call-1".to_string(),
                 },
-                /*experimental_show_cell_overhead*/ false,
+                codex_extension_api::empty_extension_registry(),
             );
             assert!(
                 code_mode_guard.is_none(),
@@ -514,7 +536,7 @@ mod tests {
                 "turn-id",
                 &call,
                 &ToolCallSource::Direct,
-                /*experimental_show_cell_overhead*/ true,
+                codex_extension_api::empty_extension_registry(),
             )
             .expect("model-visible timing must not depend on INFO logging");
             timing
@@ -785,3 +807,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "parallel_observation_tests.rs"]
+mod observation_tests;

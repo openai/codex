@@ -50,6 +50,8 @@ pub use tool_lifecycle::ToolCallOutcome;
 pub use tool_lifecycle::ToolFinishInput;
 pub use tool_lifecycle::ToolLifecycleFuture;
 pub use tool_lifecycle::ToolStartInput;
+pub use tool_lifecycle::ToolTimingBoundary;
+pub use tool_lifecycle::ToolTimingInput;
 pub use turn_input::TurnInputContext;
 pub use turn_input::TurnInputEnvironment;
 pub use turn_lifecycle::TurnAbortInput;
@@ -349,6 +351,10 @@ pub trait ToolContributor: Send + Sync {
 /// rewriting the invocation. Use `ToolContributor` for owning a tool implementation
 /// and hooks for policy that changes tool payloads.
 pub trait ToolLifecycleContributor: Send + Sync {
+    /// Observe direct calls before readiness, dispatch waiting, and hooks, including blocked calls.
+    /// Excludes nested code-mode calls. Observers must return promptly.
+    fn on_tool_dispatch(&self, _input: ToolDispatchInput<'_>) {}
+
     /// Called after pre-tool hooks finalize an invocation and before execution.
     ///
     /// Calls blocked by hooks, or whose hook-provided input cannot be applied,
@@ -377,6 +383,10 @@ pub trait ToolLifecycleContributor: Send + Sync {
     fn on_tool_finish<'a>(&'a self, _input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(std::future::ready(()))
     }
+
+    /// Observe handler or remote host duration as defined by `ToolTimingBoundary`.
+    /// Handler timing includes cancellation. Observers must return promptly.
+    fn on_tool_timing(&self, _input: ToolTimingInput<'_>) {}
 }
 
 /// Owns the complete approval decision, including whether to consult a reviewer.
@@ -404,3 +414,5 @@ pub trait TurnItemContributor: Send + Sync {
         item: &'a mut TurnItem,
     ) -> ExtensionFuture<'a, Result<(), String>>;
 }
+
+pub use tool_lifecycle::ToolDispatchInput;

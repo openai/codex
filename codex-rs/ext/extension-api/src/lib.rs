@@ -82,6 +82,8 @@ pub use contributors::ToolFinishInput;
 pub use contributors::ToolLifecycleContributor;
 pub use contributors::ToolLifecycleFuture;
 pub use contributors::ToolStartInput;
+pub use contributors::ToolTimingBoundary;
+pub use contributors::ToolTimingInput;
 pub use contributors::TurnAbortInput;
 pub use contributors::TurnContextContributionInput;
 pub use contributors::TurnErrorInput;
@@ -106,3 +108,5 @@ pub use user_instructions::LoadInstructionsFuture;
 pub use user_instructions::LoadedUserInstructions;
 pub use user_instructions::ThreadInstructionsProvider;
 pub use user_instructions::UserInstructionsProvider;
+
+pub use contributors::ToolDispatchInput;

@@ -51,6 +51,9 @@ use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
 
+#[path = "tool_observation_tests.rs"]
+mod observations;
+
 #[path = "command_lifecycle_tests.rs"]
 mod command_lifecycle;
 
