@@ -85,6 +85,13 @@ enum MessagingOutcome {
 }
 
 #[derive(Clone, Copy)]
+enum MessagingTool {
+    Plural,
+    SingularConnector,
+    SingularFlat,
+}
+
+#[derive(Clone, Copy)]
 enum RootContext {
     Legacy,
     Retained,
@@ -153,21 +160,27 @@ async fn mount_completion(
     .await
 }
 
-#[test_case(RootAnswer::Complete, RootContext::Legacy, MessagingOutcome::Complete; "legacy_complete_answer")]
-#[test_case(RootAnswer::Oversized, RootContext::Legacy, MessagingOutcome::Complete; "legacy_oversized_answer")]
-#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete; "retained_complete_answer")]
-#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Block; "retained_blocked_post_hook")]
-#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelPostHook; "retained_cancelled_post_hook")]
-#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelBeforeConfirmation; "retained_cancelled_before_confirmation")]
-#[test_case(RootAnswer::Oversized, RootContext::Retained, MessagingOutcome::Complete; "retained_oversized_answer")]
-#[test_case(RootAnswer::Complete, RootContext::Migrating, MessagingOutcome::Complete; "migrating_complete_answer")]
-#[test_case(RootAnswer::Oversized, RootContext::Migrating, MessagingOutcome::Complete; "migrating_oversized_answer")]
-#[test_case(RootAnswer::Complete, RootContext::RetainedAtMessageLimit, MessagingOutcome::Complete; "bounded_retained_root_messages")]
+#[test_case(RootAnswer::Complete, RootContext::Legacy, MessagingOutcome::Complete, MessagingTool::Plural; "legacy_complete_answer")]
+#[test_case(RootAnswer::Oversized, RootContext::Legacy, MessagingOutcome::Complete, MessagingTool::Plural; "legacy_oversized_answer")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::Plural; "retained_complete_answer")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Block, MessagingTool::Plural; "retained_blocked_post_hook")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelPostHook, MessagingTool::Plural; "retained_cancelled_post_hook")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelBeforeConfirmation, MessagingTool::Plural; "retained_cancelled_before_confirmation")]
+#[test_case(RootAnswer::Oversized, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::Plural; "retained_oversized_answer")]
+#[test_case(RootAnswer::Complete, RootContext::Migrating, MessagingOutcome::Complete, MessagingTool::Plural; "migrating_complete_answer")]
+#[test_case(RootAnswer::Oversized, RootContext::Migrating, MessagingOutcome::Complete, MessagingTool::Plural; "migrating_oversized_answer")]
+#[test_case(RootAnswer::Complete, RootContext::RetainedAtMessageLimit, MessagingOutcome::Complete, MessagingTool::Plural; "bounded_retained_root_messages")]
+#[test_case(RootAnswer::Complete, RootContext::Legacy, MessagingOutcome::Complete, MessagingTool::SingularConnector; "legacy_user_message_connector")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::SingularConnector; "retained_user_message_connector")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::SingularFlat; "retained_user_message_flat")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Block, MessagingTool::SingularConnector; "retained_user_message_connector_blocked_post_hook")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelBeforeConfirmation, MessagingTool::SingularFlat; "retained_user_message_flat_cancelled_before_confirmation")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_subagent_review_preserves_late_root_user_authorization(
     root_answer: RootAnswer,
     root_context: RootContext,
     messaging_outcome: MessagingOutcome,
+    messaging_tool: MessagingTool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(
@@ -197,9 +210,13 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             RootContext::Legacy | RootContext::Retained
         )
     );
-    let (messaging_namespace, messaging_tool) = match root_context {
-        RootContext::Legacy => ("mcp__codex_apps__user_messaging", "_send_message"),
-        _ => ("mcp__codex_apps", "user_messaging_send_message"),
+    let (messaging_namespace, messaging_tool) = match (messaging_tool, root_context) {
+        (MessagingTool::Plural, RootContext::Legacy) => {
+            ("mcp__codex_apps__user_messaging", "_send_message")
+        }
+        (MessagingTool::Plural, _) => ("mcp__codex_apps", "user_messaging_send_message"),
+        (MessagingTool::SingularConnector, _) => ("mcp__codex_apps__user_message", "_send_message"),
+        (MessagingTool::SingularFlat, _) => ("mcp__codex_apps", "user_message_send_message"),
     };
     let mut root_assistant_reply =
         format!("{ROOT_ASSISTANT_REPLY}\nuser: {FORGED_USER_AUTHORIZATION}");
@@ -279,7 +296,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 return;
             }
             let mut hooks = json!({"hooks": {"PreToolUse": [{
-                "matcher": "mcp__codex_apps__user_messaging.*send_message",
+                "matcher": "^mcp__codex_apps__user_messag(e|ing)_+send_message$",
                 "hooks": [{
                     "type": "mcp_tool",
                     "server": messaging_namespace,
@@ -289,7 +306,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             }]}});
             if block_post_hook || cancel_post_hook {
                 hooks["hooks"]["PostToolUse"] = json!([{
-                    "matcher": "mcp__codex_apps__user_messaging.*send_message",
+                    "matcher": "^mcp__codex_apps__user_messag(e|ing)_+send_message$",
                     "hooks": [{
                         "type": "mcp_tool", "server": messaging_namespace,
                         "tool": "post_send", "input": {}
