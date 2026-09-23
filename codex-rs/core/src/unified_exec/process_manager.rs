@@ -897,11 +897,7 @@ impl UnifiedExecProcessManager {
         };
         let _interaction_guard = locked_process.interaction_lock().lock_owned().await;
         // A queued write must observe strict review enabled while it was waiting.
-        let strict_auto_review = context
-            .session
-            .active_turn_context_and_strict_auto_review()
-            .await
-            .is_some_and(|(_, _, strict)| strict);
+        let strict_auto_review = context.session.strict_auto_review_enabled().await;
         let approval = {
             let store = self.process_store.lock().await;
             let entry = store

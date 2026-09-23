@@ -3,7 +3,6 @@ use crate::config::ConstraintResult;
 use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
 use crate::elicitation::ElicitationRegistration;
-use crate::environment_selection::TurnEnvironmentState;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::Submission;
@@ -531,28 +530,6 @@ impl CodexThread {
         self.session.inject_if_running(items).await
     }
 
-    /// Environment selections captured by the active turn, before later settings updates.
-    /// Includes environments that are still starting or have failed. Hosts use this snapshot
-    /// to authorize steering against every executor that the active turn selected.
-    pub async fn active_turn_environment_selections(
-        &self,
-    ) -> Option<Vec<TurnEnvironmentSelection>> {
-        let active = self.session.active_turn.lock().await;
-        let task = active.as_ref()?.task.as_ref()?;
-        Some(
-            task.turn_context
-                .initial_environments
-                .environments
-                .iter()
-                .map(|environment| match environment {
-                    TurnEnvironmentState::Ready(environment) => environment.selection(),
-                    TurnEnvironmentState::Starting(environment) => environment.selection.clone(),
-                    TurnEnvironmentState::Failed { selection, .. } => selection.clone(),
-                })
-                .collect(),
-        )
-    }
-
     /// Captures a regular turn only after its input is recorded. The caller must flush the rollout.
     pub async fn interrupted_turn(
         &self,
@@ -837,13 +814,13 @@ impl CodexThread {
 
     /// Returns the active turn's reviewer, including live updates, or the thread default.
     pub async fn approvals_reviewer_for_turn(&self, turn_id: &str) -> ApprovalsReviewer {
-        if let Some((turn, inputs, _)) = self
+        if let Some((turn, settings, _, _)) = self
             .session
             .active_turn_context_and_strict_auto_review()
             .await
             && turn.sub_id == turn_id
         {
-            inputs.settings.approvals_reviewer()
+            settings.approvals_reviewer()
         } else {
             self.config_snapshot().await.approvals_reviewer
         }

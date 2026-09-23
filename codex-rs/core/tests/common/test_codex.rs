@@ -26,6 +26,7 @@ use codex_core::resolve_installation_id;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_core::thread_store_from_config;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
@@ -45,14 +46,17 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PermissionProfileSnapshot;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EnvironmentConfig;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
@@ -129,6 +133,36 @@ pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
         cwd: PathUri::from_abs_path(&cwd),
         workspace_roots: vec![PathUri::from_abs_path(&cwd)],
         config: EnvironmentConfigState::FromThread,
+    }
+}
+
+/// Builds explicit environment configuration with the test thread's permissions and shell settings.
+pub fn environment_config_for_selection(
+    config: &Config,
+    selection: &TurnEnvironmentSelection,
+) -> EnvironmentConfig {
+    let permissions = &config.permissions;
+    let profile = permissions.permission_profile().clone();
+    let permission_profile = match permissions.active_permission_profile() {
+        Some(active) => PermissionProfileSnapshot::active_with_profile_workspace_roots(
+            profile,
+            active,
+            permissions.profile_workspace_roots().to_vec(),
+        ),
+        None => PermissionProfileSnapshot::legacy(profile),
+    };
+    EnvironmentConfig {
+        allow_login_shell: permissions.allow_login_shell,
+        workspace_roots: selection.workspace_roots.clone(),
+        permission_profile,
+        shell_environment_policy: permissions.shell_environment_policy.clone(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(config),
+        windows_sandbox_type: permissions.windows_sandbox_type,
+        use_legacy_landlock: config.features.use_legacy_landlock(),
+        exec_policy: None,
+        mcp_policy: None,
+        network_policy: None,
+        selected_capability_roots: Vec::new(),
     }
 }
 

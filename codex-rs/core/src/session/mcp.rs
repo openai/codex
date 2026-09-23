@@ -744,7 +744,7 @@ async fn review_guardian_mcp_elicitation(
     let Some(mcp_config) = session.services.mcp_runtime.current_config() else {
         return Ok(None);
     };
-    let step_settings = Arc::clone(&turn_context.next_step_input.load().settings);
+    let step_settings = turn_context.next_step_settings.load_full();
 
     // User approval skips ordinary CUA checks, not separate sensitive requests.
     let user_cua_execution = step_settings.approvals_reviewer() == ApprovalsReviewer::User

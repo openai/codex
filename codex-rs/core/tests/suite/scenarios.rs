@@ -19,6 +19,7 @@ use codex_context_fragments::ContextualUserFragment;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
 use codex_core::config::Config;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionDataInit;
@@ -35,8 +36,13 @@ use codex_protocol::models::ImageReference;
 use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnSettingsUpdate;
+use codex_protocol::protocol::TurnSettingsUpdateOutcome;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use codex_skills_extension::ExecutorSkillProvider;
 use codex_skills_extension::SkillProviders;
@@ -60,6 +66,7 @@ use core_test_support::skip_if_wine_exec;
 use core_test_support::stdio_server_bin;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::environment_config_for_selection;
 use core_test_support::test_codex::executor_path_uri;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -321,6 +328,127 @@ async fn astra_asks_an_async_question_and_receives_the_answer_while_working() ->
             "Astra asks who a launch update is for, keeps working, and receives the user's answer in the active turn.",
             &entries,
             &ContextSnapshotOptions::default().rewrite_known_segments(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_switches_environments_for_the_rest_of_the_active_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_function_call_with_namespace(
+                    "pause-for-switch",
+                    "functions",
+                    "request_user_input",
+                    &json!({"questions": [{
+                        "id": "continue", "header": "Continue", "question": "Continue in the other workspace?",
+                        "options": [
+                            {"label": "Yes", "description": "Continue working."},
+                            {"label": "No", "description": "Stop working."}
+                        ]
+                    }]}).to_string(),
+                ),
+                ev_completed("first-step"),
+            ]),
+            sse(vec![
+                ev_assistant_message("active-turn", "I continued in the other workspace."),
+                ev_completed("second-step"),
+            ]),
+            sse(vec![
+                ev_assistant_message("next-turn", "I am back in the original workspace."),
+                ev_completed("next-turn"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .features
+                .enable(Feature::DefaultModeRequestUserInput)
+                .expect("enable request_user_input");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let original = test.executor_environment().selection().clone();
+    let mut other = original.clone();
+    other.cwd = original.cwd.join("other-workspace")?;
+    other.workspace_roots = vec![other.cwd.clone()];
+    other.config =
+        EnvironmentConfigState::Ready(environment_config_for_selection(&test.config, &other));
+    test.fs()
+        .create_directory(
+            &other.cwd,
+            CreateDirectoryOptions {
+                recursive: false,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Ask before continuing in the other workspace.",
+        )]))
+        .await?;
+    let request = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::RequestUserInput(request) => Some(request.clone()),
+        _ => None,
+    })
+    .await;
+    let (reply, outcome) = oneshot::channel();
+    test.codex
+        .submit(Op::TurnSettings {
+            turn_id: request.turn_id.clone(),
+            update: TurnSettingsUpdate {
+                environments: Some(vec![other.clone()]),
+                ..Default::default()
+            },
+            reply,
+        })
+        .await?;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(/*secs*/ 10), outcome).await??,
+        TurnSettingsUpdateOutcome::Applied
+    );
+    test.codex
+        .submit(Op::UserInputAnswer {
+            id: request.turn_id,
+            response: RequestUserInputResponse {
+                answers: HashMap::from([(
+                    "continue".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec!["Yes".to_string()],
+                    },
+                )]),
+            },
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_text_turn("Which workspace are you using now?")
+        .await?;
+
+    let requests = mock.requests();
+    insta::assert_snapshot!(
+        "astra_active_environment_selection",
+        context_snapshot::format_request_history_snapshot(
+            "Astra starts in one workspace, switches for the next step of the active turn, and returns to the original workspace on the next turn.",
+            &requests,
+            &ContextSnapshotOptions::default(),
         )
     );
     Ok(())

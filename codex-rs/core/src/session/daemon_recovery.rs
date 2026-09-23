@@ -20,12 +20,12 @@ impl Session {
         }
         let context = &task.turn_context;
         context.extension_data.get::<RecordedTurnInput>()?;
-        let inputs = context.next_step_input.load();
+        let settings = context.next_step_settings.load();
+        let environments = self.services.turn_environments.snapshot_now();
         // Remote identities/configuration are not persisted across daemon restarts.
-        if inputs.environments.environments.len() != 1 {
+        if environments.environments.len() != 1 {
             return None;
         }
-        let environments = inputs.environments.refresh_readiness();
         let environment = environments.single_local_environment()?.selection();
         if environment.config != EnvironmentConfigState::FromThread {
             return None;
@@ -34,7 +34,7 @@ impl Session {
             context.sub_id.clone(),
             crate::TurnStartOptions {
                 final_output_json_schema: context.final_output_json_schema.clone(),
-                service_tier: Some(inputs.settings.service_tier.clone().unwrap_or_else(|| {
+                service_tier: Some(settings.service_tier.clone().unwrap_or_else(|| {
                     codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()
                 })),
                 cyber_access_program: context.cyber_access_program,

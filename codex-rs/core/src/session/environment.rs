@@ -45,7 +45,7 @@ impl ThreadEnvironmentDefaults {
     }
 }
 
-pub(super) fn validate_environment_selections(
+pub(super) fn validate_environment_configs(
     selections: &[TurnEnvironmentSelection],
 ) -> ConstraintResult<()> {
     for selection in selections {
@@ -64,6 +64,27 @@ pub(super) fn validate_environment_selections(
                 })?;
             }
         }
+    }
+    Ok(())
+}
+
+pub(super) fn ensure_configs_stay_owner_provided(
+    current: &[TurnEnvironmentSelection],
+    proposed: &[TurnEnvironmentSelection],
+) -> ConstraintResult<()> {
+    if let Some(environment) = proposed.iter().find(|environment| {
+        environment.config == EnvironmentConfigState::FromThread
+            && current.iter().any(|current| {
+                current.environment_id == environment.environment_id
+                    && current.config != EnvironmentConfigState::FromThread
+            })
+    }) {
+        return Err(ConstraintError::InvalidValue {
+            field_name: "environments",
+            candidate: environment.environment_id.clone(),
+            allowed: "owner-provided environment configuration".to_string(),
+            requirement_source: codex_config::RequirementSource::Unknown,
+        });
     }
     Ok(())
 }
@@ -137,21 +158,8 @@ impl Session {
         updates: &SessionSettingsUpdate,
     ) -> ConstraintResult<SessionConfiguration> {
         let current_environments = &current.environments;
-        if let Some(environments) = &updates.environments
-            && let Some(environment) = environments.environments.iter().find(|environment| {
-                environment.config == EnvironmentConfigState::FromThread
-                    && current_environments.iter().any(|current| {
-                        current.environment_id == environment.environment_id
-                            && current.config != EnvironmentConfigState::FromThread
-                    })
-            })
-        {
-            return Err(ConstraintError::InvalidValue {
-                field_name: "environments",
-                candidate: environment.environment_id.clone(),
-                allowed: "owner-provided environment configuration".to_string(),
-                requirement_source: codex_config::RequirementSource::Unknown,
-            });
+        if let Some(environments) = &updates.environments {
+            ensure_configs_stay_owner_provided(current_environments, &environments.environments)?;
         }
 
         current.apply(updates, current_environments)

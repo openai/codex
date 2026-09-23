@@ -15,14 +15,6 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::protocol::TurnContextItem;
 
-/// Inputs for the next step, published together so capture cannot mix versions.
-#[derive(Debug)]
-pub(crate) struct StepInputs {
-    pub(crate) settings: Arc<ResolvedStepSettings>,
-    /// Selection is fixed within this version; attachment startup may still finish.
-    pub(crate) environments: TurnEnvironmentSnapshot,
-}
-
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,

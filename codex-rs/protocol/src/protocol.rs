@@ -476,10 +476,14 @@ pub struct ConversationSpeechParams {
 
 /// Supported sparse changes to one live task's current settings, regardless of
 /// task kind. Child sessions and consumers of frozen initial settings are unchanged.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TurnSettingsUpdate {
     /// Changes the reviewer for subsequent approval requests, not pending reviews.
     pub approvals_reviewer: Option<ApprovalsReviewer>,
+    /// Replaces the selection for subsequent steps, without changing future turns.
+    /// Environments may inherit the running turn's defaults or provide their own configuration,
+    /// which can be pending. An already-selected environment with its own cannot switch back.
+    pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub model: Option<String>,
     /// `None` preserves the selection; `Some(None)` clears it.
     pub effort: Option<Option<ReasoningEffortConfig>>,

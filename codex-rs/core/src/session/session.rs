@@ -366,7 +366,7 @@ impl SessionConfiguration {
     ) -> ConstraintResult<()> {
         self.step_settings
             .validate(&self.step_settings_constraints(environments))?;
-        super::environment::validate_environment_selections(environments)
+        super::environment::validate_environment_configs(environments)
     }
 
     pub(super) fn step_settings_constraints(
@@ -537,7 +537,7 @@ impl SessionConfiguration {
             .map_or(current_environments, |environments| {
                 environments.environments.as_slice()
             });
-        super::environment::validate_environment_selections(next_environments)?;
+        super::environment::validate_environment_configs(next_environments)?;
         // Apply step settings last: the proposed permissions and environment
         // selections must be complete before deriving their validation constraints.
         next_configuration.step_settings = Arc::new(self.step_settings.apply(

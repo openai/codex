@@ -232,8 +232,7 @@ pub(crate) struct StepSettingsUpdate {
 }
 
 /// Constraints used when applying and validating a candidate settings version.
-/// Future settings use the proposed environment; active settings use the
-/// environment already admitted for that execution.
+/// Each caller supplies the permissions of the target environment selection.
 pub(crate) struct StepSettingsConstraints<'a> {
     pub(crate) requirements: &'a ConfigRequirements,
     pub(crate) guardian_approval_enabled: bool,

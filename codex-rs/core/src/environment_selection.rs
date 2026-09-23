@@ -18,6 +18,8 @@ use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EnvironmentConfig;
@@ -43,6 +45,9 @@ use crate::session::turn_context::TurnEnvironment;
 use crate::shell::Shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
+
+// Reject pathological selected cwd values at the environment-selection boundary.
+const MAX_TURN_ENVIRONMENT_CWD_BYTES: usize = 8 * 1024;
 
 /// Records whether a normalized config should follow later thread setting updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,6 +137,36 @@ pub(crate) fn default_thread_environment_selections(
             config: EnvironmentConfigState::FromThread,
         })
         .collect()
+}
+
+/// Checks that environment IDs are registered and unique and that working directories are not too long.
+pub fn validate_environment_ids_and_cwds(
+    environment_manager: &EnvironmentManager,
+    environments: &[TurnEnvironmentSelection],
+) -> CodexResult<()> {
+    let mut environment_ids = HashSet::with_capacity(environments.len());
+    for environment in environments {
+        if environment.cwd.inferred_native_path_string().len() > MAX_TURN_ENVIRONMENT_CWD_BYTES {
+            return Err(CodexErr::InvalidRequest(
+                "turn environment working directory exceeds the maximum size".to_string(),
+            ));
+        }
+        if !environment_ids.insert(environment.environment_id.as_str()) {
+            return Err(CodexErr::InvalidRequest(format!(
+                "duplicate turn environment id `{}`",
+                environment.environment_id
+            )));
+        }
+        environment_manager
+            .get_environment(&environment.environment_id)
+            .ok_or_else(|| {
+                CodexErr::InvalidRequest(format!(
+                    "unknown turn environment id `{}`",
+                    environment.environment_id
+                ))
+            })?;
+    }
+    Ok(())
 }
 
 type TurnEnvironmentResult = Result<ResolvedEnvironment, Arc<ExecServerError>>;
@@ -334,6 +369,7 @@ impl ThreadEnvironments {
         shell_snapshot
     }
 
+    /// Updates the selected list before waking work that was waiting on the previous selection.
     pub(crate) fn update_selections(&self, environments: &[TurnEnvironmentSelection]) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let ThreadEnvironmentsState {
@@ -471,6 +507,7 @@ impl ThreadEnvironments {
         for task in removed_connection_tasks {
             task.abort();
         }
+
         drop(previous);
     }
 
@@ -791,55 +828,58 @@ impl ThreadEnvironments {
     /// Captures the selected list immediately, then returns a future that may wait for setup.
     /// This lets callers release their locks before waiting without accidentally using a newer
     /// selection. The trace still covers the setup wait itself.
-    #[tracing::instrument(
-        name = "environments.snapshot",
-        skip_all,
-        fields(
-            environment_count = selected.len(),
-            non_blocking = non_blocking_snapshots,
-        )
-    )]
     pub(crate) fn snapshot(
         &self,
     ) -> impl Future<Output = TurnEnvironmentSnapshot> + Send + 'static {
+        self.resolve_snapshot(self.snapshot_now())
+    }
+
+    /// Copies the current selection without waiting for any executor to connect.
+    pub(crate) fn snapshot_now(&self) -> TurnEnvironmentSnapshot {
         // Keep the startup results, but not the senders that would keep removed Pending work alive.
-        let selected = self
+        let environments = self
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .environments
             .iter()
-            .map(|environment| StartingTurnEnvironment {
-                selection: environment.selection.clone(),
-                config_origin: environment.config_origin,
-                resolution: environment.resolution.clone(),
+            .map(|environment| {
+                let starting = StartingTurnEnvironment {
+                    selection: environment.selection.clone(),
+                    config_origin: environment.config_origin,
+                    resolution: environment.resolution.clone(),
+                };
+                let resolved = starting.resolution.clone().now_or_never();
+                TurnEnvironmentState::from_resolution(starting, resolved)
             })
-            .collect::<Vec<_>>();
+            .collect();
+        TurnEnvironmentSnapshot { environments }
+    }
+
+    /// Applies the same startup policy to an already captured selection without adopting newer ones.
+    #[tracing::instrument(
+        name = "environments.snapshot",
+        skip_all,
+        fields(
+            environment_count = snapshot.environments.len(),
+            non_blocking = non_blocking_snapshots,
+        )
+    )]
+    fn resolve_snapshot(
+        &self,
+        snapshot: TurnEnvironmentSnapshot,
+    ) -> impl Future<Output = TurnEnvironmentSnapshot> + Send + 'static {
         let non_blocking_snapshots = self.non_blocking_snapshots;
         async move {
-            let mut environments = Vec::with_capacity(selected.len());
-            for starting in selected {
-                if let EnvironmentConfigState::Failed(error) = &starting.selection.config {
-                    environments.push(TurnEnvironmentState::Failed {
-                        selection: starting
-                            .config_origin
-                            .into_input_selection(starting.selection.clone()),
-                        error: error.clone(),
-                    });
-                    continue;
+            if !non_blocking_snapshots {
+                for starting in snapshot.starting() {
+                    if !matches!(starting.selection.config, EnvironmentConfigState::Pending) {
+                        let _ = starting.wait_until_ready().await;
+                    }
                 }
-                let pending = matches!(starting.selection.config, EnvironmentConfigState::Pending);
-                let resolved = if non_blocking_snapshots || pending {
-                    starting.resolution.clone().now_or_never()
-                } else {
-                    Some(match starting.wait_until_ready().await {
-                        Ok(()) => starting.resolution.clone().await,
-                        Err(error) => Err(error),
-                    })
-                };
-                environments.push(TurnEnvironmentState::from_resolution(starting, resolved));
             }
-            TurnEnvironmentSnapshot { environments }
+            // An earlier environment may have become ready while we waited for a later one.
+            snapshot.refresh_readiness()
         }
     }
 
@@ -865,6 +905,15 @@ impl TurnEnvironmentState {
         starting: StartingTurnEnvironment,
         resolved: Option<TurnEnvironmentResult>,
     ) -> Self {
+        if let EnvironmentConfigState::Failed(error) = &starting.selection.config {
+            let error = error.clone();
+            return Self::Failed {
+                selection: starting
+                    .config_origin
+                    .into_input_selection(starting.selection),
+                error,
+            };
+        }
         match resolved {
             Some(Ok(environment)) => {
                 let mut selection = starting.selection;

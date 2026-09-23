@@ -53,6 +53,7 @@ use codex_protocol::protocol::WarningEvent;
 use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadParams;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Map;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -60,6 +61,7 @@ use tracing::instrument;
 
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
+use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GuardianReviewContext;
 use crate::session::TurnInput;
@@ -195,8 +197,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-        #[allow(deprecated)]
-        cwd: turn_context.cwd.clone(),
+        cwd: tool_hook_cwd(&step_context.environments, turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),
@@ -243,6 +244,14 @@ pub(crate) async fn run_pre_tool_use_hooks(
     }
 }
 
+#[allow(deprecated)]
+fn tool_hook_cwd(environments: &TurnEnvironmentSnapshot, turn: &TurnContext) -> AbsolutePathBuf {
+    // Hooks run on the host, so a remote workspace cannot replace the local fallback.
+    environments
+        .local_environment_cwd()
+        .unwrap_or_else(|| turn.cwd.clone())
+}
+
 // PermissionRequest hooks share the same preview/start/completed event flow as
 // other hook types, but they return an optional decision instead of mutating
 // tool input or post-run state.
@@ -257,8 +266,7 @@ pub(crate) async fn run_permission_request_hooks(
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-        #[allow(deprecated)]
-        cwd: turn_context.cwd.to_path_buf(),
+        cwd: tool_hook_cwd(review_context.environments(), turn_context).to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
         model: review_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(review_context.approval_policy),
@@ -300,8 +308,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-        #[allow(deprecated)]
-        cwd: turn_context.cwd.clone(),
+        cwd: tool_hook_cwd(&step_context.environments, turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(step_context.settings.approval_policy()),

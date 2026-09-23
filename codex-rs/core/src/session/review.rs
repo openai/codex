@@ -1,4 +1,3 @@
-use super::step_context::StepInputs;
 use super::step_settings::ResolvedStepSettings;
 use super::*;
 use arc_swap::ArcSwap;
@@ -164,10 +163,7 @@ pub(super) async fn spawn_review_thread(
         initial_settings: Arc::clone(&step_settings),
         disabled_plugin_ids: parent_turn_context.disabled_plugin_ids.clone(),
         active_host_plugin_identities: None,
-        next_step_input: ArcSwap::from_pointee(StepInputs {
-            settings: step_settings,
-            environments: parent_turn_context.initial_environments.clone(),
-        }),
+        next_step_settings: ArcSwap::from(step_settings),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         session_source,

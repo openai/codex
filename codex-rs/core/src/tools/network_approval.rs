@@ -648,13 +648,7 @@ impl NetworkApprovalService {
         {
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
-        let active_turn = session
-            .active_turn_context_and_strict_auto_review()
-            .await
-            .map(|(turn, inputs, strict)| {
-                let environments = inputs.environments.refresh_readiness();
-                (turn, inputs, environments, strict)
-            });
+        let active_turn = session.active_turn_context_and_strict_auto_review().await;
         let Some(environment_id) = active_environment_id.or_else(|| {
             active_turn
                 .as_ref()
@@ -685,8 +679,7 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some((turn_context, step_inputs, active_environments, strict_auto_review)) =
-            active_turn
+        let Some((turn_context, settings, active_environments, strict_auto_review)) = active_turn
         else {
             if let Some(owner_call) = owner_call.as_ref() {
                 self.record_call_outcome(&owner_call.registration_id, policy_denial_message);
@@ -739,7 +732,7 @@ impl NetworkApprovalService {
         }
         let review_context = GuardianReviewContext::from_resolved_settings(
             Arc::clone(&turn_context),
-            &step_inputs.settings,
+            &settings,
             review_environments,
         );
         if !allows_network_approval_flow(review_context.approval_policy) {

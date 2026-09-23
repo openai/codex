@@ -133,11 +133,7 @@ impl ToolOrchestrator {
         let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = flat_tool_name(&tool_ctx.tool_name).into_owned();
         let otel_ci = &tool_ctx.call_id;
-        let strict_auto_review = tool_ctx
-            .session
-            .active_turn_context_and_strict_auto_review()
-            .await
-            .is_some_and(|(_, _, strict_auto_review)| strict_auto_review);
+        let strict_auto_review = tool_ctx.session.strict_auto_review_enabled().await;
         // 1) Approval
         let mut already_approved = false;
 

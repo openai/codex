@@ -1,4 +1,3 @@
-use super::step_context::StepInputs;
 use super::step_settings::ResolvedStepSettings;
 use super::token_budget::has_explicit_settings;
 use super::token_budget::resolve_token_budget;
@@ -321,8 +320,8 @@ pub struct TurnContext {
     /// Thread-owned plugin selection captured when this turn was admitted.
     pub(crate) disabled_plugin_ids: Vec<String>,
     pub(super) active_host_plugin_identities: Option<Vec<PluginIdentity>>,
-    /// Inputs for the next step; request consumers use their captured StepContext.
-    pub(super) next_step_input: ArcSwap<StepInputs>,
+    /// Settings for the next step; environments are owned by `ThreadEnvironments`.
+    pub(super) next_step_settings: ArcSwap<ResolvedStepSettings>,
     /// Turn-wide telemetry; model-attributed step work should use `StepContext::session_telemetry`.
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
@@ -331,7 +330,7 @@ pub struct TurnContext {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) originator: String,
     /// Initial selection retained for legacy turn consumers. Step work uses StepContext.
-    // TODO(sayan): Migrate all remaining consumers to next_step_input's environments.
+    // TODO(sayan): Migrate remaining step consumers to their StepContext's environments.
     pub(crate) initial_environments: TurnEnvironmentSnapshot,
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
@@ -381,7 +380,7 @@ enum TurnContextBuildMode {
 impl TurnContext {
     /// Captures current model metadata without preparing a step.
     pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
-        Arc::clone(&self.next_step_input.load().settings.model_info)
+        Arc::clone(&self.next_step_settings.load().model_info)
     }
 
     /// Legacy: returns the frozen initial-turn model metadata.
@@ -692,10 +691,7 @@ impl TurnContext {
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: self.disabled_plugin_ids.clone(),
             active_host_plugin_identities: self.active_host_plugin_identities.clone(),
-            next_step_input: ArcSwap::from_pointee(StepInputs {
-                settings: step_settings,
-                environments: self.initial_environments.clone(),
-            }),
+            next_step_settings: ArcSwap::from(step_settings),
             session_telemetry,
             provider: self.provider.clone(),
             session_source: self.session_source.clone(),
@@ -1011,10 +1007,7 @@ impl Session {
             initial_settings: Arc::clone(&step_settings),
             disabled_plugin_ids: session_configuration.disabled_plugin_ids.clone(),
             active_host_plugin_identities: None,
-            next_step_input: ArcSwap::from_pointee(StepInputs {
-                settings: step_settings,
-                environments: environments.clone(),
-            }),
+            next_step_settings: ArcSwap::from(step_settings),
             session_telemetry: session_telemetry_for_context,
             provider,
             session_source,

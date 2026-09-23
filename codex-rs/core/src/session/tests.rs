@@ -2,8 +2,6 @@
 mod notification_tests;
 
 use super::mcp_refresh::McpRefresh;
-use super::step_context::StepInputs;
-
 #[path = "turn_start_mcp_tests.rs"]
 mod turn_start_mcp_tests;
 use super::step_settings::ResolvedStepSettings;
@@ -254,10 +252,7 @@ pub(crate) fn update_turn_settings_for_test(
     update(&mut settings);
     let settings = Arc::new(settings);
     turn.initial_settings = Arc::clone(&settings);
-    turn.next_step_input.store(Arc::new(StepInputs {
-        settings,
-        environments: turn.initial_environments.clone(),
-    }));
+    turn.next_step_settings.store(settings);
 }
 
 impl StepContext {
@@ -4363,23 +4358,20 @@ async fn turn_context_with_model_updates_model_fields() {
     });
     Arc::make_mut(&mut turn_context.config).service_tier =
         turn_context.initial_settings.service_tier.clone();
-    let captured = turn_context.next_step_input.load_full();
-    let mut current_selection = captured.settings.selected().clone();
+    let captured = turn_context.next_step_settings.load_full();
+    let mut current_selection = captured.selected().clone();
     current_selection.reasoning_summary = Some(ReasoningSummaryConfig::None);
     current_selection.service_tier = None;
     current_selection
         .collaboration_mode
         .settings
         .reasoning_effort = Some(ReasoningEffortConfig::High);
-    let current = Arc::new(StepInputs {
-        settings: Arc::new(ResolvedStepSettings::new(
-            Arc::new(current_selection),
-            Arc::clone(turn_context.model_info()),
-            /*fast_mode_enabled*/ true,
-        )),
-        environments: captured.environments.clone(),
-    });
-    turn_context.next_step_input.store(Arc::clone(&current));
+    let current = Arc::new(ResolvedStepSettings::new(
+        Arc::new(current_selection),
+        Arc::clone(turn_context.model_info()),
+        /*fast_mode_enabled*/ true,
+    ));
+    turn_context.next_step_settings.store(Arc::clone(&current));
     let updated = turn_context
         .with_model("gpt-5.5".to_string(), &session.services.models_manager)
         .await;
@@ -4414,22 +4406,19 @@ async fn turn_context_with_model_updates_model_fields() {
             Some(ServiceTier::Fast.request_value())
         ),
     );
-    assert!(Arc::ptr_eq(
-        &captured.settings,
-        &turn_context.initial_settings
-    ));
+    assert!(Arc::ptr_eq(&captured, &turn_context.initial_settings));
     assert!(Arc::ptr_eq(
         &current,
-        &turn_context.next_step_input.load_full()
+        &turn_context.next_step_settings.load_full()
     ));
-    assert!(!Arc::ptr_eq(&captured.settings, &updated.initial_settings));
+    assert!(!Arc::ptr_eq(&captured, &updated.initial_settings));
     assert!(Arc::ptr_eq(
         &updated.initial_settings,
-        &updated.next_step_input.load().settings
+        &updated.next_step_settings.load_full()
     ));
     assert!(!Arc::ptr_eq(
-        &updated.next_step_input.load_full(),
-        &turn_context.next_step_input.load_full()
+        &updated.next_step_settings.load_full(),
+        &turn_context.next_step_settings.load_full()
     ));
     assert_eq!(updated.config.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(updated.collaboration_mode().model(), "gpt-5.5");
@@ -10786,14 +10775,13 @@ async fn build_initial_context_uses_retained_step_after_model_change() {
         .as_mut()
         .unwrap()
         .instructions_template = Some("B instructions".to_string());
-    turn_context.next_step_input.store(Arc::new(StepInputs {
-        settings: Arc::new(ResolvedStepSettings::new(
+    turn_context
+        .next_step_settings
+        .store(Arc::new(ResolvedStepSettings::new(
             Arc::new(selected_b),
             Arc::new(model_b),
             /*fast_mode_enabled*/ false,
-        )),
-        environments: step_a.environments.clone(),
-    }));
+        )));
     let step_b = session
         .capture_step_context(Arc::clone(&turn_context), &CancellationToken::new())
         .await
@@ -11862,10 +11850,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
 
     let mut current = tc.initial_settings.as_ref().clone();
     Arc::make_mut(&mut current.model_info).supports_image_detail_original = true;
-    tc.next_step_input.store(Arc::new(StepInputs {
-        settings: Arc::new(current),
-        environments: tc.next_step_input.load().environments.clone(),
-    }));
+    tc.next_step_settings.store(Arc::new(current));
 
     sess.on_task_finished(Arc::clone(&tc), /*task_result*/ Ok(None))
         .await;
