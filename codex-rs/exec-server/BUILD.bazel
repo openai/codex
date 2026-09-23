@@ -42,7 +42,7 @@ exec_server_compat_test(
 
 exec_server_compat_test(
     name = "exec-server-stable-release-test",
-    release = "@codex_release_0.153.1_linux_x86_64",
+    release = "@codex_release_0.156.1_linux_x86_64",
 )
 
 exec_server_compat_test(
