@@ -766,6 +766,7 @@ pub(crate) async fn record_pending_input(
         TurnInput::InterAgentCommunication(communication) => {
             sess.record_inter_agent_communication(turn_context, model_info, communication)
                 .await;
+            sess.ensure_rollout_materialized(persist_context).await;
         }
     }
     record_additional_contexts(sess, turn_context, additional_contexts).await;

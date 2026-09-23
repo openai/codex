@@ -12,10 +12,12 @@ use codex_core::TurnInputSubmission;
 use codex_features::Feature;
 use codex_history::InitialHistory;
 use codex_history::ResumedHistory;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::user_input::UserInput;
@@ -62,6 +64,12 @@ enum CheckpointPolicy {
 enum InputKind {
     User,
     ToolOutput,
+}
+
+#[derive(Clone, Copy)]
+enum FirstInputKind {
+    User,
+    InterAgentCommunication,
 }
 
 #[derive(Debug)]
@@ -299,8 +307,12 @@ async fn steered_input_checkpoint_controls_next_request(
     Ok(())
 }
 
+#[test_case(FirstInputKind::User; "user_input")]
+#[test_case(FirstInputKind::InterAgentCommunication; "inter_agent_communication")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn preparation_and_first_sampling_do_not_wait_for_durable_metadata() -> anyhow::Result<()> {
+async fn preparation_and_first_sampling_do_not_wait_for_durable_metadata(
+    input_kind: FirstInputKind,
+) -> anyhow::Result<()> {
     let (complete, completion) = oneshot::channel();
     let (server, _completions) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
         gate: Some(completion),
@@ -332,16 +344,44 @@ async fn preparation_and_first_sampling_do_not_wait_for_durable_metadata() -> an
         "type": "message", "role": "developer", "content": [{"type": "input_text", "text": "prepared context"}]
     }))?])).await??;
     assert!(checkpoint_requests.try_recv().is_err());
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "first prompt".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
+    match input_kind {
+        FirstInputKind::User => {
+            assert!(matches!(
+                test.codex
+                    .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+                        text: "first prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }]))
+                    .await?,
+                TurnInputSubmission::Started { .. }
+            ));
+        }
+        FirstInputKind::InterAgentCommunication => {
+            test.codex
+                .submit(Op::InterAgentCommunication {
+                    communication: InterAgentCommunication::new(
+                        AgentPath::try_from("/root/worker").expect("valid agent path"),
+                        AgentPath::root(),
+                        /*other_recipients*/ Vec::new(),
+                        "first prompt".to_string(),
+                        /*trigger_turn*/ true,
+                    ),
+                    start_options: Default::default(),
+                })
+                .await?;
+        }
+    }
     let checkpoint = timeout(Duration::from_secs(10), checkpoint_requests.recv())
         .await?
         .expect("first execution checkpoint");
-    assert_eq!(checkpoint.context, PersistContext::TurnStart);
+    assert_eq!(
+        checkpoint.context,
+        match input_kind {
+            FirstInputKind::User => PersistContext::TurnStart,
+            // Mailbox work enters through the pending-input drain, even on its first turn.
+            FirstInputKind::InterAgentCommunication => PersistContext::SteeredUserInput,
+        }
+    );
     timeout(
         Duration::from_secs(10),
         server.wait_for_request_count(/*count*/ 1),
@@ -361,14 +401,37 @@ async fn preparation_and_first_sampling_do_not_wait_for_durable_metadata() -> an
                 .flatten()
                 .filter_map(move |content| {
                     let text = content["text"].as_str()?;
-                    matches!(text, "prepared context" | "first prompt")
-                        .then(|| (item["role"].as_str().expect("message role"), text))
+                    matches!(text, "prepared context" | "first prompt").then(|| {
+                        (
+                            item["role"]
+                                .as_str()
+                                .or_else(|| item["author"].as_str())
+                                .expect("message role or agent author"),
+                            text,
+                        )
+                    })
                 })
         })
         .collect::<Vec<_>>();
+    let first_input_author = match input_kind {
+        FirstInputKind::User => "user",
+        FirstInputKind::InterAgentCommunication => {
+            let communication = request["input"]
+                .as_array()
+                .expect("request input")
+                .iter()
+                .find(|item| item["type"] == "agent_message")
+                .expect("accepted communication should reach the model");
+            assert_eq!(communication["recipient"], "/root");
+            "/root/worker"
+        }
+    };
     assert_eq!(
         prepared_input,
-        vec![("developer", "prepared context"), ("user", "first prompt")]
+        vec![
+            ("developer", "prepared context"),
+            (first_input_author, "first prompt")
+        ]
     );
     drop(checkpoint.complete);
     complete.send(()).expect("complete inference");
