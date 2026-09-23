@@ -41,13 +41,12 @@ jobs:
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag ref"; exit 1; }
 
-          # Release tags must match the version in Cargo.toml.
-          # Keep this pattern in sync with VERSION_RE in
-          # .github/scripts/publish_r2_release.py.
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha(\.[0-9]+){0,2}|beta(\.[0-9]+)?))?$ ]] \
+          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          [[ "${GITHUB_REF_NAME}" == rust-v* ]] \
+            && python3 .github/scripts/releases.py "${tag_ver}" \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
-          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          # Release tags must match the version in Cargo.toml.
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -2019,11 +2018,9 @@ jobs:
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
+        needs.release.outputs.npm_tag == 'alpha' &&
         needs.publish-r2.result == 'success' &&
-        (
-          needs.release.outputs.should_publish_npm != 'true' ||
-          needs.publish-npm.result == 'success'
-        )
+        needs.publish-npm.result == 'success'
       }}
     permissions:
       contents: write
@@ -2035,7 +2032,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Determine whether to update the GitHub canary branch
+        id: github_canary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          PYTHONPATH: .github/scripts
+        run: |
+          set -euo pipefail
+          # Despite its name, raw+json returns raw TOML. The default response
+          # is JSON metadata with the file contents encoded as base64.
+          update="$(gh api "repos/$GITHUB_REPOSITORY/contents/codex-rs/Cargo.toml?ref=latest-alpha-cli" \
+            -H 'Accept: application/vnd.github.raw+json' \
+            | python3 .github/scripts/check_github_canary.py "$RELEASE_VERSION")"
+          echo "update=$update" >> "$GITHUB_OUTPUT"
       - name: Update latest-alpha-cli branch
+        if: success() && steps.github_canary.outputs.update == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

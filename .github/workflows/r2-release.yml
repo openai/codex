@@ -46,6 +46,7 @@ jobs:
           RELEASE_MAKE_LATEST: ${{ inputs.make_latest }}
           RELEASE_PRERELEASE: ${{ inputs.prerelease }}
           RELEASE_STAGE: ${{ inputs.stage }}
+          PYTHONPATH: .github/scripts
         run: |
           set -euo pipefail
           # The publisher parallelizes objects; serialize parts within each object to avoid R2 throttling.
