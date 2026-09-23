@@ -16,7 +16,7 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::mcp::is_node_repl_backed_server;
+use codex_protocol::mcp::is_node_repl_backed_connector;
 use codex_protocol::openai_models::GuardianReviewMode;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::ModelInfo;
@@ -56,11 +56,12 @@ impl GuardianV2Extension {
         if !policy.scoring_enabled() {
             input.thread_store.remove::<GuardianV2Enabled>();
         }
-        let mcp_server = input
+        let scope = input
             .mcp_tool
-            .map(|tool| tool.tool_info().server_name.as_str());
-        let scope = mcp_server
-            .map(GuardianScope::for_mcp_server)
+            .map(|tool| {
+                let info = tool.tool_info();
+                GuardianScope::for_mcp_connector(&info.server_name, info.connector_id.as_deref())
+            })
             .or_else(|| GuardianScope::for_tool(input.tool_name));
         // Model policies review nested actions; the Code Mode wrapper leaves their scores alone.
         // The legacy all-tools policy still scores wrappers through `other_tools`.
@@ -100,7 +101,19 @@ impl GuardianV2Extension {
         }
         if input.mcp_tool.is_some_and(|tool| {
             let info = tool.tool_info();
-            is_node_repl_backed_server(&info.server_name) && info.tool.name == "js"
+            is_node_repl_backed_connector(&info.server_name, info.connector_id.as_deref())
+                && if info.server_name == "codex_apps" {
+                    info.tool
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| meta.get("_codex_apps"))
+                        .and_then(|meta| meta.get("resource_uri"))
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|uri| uri.trim_matches('/').rsplit('/').next())
+                        == Some("js")
+                } else {
+                    info.tool.name == "js"
+                }
         }) {
             score_progress.observe_js_execution();
         }

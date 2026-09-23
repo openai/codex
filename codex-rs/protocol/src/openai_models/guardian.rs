@@ -8,7 +8,7 @@ use ts_rs::TS;
 
 use super::ModelInfo;
 use crate::ToolName;
-use crate::mcp::is_node_repl_backed_server;
+use crate::mcp::is_node_repl_backed_connector;
 use crate::mcp::is_node_repl_backed_tool;
 
 /// How Guardian handles an action when the user selects automatic approval.
@@ -124,7 +124,12 @@ pub enum GuardianScope {
 
 impl GuardianScope {
     pub fn for_mcp_server(server: &str) -> Self {
-        if is_node_repl_backed_server(server) {
+        Self::for_mcp_connector(server, /*connector_id*/ None)
+    }
+
+    /// Classifies an MCP call using connector identity from registered tool metadata.
+    pub fn for_mcp_connector(server: &str, connector_id: Option<&str>) -> Self {
+        if is_node_repl_backed_connector(server, connector_id) {
             Self::ComputerUse
         } else {
             Self::Mcp

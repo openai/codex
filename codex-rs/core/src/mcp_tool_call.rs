@@ -55,6 +55,7 @@ use codex_protocol::items::McpToolCallStatus;
 use codex_protocol::items::TurnItem;
 use codex_protocol::mcp::CONFIRMATION_POLICIES_META_KEY;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::is_node_repl_backed_connector;
 use codex_protocol::mcp::is_node_repl_backed_server;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as MCP_TOOL_APPROVAL_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL;
@@ -1351,7 +1352,11 @@ fn build_mcp_tool_call_request_meta(
         );
     }
 
-    if let Some(policies) = build_confirmation_policies_request_meta(step_context, server) {
+    if let Some(policies) = build_confirmation_policies_request_meta(
+        step_context,
+        server,
+        metadata.and_then(|metadata| metadata.connector_id.as_deref()),
+    ) {
         request_meta.insert(CONFIRMATION_POLICIES_META_KEY.to_string(), policies);
     }
 
@@ -1361,14 +1366,15 @@ fn build_mcp_tool_call_request_meta(
 /// Builds confirmation-policy metadata for eligible actor MCP calls.
 ///
 /// Policies follow the issuing step's model snapshot, including across approval
-/// waits. Only `node_repl`/`cua_repl` receive them; Guardian sessions are excluded.
+/// waits. REPL-backed connectors receive them; Guardian sessions are excluded.
 /// Eligible calls get an empty object when no policies are configured, clearing
 /// startup defaults. Text stays verbatim so runtimes own blank-value fallback.
 fn build_confirmation_policies_request_meta(
     step_context: &StepContext,
     server: &str,
+    connector_id: Option<&str>,
 ) -> Option<serde_json::Value> {
-    if !is_node_repl_backed_server(server)
+    if !is_node_repl_backed_connector(server, connector_id)
         || crate::guardian::is_basic_session_source(&step_context.turn.session_source)
     {
         return None;

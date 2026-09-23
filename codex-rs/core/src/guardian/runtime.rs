@@ -38,7 +38,10 @@ impl ReviewAction {
         let category = action.guardian_scope();
         let original = serde_json::to_value(&action).map_err(|error| error.to_string());
         match action.into_guardian_request(exec_command_cwd_convention) {
-            Ok(request) => Self::from(request),
+            Ok(request) => Self {
+                category,
+                ..Self::from(request)
+            },
             Err(error) => Self {
                 action: original,
                 category,

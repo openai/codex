@@ -1925,7 +1925,6 @@ async fn guardian_reuse_respects_effective_policy_and_personality(
             context,
             guardian_exec_command_request(&format!("action-{index}")),
             ApprovalRequestReasons::default(),
-            guardian_output_schema(),
             /*external_cancel*/ None,
             /*max_attempts*/ 1,
         )
@@ -2027,7 +2026,6 @@ async fn guardian_request_model_for_auto_review(
             approval: None,
             retry: Some("Sandbox denied outbound git push to github.com.".to_string()),
         },
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2282,7 +2280,6 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
             approval: None,
             retry: Some("Sandbox denied outbound git push to github.com.".to_string()),
         },
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2521,7 +2518,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             approval: None,
             retry: Some("First retry reason".to_string()),
         },
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2575,7 +2571,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             approval: None,
             retry: Some("Second retry reason".to_string()),
         },
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2672,7 +2667,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             approval: None,
             retry: Some("Third retry reason".to_string()),
         },
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2696,7 +2690,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         Arc::clone(&turn),
         guardian_exec_command_request("shell-4"),
         ApprovalRequestReasons::default(),
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2923,7 +2916,6 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
             tty: false,
         },
         ApprovalRequestReasons::default(),
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -2975,7 +2967,6 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
             tty: false,
         },
         ApprovalRequestReasons::default(),
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 1,
     )
@@ -3145,7 +3136,6 @@ async fn guardian_review_retries_transient_session_failure_then_approves() -> an
         Arc::clone(&turn),
         guardian_exec_command_request("shell-session-retry"),
         ApprovalRequestReasons::default(),
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 3,
     )
@@ -3236,7 +3226,6 @@ async fn guardian_review_retries_two_parse_failures_then_approves() -> anyhow::R
         Arc::clone(&turn),
         guardian_exec_command_request("shell-parse-retry"),
         ApprovalRequestReasons::default(),
-        guardian_output_schema(),
         /*external_cancel*/ None,
         /*max_attempts*/ 3,
     )

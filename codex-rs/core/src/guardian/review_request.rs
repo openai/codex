@@ -153,8 +153,8 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             Arc::clone(&self.session),
             self.context.clone(),
             prepared.request.clone(),
+            self.request.category,
             self.reasons.clone(),
-            guardian_output_schema(),
             Some(cancellation.clone()),
             deadline,
         )

@@ -39,6 +39,14 @@ pub fn is_node_repl_backed_server(server: &str) -> bool {
     matches!(server, "node_repl" | "cua_repl")
 }
 
+/// Returns whether an MCP server or registered connector is Node REPL-backed.
+/// Callers must supply connector identity from registered tool metadata, never
+/// from tool arguments or provider-supplied elicitation metadata.
+pub fn is_node_repl_backed_connector(server: &str, connector_id: Option<&str>) -> bool {
+    is_node_repl_backed_server(server)
+        || server == "codex_apps" && connector_id == Some("connector_openai_browser")
+}
+
 /// Recognizes Node REPL-backed tools in model-visible MCP namespaces or legacy
 /// flat tool names. An explicit namespace takes precedence over the tool name.
 pub fn is_node_repl_backed_tool(name: &str, namespace: Option<&str>) -> bool {

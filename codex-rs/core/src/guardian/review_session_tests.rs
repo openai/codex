@@ -229,6 +229,7 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         parent_context: GuardianReviewContext::from(Arc::new(turn)),
         spawn_config,
         node_repl_policy: GuardianNodeReplPolicy::from_messages(ResolvedModelMessages::bundled()),
+        category: GuardianScope::Shell,
         request: GuardianApprovalRequest::ExecCommand {
             id: "shell-1".to_string(),
             environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
