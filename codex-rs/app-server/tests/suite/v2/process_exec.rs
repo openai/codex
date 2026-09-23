@@ -188,6 +188,53 @@ async fn process_spawn_reports_buffered_output_cap_reached() -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn process_spawn_exec_failure_releases_handle_for_retry() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let (_server, mut mcp) = initialized_mcp(codex_home.path()).await?;
+    let process_handle = "retry-after-exec-error".to_string();
+    let request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            codex_home.path(),
+            vec!["/codex-missing-process-spawn-target".to_string()],
+        )?)
+        .await?;
+    let error = mcp
+        .read_stream_until_error_message(RequestId::Integer(request_id))
+        .await?;
+    assert!(error.error.message.starts_with("failed to spawn process:"));
+
+    let request_id = mcp
+        .send_process_spawn_request(process_spawn_params(
+            process_handle.clone(),
+            codex_home.path(),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "printf retried; exit 19".to_string(),
+            ],
+        )?)
+        .await?;
+    let response = mcp
+        .read_stream_until_response_message(RequestId::Integer(request_id))
+        .await?;
+    assert_eq!(response.result, serde_json::json!({}));
+    assert_eq!(
+        read_process_exited(&mut mcp).await?,
+        ProcessExitedNotification {
+            process_handle,
+            exit_code: 19,
+            stdout: "retried".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        }
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn process_kill_terminates_running_process() -> Result<()> {
     let codex_home = TempDir::new()?;

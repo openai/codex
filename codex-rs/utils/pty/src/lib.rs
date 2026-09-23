@@ -55,3 +55,13 @@ pub use win::PsuedoCon;
 pub use win::conpty::RawConPty;
 #[cfg(windows)]
 pub use windows_input::WindowsTtyInputNormalizer;
+
+#[cfg(target_os = "linux")]
+mod spawn_helper;
+#[cfg(target_os = "linux")]
+mod spawn_helper_main;
+#[cfg(target_os = "linux")]
+pub use spawn_helper::init_spawn_helper;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "spawn_helper_tests.rs"]
+mod spawn_helper_tests;

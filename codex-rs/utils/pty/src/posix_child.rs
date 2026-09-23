@@ -3,7 +3,7 @@
 //! Spawn attributes and file actions implement the shared command's process-group
 //! and descriptor policies. Bare commands search the child's PATH. Callers choose
 //! whether incompatible executable formats and failed searches may retry through
-//! Tokio. Linux uses this for detached sessions with ambient descriptor inheritance.
+//! Tokio. Linux also uses it to start the registered process-setup helper.
 //! Each native child owns its PID until it has been reaped.
 
 use std::ffi::CString;
@@ -405,10 +405,10 @@ fn c_string(value: &OsStr) -> io::Result<CString> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "nul byte in MCP command"))
 }
 
-/// Keeps a child pipe source above stdio so `dup2` cannot clobber another source
-/// when the parent has closed standard descriptors. Close-on-exec disposes of
-/// this extra descriptor after the spawn actions duplicate it onto stdio.
-fn child_fd(fd: OwnedFd) -> io::Result<OwnedFd> {
+/// Keeps a child descriptor above stdio so `dup2` cannot clobber it when the
+/// parent has closed standard descriptors. Spawn actions either duplicate it
+/// onto stdio or explicitly preserve it across exec.
+pub(crate) fn child_fd(fd: OwnedFd) -> io::Result<OwnedFd> {
     // SAFETY: fcntl duplicates this live descriptor; the returned fd is newly owned.
     let duplicate = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
     cvt_errno(duplicate)?;

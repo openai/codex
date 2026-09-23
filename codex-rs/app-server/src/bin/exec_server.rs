@@ -13,6 +13,8 @@ use std::ffi::OsStr;
 const CODEX_LINUX_SANDBOX_EXE_ENV_VAR: &str = "CODEX_TEST_LINUX_SANDBOX_EXE";
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    #[cfg(target_os = "linux")]
+    codex_utils_pty::init_spawn_helper(std::env::args_os());
     let mut args = std::env::args_os();
     let _ = args.next();
     let argv1 = args.next();

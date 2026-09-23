@@ -172,6 +172,12 @@ async fn spawn_process_with_stdin_mode(
 
     #[cfg(windows)]
     let job = crate::win::JobObject::create().map(Arc::new);
+    #[cfg(target_os = "linux")]
+    let mut child = match crate::spawn_helper::spawn(&command).await? {
+        Some(child) => child,
+        None => command.spawn()?,
+    };
+    #[cfg(not(target_os = "linux"))]
     let mut child = command.spawn()?;
     #[cfg(windows)]
     let windows_terminator = {

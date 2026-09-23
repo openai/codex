@@ -13,6 +13,7 @@ portable-pty = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }
 
