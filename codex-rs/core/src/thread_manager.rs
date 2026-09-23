@@ -1205,14 +1205,11 @@ impl ThreadManager {
                 "cannot resume multi-agent v2 child {child_thread_id}: parent {parent_thread_id} is not loaded; resume the parent first"
             ))
         })?;
-        let config = parent.session.get_config().await.as_ref().clone();
-        let agent_control = parent
+        parent
             .session
             .services
-            .local_agent_runtime
-            .control(parent.session.session_id());
-        agent_control
-            .ensure_v2_agent_loaded(config, child_thread_id, Some(parent))
+            .agent_control
+            .ensure_child_loaded(parent_thread_id, child_thread_id)
             .await
     }
 

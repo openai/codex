@@ -165,6 +165,15 @@ impl AgentControl for LocalAgentControl {
         })
     }
 
+    fn ensure_child_loaded(&self, parent: ThreadId, child: ThreadId) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            let parent = self.runtime.upgrade()?.get_thread(parent).await?;
+            let config = parent.session.get_config().await.as_ref().clone();
+            self.ensure_v2_agent_loaded(config, child, Some(parent))
+                .await
+        })
+    }
+
     fn interrupt(
         &self,
         caller: ThreadId,
