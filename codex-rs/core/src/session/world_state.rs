@@ -143,17 +143,19 @@ impl Session {
             .and_then(|config| config.guidance_message.as_deref())
             .filter(|_| token_budget_enabled);
         world_state.add_section(ContextWindowGuidanceState::new(guidance));
-        let realtime_mode_instructions = self.conversation.mode_instructions().await;
+        let realtime = &step_context.realtime;
         world_state.add_section(RealtimeState::new(
-            turn_context.realtime_active,
-            realtime_mode_instructions
+            realtime.active,
+            realtime
+                .mode_instructions
                 .as_ref()
                 .and_then(|instructions| instructions.start.as_deref())
                 .or(turn_context
                     .config
                     .experimental_realtime_start_instructions
                     .as_deref()),
-            realtime_mode_instructions
+            realtime
+                .mode_instructions
                 .as_ref()
                 .and_then(|instructions| instructions.end.as_deref()),
         ));

@@ -9,6 +9,7 @@ use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
 use codex_core::StartThreadOptions;
 use codex_core::TurnInputRequest;
+use codex_core::TurnInputSubmission;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
@@ -5537,7 +5538,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
+async fn inbound_handoff_request_updates_realtime_state_during_active_turn() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
@@ -5567,18 +5568,23 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             body: sse_event(responses::ev_completed("resp-1")),
         },
     ];
+    let (second_completed_tx, second_completed_rx) = oneshot::channel();
     let second_chunks = vec![
         StreamingSseChunk {
             gate: None,
             body: sse_event(responses::ev_response_created("resp-2")),
         },
         StreamingSseChunk {
-            gate: None,
+            gate: Some(second_completed_rx),
             body: sse_event(responses::ev_completed("resp-2")),
         },
     ];
+    let third_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse_event(responses::ev_completed("resp-3")),
+    }];
     let (api_server, completions) =
-        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+        start_streaming_sse_server(vec![first_chunks, second_chunks, third_chunks]).await;
 
     let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![
@@ -5614,6 +5620,22 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     });
     let test = builder.build_with_streaming_server(&api_server).await?;
 
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "first prompt".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let TurnInputSubmission::Started { turn_id } = started else {
+        panic!("expected the text input to start a turn");
+    };
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
             client_managed_handoffs: false,
@@ -5629,8 +5651,8 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             output_modality: RealtimeOutputModality::Audio,
             include_startup_context: true,
             initial_items: Vec::new(),
-            realtime_start_instructions: None,
-            realtime_end_instructions: None,
+            realtime_start_instructions: Some("Give frequent spoken progress updates.".to_string()),
+            realtime_end_instructions: Some("Return to normal text updates.".to_string()),
             prompt: Some(Some("backend prompt".to_string())),
             realtime_session_id: None,
             transport: None,
@@ -5647,18 +5669,6 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
                 },
         }) if session_id == "sess_steer" => Some(()),
         _ => None,
-    })
-    .await;
-
-    test.codex
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "first prompt".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
-
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::AgentMessageContentDelta(_))
     })
     .await;
 
@@ -5685,21 +5695,47 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     let mut completion_iter = completions.into_iter();
     let first_completion = completion_iter.next().expect("missing first completion");
     let second_completion = completion_iter.next().expect("missing second completion");
+    let third_completion = completion_iter.next().expect("missing third completion");
 
     let _ = gate_completed_tx.send(());
     first_completion
         .await
         .expect("first request did not complete");
+    timeout(
+        Duration::from_secs(10),
+        api_server.wait_for_request_count(/*count*/ 2),
+    )
+    .await
+    .context("steered request did not start")?;
+
+    // End the call while the same text turn is still in flight.
+    test.codex.submit(Op::RealtimeConversationClose).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::RealtimeConversationClosed(_))
+    })
+    .await;
+    let steered = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "continue in text".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    assert_eq!(steered, TurnInputSubmission::Steered { turn_id });
+    let _ = second_completed_tx.send(());
     second_completion
         .await
         .expect("second request did not complete");
+    third_completion
+        .await
+        .expect("third request did not complete");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 
     let requests = api_server.requests().await;
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
 
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let second_body: Value = serde_json::from_slice(&requests[1]).expect("parse second request");
@@ -5716,6 +5752,29 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     assert!(second_texts.iter().any(|text| text == "first prompt"));
     assert!(second_texts.iter().any(|text| text
         == "<realtime_delegation>\n  <input>steer via realtime</input>\n  <transcript_delta>user: steer via realtime</transcript_delta>\n</realtime_delegation>"));
+
+    let realtime_instructions = requests
+        .iter()
+        .map(|request| {
+            let body: Value = serde_json::from_slice(request).expect("parse request");
+            message_input_texts(&body, "developer")
+                .into_iter()
+                .filter(|text| text.contains("<realtime_conversation>"))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let start_instructions =
+        "<realtime_conversation>\nGive frequent spoken progress updates.\n</realtime_conversation>";
+    let end_instructions =
+        "<realtime_conversation>\nReturn to normal text updates.\n</realtime_conversation>";
+    assert_eq!(
+        realtime_instructions,
+        vec![
+            vec![],
+            vec![start_instructions.to_string()],
+            vec![start_instructions.to_string(), end_instructions.to_string()],
+        ]
+    );
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
