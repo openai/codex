@@ -415,10 +415,13 @@ fn map_remote_error(error: ExecServerError) -> io::Error {
         ExecServerError::Server { code, message } if code == INVALID_REQUEST_ERROR_CODE => {
             io::Error::new(io::ErrorKind::InvalidInput, message)
         }
-        ExecServerError::Server { message, .. } => io::Error::other(message),
         ExecServerError::Closed | ExecServerError::Disconnected(_) => {
             io::Error::new(io::ErrorKind::BrokenPipe, "exec-server transport closed")
         }
+        error if error.is_retryable_preparation_error() => {
+            io::Error::new(io::ErrorKind::BrokenPipe, error.to_string())
+        }
+        ExecServerError::Server { message, .. } => io::Error::other(message),
         _ => io::Error::other(error.to_string()),
     }
 }
@@ -461,5 +464,26 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn preparation_retryability_controls_filesystem_error_kind() {
+        let errors = [
+            ExecServerError::ConnectionAttempt(Arc::new(
+                ExecServerError::EnvironmentRegistryHttp {
+                    status: http::StatusCode::SERVICE_UNAVAILABLE,
+                    code: None,
+                    message: "registry unavailable".to_string(),
+                },
+            )),
+            ExecServerError::Protocol("exec-server transport closed".to_string()),
+        ];
+
+        let kinds = errors
+            .into_iter()
+            .map(|error| map_remote_error(error).kind())
+            .collect::<Vec<_>>();
+
+        assert_eq!(kinds, vec![io::ErrorKind::BrokenPipe, io::ErrorKind::Other]);
     }
 }
