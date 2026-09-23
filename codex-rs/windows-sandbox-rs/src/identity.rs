@@ -29,10 +29,14 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
+use windows_sys::Win32::Foundation::ERROR_PASSWORD_EXPIRED;
+use windows_sys::Win32::Foundation::ERROR_PASSWORD_MUST_CHANGE;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
 use windows_sys::Win32::Security::LOGON32_LOGON_INTERACTIVE;
@@ -54,6 +58,18 @@ pub struct SandboxCreds {
     pub username: String,
     pub password: String,
 }
+
+/// Windows rejected the stored sandbox password; credential-file and policy errors are distinct.
+#[derive(Debug)]
+pub struct SandboxAccountCredentialMismatch;
+
+impl std::fmt::Display for SandboxAccountCredentialMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Windows rejected the stored sandbox account password")
+    }
+}
+
+impl std::error::Error for SandboxAccountCredentialMismatch {}
 
 /// Returns true when the on-disk setup artifacts exist and match the current
 /// setup version.
@@ -206,9 +222,22 @@ pub fn logon_existing_sandbox_account(
         )
     } == 0
     {
-        return Err(std::io::Error::last_os_error()).context("log on existing sandbox account");
+        return Err(account_logon_error(io::Error::last_os_error()));
     }
     Ok(unsafe { OwnedHandle::from_raw_handle(token as _) })
+}
+
+fn account_logon_error(error: io::Error) -> anyhow::Error {
+    let bad_password = matches!(
+        error.raw_os_error().map(|code| code as u32),
+        Some(ERROR_LOGON_FAILURE | ERROR_PASSWORD_EXPIRED | ERROR_PASSWORD_MUST_CHANGE)
+    );
+    let error = anyhow::Error::new(error);
+    if bad_password {
+        error.context(SandboxAccountCredentialMismatch)
+    } else {
+        error.context("log on existing sandbox account")
+    }
 }
 
 fn select_identity(

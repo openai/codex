@@ -279,6 +279,8 @@ pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_newly_created_users;
 #[cfg(target_os = "windows")]
+pub use identity::SandboxAccountCredentialMismatch;
+#[cfg(target_os = "windows")]
 pub use identity::logon_existing_sandbox_account;
 #[cfg(target_os = "windows")]
 pub use identity::require_logon_sandbox_creds;

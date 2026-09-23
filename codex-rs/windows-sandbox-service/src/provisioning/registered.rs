@@ -5,7 +5,11 @@ use std::sync::atomic::AtomicBool;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
+use codex_windows_sandbox::SandboxAccountCredentialMismatch;
 use codex_windows_sandbox::SandboxProvisioningResponse;
+use codex_windows_sandbox::SandboxRuntimeAccount;
+use codex_windows_sandbox::logon_existing_sandbox_account;
+use codex_windows_sandbox::sandbox_secrets_dir;
 
 use crate::ipc::ProvisioningRequest;
 use codex_windows_sandbox::string_from_sid_bytes;
@@ -17,6 +21,10 @@ use crate::installation_record::InstallationRecord;
 use crate::installation_record::RuntimeRegistration;
 use crate::ipc::ClientIdentity;
 use crate::ipc::OwnedHandle;
+
+#[cfg(test)]
+#[path = "registered_tests.rs"]
+mod tests;
 
 pub(super) fn run(
     identity: &ClientIdentity,
@@ -79,7 +87,7 @@ pub(super) fn run(
         // Persist the authenticated owner before setup can rotate shared credentials.
         crate::installation_record::save_runtime(&installation)
             .context("persist registered sandbox owner")?;
-        // Expired passwords require full setup to rotate and persist credentials before logon.
+        // Missing, disabled, or expired accounts require full setup before runtime logon.
         for account in [
             codex_windows_sandbox::OFFLINE_USERNAME,
             codex_windows_sandbox::ONLINE_USERNAME,
@@ -87,6 +95,32 @@ pub(super) fn run(
             setup_complete &= codex_windows_sandbox::local_user_flags(account)
                 .with_context(|| format!("inspect registered sandbox account {account}"))?
                 .is_some_and(|flags| flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) == 0);
+        }
+        if setup_complete && !request.refresh_only {
+            setup_complete = !credentials_need_repair(
+                |account| {
+                    crate::package_lifecycle::with_owner_impersonation(identity.token.0, || {
+                        let mut pins = Vec::new();
+                        crate::ipc::pin_existing_ancestors(
+                            &sandbox_secrets_dir(&identity.codex_home),
+                            &mut pins,
+                        )?;
+                        logon_existing_sandbox_account(&identity.codex_home, account).map(drop)
+                    })
+                    .with_context(|| format!("check registered sandbox account {account:?}"))
+                },
+                || {
+                    for entry in &installation.runtime()?.accounts {
+                        let sid = codex_windows_sandbox::resolve_sid(entry.account.username())?;
+                        ensure!(
+                            string_from_sid_bytes(&sid).map_err(anyhow::Error::msg)?
+                                == entry.user_sid,
+                            "managed runtime account was replaced"
+                        );
+                    }
+                    Ok(())
+                },
+            )?;
         }
         if !setup_complete {
             // Account state can change outside our setup lock; refresh must never repair it.
@@ -133,4 +167,26 @@ pub(super) fn run(
         "Codex sandbox provisioning completed successfully.",
     );
     Ok(SandboxProvisioningResponse::Ok)
+}
+
+fn credentials_need_repair(
+    mut logon: impl FnMut(SandboxRuntimeAccount) -> Result<()>,
+    validate_ownership: impl FnOnce() -> Result<()>,
+) -> Result<bool> {
+    let mut needs_repair = false;
+    for account in [
+        SandboxRuntimeAccount::Offline,
+        SandboxRuntimeAccount::Online,
+    ] {
+        match logon(account) {
+            Ok(()) => {}
+            Err(error) if error.is::<SandboxAccountCredentialMismatch>() => needs_repair = true,
+            Err(error) => return Err(error),
+        }
+    }
+    if needs_repair {
+        // Full setup rotates both passwords; never rotate a recreated local account.
+        validate_ownership()?;
+    }
+    Ok(needs_repair)
 }

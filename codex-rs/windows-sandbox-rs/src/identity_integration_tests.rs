@@ -3,8 +3,12 @@
 //! the public wrapper, native account queries, payload serialization, singleflight,
 //! or helper launches.
 
+use super::SandboxAccountCredentialMismatch;
+use super::account_logon_error;
+use super::logon_existing_sandbox_account;
 use super::require_sandbox_account_with_setup;
 use super::sandbox_setup_is_complete_with_settings;
+use crate::SandboxRuntimeAccount;
 use crate::WindowsSandboxProvisioningSettings;
 use crate::WindowsSandboxProxySettingsMode;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
@@ -25,9 +29,40 @@ use pretty_assertions::assert_eq;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
+use std::io;
+use windows_sys::Win32::Foundation as win32;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_ACCOUNTDISABLE;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_NORMAL_ACCOUNT;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_PASSWORD_EXPIRED;
+
+#[test]
+fn only_native_bad_or_expired_passwords_trigger_credential_repair() -> Result<()> {
+    for code in [
+        win32::ERROR_LOGON_FAILURE,
+        win32::ERROR_PASSWORD_EXPIRED,
+        win32::ERROR_PASSWORD_MUST_CHANGE,
+    ] {
+        let error = account_logon_error(io::Error::from_raw_os_error(code as i32));
+        assert!(error.is::<SandboxAccountCredentialMismatch>());
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().raw_os_error(),
+            Some(code as i32)
+        );
+    }
+    for code in [
+        win32::ERROR_ACCESS_DENIED,
+        win32::ERROR_ACCOUNT_RESTRICTION,
+        win32::ERROR_LOGON_TYPE_NOT_GRANTED,
+    ] {
+        let error = account_logon_error(io::Error::from_raw_os_error(code as i32));
+        assert!(!error.is::<SandboxAccountCredentialMismatch>());
+    }
+    let home = tempfile::tempdir()?;
+    let error =
+        logon_existing_sandbox_account(home.path(), SandboxRuntimeAccount::Offline).unwrap_err();
+    assert!(!error.is::<SandboxAccountCredentialMismatch>());
+    Ok(())
+}
 
 #[test]
 fn credential_setup_repairs_expired_accounts_once_and_reloads_credentials() -> Result<()> {
