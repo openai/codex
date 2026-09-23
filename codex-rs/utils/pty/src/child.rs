@@ -1,6 +1,6 @@
 //! Local child ownership and platform selection, independent of process transports.
 //!
-//! Every child exposes Tokio stdio handles. Native children retain their PID until
+//! Every child exposes Tokio stdio handles. Reap-only children retain ownership until
 //! reaped, including when a wait is cancelled or the async runtime shuts down.
 
 use std::io;
@@ -15,6 +15,10 @@ use tokio::process::ChildStdout;
 #[path = "macos_child.rs"]
 pub(super) mod macos;
 
+#[cfg(unix)]
+#[path = "child_reaper.rs"]
+pub(super) mod reaper;
+
 /// A local subprocess with owned stdio and cancellation-safe exit handling.
 pub struct Child {
     pub(super) inner: ChildKind,
@@ -25,6 +29,11 @@ pub struct Child {
 
 pub(super) enum ChildKind {
     Tokio(tokio::process::Child),
+    #[cfg(unix)]
+    TokioReapOnly {
+        child: Option<tokio::process::Child>,
+        reaper: std::sync::mpsc::Sender<reaper::ChildToReap>,
+    },
     #[cfg(target_os = "macos")]
     Native(macos::NativeChild),
 }
@@ -33,6 +42,10 @@ impl Child {
     pub fn id(&self) -> Option<u32> {
         match &self.inner {
             ChildKind::Tokio(child) => child.id(),
+            #[cfg(unix)]
+            ChildKind::TokioReapOnly { child, .. } => {
+                child.as_ref().and_then(tokio::process::Child::id)
+            }
             #[cfg(target_os = "macos")]
             ChildKind::Native(child) => child.id(),
         }
@@ -43,12 +56,20 @@ impl Child {
         self.stdin.take();
         match &mut self.inner {
             ChildKind::Tokio(child) => child.wait().await,
+            #[cfg(unix)]
+            ChildKind::TokioReapOnly { child, .. } => {
+                child
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("child already transferred to reaper"))?
+                    .wait()
+                    .await
+            }
             #[cfg(target_os = "macos")]
             ChildKind::Native(child) => child.wait().await,
         }
     }
 
-    /// Drain both output pipes while waiting, retaining kill-on-drop on cancellation.
+    /// Drain both output pipes while waiting, retaining the configured drop policy on cancellation.
     pub async fn wait_with_output(mut self) -> io::Result<std::process::Output> {
         let mut stdout = self.stdout.take();
         let mut stderr = self.stderr.take();
@@ -85,6 +106,14 @@ impl Child {
         self.stdin.take();
         match &mut self.inner {
             ChildKind::Tokio(child) => child.kill().await,
+            #[cfg(unix)]
+            ChildKind::TokioReapOnly { child, .. } => {
+                child
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("child already transferred to reaper"))?
+                    .kill()
+                    .await
+            }
             #[cfg(target_os = "macos")]
             ChildKind::Native(child) => child.kill().await,
         }
@@ -94,3 +123,17 @@ impl Child {
 #[cfg(all(test, unix))]
 #[path = "child_tests.rs"]
 mod tests;
+
+impl Drop for ChildKind {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Self::TokioReapOnly { child, reaper } = self
+            && let Some(child) = child.take()
+            && child.id().is_some()
+        {
+            // Transfer the handle, not only its PID: Tokio must not enqueue it
+            // into a stopped runtime's orphan queue before our worker reaps it.
+            let _ = reaper.send(reaper::ChildToReap::Tokio(child));
+        }
+    }
+}

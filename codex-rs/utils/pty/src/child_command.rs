@@ -2,7 +2,7 @@
 //!
 //! The wrapped Tokio command is private: callers cannot install callbacks or
 //! change settings that the native backend cannot inspect. Children receive only
-//! explicitly supplied environment variables and kill-on-drop. Stdio, descriptor
+//! explicitly supplied environment variables and default to kill-on-drop. Stdio, descriptor
 //! inheritance, and compatibility fallbacks are configured independently.
 
 use std::ffi::OsStr;
@@ -36,6 +36,19 @@ pub enum SpawnFallback {
     ReturnError,
 }
 
+/// Cleanup performed when a child handle is dropped before its exit is collected.
+#[derive(Clone, Copy)]
+pub(crate) enum ChildDropPolicy {
+    /// Kill the direct child, then reap it. This is the default.
+    KillAndReap,
+    /// Reap the child when it exits, leaving termination to the caller.
+    #[allow(
+        dead_code,
+        reason = "Used by the pipe adapter in the next stacked change."
+    )]
+    ReapOnly,
+}
+
 /// An explicit child stdin, including a socket used for bidirectional fd transfer.
 pub enum ChildStdin {
     Piped,
@@ -50,6 +63,7 @@ pub struct Command {
     pub(crate) descriptor_policy: DescriptorPolicy,
     pub(crate) fallback: SpawnFallback,
     pub(crate) stdin: ChildStdin,
+    pub(crate) drop_policy: ChildDropPolicy,
     #[cfg(unix)]
     pub(crate) arg0: Option<OsString>,
 }
@@ -69,6 +83,7 @@ impl Command {
             descriptor_policy: DescriptorPolicy::Inherit,
             fallback: SpawnFallback::Compatible,
             stdin: ChildStdin::Piped,
+            drop_policy: ChildDropPolicy::KillAndReap,
             #[cfg(unix)]
             arg0: None,
         }
@@ -105,6 +120,20 @@ impl Command {
 
     pub fn process_mode(&mut self, mode: ProcessMode) -> &mut Self {
         self.process_mode = mode;
+        self
+    }
+
+    /// Choose who owns termination when the child handle is dropped.
+    #[allow(
+        dead_code,
+        reason = "Used by the pipe adapter in the next stacked change."
+    )]
+    pub(crate) fn drop_policy(&mut self, policy: ChildDropPolicy) -> &mut Self {
+        self.drop_policy = policy;
+        self.inner.kill_on_drop(match policy {
+            ChildDropPolicy::KillAndReap => true,
+            ChildDropPolicy::ReapOnly => false,
+        });
         self
     }
 
@@ -170,12 +199,30 @@ impl Command {
                 });
             }
         }
+        #[cfg(unix)]
+        let reaper = match self.drop_policy {
+            ChildDropPolicy::KillAndReap => None,
+            ChildDropPolicy::ReapOnly => Some(crate::child::reaper::sender()?),
+        };
         let mut child = self.inner.spawn()?;
         Ok(Child {
             stdin: child.stdin.take(),
             stdout: child.stdout.take(),
             stderr: child.stderr.take(),
-            inner: ChildKind::Tokio(child),
+            inner: {
+                #[cfg(unix)]
+                {
+                    match reaper {
+                        Some(reaper) => ChildKind::TokioReapOnly {
+                            child: Some(child),
+                            reaper,
+                        },
+                        None => ChildKind::Tokio(child),
+                    }
+                }
+                #[cfg(not(unix))]
+                ChildKind::Tokio(child)
+            },
         })
     }
 }

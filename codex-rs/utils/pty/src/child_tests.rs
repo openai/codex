@@ -1,4 +1,4 @@
-//! Regression coverage for output-pipe lifetimes while waiting for a child.
+//! Regression coverage for output-pipe lifetimes and runtime-independent reaping.
 
 use std::future::Future;
 use std::future::poll_fn;
@@ -64,5 +64,100 @@ async fn wait_with_output_keeps_eof_pipes_open_until_exit() -> anyhow::Result<()
             stderr: Vec::new(),
         }
     );
+    Ok(())
+}
+
+#[test]
+fn non_killing_drop_reaps_after_runtime_shutdown() -> anyhow::Result<()> {
+    use crate::child_command::ChildDropPolicy;
+    use std::time::Duration;
+    if std::env::var_os("CODEX_TEST_ISOLATED_REAPER").is_none() {
+        // Other Tokio tests must not drain this process's global orphan queue.
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "child::tests::non_killing_drop_reaps_after_runtime_shutdown",
+                "--nocapture",
+            ])
+            .env("CODEX_TEST_ISOLATED_REAPER", "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "isolated reaper test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return Ok(());
+    }
+    for program in ["cat", "/bin/cat"] {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let mut child = runtime.block_on(async {
+            let mut command = crate::Command::new(program);
+            command.drop_policy(ChildDropPolicy::ReapOnly);
+            command.spawn()
+        })?;
+        let stdin = child.stdin.take();
+        let pid = child.id().expect("live PID");
+        let next = runtime.block_on(async {
+            let mut command = crate::Command::new(program);
+            command.drop_policy(ChildDropPolicy::ReapOnly);
+            command.spawn()
+        })?;
+        let next_pid = next.id().expect("live PID");
+        drop(runtime);
+        drop(child);
+        drop(next);
+        // The shared reaper must collect the second child while the first remains alive.
+        wait_until_reaped(next_pid)?;
+        // Keep stdin open: cat must remain alive even after its owner and runtime go away.
+        std::thread::sleep(Duration::from_millis(50));
+        let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: waitid only observes our child without reaping it, with writable storage.
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    info.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        // SAFETY: waitid succeeded and initialized the zeroed signal information.
+        assert_eq!(unsafe { info.assume_init().si_pid() }, 0);
+        drop(stdin);
+        wait_until_reaped(pid)?;
+    }
+    Ok(())
+}
+
+fn wait_until_reaped(pid: u32) -> anyhow::Result<()> {
+    use std::io;
+    use std::time::Duration;
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        // SAFETY: WNOWAIT prevents the test from stealing the reaper's child.
+        if unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid,
+                info.as_mut_ptr(),
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        } == -1
+        {
+            assert_eq!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+            break;
+        }
+        anyhow::ensure!(std::time::Instant::now() < deadline, "child was not reaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
     Ok(())
 }

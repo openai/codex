@@ -23,6 +23,10 @@ use tokio::signal::unix::Signal;
 use tokio::signal::unix::SignalKind;
 use tokio::signal::unix::signal;
 
+use crate::child_command::ChildDropPolicy;
+
+use crate::child::reaper;
+
 // libc does not expose this Apple extension. It is available since macOS 10.15,
 // before Codex's minimum supported macOS version (12).
 unsafe extern "C" {
@@ -33,11 +37,12 @@ unsafe extern "C" {
 }
 
 /// Owns a child PID until reaping, so cancellation cannot lose or reuse it.
-/// Dropping a live child kills it and reaps it independently of the Tokio runtime.
+/// Drop obeys the configured kill policy and reaps independently of Tokio.
 pub(crate) struct NativeChild {
     pid: Option<libc::pid_t>,
     status: Option<ExitStatus>,
     sigchld: Signal,
+    reaper: Option<std::sync::mpsc::Sender<reaper::ChildToReap>>,
 }
 
 impl NativeChild {
@@ -74,6 +79,12 @@ impl NativeChild {
             .get_current_dir()
             .map(|cwd| c_string(cwd.as_os_str()))
             .transpose()?;
+        // Reserve the non-killing cleanup worker before creating a child. Drop
+        // must not need a new thread or synchronously wait for a live process.
+        let reaper = match request.drop_policy {
+            ChildDropPolicy::KillAndReap => None,
+            ChildDropPolicy::ReapOnly => Some(reaper::sender()?),
+        };
 
         // Subscribe before spawning so a child that exits immediately cannot be missed.
         let sigchld = signal(SignalKind::child())?;
@@ -203,6 +214,7 @@ impl NativeChild {
             pid: Some(pid),
             status: None,
             sigchld,
+            reaper,
         };
         Ok(Some(crate::Child {
             inner: super::ChildKind::Native(child),
@@ -278,14 +290,19 @@ impl Drop for NativeChild {
     fn drop(&mut self) {
         let _ = self.try_wait();
         let Some(pid) = self.pid.take() else { return };
+        if let Some(reaper) = &self.reaper {
+            // The shared sender keeps the worker alive for the process lifetime.
+            let _ = reaper.send(reaper::ChildToReap::Native(pid));
+            return;
+        }
         // SAFETY: This child has not been reaped, so its PID cannot be reused.
         unsafe {
             libc::kill(pid, libc::SIGKILL);
         }
         // Drop may run during runtime shutdown. Reap independently of Tokio,
-        // without blocking its worker threads while the killed process exits.
+        // without blocking its worker threads while this process exits.
         if std::thread::Builder::new()
-            .name("mcp-child-reaper".into())
+            .name("codex-child-reaper".into())
             .spawn(move || reap(pid))
             .is_err()
         {
