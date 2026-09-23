@@ -54,6 +54,21 @@ fn disabled_renderers_preserve_source_independently() {
 }
 
 #[test]
+fn disabled_mermaid_keeps_unsupported_source_without_notice() {
+    init(TuiRendering {
+        mermaid: false,
+        ..Default::default()
+    });
+    let source = "```mermaid\npie\n\"Cats\": 2\n```\n";
+    let rendered = render_markdown_text(source);
+    init(TuiRendering::default());
+    assert_eq!(
+        rendered.to_string(),
+        render_markdown_text(&source.replacen("mermaid", "unknown", /*count*/ 1)).to_string(),
+    );
+}
+
+#[test]
 fn disabled_tables_keep_markdown_fences_and_cell_markup() {
     init(TuiRendering {
         tables: false,

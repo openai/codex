@@ -1018,11 +1018,11 @@ where
                 {
                     let indent =
                         Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
-                    mermaid::render(
+                    Some(mermaid::render(
                         &code,
                         self.wrap_width.map(|width| width.saturating_sub(indent)),
                         &current_syntax_theme(),
-                    )
+                    ))
                 } else {
                     None
                 };

@@ -1,6 +1,5 @@
 ---
 source: tui/src/streaming/mermaid_tests.rs
-assertion_line: 78
 expression: "stages.join(\"\\n\\n---\\n\\n\")"
 ---
 Before.
@@ -45,6 +44,14 @@ After.
 
 Before.
 
+This
+Mermaid
+diagram
+doesn't
+fit the
+current
+terminal
+width.
 flowchart LR
 A[Request] --> B[Reply]
 

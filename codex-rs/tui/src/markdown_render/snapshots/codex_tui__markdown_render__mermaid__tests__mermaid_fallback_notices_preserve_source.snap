@@ -1,0 +1,36 @@
+---
+source: tui/src/markdown_render/mermaid_tests.rs
+expression: "cases.join(\"\\n\\n---\\n\\n\")"
+---
+invalid
+This Mermaid diagram uses features the terminal renderer doesn't support.
+flowchart LR
+A[unfinished
+
+---
+
+unsupported
+This Mermaid diagram uses features the terminal renderer doesn't support.
+pie
+"Cats": 2
+
+---
+
+too wide
+This
+Mermaid
+diagram
+doesn't
+fit the
+current
+terminal
+width.
+flowchart LR
+A[Request] --> B[Reply]
+
+---
+
+limit
+This Mermaid diagram exceeds the terminal renderer's size limits.
+flowchart TD
+A[This label exceeds the forty column limit]
