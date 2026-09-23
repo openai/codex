@@ -300,6 +300,13 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 .expect("write messaging rewrite hook");
         })
         .with_config(move |config| {
+            if block_post_hook {
+                config.model_provider.name = "Local compaction test provider".to_owned();
+                config
+                    .features
+                    .disable(Feature::TokenBudget)
+                    .expect("use local compaction");
+            }
             if messaging_case {
                 trust_discovered_hooks(config);
                 let servers = json!({(messaging_namespace): {
@@ -976,6 +983,10 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             // the inherited instruction first without losing the queued local grant.
             (inherited_prefix, MissingCheckpointSource::None, true),
         ] {
+            // The blocked-result case uses a real compaction and resume below.
+            if block_post_hook {
+                continue;
+            }
             let mut expected = expected_authorization.clone();
             let inherited_message_id = retained["user_messages"]
                 .as_array()
@@ -1101,7 +1112,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 exchange,
                 if !question_delivered {
                     vec![approval]
-                } else if preserve_acceptance_order {
+                } else if preserve_acceptance_order || !retained.is_null() {
                     vec![
                         GuardianRootMessage::Assistant(root_assistant_reply.clone()),
                         approval,
@@ -1172,6 +1183,58 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                     snapshot.authorization_version.retained_context_complete,
                 ),
                 (expected, false),
+            );
+        }
+        if block_post_hook {
+            let relevant = |messages: Vec<GuardianRootMessage>| {
+                messages
+                    .into_iter()
+                    .filter(|message| {
+                        !matches!(message,
+                    GuardianRootMessage::Assistant(text) if text != &root_assistant_reply)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let before = relevant(
+                worker_thread
+                    .guardian_root_snapshot()
+                    .await
+                    .expect("before compaction")
+                    .messages,
+            );
+            let compact = mount_sse_once_match(
+                &server,
+                move |request: &wiremock::Request| is_root_request(request, root_thread_id),
+                sse(vec![
+                    ev_assistant_message("compact-root", "Deployment context compacted."),
+                    ev_completed("compact-root-response"),
+                ]),
+            )
+            .await;
+            root.submit(Op::Compact).await?;
+            wait_for_event(&root, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+            compact.single_request();
+            assert!(!root.conversation_history_snapshot().await.items().any(|item| {
+                matches!(item, ResponseItem::FunctionCall { call_id, .. } if call_id == MESSAGE_CALL_ID)
+            }));
+            root.flush_rollout().await?;
+            let saved = test
+                .thread_store
+                .load_latest_model_context(LoadThreadHistoryParams {
+                    thread_id: root_thread_id,
+                    include_archived: false,
+                })
+                .await?;
+            root = super::guardian_checkpoint_migration::resume(&test, &root, saved.items).await?;
+            assert_eq!(
+                relevant(
+                    worker_thread
+                        .guardian_root_snapshot()
+                        .await
+                        .expect("after compacted resume")
+                        .messages
+                ),
+                before
             );
         }
         root.shutdown_and_wait().await?;
