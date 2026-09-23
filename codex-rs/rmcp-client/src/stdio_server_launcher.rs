@@ -10,7 +10,7 @@
 //! Both paths return [`StdioServerTransport`], so `RmcpClient` can hand the
 //! resulting byte stream to rmcp without knowing where the process lives. The
 //! executor-specific byte adaptation lives in `executor_process_transport`.
-//! Unix local servers inherit only their explicit transport stdio.
+//! Unix local servers use the stdio-only descriptor policy.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -282,8 +282,8 @@ impl LocalStdioServerLauncher {
             let mut command = Command::new(&resolved_program);
             command.current_dir(&cwd).envs(&envs).args(&args);
             command.process_mode(ProcessMode::NewGroup);
-            // MCP uses only stdio; unrelated orchestrator descriptors must not
-            // propagate into the server or commands it launches.
+            // MCP uses only stdio; select Explicit to exclude unrelated
+            // orchestrator descriptors from the server and commands it launches.
             // Descriptor allowlisting is Unix-only. Windows can still inherit unrelated
             // handles and needs a handle allowlist in the shared spawn backend.
             #[cfg(unix)]

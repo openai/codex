@@ -38,6 +38,7 @@ pub enum ProcessMode {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorPolicy {
     Inherit,
+    /// Exclude unrelated descriptors, allowing launch if best-effort cleanup fails.
     Explicit,
 }
 
@@ -286,9 +287,10 @@ impl Command {
             #[cfg(not(target_os = "linux"))]
             let parent_pid: Option<i32> = None;
             if new_session || explicit_fds || !targets.is_empty() || parent_pid.is_some() {
-                // SAFETY: Keep the existing Unix pre-exec setup in the fallback
-                // backend. The caller keeps the selected descriptors open, and
-                // this callback only changes the child's descriptor table.
+                // SAFETY: The caller keeps the selected descriptors open. Session
+                // and parent-death setup use system calls; Linux and macOS cleanup
+                // avoid allocation after fork. Other Unix targets have an
+                // allocation-after-fork risk documented on close_inherited_fds_except.
                 unsafe {
                     self.inner.pre_exec(move || {
                         if new_session {

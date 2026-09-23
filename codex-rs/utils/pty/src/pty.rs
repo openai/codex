@@ -29,6 +29,8 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+#[cfg(target_os = "linux")]
+pub(crate) use crate::linux_fds::close_inherited_fds_except;
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
 use crate::process::ProcessSignal;
@@ -492,6 +494,7 @@ fn set_cloexec(fd: RawFd) -> std::io::Result<()> {
 }
 
 // macOS needs a fork-safe sweep because recvmsg cannot set close-on-exec.
+// Cleanup is best-effort; enumeration and close failures do not prevent launch.
 #[cfg(target_os = "macos")]
 pub fn close_inherited_fds_except(preserved_fds: &[RawFd]) {
     let mut descriptors = [libc::proc_fdinfo {
@@ -561,8 +564,9 @@ pub fn close_inherited_fds_except(preserved_fds: &[RawFd]) {
     }
 }
 
-// Other Unix platforms keep their existing fd cleanup.
-#[cfg(all(unix, not(target_os = "macos")))]
+// Other Unix platforms use best-effort /dev/fd cleanup.
+// Directory enumeration allocates, so this path is not guaranteed fork-safe.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 pub(crate) fn close_inherited_fds_except(preserved_fds: &[RawFd]) {
     if let Ok(dir) = std::fs::read_dir("/dev/fd") {
         let mut fds = Vec::new();
