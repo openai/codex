@@ -58,13 +58,7 @@ impl ReviewAction {
             tracing::error!(%error, "failed to build automatic approval action");
             ReviewDecision::denied("automatic approval review could not prepare the action")
         })?;
-        let environment_id =
-            if let GuardianApprovalRequest::WriteStdin { environment_id, .. } = request {
-                Some(environment_id.as_str())
-            } else {
-                request.background_environment_id()
-            };
-        if let Some(environment_id) = environment_id
+        if let Some(environment_id) = request.target_environment_id()
             && !context
                 .environments()
                 .turn_environments()

@@ -7,7 +7,6 @@ use codex_guardian_context::ContextProfile;
 #[cfg(test)]
 use codex_guardian_context::ConversationTranscriptEntry;
 use codex_guardian_context::GuardianRootMessage;
-use codex_guardian_context::PermissionContext;
 use codex_guardian_context::PlannedAction;
 use codex_guardian_context::PlannedActionKind;
 use codex_guardian_context::SectionError;
@@ -20,6 +19,7 @@ use codex_guardian_context::default_registry;
 use codex_protocol::models::ResponseItem;
 
 use crate::context::ContextualUserFragment;
+use crate::context::GuardianPermissionContext;
 use crate::context::GuardianReviewEvidence;
 use crate::context::GuardianToolDescriptions;
 use crate::context::NodeReplReviewEvidence;
@@ -40,6 +40,8 @@ use super::GuardianReviewContext;
 use super::approval_request::format_guardian_action_pretty;
 
 const GUARDIAN_MAX_APPROVAL_REASON_TOKENS: usize = 512;
+// Bound both JSON and permission evidence without restricting manual approvals.
+const MAX_GUARDIAN_ENVIRONMENT_ID_BYTES: usize = 256;
 pub(super) const GUARDIAN_TRANSCRIPT_START: &str = ">>> TRANSCRIPT START\n";
 
 pub(crate) struct GuardianPromptItems {
@@ -87,6 +89,12 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     mode: GuardianPromptMode,
     reviewed_node_repl_evidence_sequence: u64,
 ) -> anyhow::Result<GuardianPromptItems> {
+    if request
+        .target_environment_id()
+        .is_some_and(|id| id.len() > MAX_GUARDIAN_ENVIRONMENT_ID_BYTES)
+    {
+        anyhow::bail!("approval environment id exceeds Guardian's 256-byte limit");
+    }
     let evidence_mode = parent_context
         .map(|context| node_repl_review_evidence_mode(context.turn()))
         .unwrap_or(NodeReplReviewEvidenceMode::Disabled);
@@ -214,9 +222,9 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
 fn parent_turn_permissions(
     context: &GuardianReviewContext,
     request: &GuardianApprovalRequest,
-) -> anyhow::Result<PermissionContext> {
+) -> anyhow::Result<GuardianPermissionContext> {
     let turn = context.turn();
-    let environment = match request.background_environment_id() {
+    let environment = match request.target_environment_id() {
         Some(id) => Some(
             context
                 .environments()
@@ -246,7 +254,8 @@ fn parent_turn_permissions(
             .map_err(anyhow::Error::msg)?;
         denied_globs.sort();
         denied_globs.dedup();
-        return Ok(PermissionContext {
+        return Ok(GuardianPermissionContext {
+            environment_id: request.target_environment_id().map(str::to_owned),
             denied_paths: file_system_policy
                 .get_unreadable_roots_with_context(&paths)
                 .map_err(anyhow::Error::msg)?
@@ -258,7 +267,8 @@ fn parent_turn_permissions(
     }
     #[allow(deprecated)]
     let cwd = native_cwd.unwrap_or_else(|| turn.cwd.clone());
-    Ok(PermissionContext {
+    Ok(GuardianPermissionContext {
+        environment_id: request.target_environment_id().map(str::to_owned),
         denied_paths: file_system_policy
             .get_unreadable_roots_with_cwd(&cwd)
             .into_iter()
@@ -306,7 +316,7 @@ pub(super) fn collect_guardian_context(
     root_conversation: &[GuardianRootMessage],
     trusted_user_answers: &[String],
     planned_action: Option<&PlannedAction>,
-    permissions: Option<&PermissionContext>,
+    permissions: Option<&GuardianPermissionContext>,
     node_repl: Option<&codex_guardian_context::NodeReplContext<'_>>,
 ) -> Result<CollectedContext, SectionError> {
     let mut profile = ContextProfile::synchronous();

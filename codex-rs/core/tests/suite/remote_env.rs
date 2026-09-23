@@ -1,3 +1,6 @@
+#[path = "guardian_environments_tests.rs"]
+mod guardian_environments;
+
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;

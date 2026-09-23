@@ -109,6 +109,16 @@ guardian_extra_policy = "Draft reminders without sending them."
         &requests,
         &ContextSnapshotOptions::default().include_request_settings(),
     );
+    let environment_id = &test.executor_environment().selection().environment_id;
+    snapshot = snapshot
+        .replace(
+            &format!("\"environment_id\": {environment_id:?}"),
+            "\"environment_id\": \"<ENVIRONMENT>\"",
+        )
+        .replace(
+            &format!("For this action on environment {environment_id:?},"),
+            "For this action on environment \"<ENVIRONMENT>\",",
+        );
     for (pattern, replacement) in [
         (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),
         (

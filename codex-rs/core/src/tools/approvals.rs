@@ -149,6 +149,7 @@ pub(crate) enum ApprovalAction {
     },
     RequestPermissions {
         id: String,
+        environment_id: String,
         turn_id: String,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
@@ -351,12 +352,14 @@ impl ApprovalAction {
             },
             Self::ApplyPatch {
                 id,
+                environment_id,
                 cwd,
                 files,
                 patch,
                 ..
             } => crate::guardian::GuardianApprovalRequest::ApplyPatch {
                 id,
+                environment_id,
                 cwd,
                 files,
                 patch,
@@ -409,11 +412,13 @@ impl ApprovalAction {
             },
             Self::RequestPermissions {
                 id,
+                environment_id,
                 turn_id,
                 reason,
                 permissions,
             } => crate::guardian::GuardianApprovalRequest::RequestPermissions {
                 id,
+                environment_id,
                 turn_id,
                 reason,
                 permissions,

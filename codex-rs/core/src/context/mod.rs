@@ -61,6 +61,7 @@ pub(crate) use codex_context_fragments::AdditionalContextDeveloperFragment;
 pub(crate) use codex_context_fragments::AdditionalContextUserFragment;
 pub use codex_context_fragments::AnsweredQuestion;
 pub use codex_context_fragments::ContextualUserFragment;
+pub(crate) use codex_guardian_context::PermissionContext as GuardianPermissionContext;
 pub(crate) use codex_prompts::MultiAgentRoleInstructions;
 pub use codex_prompts::PermissionsInstructions;
 pub(crate) use compaction_summary::CompactionSummary;

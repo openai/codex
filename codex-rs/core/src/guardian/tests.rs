@@ -567,7 +567,7 @@ async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn background_approval_permissions_use_the_owning_environment() -> anyhow::Result<()> {
+async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()> {
     let (session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut secondary = turn.initial_environments.primary().unwrap().clone();
     let cwd = test_path_buf("/guardian-secondary").abs();
@@ -628,6 +628,17 @@ async fn background_approval_permissions_use_the_owning_environment() -> anyhow:
     let requests = [
         network_request("secondary"),
         network_request("windows"),
+        GuardianApprovalRequest::WriteStdin {
+            id: "exec-secondary".to_string(),
+            approval_id: "stdin-secondary".to_string(),
+            environment_id: "secondary".to_string(),
+            process_id: 42,
+            input: "cat private/secret.txt\n".to_string(),
+            cwd: cwd.clone().into(),
+            tty: true,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
+        },
         #[cfg(unix)]
         GuardianApprovalRequest::Execve {
             id: "shell".to_string(),
@@ -639,8 +650,18 @@ async fn background_approval_permissions_use_the_owning_environment() -> anyhow:
             additional_permissions: None,
         },
     ];
+    let mut missing_context = context.clone();
+    missing_context.environments.environments.truncate(1);
     for request in requests {
-        let is_windows = request.background_environment_id() == Some("windows");
+        let action = runtime::ReviewAction::from(request.clone());
+        assert!(action.validate(&context).is_ok());
+        assert!(action.validate(&missing_context).is_err());
+        let environment_id = request.target_environment_id().unwrap().to_string();
+        assert_eq!(
+            guardian_approval_request_to_json(&request)?["environment_id"],
+            environment_id,
+        );
+        let is_windows = request.target_environment_id() == Some("windows");
         let prompt = build_guardian_prompt_items_with_parent_turn(
             &session,
             session.conversation_history_snapshot().await.as_ref(),
@@ -652,6 +673,9 @@ async fn background_approval_permissions_use_the_owning_environment() -> anyhow:
         )
         .await?;
         let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
+        assert!(text.contains(&format!(
+            "For this action on environment {environment_id:?}"
+        )));
         if is_windows {
             assert!(
                 text.contains(r"path `C:\guardian-secondary\private`"),
@@ -674,7 +698,7 @@ async fn background_approval_permissions_use_the_owning_environment() -> anyhow:
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn guardian_uses_thread_permissions_for_an_unavailable_captured_environment()
+async fn guardian_mcp_uses_thread_permissions_for_an_unavailable_captured_environment()
 -> anyhow::Result<()> {
     let (session, mut turn) = crate::session::tests::make_session_and_context().await;
     let original_root = test_path_buf("/original-workspace").abs();
@@ -728,7 +752,7 @@ async fn guardian_uses_thread_permissions_for_an_unavailable_captured_environmen
         session.conversation_history_snapshot().await.as_ref(),
         Some(&context),
         ApprovalRequestReasons::default(),
-        guardian_exec_command_request("shell"),
+        guardian_mcp_request("server", "tool"),
         GuardianPromptMode::Full,
         /*reviewed_node_repl_evidence_sequence*/ 0,
     )
@@ -1144,6 +1168,52 @@ fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     assert!(was_truncated);
 }
 
+#[tokio::test]
+async fn guardian_prompt_rejects_oversized_environment_ids() -> anyhow::Result<()> {
+    let (session, _) = crate::session::tests::make_session_and_context().await;
+    for environment_id in ["a".repeat(256), "\u{1f}".repeat(256), "é".repeat(128)] {
+        let mut action = GuardianApprovalRequest::RequestPermissions {
+            id: "permissions".to_string(),
+            environment_id,
+            turn_id: "turn".to_string(),
+            reason: None,
+            permissions: Default::default(),
+        };
+        build_guardian_prompt_items(
+            &session,
+            /*retry_reason*/ None,
+            action.clone(),
+            GuardianPromptMode::Full,
+        )
+        .await?;
+        let GuardianApprovalRequest::RequestPermissions { environment_id, .. } = &mut action else {
+            unreachable!();
+        };
+        environment_id.push('a');
+        let environment_id = environment_id.clone();
+        assert_eq!(
+            runtime::ReviewAction::from(action.clone())
+                .action
+                .expect("oversized environment IDs must remain routable to manual approval")["environment_id"],
+            environment_id,
+        );
+        assert_eq!(
+            build_guardian_prompt_items(
+                &session,
+                /*retry_reason*/ None,
+                action,
+                GuardianPromptMode::Full,
+            )
+            .await
+            .err()
+            .expect("oversized environment IDs must be rejected before Guardian inference")
+            .to_string(),
+            "approval environment id exceeds Guardian's 256-byte limit",
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn guardian_approval_request_to_json_renders_mcp_tool_call_shape() -> serde_json::Result<()> {
     let action = GuardianApprovalRequest::McpToolCall {
@@ -1286,6 +1356,7 @@ fn guardian_approval_request_to_json_renders_network_access_trigger() -> serde_j
         guardian_approval_request_to_json(&action)?,
         serde_json::json!({
             "tool": "network_access",
+            "environment_id": "local",
             "target": "https://example.com:443",
             "host": "example.com",
             "protocol": "https",
@@ -1460,6 +1531,7 @@ fn guardian_exec_command_uses_executor_cwd_convention(
         guardian_approval_request_to_json(&action)?,
         serde_json::json!({
             "tool": "exec_command",
+            "environment_id": codex_exec_server::REMOTE_ENVIRONMENT_ID,
             "command": ["git", "status"],
             "cwd": expected_cwd,
             "sandbox_permissions": "use_default",
@@ -1484,6 +1556,7 @@ fn guardian_apply_patch_preserves_foreign_paths_and_redacts_patch_text() -> serd
         PathUri::parse("file:///C:/workspace/guardian.txt").expect("valid executor file path");
     let patch = "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+secret\n*** End Patch";
     let action = GuardianApprovalRequest::ApplyPatch {
+        environment_id: "local".to_string(),
         id: "patch-1".to_string(),
         cwd,
         files: vec![file],
@@ -1494,6 +1567,7 @@ fn guardian_apply_patch_preserves_foreign_paths_and_redacts_patch_text() -> serd
         guardian_approval_request_to_json(&action)?,
         serde_json::json!({
             "tool": "apply_patch",
+            "environment_id": "local",
             "cwd": r"C:\workspace",
             "files": [r"C:\workspace\guardian.txt"],
             "patch": patch,
@@ -1523,6 +1597,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
         trigger: None,
     };
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
+        environment_id: "local".to_string(),
         id: "patch-1".to_string(),
         cwd: test_path_buf("/tmp").abs().into(),
         files: vec![test_path_buf("/tmp/guardian.txt").abs().into()],
@@ -1610,6 +1685,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning(
         &turn,
         "review-cancelled-guardian".to_string(),
         GuardianApprovalRequest::ApplyPatch {
+            environment_id: "local".to_string(),
             id: "patch-1".to_string(),
             cwd: test_path_buf("/tmp").abs().into(),
             files: vec![test_path_buf("/tmp/guardian.txt").abs().into()],

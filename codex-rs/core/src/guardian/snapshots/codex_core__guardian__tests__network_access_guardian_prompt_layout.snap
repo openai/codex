@@ -26,6 +26,7 @@ The network access was triggered by the action in the `trigger` entry. When asse
 Assess the exact network access below. Use read-only tool checks when local state matters.
 Network access JSON:
 {
+  "environment_id": "local",
   "host": "example.com",
   "port": 443,
   "protocol": "https",

@@ -243,6 +243,7 @@ async fn guardian_network_approval_preserves_action_and_outcome_routing() -> Res
             "protocol": "http",
             "target": NETWORK_TEST_TARGET,
             "tool": "network_access",
+            "environment_id": LOCAL_ENVIRONMENT_ID,
             "trigger": {
                 "callId": first_call_id,
                 "command": expected_command,
@@ -2396,6 +2397,7 @@ async fn remote_guardian_network_decisions_are_scoped_to_each_request_and_enviro
             "protocol": "http",
             "target": NETWORK_TEST_TARGET,
             "tool": "network_access",
+            "environment_id": environment.environment_id,
             "trigger": {
                 "callId": call_id,
                 "command": command,

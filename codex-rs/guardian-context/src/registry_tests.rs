@@ -204,6 +204,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
     ])
     .unwrap();
     let permissions = super::PermissionContext {
+        environment_id: None,
         denied_paths: vec!["/private".into()],
         denied_globs: vec!["**/*.key".into()],
     };
