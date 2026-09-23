@@ -5,14 +5,14 @@ expression: descriptions
 
   Edit Shortcut
   Edit Queued Message · Chat
-  Current alt-up, shift-left · Default keymap
+  Current shift-left, alt-up · Default keymap
   Config `tui.keymap.chat.edit_queued_message`
-  Move up through questions, then edit the last queued message.
+  Move forward through questions, then edit the last queued message.
 
 
   Edit Shortcut
   Prompt Stack Back · Chat
-  Current alt-down, shift-right · Default keymap
+  Current shift-right, alt-down · Default keymap
   Config `tui.keymap.chat.prompt_stack_back`
   Move back through questions toward the composer.
 

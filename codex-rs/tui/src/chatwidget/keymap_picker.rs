@@ -12,10 +12,8 @@
 //! appear to accept a remap while some handlers still respond to the old keys.
 
 use codex_config::types::TuiKeymap;
-use codex_terminal_detection::terminal_info;
 
 use super::ChatWidget;
-use super::queued_message_edit_hint_binding;
 use crate::app_event::KeymapCaptureMode;
 use crate::app_event::KeymapEditIntent;
 use crate::keymap::RuntimeKeymap;
@@ -173,10 +171,6 @@ impl ChatWidget {
         self.local_settings.tui.keymap = keymap_config;
         self.copy_last_response_binding = runtime_keymap.app.copy.clone();
         self.chat_keymap = runtime_keymap.chat.clone();
-        self.queued_message_edit_hint_binding =
-            queued_message_edit_hint_binding(runtime_keymap, terminal_info());
-        self.bottom_pane
-            .set_queued_message_edit_binding(self.queued_message_edit_hint_binding);
         self.bottom_pane.set_keymap_bindings(runtime_keymap);
         self.update_realtime_footer();
         self.request_redraw();

@@ -9,4 +9,5 @@ expression: buffer_text(&buffer)
   › 1. Other
     2. Other (write an answer)
 
-  enter submit   ctrl+] skip   ⌥+↓ prev question
+  enter submit   ctrl+] skip
+  shift+→ prev question

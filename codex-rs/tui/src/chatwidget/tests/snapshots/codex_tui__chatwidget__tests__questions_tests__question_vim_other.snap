@@ -11,7 +11,7 @@ NORMAL
   › 2. alpha beta
        alpha gamma
                                                                    Vim: Normal
-  enter submit   ctrl+] skip   ⌥+↓ main prompt
+  enter submit   ctrl+] skip   shift+→ main prompt
 
 SEARCH
 • Queued follow-up inputs
@@ -23,4 +23,4 @@ SEARCH
        alpha gamma
        /gamma
                                                                    Vim: Normal
-  enter submit   ctrl+] skip   ⌥+↓ main prompt
+  enter submit   ctrl+] skip   shift+→ main prompt

@@ -12,4 +12,4 @@ expression: buffer_text(&buffer)
        rows
 
   f9 submit   ctrl+] skip   option 1/13
-  ⌥+↓ prev question
+  shift+→ prev question

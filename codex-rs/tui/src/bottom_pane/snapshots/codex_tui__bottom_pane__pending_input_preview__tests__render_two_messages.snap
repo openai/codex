@@ -8,7 +8,7 @@ Buffer {
         "• Queued follow-up inputs               ",
         "  ↳ Hello, world!                       ",
         "  ↳ This is another message             ",
-        "    ⌥+↑ edit last queued message        ",
+        "    shift+← edit last queued message    ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -20,7 +20,7 @@ Buffer {
         x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
         x: 27, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 7, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 32, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 11, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

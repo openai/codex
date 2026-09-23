@@ -1924,54 +1924,42 @@ async fn restore_thread_input_state_applies_running_state_policy() {
 }
 
 #[tokio::test]
-async fn alt_up_edits_most_recent_queued_message() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.chat_keymap.edit_queued_message = vec![crate::key_hint::alt(KeyCode::Up)];
-    chat.queued_message_edit_hint_binding = Some(crate::key_hint::alt(KeyCode::Up).into());
-    chat.bottom_pane
-        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
+async fn default_shortcuts_edit_most_recent_queued_message() {
+    for key in [
+        KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
+        KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+    ] {
+        let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.bottom_pane.set_task_running(/*running*/ true);
+        for message in ["first queued", "second queued"] {
+            chat.input_queue
+                .queued_user_messages
+                .push_back(UserMessage::from(message.to_string()).into());
+        }
+        chat.refresh_pending_input_preview();
 
-    // Simulate a running task so messages would normally be queued.
-    chat.bottom_pane.set_task_running(/*running*/ true);
+        chat.handle_key_event(key);
 
-    // Seed two queued messages.
-    chat.input_queue
-        .queued_user_messages
-        .push_back(UserMessage::from("first queued".to_string()).into());
-    chat.input_queue
-        .queued_user_messages
-        .push_back(UserMessage::from("second queued".to_string()).into());
-    chat.refresh_pending_input_preview();
-
-    // Press Alt+Up to edit the most recent (last) queued message.
-    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-
-    // Composer should now contain the last queued message.
-    assert_eq!(
-        chat.bottom_pane.composer_text(),
-        "second queued".to_string()
-    );
-    // And the queue should now contain only the remaining (older) item.
-    assert_eq!(chat.input_queue.queued_user_messages.len(), 1);
-    assert_eq!(
-        chat.input_queue.queued_user_messages.front().unwrap().text,
-        "first queued"
-    );
+        assert_eq!(chat.bottom_pane.composer_text(), "second queued");
+        assert_eq!(chat.queued_user_message_texts(), vec!["first queued"]);
+    }
 }
 
 #[tokio::test]
 async fn unbound_queued_message_edit_does_not_fall_back_to_alt_up() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.chat_keymap.edit_queued_message = Vec::new();
-    chat.queued_message_edit_hint_binding = None;
-    chat.bottom_pane
-        .set_queued_message_edit_binding(chat.queued_message_edit_hint_binding);
+    let mut config = codex_config::types::TuiKeymap::default();
+    config.chat.edit_queued_message = Some(codex_config::types::KeybindingsSpec::Many(Vec::new()));
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid unbound queued edit");
+    chat.apply_keymap_update(config, &keymap);
     chat.bottom_pane.set_task_running(/*running*/ true);
     chat.input_queue
         .queued_user_messages
         .push_back(UserMessage::from("queued".to_string()).into());
     chat.refresh_pending_input_preview();
 
+    assert!(!render_bottom_popup(&chat, /*width*/ 100).contains("edit last queued message"));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
 
     assert!(chat.bottom_pane.composer_text().is_empty());
@@ -1979,141 +1967,31 @@ async fn unbound_queued_message_edit_does_not_fall_back_to_alt_up() {
 }
 
 #[tokio::test]
-async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
-        name: TerminalName::AppleTerminal,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: None,
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
-        name: TerminalName::WarpTerminal,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: None,
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
-        name: TerminalName::VsCode,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: None,
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn shift_left_edits_most_recent_queued_message_in_tmux() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
-        name: TerminalName::Iterm2,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: Some(Multiplexer::Tmux { version: None }),
-    })
-    .await;
-}
-
-#[test]
-fn queued_message_edit_hint_displays_configured_chords() {
+async fn queued_message_edit_hint_displays_configured_chords() {
     use codex_config::types::KeybindingSpec;
     use codex_config::types::KeybindingsSpec;
     use codex_config::types::TuiKeymap;
 
-    let terminal_info = || TerminalInfo {
-        name: TerminalName::Iterm2,
-        term_program: None,
-        version: None,
-        term: None,
-        multiplexer: None,
-    };
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let mut config = TuiKeymap::default();
     config.chat.edit_queued_message = Some(KeybindingsSpec::One(KeybindingSpec(
         "ctrl-x up".to_string(),
     )));
     let keymap = RuntimeKeymap::from_config(&config).expect("valid queued edit chord");
+    chat.apply_keymap_update(config, &keymap);
+    chat.input_queue
+        .queued_user_messages
+        .push_back(UserMessage::from("queued".to_string()).into());
+    chat.refresh_pending_input_preview();
 
-    assert_eq!(
-        queued_message_edit_hint_binding(&keymap, terminal_info()),
-        Some(crate::key_hint::ShortcutHint::Chord {
-            prefix: crate::key_hint::ctrl(KeyCode::Char('x')),
-            completion: crate::key_hint::plain(KeyCode::Up),
-        })
-    );
-
-    let default_keymap = RuntimeKeymap::defaults();
-    assert_eq!(
-        queued_message_edit_hint_binding(&default_keymap, terminal_info()),
-        Some(crate::key_hint::ShortcutHint::Single(crate::key_hint::alt(
-            KeyCode::Up,
-        )))
-    );
-}
-
-#[test]
-fn queued_message_edit_binding_mapping_covers_special_terminals_and_tmux() {
-    assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalInfo {
-            name: TerminalName::AppleTerminal,
-            term_program: None,
-            version: None,
-            term: None,
-            multiplexer: None,
-        }),
-        crate::key_hint::shift(KeyCode::Left)
-    );
-    assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalInfo {
-            name: TerminalName::WarpTerminal,
-            term_program: None,
-            version: None,
-            term: None,
-            multiplexer: None,
-        }),
-        crate::key_hint::shift(KeyCode::Left)
-    );
-    assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalInfo {
-            name: TerminalName::VsCode,
-            term_program: None,
-            version: None,
-            term: None,
-            multiplexer: None,
-        }),
-        crate::key_hint::shift(KeyCode::Left)
-    );
-    assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalInfo {
-            name: TerminalName::Iterm2,
-            term_program: None,
-            version: None,
-            term: None,
-            multiplexer: Some(Multiplexer::Tmux { version: None }),
-        }),
-        crate::key_hint::shift(KeyCode::Left)
-    );
-    assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalInfo {
-            name: TerminalName::Iterm2,
-            term_program: None,
-            version: None,
-            term: None,
-            multiplexer: None,
-        }),
-        crate::key_hint::alt(KeyCode::Up)
-    );
+    let hint = crate::key_hint::ShortcutHint::Chord {
+        prefix: crate::key_hint::ctrl(KeyCode::Char('x')),
+        completion: crate::key_hint::plain(KeyCode::Up),
+    };
+    assert!(render_bottom_popup(&chat, /*width*/ 100).contains(&format!(
+        "{} edit last queued message",
+        hint.display_label()
+    )));
 }
 
 /// Pressing Up to recall the most recent history entry and immediately queuing

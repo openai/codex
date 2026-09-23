@@ -30,7 +30,6 @@ impl BottomPane {
                 self.keymap.clone(),
             );
             questions.set_vim_enabled(self.composer.is_vim_enabled());
-            questions.next_hint = self.pending_input_preview.edit_binding;
             Box::new(questions)
         })
     }

@@ -10,7 +10,7 @@ Buffer {
         "  ↳ This is another message             ",
         "  ↳ This is a third message             ",
         "  ↳ This is a fourth message            ",
-        "    ⌥+↑ edit last queued message        ",
+        "    shift+← edit last queued message    ",
     ],
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
@@ -28,7 +28,7 @@ Buffer {
         x: 4, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
         x: 28, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 4, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
-        x: 7, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 32, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 11, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 36, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }

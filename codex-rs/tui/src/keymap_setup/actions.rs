@@ -102,7 +102,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort."),
     action("chat", "Chat", "previous_permission_mode", "Switch to the previous available permission mode."),
     action("chat", "Chat", "next_permission_mode", "Switch to the next available permission mode."),
-    action("chat", "Chat", "edit_queued_message", "Move up through questions, then edit the last queued message."),
+    action("chat", "Chat", "edit_queued_message", "Move forward through questions, then edit the last queued message."),
     action("chat", "Chat", "prompt_stack_back", "Move back through questions toward the composer."),
     action("chat", "Chat", "skip_question", "Skip the focused question."),
     action("chat", "Chat", "toggle_voice", "Start or stop a voice conversation."),

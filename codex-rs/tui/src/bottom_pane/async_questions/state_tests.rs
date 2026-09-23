@@ -17,7 +17,6 @@ fn editor() -> AsyncQuestions {
         /*disable_paste_burst*/ true,
         RuntimeKeymap::defaults(),
     );
-    editor.next_hint = Some(crate::key_hint::alt(KeyCode::Up).into());
     editor.append(
         "message",
         &[
@@ -446,7 +445,7 @@ fn existing_cross_context_keymaps_load_without_misleading_submit_hints() {
         let mut editor = editor();
         editor.navigate(/*forward*/ true);
         editor.set_keymap(&keymap);
-        insta::allow_duplicates! { insta::assert_snapshot!(editor.footer_lines(/*width*/ 100, /*option_tip*/ None)[0].to_string(), @"ctrl+] skip   ⌥+↓ prev question"); }
+        insta::allow_duplicates! { insta::assert_snapshot!(editor.footer_lines(/*width*/ 100, /*option_tip*/ None)[0].to_string(), @"ctrl+] skip   shift+→ prev question"); }
         editor.handle_key_event(KeyEvent::from(KeyCode::F(12)));
         assert!(editor.submission.is_none());
     }

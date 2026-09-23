@@ -6,7 +6,7 @@ expression: "normalize_snapshot_paths(render_bottom_popup(&chat, 80)).replace('�
 
 • Queued follow-up inputs
   ↳ x
-    ⌥+↑ edit last queued message
+    shift+← edit last queued message
 
 › describe
 

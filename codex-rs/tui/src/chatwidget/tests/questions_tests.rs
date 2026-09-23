@@ -865,21 +865,93 @@ async fn questions_and_queued_messages_share_the_resolved_shortcut() {
         .queued_user_messages
         .push_back(UserMessage::from("queued".to_string()).into());
     chat.refresh_pending_input_preview();
-    for binding in [key_hint::shift(KeyCode::Left), key_hint::alt(KeyCode::Up)] {
-        chat.bottom_pane
-            .set_queued_message_edit_binding(Some(binding.into()));
-        let hint = binding.display_label();
-        assert!(render_bottom_popup(&chat, /*width*/ 100).contains(&hint));
-        chat.add_async_questions(&hint, &questions());
-        assert!(render_bottom_popup(&chat, /*width*/ 100).contains(&format!("{hint} to answer")));
-        let (key, modifiers) = binding.parts();
-        chat.handle_key_event(KeyEvent::new(key, modifiers));
-        insta::assert_snapshot!(
-            format!("question_queue_hint_{}", key),
-            render_bottom_popup(&chat, /*width*/ 100)
-        );
-        chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    let forward_hint = key_hint::shift(KeyCode::Left).display_label();
+    let backward_hint = key_hint::shift(KeyCode::Right).display_label();
+    assert!(
+        render_bottom_popup(&chat, /*width*/ 100)
+            .contains(&format!("{forward_hint} edit last queued message"))
+    );
+    chat.add_async_questions("message", &questions());
+    assert!(
+        render_bottom_popup(&chat, /*width*/ 100).contains(&format!("{forward_hint} to answer"))
+    );
+
+    for (forward, backward) in [
+        (
+            KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
+            KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT),
+        ),
+        (
+            KeyEvent::new(KeyCode::Up, KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Down, KeyModifiers::ALT),
+        ),
+    ] {
+        chat.handle_key_event(forward);
+        let rendered = render_bottom_popup(&chat, /*width*/ 100);
+        assert!(rendered.contains(&format!("{backward_hint} main prompt")));
+        assert!(rendered.contains(&format!("{forward_hint} next question")));
+        if forward.code == KeyCode::Left {
+            insta::assert_snapshot!(
+                "question_queue_hint_Left",
+                render_bottom_popup(&chat, /*width*/ 100)
+            );
+        }
+        chat.handle_key_event(forward);
+        let rendered = render_bottom_popup(&chat, /*width*/ 100);
+        assert!(rendered.contains(&format!("{backward_hint} prev question")));
+        assert!(rendered.contains(&format!("{forward_hint} queued messages")));
+        chat.handle_key_event(backward);
+        assert!(render_bottom_popup(&chat, /*width*/ 100).contains("Which way?"));
+        chat.handle_key_event(backward);
+        assert!(!chat.bottom_pane.questions.as_ref().unwrap().expanded);
     }
+
+    let config = toml::from_str(
+        r#"
+[chat]
+edit_queued_message = ["alt-up", "shift-left"]
+prompt_stack_back = ["alt-down", "shift-right"]
+"#,
+    )
+    .unwrap();
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid alternate shortcuts");
+    chat.apply_keymap_update(config, &keymap);
+    chat.add_async_questions("remapped", &questions());
+    let forward_hint = key_hint::alt(KeyCode::Up).display_label();
+    assert!(
+        render_bottom_popup(&chat, /*width*/ 100).contains(&format!("{forward_hint} to answer"))
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+    insta::assert_snapshot!(
+        "question_queue_hint_Up",
+        render_bottom_popup(&chat, /*width*/ 100)
+    );
+
+    let config = toml::from_str(
+        r#"
+[chat]
+edit_queued_message = ["ctrl-x up", "shift-left"]
+prompt_stack_back = ["ctrl-x down", "shift-right"]
+"#,
+    )
+    .unwrap();
+    let keymap = RuntimeKeymap::from_config(&config).expect("valid configured chords");
+    chat.apply_keymap_update(config, &keymap);
+    let hint = |completion| {
+        crate::key_hint::ShortcutHint::Chord {
+            prefix: key_hint::ctrl(KeyCode::Char('x')),
+            completion: key_hint::plain(completion),
+        }
+        .display_label()
+    };
+    let rendered = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(rendered.contains(&format!("{} main prompt", hint(KeyCode::Down))));
+    assert!(rendered.contains(&format!("{} next question", hint(KeyCode::Up))));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert!(
+        render_bottom_popup(&chat, /*width*/ 100)
+            .contains(&format!("{} to answer", hint(KeyCode::Up)))
+    );
 }
 
 #[tokio::test]
