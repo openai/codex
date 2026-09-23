@@ -86,6 +86,7 @@ mod startup_tests;
 mod terminal_stderr;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod tmux;
 #[cfg(any(windows, test))]
 mod windows_console;
 

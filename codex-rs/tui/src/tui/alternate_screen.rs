@@ -3,6 +3,7 @@
 //! Push only on entry and pop before leaving; the main screen keeps its own TUI mode until
 //! terminal handoff. Transcript surfaces retain pointer reporting across overlays and disable it
 //! before yielding to the shell. Promoting an overlay must not push another keyboard frame.
+//! Refresh tmux's input policy on entry and apply it to every mouse-capture request.
 
 use std::io::Result;
 use std::io::Write;
@@ -23,11 +24,13 @@ use super::DisableAlternateScroll;
 use super::EnableAlternateScroll;
 use super::KeyboardRestore;
 use super::keyboard_modes;
+use super::tmux::MouseCapture;
 
 // Panic and exit cleanup cannot borrow Tui. Track the actual screen independently of its owner.
 pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
     active: AtomicBool::new(/*v*/ false),
     mouse_active: AtomicBool::new(/*v*/ false),
+    mouse_capture_disabled: AtomicBool::new(/*v*/ false),
     input_configured: AtomicBool::new(/*v*/ false),
 };
 
@@ -35,6 +38,8 @@ pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
 pub(super) struct AlternateScreen {
     active: AtomicBool,
     mouse_active: AtomicBool,
+    // Refresh alongside keyboard modes whenever this screen is entered or restored.
+    mouse_capture_disabled: AtomicBool,
     // A cleanup/setup error must not make the next identical request look already applied.
     input_configured: AtomicBool,
 }
@@ -68,7 +73,11 @@ impl AlternateScreen {
         // Stdout retains queued bytes on a flush error; cleanup must follow that pending entry.
         self.active.store(/*val*/ true, Ordering::Relaxed);
         writer.flush()?;
-        keyboard_modes::enable_keyboard_enhancement(writer);
+        let mouse_capture = keyboard_modes::enable_keyboard_enhancement(writer);
+        self.mouse_capture_disabled.store(
+            mouse_capture == MouseCapture::DisabledByTmux,
+            Ordering::Relaxed,
+        );
         self.configure_input(writer, capture_mouse)
     }
 
@@ -79,7 +88,7 @@ impl AlternateScreen {
     ) -> Result<()> {
         self.input_configured
             .store(/*val*/ false, Ordering::Relaxed);
-        let result = if capture_mouse {
+        let result = if capture_mouse && !self.mouse_capture_disabled.load(Ordering::Relaxed) {
             // A partial write can already enable reporting; cleanup must still attempt to stop it.
             self.mouse_active.store(/*val*/ true, Ordering::Relaxed);
             execute!(writer, DisableAlternateScroll, EnablePointerCapture)

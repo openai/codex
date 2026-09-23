@@ -14,6 +14,50 @@ struct KeyboardScreens {
     alternate_active: bool,
 }
 
+#[test]
+fn refreshed_mouse_policy_applies_to_fullscreen_and_overlays() {
+    use super::super::OverlayInput;
+
+    for owned in [false, true] {
+        let screen = AlternateScreen::default();
+        let mut output = Vec::new();
+        let mut terminal = vt100::Parser::new(
+            /*rows*/ 24, /*cols*/ 80, /*scrollback_len*/ 0,
+        );
+        let mut input = OverlayInput::Default;
+        screen
+            .enter(&mut output, input.captures_mouse(owned))
+            .unwrap();
+        for disabled in [true, false, true] {
+            screen
+                .mouse_capture_disabled
+                .store(disabled, Ordering::Relaxed);
+            for next in [
+                OverlayInput::Transcript,
+                OverlayInput::Usage,
+                OverlayInput::StaticPager,
+                OverlayInput::Default,
+            ] {
+                input.apply(&screen, &mut output, next, owned).unwrap();
+                terminal.process(&std::mem::take(&mut output));
+                let expected = if !disabled && next.captures_mouse(owned) {
+                    vt100::MouseProtocolMode::AnyMotion
+                } else {
+                    vt100::MouseProtocolMode::None
+                };
+                assert_eq!(
+                    (
+                        terminal.screen().alternate_screen(),
+                        terminal.screen().mouse_protocol_mode()
+                    ),
+                    (true, expected),
+                );
+            }
+        }
+        screen.leave(&mut output).unwrap();
+    }
+}
+
 impl KeyboardScreens {
     fn process(&mut self, output: &[u8]) {
         for sequence in std::str::from_utf8(output).unwrap().split('\x1b') {
@@ -46,6 +90,23 @@ impl KeyboardScreens {
     fn state(&self) -> (bool, &[u8], &[u8]) {
         (self.alternate_active, &self.main, &self.alternate)
     }
+}
+
+// Capture-specific tests must not inherit the tmux session running the test binary.
+fn enter_with_mouse_enabled(
+    screen: &AlternateScreen,
+    writer: &mut impl Write,
+    capture_mouse: bool,
+) -> Result<()> {
+    screen.enter(writer, capture_mouse)?;
+    if screen
+        .mouse_capture_disabled
+        .swap(/*val*/ false, Ordering::Relaxed)
+        && capture_mouse
+    {
+        screen.configure_input(writer, capture_mouse)?;
+    }
+    Ok(())
 }
 
 struct FailOnce {
@@ -174,7 +235,7 @@ fn owned_overlay_promotion_and_handoff_balance_both_keyboard_stacks() {
         /*rows*/ 24, /*cols*/ 80, /*scrollback_len*/ 0,
     );
     keyboard_modes::enable_keyboard_enhancement(&mut output);
-    screen.enter(&mut output, /*capture_mouse*/ false).unwrap();
+    enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ false).unwrap();
     keyboard.process(&output);
     terminal.process(&std::mem::take(&mut output));
     let stacks = (keyboard.main.clone(), keyboard.alternate.clone());
@@ -212,7 +273,7 @@ fn owned_overlay_promotion_and_handoff_balance_both_keyboard_stacks() {
                 vt100::MouseProtocolEncoding::Default,
             ),
         );
-        screen.enter(&mut output, /*capture_mouse*/ true).unwrap();
+        enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ true).unwrap();
         keyboard.process(&output);
         terminal.process(&std::mem::take(&mut output));
     }
@@ -231,7 +292,7 @@ fn owned_overlay_promotion_and_handoff_balance_both_keyboard_stacks() {
 fn failed_mouse_cleanup_still_leaves_owned_screen_and_remains_retryable() {
     let screen = AlternateScreen::default();
     let mut output = Vec::new();
-    screen.enter(&mut output, /*capture_mouse*/ true).unwrap();
+    enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ true).unwrap();
     let mut writer = FailOnce {
         output,
         sequence: b"\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l",
@@ -284,7 +345,7 @@ fn pager_capture_restores_picker_input_without_a_screen_transition() {
     let mut terminal = vt100::Parser::new(
         /*rows*/ 12, /*cols*/ 40, /*scrollback_len*/ 0,
     );
-    screen.enter(&mut output, /*capture_mouse*/ false).unwrap();
+    enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ false).unwrap();
     terminal.process(&std::mem::take(&mut output));
     assert_eq!(
         terminal.screen().mouse_protocol_mode(),
@@ -353,7 +414,7 @@ fn failed_pager_capture_setup_restores_requested_and_actual_picker_policy() {
     ] {
         let screen = AlternateScreen::default();
         let mut output = Vec::new();
-        screen.enter(&mut output, /*capture_mouse*/ false).unwrap();
+        enter_with_mouse_enabled(&screen, &mut output, /*capture_mouse*/ false).unwrap();
         let mut writer = FailOnce {
             output,
             sequence: b"\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h",
@@ -417,7 +478,7 @@ fn identical_default_request_retries_after_failed_fallback_cleanup() {
         failed_setup: false,
         failed_cleanup: false,
     };
-    screen.enter(&mut writer, /*capture_mouse*/ false).unwrap();
+    enter_with_mouse_enabled(&screen, &mut writer, /*capture_mouse*/ false).unwrap();
     let mut input = super::super::OverlayInput::Default;
     let result = input.apply(
         &screen,

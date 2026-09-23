@@ -206,14 +206,16 @@ fn read_windows_vscode_detection_with_timeout(
 #[path = "windows_term_program_tests.rs"]
 mod windows_term_program_tests;
 
-pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) {
+/// Restore keyboard reporting and return the mouse policy from the same fresh tmux probe.
+pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) -> super::tmux::MouseCapture {
+    let tmux_options = super::tmux::options();
     if keyboard_enhancement_disabled() {
-        return;
+        return tmux_options.mouse_capture;
     }
 
     let running_in_tmux_session = running_in_tmux_session();
     let tmux_extended_keys_format = if running_in_tmux_session {
-        read_tmux_extended_keys_format()
+        tmux_options.extended_keys_format.as_deref()
     } else {
         None
     };
@@ -224,16 +226,15 @@ pub(super) fn enable_keyboard_enhancement(writer: &mut impl Write) {
         PushKeyboardEnhancementFlags(keyboard_enhancement_flags(
             terminal_info().name,
             running_in_tmux_session,
-            tmux_extended_keys_format.as_deref()
+            tmux_extended_keys_format
         ))
     );
 
-    if tmux_should_enable_modify_other_keys_for(
-        running_in_tmux_session,
-        tmux_extended_keys_format.as_deref(),
-    ) {
+    if tmux_should_enable_modify_other_keys_for(running_in_tmux_session, tmux_extended_keys_format)
+    {
         let _ = execute!(writer, EnableModifyOtherKeys);
     }
+    tmux_options.mouse_capture
 }
 
 fn keyboard_enhancement_flags(
@@ -276,37 +277,6 @@ fn tmux_should_enable_modify_other_keys_for(
     // versions do not expose this option and may emit xterm-style sequences,
     // which crossterm does not parse consistently for modified keys.
     running_in_tmux_session && matches!(extended_keys_format, Some("csi-u"))
-}
-
-fn read_tmux_extended_keys_format() -> Option<String> {
-    let executable = codex_utils_path::system_executable("tmux")?;
-    let path = codex_utils_path::system_path().ok()?;
-    for args in [
-        ["display-message", "-p", "#{extended-keys-format}"],
-        ["show-options", "-gqv", "extended-keys-format"],
-    ] {
-        let output = std::process::Command::new(&executable)
-            .env("PATH", &path)
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            continue;
-        }
-
-        if let Some(value) = String::from_utf8(output.stdout)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-        {
-            return Some(value);
-        }
-    }
-
-    None
 }
 
 pub(super) fn restore_keyboard_enhancement_stack(writer: &mut impl Write) {
