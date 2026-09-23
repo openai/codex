@@ -28,7 +28,7 @@ pub(super) async fn suspend_turn_and_shutdown(
     // Previously closed descendants and concurrent future spawns remain best effort.
     if session
         .services
-        .agent_control
+        .local_agent_runtime
         .list_live_agent_subtree_thread_ids(session.thread_id)
         .await?
         .len()

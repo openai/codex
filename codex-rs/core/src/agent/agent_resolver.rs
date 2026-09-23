@@ -18,7 +18,7 @@ pub(crate) async fn resolve_agent_target(
 
     session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, target)
         .await
         .map_err(|err| match err.details() {
@@ -32,6 +32,6 @@ pub(crate) async fn resolve_agent_target(
 fn register_session_root(session: &Arc<Session>, turn: &Arc<TurnContext>) {
     session
         .services
-        .agent_control
+        .local_agent_runtime
         .register_session_root(session.thread_id, turn.parent_thread_id);
 }

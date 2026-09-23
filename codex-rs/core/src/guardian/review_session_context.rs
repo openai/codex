@@ -40,7 +40,7 @@ impl ReviewContextPolicy {
         session
             .services
             .agent_control
-            .root_user_authorization(session.thread_id)
+            .get_guardian_package(session.thread_id)
             .await
             .map(|snapshot| snapshot.authorization_version)
     }

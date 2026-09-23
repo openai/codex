@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::agent::LocalAgentControl;
+use crate::agent::api::AgentControl;
 use crate::agent::control::LocalAgentRuntime;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::attestation::AttestationProvider;
@@ -83,7 +83,7 @@ pub(crate) struct SessionServices {
     /// current executor environments before using them.
     pub(crate) selected_capability_roots: Vec<SelectedCapabilityRoot>,
     pub(crate) mcp_thread_init: ExtensionDataInit,
-    pub(crate) agent_control: LocalAgentControl,
+    pub(crate) agent_control: Arc<dyn AgentControl>,
     pub(crate) local_agent_runtime: LocalAgentRuntime,
     pub(crate) network_proxy: ArcSwapOption<StartedNetworkProxy>,
     pub(crate) network_proxy_audit_metadata: NetworkProxyAuditMetadata,

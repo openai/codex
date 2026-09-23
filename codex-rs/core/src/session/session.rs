@@ -6,6 +6,7 @@ use super::step_settings::StepSettings;
 use super::step_settings::StepSettingsConstraints;
 use super::step_settings::StepSettingsUpdate;
 use super::*;
+use crate::agent::api::AgentControl;
 use crate::agents_md_manager::AgentsMdManager;
 use crate::agents_md_manager::SessionInstructions;
 use crate::config::ConstraintError;
@@ -647,7 +648,7 @@ impl Session {
 
     /// Returns the identity shared by the root thread and all descendant threads.
     pub(crate) fn session_id(&self) -> SessionId {
-        self.services.agent_control.session_id()
+        self.services.agent_control.identity()
     }
 
     pub(crate) async fn originator(&self) -> String {
@@ -759,7 +760,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         mut thread_extension_init: ExtensionDataInit,
         client_mcp_extensions: ClientMcpExtensions,
-        agent_control: LocalAgentControl,
+        agent_control: AgentControlInit,
         reserved_thread_id: Option<ThreadId>,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
@@ -836,13 +837,15 @@ impl Session {
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
         if parent_thread_id.is_none() {
-            agent_control.set_root_service_tier(
-                session_configuration
-                    .step_settings
-                    .service_tier
-                    .clone()
-                    .or_else(|| config.service_tier.clone()),
-            );
+            agent_control
+                .control()
+                .propagate_config_update(AgentConfigUpdate::ServiceTier(
+                    session_configuration
+                        .step_settings
+                        .service_tier
+                        .clone()
+                        .or_else(|| config.service_tier.clone()),
+                ));
         }
         let is_paginated_subagent = matches!(
             session_configuration.history_mode,
@@ -863,7 +866,7 @@ impl Session {
                 Some(thread_id),
             ) => thread_id,
             (InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_), None) => {
-                agent_control.generate_thread_id()
+                agent_control.runtime().generate_thread_id()
             }
             (InitialHistory::Resumed(resumed_history), None) => resumed_history.conversation_id,
             (InitialHistory::Resumed(_), Some(_)) => {
@@ -880,6 +883,7 @@ impl Session {
             && isolation != codex_extension_api::SessionIsolation::Isolated
         {
             instructions.thread_provider = agent_control
+                .runtime()
                 .root_thread_instructions_provider(thread_id, instructions.thread_provider);
         }
         // Ephemeral forks reuse cache routing, without sharing storage or lifecycle identity.
@@ -915,7 +919,7 @@ impl Session {
         // session_id is equal to the root thread's ID.
         let session_id = resumed_session_id.unwrap_or_else(|| {
             if session_configuration.session_source.is_non_root_agent() {
-                agent_control.session_id()
+                agent_control.control().identity()
             } else {
                 SessionId::from(thread_id)
             }
@@ -935,12 +939,19 @@ impl Session {
                 }
             }
         }
-        let agent_control = agent_control.with_session_id(
-            session_id,
-            config
-                .effective_agent_max_threads(MultiAgentVersion::V2)
-                .unwrap_or(usize::MAX),
-        );
+        let (agent_control, local_agent_runtime): (Arc<dyn AgentControl>, _) = match agent_control {
+            AgentControlInit::Local(control) => {
+                let control = control.with_session_id(
+                    session_id,
+                    config
+                        .effective_agent_max_threads(MultiAgentVersion::V2)
+                        .unwrap_or(usize::MAX),
+                );
+                let runtime = control.runtime.clone();
+                (Arc::new(control), runtime)
+            }
+            AgentControlInit::Inherited { control, runtime } => (control, runtime),
+        };
         let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),
             external_time_provider,
@@ -1685,7 +1696,7 @@ impl Session {
                 selected_capability_roots,
                 mcp_thread_init,
                 client_mcp_extensions,
-                local_agent_runtime: agent_control.runtime.clone(),
+                local_agent_runtime,
                 agent_control,
                 network_proxy: arc_swap::ArcSwapOption::from(network_proxy.map(Arc::new)),
                 network_proxy_audit_metadata,

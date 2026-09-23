@@ -125,6 +125,7 @@ pub(crate) async fn finalize(
         .services
         .agent_control
         .pending_budget_reminder(session.thread_id(), &session.current_window_id().await)
+        .await
     {
         let reminder = ContextualUserFragment::into(crate::context::RolloutBudgetContext {
             remaining_tokens: reminder.remaining_tokens,

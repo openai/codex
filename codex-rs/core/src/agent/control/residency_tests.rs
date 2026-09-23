@@ -38,7 +38,10 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         .await
         .expect("start root thread");
     let control = manager.agent_control();
-    let state = control.upgrade().expect("thread manager should be live");
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
 
     let first_slot = control
         .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
@@ -86,7 +89,10 @@ async fn interrupted_v2_agent_is_lost_after_residency_eviction() {
         .await
         .expect("start root thread");
     let control = manager.agent_control();
-    let state = control.upgrade().expect("thread manager should be live");
+    let state = control
+        .runtime
+        .upgrade()
+        .expect("thread manager should be live");
 
     let first_slot = control
         .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)

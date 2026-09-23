@@ -287,8 +287,8 @@ fn thread_id_generator_defaults_to_standard_ids() {
     let agent_control = LocalAgentControl::default();
 
     assert_ne!(
-        agent_control.generate_thread_id(),
-        agent_control.generate_thread_id()
+        agent_control.runtime.generate_thread_id(),
+        agent_control.runtime.generate_thread_id()
     );
 }
 
@@ -378,7 +378,8 @@ async fn thread_id_generator_applies_to_roots_children_and_forks() {
         .thread
         .session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(root.thread.session.session_id())
         .spawn_agent_with_metadata(
             config.clone(),
             vec![UserInput::Text {
@@ -1382,6 +1383,10 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .await
         .expect("start internal reviewer");
     let reviewer_config = reviewer.thread.config_snapshot().await;
+    assert!(Arc::ptr_eq(
+        &reviewer.thread.session.services.agent_control,
+        &parent.thread.session.services.agent_control,
+    ));
 
     assert_eq!(
         reviewer.session_configured.session_id,
@@ -1392,10 +1397,11 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .session
         .services
         .agent_control
-        .record_rollout_budget_usage(&TokenUsage {
+        .record_usage(TokenUsage {
             output_tokens: 25,
             ..Default::default()
         })
+        .await
         .expect("record reviewer usage");
     let reminder = parent
         .thread
@@ -1403,6 +1409,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
         .services
         .agent_control
         .pending_budget_reminder(parent.thread_id, "window")
+        .await
         .expect("parent budget reminder");
     assert_eq!(reminder.remaining_tokens, 75);
     assert_eq!(reviewer_config.parent_thread_id, Some(parent.thread_id));
@@ -1497,7 +1504,10 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
             internal_parent: Some(InternalSessionParent {
                 thread_id: parent.thread_id,
                 auth_manager: Arc::clone(&parent.thread.session.services.auth_manager),
-                agent_control: parent.thread.session.services.agent_control.clone(),
+                agent_control: AgentControlInit::Inherited {
+                    control: Arc::clone(&parent.thread.session.services.agent_control),
+                    runtime: parent.thread.session.services.local_agent_runtime.clone(),
+                },
                 originator: reviewer_config.originator.clone(),
                 inherited_instructions: None,
             }),

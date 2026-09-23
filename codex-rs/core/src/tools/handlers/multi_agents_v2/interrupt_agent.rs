@@ -1,6 +1,8 @@
 use super::analytics::ToolCallAnalytics;
 use super::*;
+use crate::agent::api::AgentTarget;
 use crate::tools::handlers::multi_agents_spec::create_interrupt_agent_tool_v2;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -46,7 +48,11 @@ async fn handle_interrupt_agent(
     let snapshot = session
         .services
         .agent_control
-        .interrupt_spawned_agent(session.thread_id, agent_id)
+        .interrupt(
+            session.thread_id,
+            AgentTarget::Id(agent_id),
+            MultiAgentVersion::V2,
+        )
         .await
         .map_err(|err| collab_v2_agent_error(agent_id, err))?;
     let agent_path = snapshot.metadata().agent_path.clone().ok_or_else(|| {

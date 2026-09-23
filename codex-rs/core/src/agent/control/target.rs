@@ -2,6 +2,7 @@
 //! Legacy callers can still supply their captured session source for path resolution.
 
 use super::LocalAgentControl;
+use super::LocalAgentRuntime;
 use crate::agent::api::AgentTarget;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -18,15 +19,17 @@ impl LocalAgentControl {
         match target {
             AgentTarget::Id(thread_id) => Ok(*thread_id),
             AgentTarget::Reference(reference) => {
-                let caller = self.ensure_agent_known(caller)?;
-                self.resolve_path_reference(
+                let caller = self.runtime.ensure_agent_known(caller)?;
+                self.runtime.resolve_path_reference(
                     &caller.agent_path.unwrap_or_else(AgentPath::root),
                     reference,
                 )
             }
         }
     }
+}
 
+impl LocalAgentRuntime {
     pub(crate) async fn resolve_agent_reference(
         &self,
         _current_thread_id: ThreadId,
@@ -39,7 +42,7 @@ impl LocalAgentControl {
         self.resolve_path_reference(&current_agent_path, agent_reference)
     }
 
-    fn resolve_path_reference(
+    pub(super) fn resolve_path_reference(
         &self,
         current_agent_path: &AgentPath,
         agent_reference: &str,
@@ -47,7 +50,7 @@ impl LocalAgentControl {
         let agent_path = current_agent_path
             .resolve(agent_reference)
             .map_err(CodexErr::UnsupportedOperation)?;
-        if let Some(thread_id) = self.runtime.registry.agent_id_for_path(&agent_path) {
+        if let Some(thread_id) = self.registry.agent_id_for_path(&agent_path) {
             return Ok(thread_id);
         }
         Err(CodexErr::UnsupportedOperation(format!(

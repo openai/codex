@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;

@@ -10,9 +10,9 @@ use codex_history::SenderUserMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 
-use super::LocalAgentControl;
+use super::LocalAgentRuntime;
 
-impl LocalAgentControl {
+impl LocalAgentRuntime {
     pub(crate) async fn capture_sender_user_messages(
         &self,
         item: &ResponseItem,

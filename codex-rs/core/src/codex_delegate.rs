@@ -114,10 +114,10 @@ pub(crate) async fn run_codex_thread_interactive(
             ThreadSource::Subagent
         }),
         originator: parent_ctx.originator.clone(),
-        agent_control: parent_session
-            .services
-            .local_agent_runtime
-            .control(parent_session.session_id()),
+        agent_control: crate::agent::control::AgentControlInit::Inherited {
+            control: Arc::clone(&parent_session.services.agent_control),
+            runtime: parent_session.services.local_agent_runtime.clone(),
+        },
         dynamic_tools: Vec::new(),
         metrics_service_name: None,
         user_shell_override: None,

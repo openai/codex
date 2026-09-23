@@ -192,7 +192,7 @@ impl LocalAgentControl {
         let registry = &self.runtime.registry;
         registry.register_root_thread(root_thread_id);
 
-        let Ok(state) = self.upgrade() else {
+        let Ok(state) = self.runtime.upgrade() else {
             return;
         };
         let Some(agent_graph_store) = state.agent_graph_store() else {
@@ -314,7 +314,7 @@ impl LocalAgentControl {
         thread_id: ThreadId,
         parent: Option<Arc<CodexThread>>,
     ) -> CodexResult<()> {
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         let owner_thread_id = parent.as_ref().map(|parent| parent.session.thread_id);
         if let Some(parent) = &parent {
             let parent_thread_id = parent.session.thread_id;
@@ -633,7 +633,7 @@ impl LocalAgentControl {
         session_source: Option<SessionSource>,
         options: SpawnAgentOptions,
     ) -> CodexResult<(LiveAgent, ThreadConfigSnapshot)> {
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
                 &InitialHistory::New,
@@ -1200,7 +1200,7 @@ impl LocalAgentControl {
             self.resume_single_agent_from_rollout(config.clone(), thread_id, session_source),
         )
         .await?;
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         if config.multi_agent_version_from_features() == MultiAgentVersion::V2
             || resumed_multi_agent_version == MultiAgentVersion::V2
         {
@@ -1270,7 +1270,7 @@ impl LocalAgentControl {
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
-        let state = self.upgrade()?;
+        let state = self.runtime.upgrade()?;
         let stored_thread = state
             .read_stored_thread(ReadThreadParams {
                 thread_id,

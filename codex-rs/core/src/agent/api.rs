@@ -26,11 +26,6 @@ use codex_protocol::turn_input::TurnStartOptions;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::ThreadTraceContext;
 use futures::future::BoxFuture;
-use futures::stream::BoxStream;
-
-/// An initial runtime snapshot followed by coalesced status changes. The local stream
-/// ends when that runtime's status channel closes; it does not follow a later reload.
-pub type StatusSubscription = BoxStream<'static, Result<AgentInfo>>;
 
 // Keep dynamic dispatch a compile-time property of the contract.
 const _: Option<&dyn AgentControl> = None;
@@ -51,17 +46,6 @@ pub trait AgentControl: Send + Sync {
         request: SpawnRequest,
     ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>>;
 
-    /// Reopen an absent runtime with the captured settings and session source. An already
-    /// loaded runtime keeps its current settings. Legacy ID-based resume can reopen a
-    /// stored thread that is not in the controller's registry.
-    fn resume(
-        &self,
-        caller: ThreadId,
-        target: AgentTarget,
-        config: Config,
-        source: SessionSource,
-    ) -> BoxFuture<'_, Result<(LiveAgent, ThreadConfigSnapshot)>>;
-
     /// Resolve, reload if needed and accept input. Agent messages retain their attribution
     /// and wake mode: queue-only messages do not start work and follow-ups cannot target
     /// the root. Legacy user input can address loaded threads outside the agent registry.
@@ -76,12 +60,6 @@ pub trait AgentControl: Send + Sync {
         version: MultiAgentVersion,
     ) -> BoxFuture<'_, Result<AgentInfo>>;
 
-    /// Close the agent and its live descendants, returning its pre-close snapshot.
-    fn close(&self, caller: ThreadId, target: AgentTarget) -> BoxFuture<'_, Result<AgentInfo>>;
-
-    /// Read runtime settings or known unloaded metadata without loading an agent.
-    fn inspect(&self, caller: ThreadId, target: AgentTarget) -> BoxFuture<'_, Result<AgentInfo>>;
-
     /// List loaded agents using the caller's captured source to resolve a path prefix.
     /// Callers own model and UI formatting.
     fn list<'a>(
@@ -89,13 +67,6 @@ pub trait AgentControl: Send + Sync {
         source: &'a SessionSource,
         path_prefix: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Vec<LiveAgent>>>;
-
-    /// Subscribe to a loaded runtime without restoring it.
-    fn watch(
-        &self,
-        caller: ThreadId,
-        target: AgentTarget,
-    ) -> BoxFuture<'_, Result<StatusSubscription>>;
 
     /// Check capacity before accepting work. This advisory check does not reserve a slot.
     fn check_turn_admission(
@@ -110,8 +81,8 @@ pub trait AgentControl: Send + Sync {
     fn admit_turn(
         &self,
         version: MultiAgentVersion,
-        source: SessionSource,
-    ) -> BoxFuture<'_, Result<Option<AgentExecutionGuard>>>;
+        source: &SessionSource,
+    ) -> Option<AgentExecutionGuard>;
 
     /// Account for one inference response, including compaction. Each call records usage;
     /// callers report it once. `SessionBudgetExceeded` means the usage was recorded and
@@ -125,26 +96,23 @@ pub trait AgentControl: Send + Sync {
         &'a self,
         outcome: AgentTurnOutcome,
         trace: &'a ThreadTraceContext,
-    ) -> BoxFuture<'a, Result<()>>;
+    ) -> BoxFuture<'a, ()>;
 
     /// Read the latest shared service tier for use at normal runtime config update points.
     fn service_tier(&self) -> Option<String>;
 
-    /// Publish a shared setting when the runtime accepts a root-owned config update.
-    fn propagate_config_update(&self, update: AgentConfigUpdate) -> BoxFuture<'_, Result<()>>;
+    /// Publish a shared setting synchronously with the runtime's root-owned config update.
+    fn propagate_config_update(&self, update: AgentConfigUpdate);
 
     /// Read the existing bounded root evidence for a worker. The local backend returns
     /// `None` for the root, a non-V2 tree, or an unavailable root runtime.
-    fn get_guardian_package(
-        &self,
-        agent: ThreadId,
-    ) -> BoxFuture<'_, Result<Option<GuardianRootSnapshot>>>;
+    fn get_guardian_package(&self, agent: ThreadId) -> BoxFuture<'_, Option<GuardianRootSnapshot>>;
 
     fn pending_budget_reminder<'a>(
         &'a self,
         agent: ThreadId,
         window: &'a str,
-    ) -> BoxFuture<'a, Result<Option<RolloutBudgetReminder>>>;
+    ) -> BoxFuture<'a, Option<RolloutBudgetReminder>>;
 
     /// Acknowledge only after inserting the reminder into the agent's history.
     fn mark_budget_reminder_delivered<'a>(
@@ -152,7 +120,7 @@ pub trait AgentControl: Send + Sync {
         agent: ThreadId,
         window: &'a str,
         reminder: RolloutBudgetReminder,
-    ) -> BoxFuture<'a, Result<()>>;
+    ) -> BoxFuture<'a, ()>;
 }
 
 /// References resolve relative to the registered caller. IDs retain each operation's

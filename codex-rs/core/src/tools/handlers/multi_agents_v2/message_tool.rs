@@ -6,7 +6,6 @@
 use super::analytics::ToolCallAnalytics;
 use super::*;
 use crate::TurnStartOptions;
-use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInput;
 use crate::agent::api::AgentTarget;
 use crate::agent::api::SendRequest;

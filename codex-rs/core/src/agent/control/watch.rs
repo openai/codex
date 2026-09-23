@@ -3,20 +3,24 @@
 
 use super::LocalAgentControl;
 use crate::agent::api::AgentInfo;
-use crate::agent::api::StatusSubscription;
 use crate::agent::types::LiveAgent;
 use codex_protocol::ThreadId;
 use codex_protocol::error::Result as CodexResult;
 use futures::StreamExt;
 use futures::stream;
+use futures::stream::BoxStream;
 use std::sync::Arc;
+
+/// An initial runtime snapshot followed by coalesced status changes. The stream ends
+/// when that local runtime's status channel closes; it does not follow a later reload.
+pub(crate) type StatusSubscription = BoxStream<'static, CodexResult<AgentInfo>>;
 
 impl LocalAgentControl {
     pub(crate) async fn subscribe_status(
         &self,
         agent_id: ThreadId,
     ) -> CodexResult<StatusSubscription> {
-        let manager = self.upgrade()?;
+        let manager = self.runtime.upgrade()?;
         let thread = manager.get_thread(agent_id).await?;
         // Subscribe before reading settings; mark the initial status seen only afterward.
         let mut receiver = thread.subscribe_status();

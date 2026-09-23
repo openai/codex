@@ -743,7 +743,7 @@ async fn pending_turn_input(
             let metadata = if session.guardian_context_mode == GuardianContextMode::ThreadOwned
                 && let Some(messages) = session
                     .services
-                    .agent_control
+                    .local_agent_runtime
                     .capture_sender_user_messages(&item, session.thread_id, turn_id)
                     .await
             {

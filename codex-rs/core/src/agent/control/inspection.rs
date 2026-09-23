@@ -10,11 +10,13 @@ use codex_protocol::error::Result as CodexResult;
 
 impl LocalAgentControl {
     pub(super) async fn inspect_agent(&self, thread_id: ThreadId) -> CodexResult<AgentInfo> {
-        let manager = self.upgrade()?;
+        let manager = self.runtime.upgrade()?;
         let thread = match manager.get_thread(thread_id).await {
             Ok(thread) => thread,
             Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {
-                return Ok(AgentInfo::Unloaded(self.ensure_agent_known(thread_id)?));
+                return Ok(AgentInfo::Unloaded(
+                    self.runtime.ensure_agent_known(thread_id)?,
+                ));
             }
             Err(err) => return Err(err),
         };

@@ -4,6 +4,7 @@
 use super::LocalAgentControl;
 use super::execution::AgentExecutionLimiter;
 use super::residency::V2Residency;
+use crate::agent::api::AgentControl;
 use crate::agent::registry::AgentRegistry;
 use crate::config::RolloutBudgetConfig;
 use crate::rollout_budget::RolloutBudget;
@@ -12,6 +13,7 @@ use crate::thread_manager::ThreadManagerState;
 use arc_swap::ArcSwapOption;
 use codex_extension_api::ThreadInstructionsProvider;
 use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::Weak;
@@ -65,5 +67,64 @@ impl LocalAgentRuntime {
             session_id,
             runtime: self.clone(),
         }
+    }
+}
+
+/// Local construction binds identity after reading history; internal children inherit
+/// an already-bound controller without selecting a backend again.
+#[derive(Clone)]
+pub(crate) enum AgentControlInit {
+    Local(LocalAgentControl),
+    Inherited {
+        control: Arc<dyn AgentControl>,
+        runtime: LocalAgentRuntime,
+    },
+}
+
+impl From<LocalAgentControl> for AgentControlInit {
+    fn from(control: LocalAgentControl) -> Self {
+        Self::Local(control)
+    }
+}
+
+impl AgentControlInit {
+    pub(crate) fn runtime(&self) -> &LocalAgentRuntime {
+        match self {
+            Self::Local(control) => &control.runtime,
+            Self::Inherited { runtime, .. } => runtime,
+        }
+    }
+
+    pub(crate) fn control(&self) -> &dyn AgentControl {
+        match self {
+            Self::Local(control) => control,
+            Self::Inherited { control, .. } => control.as_ref(),
+        }
+    }
+}
+
+impl LocalAgentRuntime {
+    pub(crate) fn generate_thread_id(&self) -> ThreadId {
+        (self.thread_id_generator)()
+    }
+
+    pub(crate) fn root_thread_instructions_provider(
+        &self,
+        root_thread_id: ThreadId,
+        provider: Option<Arc<dyn ThreadInstructionsProvider>>,
+    ) -> Option<Arc<dyn ThreadInstructionsProvider>> {
+        let provider = match self.manager.upgrade() {
+            Some(manager) => manager.shared_thread_instructions_provider(root_thread_id, provider),
+            None => provider,
+        };
+        if let Some(provider) = provider
+            .as_ref()
+            .filter(|provider| provider.share_with_subagents())
+        {
+            let _ = self
+                .shared_thread_instructions_provider
+                .set(Arc::clone(provider));
+        }
+        provider
     }
 }

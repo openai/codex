@@ -50,7 +50,7 @@ impl LocalAgentControl {
         {
             let initiating_thread_id = match outcome.initiating_agent_path.as_ref() {
                 Some(initiating_agent_path) if initiating_agent_path != &parent_agent_path => {
-                    self.resolve_agent_reference(
+                    self.runtime.resolve_agent_reference(
                         outcome.thread_id,
                         &outcome.source,
                         initiating_agent_path.as_str(),

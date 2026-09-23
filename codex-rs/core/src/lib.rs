@@ -62,7 +62,6 @@ pub use agent::api::AgentTurnOutcome;
 pub use agent::api::DeliveryReceipt;
 pub use agent::api::SendRequest;
 pub use agent::api::SpawnRequest;
-pub use agent::api::StatusSubscription;
 pub use agent::types::AgentExecutionGuard;
 pub use agent::types::AgentMessage;
 pub use agent::types::AgentMetadata;

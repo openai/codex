@@ -108,7 +108,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let root_authorization_version = session
             .services
             .agent_control
-            .root_user_authorization(session.thread_id)
+            .get_guardian_package(session.thread_id)
             .await
             .map(|snapshot| snapshot.authorization_version);
         // Keep the authorization revision even when no cacheable review evidence exists.
@@ -168,7 +168,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                     != session
                         .services
                         .agent_control
-                        .root_user_authorization(session.thread_id)
+                        .get_guardian_package(session.thread_id)
                         .await
                         .map(|snapshot| snapshot.authorization_version)
                     || user_message_revision

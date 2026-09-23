@@ -18,7 +18,7 @@ impl LocalAgentControl {
         caller: ThreadId,
         target: ThreadId,
     ) -> CodexResult<AgentInfo> {
-        let receiver_agent = self.ensure_agent_known(target)?;
+        let receiver_agent = self.runtime.ensure_agent_known(target)?;
         if receiver_agent
             .agent_path
             .as_ref()

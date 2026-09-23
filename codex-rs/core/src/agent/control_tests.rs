@@ -6,7 +6,6 @@ use crate::agent::agent_status_from_event;
 use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInfo;
 use crate::agent::api::AgentInput;
-use crate::agent::api::AgentTarget;
 use crate::agent::api::SpawnRequest;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::types::AgentMessage;
@@ -207,7 +206,9 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
 fn register_session_root_skips_threads_with_explicit_parent() {
     let control = LocalAgentControl::default();
 
-    control.register_session_root(ThreadId::new(), Some(ThreadId::new()));
+    control
+        .runtime
+        .register_session_root(ThreadId::new(), Some(ThreadId::new()));
 
     assert_eq!(
         control
@@ -518,6 +519,7 @@ async fn wait_for_live_thread_spawn_children(
     timeout(Duration::from_secs(5), async {
         loop {
             let mut child_ids = control
+                .runtime
                 .open_thread_spawn_children(parent_thread_id)
                 .await
                 .expect("live child list should load")
@@ -914,7 +916,12 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
         })
         .await
         .expect("start root thread");
-    let control = root.thread.session.services.agent_control.clone();
+    let control = root
+        .thread
+        .session
+        .services
+        .local_agent_runtime
+        .control(root.thread.session.session_id());
     let parent_thread = match route {
         V2ReloadRoute::Sender => root.thread,
         V2ReloadRoute::NestedParent => {
@@ -978,7 +985,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
     );
     assert_matches!(
         control
-            .inspect(parent_thread_id, AgentTarget::Id(spawned_agent.thread_id))
+            .inspect_agent(spawned_agent.thread_id)
             .await
             .expect("inspect registered unloaded agent"),
         AgentInfo::Unloaded(_)
@@ -1233,7 +1240,12 @@ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
         .restore_v2_agent_metadata(&harness.config, parent_thread_id)
         .await;
     for thread_id in [worker_thread_id, sibling_thread_id] {
-        assert!(resumed_control.ensure_agent_known(thread_id).is_ok());
+        assert!(
+            resumed_control
+                .runtime
+                .ensure_agent_known(thread_id)
+                .is_ok()
+        );
     }
 
     resumed_control
@@ -1241,8 +1253,10 @@ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
         .await
         .expect("closing a restored sibling should succeed");
 
-    let closed_worker = resumed_control.ensure_agent_known(worker_thread_id);
-    let surviving_sibling = resumed_control.ensure_agent_known(sibling_thread_id);
+    let closed_worker = resumed_control.runtime.ensure_agent_known(worker_thread_id);
+    let surviving_sibling = resumed_control
+        .runtime
+        .ensure_agent_known(sibling_thread_id);
     assert!(closed_worker.is_err());
     assert!(surviving_sibling.is_ok());
     assert_thread_not_loaded(&resumed_manager, sibling_thread_id).await;
@@ -1301,7 +1315,12 @@ async fn cold_resume_with_thread_instructions_preserves_lazy_v2_child_inheritanc
         .await
         .expect("start parent with thread instructions");
     let parent_thread_id = parent.thread_id;
-    let control = &parent.thread.session.services.agent_control;
+    let control = &parent
+        .thread
+        .session
+        .services
+        .local_agent_runtime
+        .control(parent.thread.session.session_id());
     let worker_thread_id =
         spawn_v2_reload_test_child(control, harness.config.clone(), &parent.thread, "worker")
             .await
@@ -1476,7 +1495,12 @@ async fn v2_sibling_reload_preserves_shared_instructions_after_root_unloads(shar
         .inherited_instructions()
         .await
         .thread_provider;
-    let control = &root.thread.session.services.agent_control;
+    let control = &root
+        .thread
+        .session
+        .services
+        .local_agent_runtime
+        .control(root.thread.session.session_id());
     let sender_id =
         spawn_v2_reload_test_child(control, harness.config.clone(), &root.thread, "sender")
             .await
@@ -1588,12 +1612,14 @@ async fn resumed_root_reuses_or_freezes_surviving_shared_instructions() {
     let shared = harness
         .manager
         .agent_control()
+        .runtime
         .root_thread_instructions_provider(id, Some(original.clone()))
         .expect("shared provider");
     let snapshot = shared.load_thread_instructions().await;
     let reused = harness
         .manager
         .agent_control()
+        .runtime
         .root_thread_instructions_provider(id, /*provider*/ None)
         .expect("reuse the live tree's provider");
     assert!(Arc::ptr_eq(&shared, &reused));
@@ -1605,6 +1631,7 @@ async fn resumed_root_reuses_or_freezes_surviving_shared_instructions() {
     let root_only = harness
         .manager
         .agent_control()
+        .runtime
         .root_thread_instructions_provider(id, Some(private.clone()))
         .expect("private root provider");
     *original.text.write().expect("update old provider") = "stale shared update";

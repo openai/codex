@@ -89,7 +89,7 @@ fn set_agent_control(
     control: crate::agent::LocalAgentControl,
 ) {
     session.services.local_agent_runtime = control.runtime.clone();
-    session.services.agent_control = control;
+    session.services.agent_control = Arc::new(control);
 }
 
 fn invocation(
@@ -485,7 +485,11 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             .expect("root thread should start");
         set_agent_control(
             &mut session,
-            root.thread.session.services.agent_control.clone(),
+            root.thread
+                .session
+                .services
+                .local_agent_runtime
+                .control(root.thread.session.session_id()),
         );
         session.services.models_manager = Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
@@ -534,7 +538,11 @@ async fn spawn_agent_service_tier_inheritance_uses_root_preference_and_child_mod
             .expect("root thread should start");
         set_agent_control(
             &mut session,
-            root.thread.session.services.agent_control.clone(),
+            root.thread
+                .session
+                .services
+                .local_agent_runtime
+                .control(root.thread.session.session_id()),
         );
         session.services.models_manager = Arc::new(StaticModelsManager::new(
             /*auth_manager*/ None,
@@ -674,7 +682,11 @@ service_tier = "turbo"
         .expect("root thread should start");
     set_agent_control(
         &mut session,
-        root.thread.session.services.agent_control.clone(),
+        root.thread
+            .session
+            .services
+            .local_agent_runtime
+            .control(root.thread.session.session_id()),
     );
     session.thread_id = root.thread_id;
 
@@ -727,7 +739,11 @@ async fn spawn_agent_full_history_fork_inherits_root_service_tier() {
         .expect("root thread should start");
     set_agent_control(
         &mut session,
-        root.thread.session.services.agent_control.clone(),
+        root.thread
+            .session
+            .services
+            .local_agent_runtime
+            .control(root.thread.session.session_id()),
     );
     session.thread_id = root.thread_id;
 
@@ -784,7 +800,11 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
         .expect("root thread should start");
     set_agent_control(
         &mut session,
-        root.thread.session.services.agent_control.clone(),
+        root.thread
+            .session
+            .services
+            .local_agent_runtime
+            .control(root.thread.session.session_id()),
     );
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
@@ -807,7 +827,7 @@ async fn multi_agent_v2_full_history_fork_inherits_root_service_tier() {
         serde_json::from_str(&content).expect("spawn_agent result should be json");
     let child_thread_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(
             session.thread_id,
             &turn.session_source,
@@ -1045,7 +1065,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
 
     let child_thread_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "test_process")
         .await
         .expect("relative path should resolve");
@@ -1241,7 +1261,8 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
             vec![UserInput::Text {
@@ -1317,7 +1338,8 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
             vec![UserInput::Text {
@@ -1411,7 +1433,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status() {
 
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
@@ -1482,7 +1504,8 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
     let worker_path = AgentPath::from_string("/root/researcher/worker".to_string()).expect("path");
     session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn_agent_with_metadata(
             config.clone(),
             vec![UserInput::Text {
@@ -1502,7 +1525,8 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
         .expect("researcher agent should spawn");
     session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn_agent_with_metadata(
             config,
             vec![UserInput::Text {
@@ -1580,13 +1604,14 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
     session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .close_agent(agent_id)
         .await
         .expect("close_agent should succeed");
@@ -1640,14 +1665,14 @@ async fn multi_agent_v2_list_agents_keeps_interrupted_resident_agents() {
 
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
     let agent_path = session
         .services
-        .agent_control
-        .get_agent_metadata(agent_id)
+        .local_agent_runtime
+        .ensure_agent_known(agent_id)
         .expect("worker metadata should exist")
         .agent_path
         .expect("worker path should exist");
@@ -1710,7 +1735,7 @@ async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
@@ -1766,7 +1791,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
@@ -1843,7 +1868,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
@@ -1996,7 +2021,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
@@ -2049,7 +2074,7 @@ async fn multi_agent_v2_interrupted_turn_does_not_notify_parent() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
@@ -2912,14 +2937,14 @@ async fn multi_agent_v2_wait_agent_accepts_timeout_only_argument() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
     let worker_path = session
         .services
-        .agent_control
-        .get_agent_metadata(agent_id)
+        .local_agent_runtime
+        .ensure_agent_known(agent_id)
         .expect("worker metadata")
         .agent_path
         .expect("worker path");
@@ -3413,14 +3438,14 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
 
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "test_process")
         .await
         .expect("relative path should resolve");
     let worker_path = session
         .services
-        .agent_control
-        .get_agent_metadata(agent_id)
+        .local_agent_runtime
+        .ensure_agent_known(agent_id)
         .expect("worker metadata")
         .agent_path
         .expect("worker path");
@@ -3504,14 +3529,14 @@ async fn multi_agent_v2_wait_agent_returns_for_already_queued_mail() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
     let worker_path = session
         .services
-        .agent_control
-        .get_agent_metadata(agent_id)
+        .local_agent_runtime
+        .ensure_agent_known(agent_id)
         .expect("worker metadata")
         .agent_path
         .expect("worker path");
@@ -3590,14 +3615,14 @@ async fn multi_agent_v2_wait_agent_wakes_on_any_mailbox_notification() {
     }
     let worker_b_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker_b")
         .await
         .expect("worker_b should resolve");
     let worker_b_path = session
         .services
-        .agent_control
-        .get_agent_metadata(worker_b_id)
+        .local_agent_runtime
+        .ensure_agent_known(worker_b_id)
         .expect("worker_b metadata")
         .agent_path
         .expect("worker_b path");
@@ -3682,14 +3707,14 @@ async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
         .expect("spawn worker");
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
     let worker_path = session
         .services
-        .agent_control
-        .get_agent_metadata(agent_id)
+        .local_agent_runtime
+        .ensure_agent_known(agent_id)
         .expect("worker metadata")
         .agent_path
         .expect("worker path");
@@ -3775,7 +3800,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
 
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
@@ -3798,7 +3823,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
         .expect("child spawn should succeed");
     let child_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker/child")
         .await
         .expect("child path should resolve");
@@ -3820,7 +3845,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_task_name_target() {
     assert_eq!(
         session
             .services
-            .agent_control
+            .local_agent_runtime
             .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
             .await
             .expect("worker path should remain resolvable"),
@@ -3896,7 +3921,7 @@ async fn multi_agent_v2_interrupt_agent_accepts_unloaded_task_name_target() {
 
     let agent_id = session
         .services
-        .agent_control
+        .local_agent_runtime
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
@@ -4028,7 +4053,8 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_id() {
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
             vec![UserInput::Text {
@@ -4095,7 +4121,8 @@ async fn multi_agent_v2_interrupt_agent_rejects_self_target_by_task_name() {
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn_agent_with_metadata(
             (*turn.config).clone(),
             vec![UserInput::Text {

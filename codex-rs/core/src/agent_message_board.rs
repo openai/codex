@@ -84,7 +84,7 @@ impl LocalBoardHost {
             actor
                 .session
                 .services
-                .agent_control
+                .local_agent_runtime
                 .register_session_root(self.caller, /*current_parent_thread_id*/ None);
         }
         Ok(actor)
@@ -98,7 +98,7 @@ impl MessageBoardHost for LocalBoardHost {
                 .await?
                 .session
                 .services
-                .agent_control
+                .local_agent_runtime
                 .ensure_agent_known(caller)?
                 .agent_path
                 .ok_or_else(|| CodexErr::InvalidRequest("agent has no tree path".into()))
@@ -111,7 +111,7 @@ impl MessageBoardHost for LocalBoardHost {
             actor
                 .session
                 .services
-                .agent_control
+                .local_agent_runtime
                 .resolve_agent_reference(self.caller, &actor.session_source, path.as_str())
                 .await
         })
@@ -164,7 +164,7 @@ impl MessageBoardHost for LocalBoardHost {
             let recipient_path = recipient
                 .session
                 .services
-                .agent_control
+                .local_agent_runtime
                 .ensure_agent_known(recipient_id)?
                 .agent_path
                 .ok_or_else(|| CodexErr::InvalidRequest("agent has no tree path".into()))?;

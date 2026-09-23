@@ -10,7 +10,10 @@ pub(super) async fn maybe_record_reminder(
     window_id: &str,
 ) {
     let agent_control = &sess.services.agent_control;
-    let Some(reminder) = agent_control.pending_budget_reminder(sess.thread_id(), window_id) else {
+    let Some(reminder) = agent_control
+        .pending_budget_reminder(sess.thread_id(), window_id)
+        .await
+    else {
         return;
     };
     let response_item = ContextualUserFragment::into(crate::context::RolloutBudgetContext {
@@ -22,13 +25,16 @@ pub(super) async fn maybe_record_reminder(
         std::slice::from_ref(&response_item),
     )
     .await;
-    agent_control.mark_budget_reminder_delivered(sess.thread_id(), window_id, reminder);
+    agent_control
+        .mark_budget_reminder_delivered(sess.thread_id(), window_id, reminder)
+        .await;
 }
 
 impl Session {
-    pub(crate) fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
+    pub(crate) async fn record_rollout_budget_usage(&self, usage: &TokenUsage) -> CodexResult<()> {
         self.services
             .agent_control
-            .record_rollout_budget_usage(usage)
+            .record_usage(usage.clone())
+            .await
     }
 }

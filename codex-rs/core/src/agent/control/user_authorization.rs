@@ -45,7 +45,7 @@ impl LocalAgentControl {
         if root_thread_id == thread_id {
             return None;
         }
-        let manager = self.upgrade().ok()?;
+        let manager = self.runtime.upgrade().ok()?;
         let root_thread = manager.get_thread(root_thread_id).await.ok()?;
         if root_thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
             return None;
