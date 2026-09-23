@@ -1,0 +1,28 @@
+[package]
+name = "codex-websocket-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-utils-absolute-path = { workspace = true }
+constant_time_eq = { workspace = true }
+http = { workspace = true }
+jsonwebtoken = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+hmac = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }

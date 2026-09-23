@@ -1,11 +1,14 @@
+//! Shared authentication for incoming app-server and exec-server WebSocket upgrades.
+//! Policies retain token digests or JWT verification secrets; callers choose when auth is required.
+
 use anyhow::Context;
-use axum::http::HeaderMap;
-use axum::http::StatusCode;
-use axum::http::header::AUTHORIZATION;
 use clap::Args;
 use clap::ValueEnum;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use constant_time_eq::constant_time_eq_32;
+use http::HeaderMap;
+use http::StatusCode;
+use http::header::AUTHORIZATION;
 use jsonwebtoken::Algorithm;
 use jsonwebtoken::DecodingKey;
 use jsonwebtoken::Validation;
@@ -25,8 +28,8 @@ const MIN_SIGNED_BEARER_SECRET_BYTES: usize = 32;
 const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
-pub struct AppServerWebsocketAuthArgs {
-    /// Websocket auth mode for non-loopback listeners.
+pub struct WebsocketAuthArgs {
+    /// Authentication mode for incoming WebSocket connections.
     #[arg(long = "ws-auth", value_name = "MODE", value_enum)]
     pub ws_auth: Option<WebsocketAuthCliMode>,
 
@@ -62,14 +65,14 @@ pub enum WebsocketAuthCliMode {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AppServerWebsocketAuthSettings {
-    pub config: Option<AppServerWebsocketAuthConfig>,
+pub struct WebsocketAuthSettings {
+    pub config: Option<WebsocketAuthConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppServerWebsocketAuthConfig {
+pub enum WebsocketAuthConfig {
     CapabilityToken {
-        source: AppServerWebsocketCapabilityTokenSource,
+        source: WebsocketCapabilityTokenSource,
     },
     SignedBearerToken {
         shared_secret_file: AbsolutePathBuf,
@@ -80,18 +83,20 @@ pub enum AppServerWebsocketAuthConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppServerWebsocketCapabilityTokenSource {
+pub enum WebsocketCapabilityTokenSource {
     TokenFile { token_file: AbsolutePathBuf },
     TokenSha256 { token_sha256: [u8; 32] },
 }
 
+/// Loaded upgrade policy. The default permits unauthenticated connections; each
+/// listener decides whether that policy is allowed for its bind address.
 #[derive(Clone, Debug, Default)]
 pub struct WebsocketAuthPolicy {
-    pub(crate) mode: Option<WebsocketAuthMode>,
+    mode: Option<WebsocketAuthMode>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum WebsocketAuthMode {
+#[derive(Clone)]
+enum WebsocketAuthMode {
     CapabilityToken {
         token_sha256: [u8; 32],
     },
@@ -103,8 +108,21 @@ pub(crate) enum WebsocketAuthMode {
     },
 }
 
+impl std::fmt::Debug for WebsocketAuthMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CapabilityToken { .. } => {
+                f.debug_struct("CapabilityToken").finish_non_exhaustive()
+            }
+            Self::SignedBearerToken { .. } => {
+                f.debug_struct("SignedBearerToken").finish_non_exhaustive()
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
-pub(crate) struct WebsocketAuthError {
+pub struct WebsocketAuthError {
     status_code: StatusCode,
     message: &'static str,
 }
@@ -125,17 +143,17 @@ enum JwtAudienceClaim {
 }
 
 impl WebsocketAuthError {
-    pub(crate) fn status_code(&self) -> StatusCode {
+    pub fn status_code(&self) -> StatusCode {
         self.status_code
     }
 
-    pub(crate) fn message(&self) -> &'static str {
+    pub fn message(&self) -> &'static str {
         self.message
     }
 }
 
-impl AppServerWebsocketAuthArgs {
-    pub fn try_into_settings(self) -> anyhow::Result<AppServerWebsocketAuthSettings> {
+impl WebsocketAuthArgs {
+    pub fn try_into_settings(self) -> anyhow::Result<WebsocketAuthSettings> {
         let normalize = |value: Option<String>| {
             value.and_then(|value| {
                 let trimmed = value.trim();
@@ -160,23 +178,19 @@ impl AppServerWebsocketAuthArgs {
                             "`--ws-token-file` and `--ws-token-sha256` are mutually exclusive"
                         );
                     }
-                    (Some(token_file), None) => {
-                        AppServerWebsocketCapabilityTokenSource::TokenFile {
-                            token_file: absolute_path_arg("--ws-token-file", token_file)?,
-                        }
-                    }
-                    (None, Some(token_sha256)) => {
-                        AppServerWebsocketCapabilityTokenSource::TokenSha256 {
-                            token_sha256: sha256_digest_arg("--ws-token-sha256", &token_sha256)?,
-                        }
-                    }
+                    (Some(token_file), None) => WebsocketCapabilityTokenSource::TokenFile {
+                        token_file: absolute_path_arg("--ws-token-file", token_file)?,
+                    },
+                    (None, Some(token_sha256)) => WebsocketCapabilityTokenSource::TokenSha256 {
+                        token_sha256: sha256_digest_arg("--ws-token-sha256", &token_sha256)?,
+                    },
                     (None, None) => {
                         anyhow::bail!(
                             "`--ws-token-file` or `--ws-token-sha256` is required when `--ws-auth capability-token` is set"
                         );
                     }
                 };
-                Some(AppServerWebsocketAuthConfig::CapabilityToken { source })
+                Some(WebsocketAuthConfig::CapabilityToken { source })
             }
             Some(WebsocketAuthCliMode::SignedBearerToken) => {
                 if self.ws_token_file.is_some() || self.ws_token_sha256.is_some() {
@@ -187,7 +201,7 @@ impl AppServerWebsocketAuthArgs {
                 let shared_secret_file = self.ws_shared_secret_file.context(
                     "`--ws-shared-secret-file` is required when `--ws-auth signed-bearer-token` is set",
                 )?;
-                Some(AppServerWebsocketAuthConfig::SignedBearerToken {
+                Some(WebsocketAuthConfig::SignedBearerToken {
                     shared_secret_file: absolute_path_arg(
                         "--ws-shared-secret-file",
                         shared_secret_file,
@@ -215,28 +229,27 @@ impl AppServerWebsocketAuthArgs {
             }
         };
 
-        Ok(AppServerWebsocketAuthSettings { config })
+        Ok(WebsocketAuthSettings { config })
     }
 }
 
-pub fn policy_from_settings(
-    settings: &AppServerWebsocketAuthSettings,
-) -> io::Result<WebsocketAuthPolicy> {
+/// Loads credentials once; changes to secret files do not update an existing policy.
+pub fn policy_from_settings(settings: &WebsocketAuthSettings) -> io::Result<WebsocketAuthPolicy> {
     let mode = match settings.config.as_ref() {
-        Some(AppServerWebsocketAuthConfig::CapabilityToken { source }) => match source {
-            AppServerWebsocketCapabilityTokenSource::TokenFile { token_file } => {
+        Some(WebsocketAuthConfig::CapabilityToken { source }) => match source {
+            WebsocketCapabilityTokenSource::TokenFile { token_file } => {
                 let token = read_trimmed_secret(token_file.as_ref())?;
                 Some(WebsocketAuthMode::CapabilityToken {
                     token_sha256: sha256_digest(token.as_bytes()),
                 })
             }
-            AppServerWebsocketCapabilityTokenSource::TokenSha256 { token_sha256 } => {
+            WebsocketCapabilityTokenSource::TokenSha256 { token_sha256 } => {
                 Some(WebsocketAuthMode::CapabilityToken {
                     token_sha256: *token_sha256,
                 })
             }
         },
-        Some(AppServerWebsocketAuthConfig::SignedBearerToken {
+        Some(WebsocketAuthConfig::SignedBearerToken {
             shared_secret_file,
             issuer,
             audience,
@@ -263,14 +276,16 @@ pub fn policy_from_settings(
     Ok(WebsocketAuthPolicy { mode })
 }
 
-pub(crate) fn is_unauthenticated_non_loopback_listener(
+pub fn is_unauthenticated_non_loopback_listener(
     bind_address: SocketAddr,
     policy: &WebsocketAuthPolicy,
 ) -> bool {
     !bind_address.ip().is_loopback() && policy.mode.is_none()
 }
 
-pub(crate) fn authorize_upgrade(
+/// Checks the bearer credential before upgrading. This does not enforce expiry
+/// or revocation after a WebSocket has been established.
+pub fn authorize_upgrade(
     headers: &HeaderMap,
     policy: &WebsocketAuthPolicy,
 ) -> Result<(), WebsocketAuthError> {
@@ -460,292 +475,5 @@ fn unauthorized(message: &'static str) -> WebsocketAuthError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::http::HeaderValue;
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use hmac::Hmac;
-    use hmac::Mac;
-    use serde_json::json;
-
-    type HmacSha256 = Hmac<Sha256>;
-
-    fn signed_token(shared_secret: &[u8], claims: serde_json::Value) -> String {
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-        let claims_segment = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
-        let payload = format!("{header}.{claims_segment}");
-        let mut mac = HmacSha256::new_from_slice(shared_secret).unwrap();
-        mac.update(payload.as_bytes());
-        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
-        format!("{payload}.{signature}")
-    }
-
-    #[test]
-    fn detects_unauthenticated_non_loopback_listener() {
-        let policy = WebsocketAuthPolicy::default();
-        assert!(is_unauthenticated_non_loopback_listener(
-            "0.0.0.0:8765".parse().unwrap(),
-            &policy,
-        ));
-        assert!(!is_unauthenticated_non_loopback_listener(
-            "127.0.0.1:8765".parse().unwrap(),
-            &policy,
-        ));
-        assert!(!is_unauthenticated_non_loopback_listener(
-            "0.0.0.0:8765".parse().unwrap(),
-            &WebsocketAuthPolicy {
-                mode: Some(WebsocketAuthMode::CapabilityToken {
-                    token_sha256: [0u8; 32],
-                }),
-            },
-        ));
-    }
-
-    #[test]
-    fn capability_token_args_require_token_file_or_hash() {
-        let err = AppServerWebsocketAuthArgs {
-            ws_auth: Some(WebsocketAuthCliMode::CapabilityToken),
-            ..Default::default()
-        }
-        .try_into_settings()
-        .expect_err("capability-token mode should require a token source");
-        assert!(
-            err.to_string().contains("--ws-token-file")
-                && err.to_string().contains("--ws-token-sha256"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn capability_token_args_accept_token_hash() {
-        let settings = AppServerWebsocketAuthArgs {
-            ws_auth: Some(WebsocketAuthCliMode::CapabilityToken),
-            ws_token_sha256: Some("ab".repeat(32)),
-            ..Default::default()
-        }
-        .try_into_settings()
-        .expect("capability-token hash args should parse");
-
-        assert_eq!(
-            settings,
-            AppServerWebsocketAuthSettings {
-                config: Some(AppServerWebsocketAuthConfig::CapabilityToken {
-                    source: AppServerWebsocketCapabilityTokenSource::TokenSha256 {
-                        token_sha256: [0xab; 32],
-                    },
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn capability_token_args_reject_multiple_token_sources() {
-        let err = AppServerWebsocketAuthArgs {
-            ws_auth: Some(WebsocketAuthCliMode::CapabilityToken),
-            ws_token_file: Some(PathBuf::from("/tmp/token")),
-            ws_token_sha256: Some("ab".repeat(32)),
-            ..Default::default()
-        }
-        .try_into_settings()
-        .expect_err("capability-token mode should reject multiple token sources");
-        assert!(
-            err.to_string().contains("mutually exclusive"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn capability_token_args_reject_malformed_token_hash() {
-        let err = AppServerWebsocketAuthArgs {
-            ws_auth: Some(WebsocketAuthCliMode::CapabilityToken),
-            ws_token_sha256: Some("not-a-sha256".to_string()),
-            ..Default::default()
-        }
-        .try_into_settings()
-        .expect_err("capability-token mode should reject malformed token hashes");
-        assert!(
-            err.to_string().contains("64-character hex"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn capability_token_hash_policy_authorizes_matching_bearer_token() {
-        let settings = AppServerWebsocketAuthSettings {
-            config: Some(AppServerWebsocketAuthConfig::CapabilityToken {
-                source: AppServerWebsocketCapabilityTokenSource::TokenSha256 {
-                    token_sha256: sha256_digest(b"super-secret-token"),
-                },
-            }),
-        };
-        let policy = policy_from_settings(&settings).expect("hash policy should build");
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_static("Bearer super-secret-token"),
-        );
-        authorize_upgrade(&headers, &policy).expect("matching token should authorize");
-
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_static("Bearer wrong-token"),
-        );
-        let err = authorize_upgrade(&headers, &policy).expect_err("wrong token should fail");
-        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn signed_bearer_args_require_mode_when_mode_specific_flags_are_set() {
-        let err = AppServerWebsocketAuthArgs {
-            ws_shared_secret_file: Some(PathBuf::from("/tmp/secret")),
-            ..Default::default()
-        }
-        .try_into_settings()
-        .expect_err("mode-specific flags should require --ws-auth");
-        assert!(
-            err.to_string().contains("websocket auth flags require"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn signed_bearer_args_default_clock_skew_and_trim_optional_claims() {
-        let settings = AppServerWebsocketAuthArgs {
-            ws_auth: Some(WebsocketAuthCliMode::SignedBearerToken),
-            ws_shared_secret_file: Some(PathBuf::from("/tmp/secret")),
-            ws_issuer: Some(" issuer ".to_string()),
-            ws_audience: Some("   ".to_string()),
-            ..Default::default()
-        }
-        .try_into_settings()
-        .expect("signed bearer args should parse");
-
-        assert_eq!(
-            settings,
-            AppServerWebsocketAuthSettings {
-                config: Some(AppServerWebsocketAuthConfig::SignedBearerToken {
-                    shared_secret_file: AbsolutePathBuf::from_absolute_path("/tmp/secret")
-                        .expect("absolute path"),
-                    issuer: Some("issuer".to_string()),
-                    audience: None,
-                    max_clock_skew_seconds: DEFAULT_MAX_CLOCK_SKEW_SECONDS,
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn signed_bearer_token_verification_rejects_tampering() {
-        let shared_secret = b"0123456789abcdef0123456789abcdef";
-        let token = signed_token(
-            shared_secret,
-            json!({
-                "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
-            }),
-        );
-        let tampered = token.replace(".eyJleHAi", ".eyJleHBi");
-        let err = verify_signed_bearer_token(
-            &tampered,
-            shared_secret,
-            /*issuer*/ None,
-            /*audience*/ None,
-            /*max_clock_skew_seconds*/ 30,
-        )
-        .expect_err("tampered jwt should fail");
-        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn signed_bearer_token_verification_accepts_valid_token() {
-        let shared_secret = b"0123456789abcdef0123456789abcdef";
-        let token = signed_token(
-            shared_secret,
-            json!({
-                "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
-                "iss": "issuer",
-                "aud": "audience",
-            }),
-        );
-        verify_signed_bearer_token(
-            &token,
-            shared_secret,
-            Some("issuer"),
-            Some("audience"),
-            /*max_clock_skew_seconds*/ 30,
-        )
-        .expect("valid signed token should verify");
-    }
-
-    #[test]
-    fn signed_bearer_token_verification_accepts_multiple_audiences() {
-        let shared_secret = b"0123456789abcdef0123456789abcdef";
-        let token = signed_token(
-            shared_secret,
-            json!({
-                "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
-                "aud": ["other-audience", "audience"],
-            }),
-        );
-        verify_signed_bearer_token(
-            &token,
-            shared_secret,
-            /*issuer*/ None,
-            Some("audience"),
-            /*max_clock_skew_seconds*/ 30,
-        )
-        .expect("jwt audience arrays should verify");
-    }
-
-    #[test]
-    fn signed_bearer_token_verification_rejects_alg_none_tokens() {
-        let claims_segment = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&json!({
-                "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
-            }))
-            .unwrap(),
-        );
-        let header_segment = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
-        let token = format!("{header_segment}.{claims_segment}.");
-        let err = verify_signed_bearer_token(
-            &token,
-            b"0123456789abcdef0123456789abcdef",
-            /*issuer*/ None,
-            /*audience*/ None,
-            /*max_clock_skew_seconds*/ 30,
-        )
-        .expect_err("alg=none jwt should be rejected");
-        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn signed_bearer_token_verification_rejects_missing_exp() {
-        let shared_secret = b"0123456789abcdef0123456789abcdef";
-        let token = signed_token(
-            shared_secret,
-            json!({
-                "iss": "issuer",
-            }),
-        );
-        let err = verify_signed_bearer_token(
-            &token,
-            shared_secret,
-            /*issuer*/ None,
-            /*audience*/ None,
-            /*max_clock_skew_seconds*/ 30,
-        )
-        .expect_err("jwt without exp should be rejected");
-        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[test]
-    fn validate_signed_bearer_secret_rejects_short_secret() {
-        let err = validate_signed_bearer_secret(Path::new("/tmp/secret"), b"too-short")
-            .expect_err("short shared secret should be rejected");
-        assert_eq!(err.kind(), ErrorKind::InvalidInput);
-        assert!(
-            err.to_string().contains("must be at least 32 bytes"),
-            "unexpected error: {err}"
-        );
-    }
-}
+#[path = "auth_tests.rs"]
+mod tests;

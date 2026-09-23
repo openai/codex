@@ -15,7 +15,6 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
-use codex_app_server::AppServerWebsocketAuthSettings;
 use codex_app_server::PluginStartupTasks;
 use codex_app_server::RemoteControlStartupMode;
 use codex_app_server::run_main_with_transport_options;
@@ -47,6 +46,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
 use codex_utils_cli::CliConfigOverrides;
+use codex_websocket_auth::WebsocketAuthSettings;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -241,7 +241,7 @@ async fn explicit_remote_control_startup_fails_when_disabled_by_requirements() -
             /*default_analytics_enabled*/ false,
             transport,
             SessionSource::VSCode,
-            AppServerWebsocketAuthSettings::default(),
+            WebsocketAuthSettings::default(),
             AppServerRuntimeOptions {
                 plugin_startup_tasks: PluginStartupTasks::Skip,
                 remote_control_startup_mode: RemoteControlStartupMode::EnabledEphemeral,

@@ -15,7 +15,6 @@ workspace = true
 [dependencies]
 codex-http-client = { workspace = true }
 codex-websocket-client = { workspace = true }
-anyhow = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "json",
@@ -23,7 +22,6 @@ axum = { workspace = true, default-features = false, features = [
     "ws",
 ] }
 base64 = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
@@ -34,12 +32,10 @@ codex-state = { workspace = true }
 codex-uds = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
-constant_time_eq = { workspace = true }
+codex-websocket-auth = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
-hmac = { workspace = true }
 httpdate = { workspace = true }
-jsonwebtoken = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 rand = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

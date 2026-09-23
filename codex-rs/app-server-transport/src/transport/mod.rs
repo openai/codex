@@ -1,5 +1,3 @@
-pub mod auth;
-
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
