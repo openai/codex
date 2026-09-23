@@ -26,6 +26,7 @@ path = "src/bin/managed_deny_probe/main.rs"
 workspace = true
 
 [dependencies]
+codex-http-client = { workspace = true }
 anyhow = "1.0"
 base64 = { workspace = true }
 chrono = { version = "0.4.42", default-features = false, features = [

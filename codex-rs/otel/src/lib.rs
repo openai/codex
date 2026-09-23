@@ -4,6 +4,7 @@ pub(crate) mod metrics;
 pub(crate) mod provider;
 pub(crate) mod trace_context;
 
+mod network_policy;
 mod otlp;
 mod targets;
 mod tool_result;

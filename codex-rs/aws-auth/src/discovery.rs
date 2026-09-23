@@ -1,4 +1,3 @@
-use aws_config::default_provider::region::DefaultRegionChain;
 use aws_config::profile::ProfileFileCredentialsProvider;
 use aws_config::provider_config::ProviderConfig;
 use aws_credential_types::provider::ProvideCredentials;
@@ -44,32 +43,27 @@ pub async fn discover_aws_profiles() -> Result<Vec<AwsProfile>, AwsAuthError> {
 }
 
 /// Resolves credentials only from the selected AWS profile.
-pub async fn validate_aws_profile(profile: &str, region: &str) -> Result<(), AwsAuthError> {
-    profile_credentials_provider(profile, Some(region))
-        .await
+pub async fn validate_aws_profile(
+    profile: &str,
+    region: &str,
+    factory: codex_http_client::HttpClientFactory,
+) -> Result<(), AwsAuthError> {
+    profile_credentials_provider(profile, region, factory)
         .provide_credentials()
         .await?;
     Ok(())
 }
 
-pub(crate) async fn profile_credentials_provider(
+pub(crate) fn profile_credentials_provider(
     profile: &str,
-    region: Option<&str>,
+    region: &str,
+    factory: codex_http_client::HttpClientFactory,
 ) -> ProfileFileCredentialsProvider {
-    let region = match region {
-        Some(region) => Some(Region::new(region.to_string())),
-        None => {
-            DefaultRegionChain::builder()
-                .profile_name(profile)
-                .build()
-                .region()
-                .await
-        }
-    };
-    let provider_config = ProviderConfig::without_region().with_region(region);
-
+    let config = ProviderConfig::without_region()
+        .with_region(Some(Region::new(region.to_string())))
+        .with_http_client(crate::transport::http_client(factory));
     ProfileFileCredentialsProvider::builder()
-        .configure(&provider_config)
+        .configure(&config)
         .profile_name(profile)
         .build()
 }

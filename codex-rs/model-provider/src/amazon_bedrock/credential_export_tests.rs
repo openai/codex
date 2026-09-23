@@ -277,6 +277,37 @@ async fn credential_export_reuses_cache_and_coalesces_refreshes() -> io::Result<
     );
     let exporter = Arc::new(exporter);
     provider.credential_export = Some(exporter.clone());
+    let controller = codex_http_client::NetworkPolicyController::default();
+    let policy = controller.policy();
+    provider.http_client_factory = provider
+        .http_client_factory
+        .clone()
+        .with_network_policy(policy.clone());
+    controller.publish(
+        policy.revision(),
+        codex_http_client::DestinationPolicy::Restricted {
+            allowed_hosts: Default::default(),
+        },
+    );
+    let denied = provider
+        .recover_from_unauthorized()
+        .await
+        .expect_err("restricted recovery must not launch the exporter");
+    assert_eq!(denied.retry_delay(/*retry_count*/ 1), None);
+    assert_eq!(
+        denied.to_string(),
+        "Fatal error: this SDK transport is disabled by application network restrictions"
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("invocations"))?
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["invoked", "invoked"]
+    );
+    controller.publish(
+        policy.revision(),
+        codex_http_client::DestinationPolicy::Unrestricted,
+    );
     {
         let first = provider.recover_from_unauthorized();
         let second = provider.recover_from_unauthorized();

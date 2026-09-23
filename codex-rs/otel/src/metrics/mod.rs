@@ -48,5 +48,11 @@ pub(crate) fn install_global_statsig_settings(settings: StatsigMetricsSettings) 
 }
 
 pub(crate) fn global_statsig_settings() -> Option<StatsigMetricsSettings> {
+    if GLOBAL_METRICS
+        .get()
+        .is_some_and(|metrics| metrics.active_inner().network_policy.is_managed())
+    {
+        return None;
+    }
     GLOBAL_STATSIG_METRICS_SETTINGS.get().cloned()
 }

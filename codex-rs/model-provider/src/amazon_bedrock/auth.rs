@@ -95,6 +95,7 @@ pub(super) async fn resolve_auth_method(
     managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) -> Result<BedrockAuthMethod> {
     match source {
         BedrockAuthSource::CommandBearerToken => Err(CodexErr::Fatal(
@@ -114,9 +115,13 @@ pub(super) async fn resolve_auth_method(
                             .to_string(),
                     )
                 })?;
-            let context = AwsAuthContext::load_with_credentials_provider(config, credential_export)
-                .await
-                .map_err(aws_auth_error_to_codex_error)?;
+            let context = AwsAuthContext::load_with_credentials_provider(
+                config,
+                credential_export,
+                http_client_factory.clone(),
+            )
+            .await
+            .map_err(aws_auth_error_to_codex_error)?;
             Ok(BedrockAuthMethod::AwsSdkAuth { context })
         }
         BedrockAuthSource::ManagedBearerToken => {
@@ -147,7 +152,7 @@ pub(super) async fn resolve_auth_method(
                 BedrockEndpoint::Mantle => aws_auth_config(aws),
                 BedrockEndpoint::Runtime => runtime::aws_auth_config(aws),
             };
-            let context = AwsAuthContext::load_profile(config)
+            let context = AwsAuthContext::load_profile(config, http_client_factory.clone())
                 .await
                 .map_err(aws_auth_error_to_codex_error)?;
             Ok(BedrockAuthMethod::AwsSdkAuth { context })
@@ -168,9 +173,13 @@ pub(super) async fn resolve_auth_method(
                 BedrockEndpoint::Mantle => aws_auth_config(aws),
                 BedrockEndpoint::Runtime => runtime::aws_auth_config(aws),
             };
-            let context = AwsAuthContext::load_with_access_keys(config, access_keys)
-                .await
-                .map_err(aws_auth_error_to_codex_error)?;
+            let context = AwsAuthContext::load_with_access_keys(
+                config,
+                access_keys,
+                http_client_factory.clone(),
+            )
+            .await
+            .map_err(aws_auth_error_to_codex_error)?;
             Ok(BedrockAuthMethod::AwsSdkAuth { context })
         }
         BedrockAuthSource::EnvAwsCredentials | BedrockAuthSource::AwsSdk => {
@@ -178,7 +187,7 @@ pub(super) async fn resolve_auth_method(
                 BedrockEndpoint::Mantle => aws_auth_config(aws),
                 BedrockEndpoint::Runtime => runtime::aws_auth_config(aws),
             };
-            let context = AwsAuthContext::load(config)
+            let context = AwsAuthContext::load(config, http_client_factory.clone())
                 .await
                 .map_err(aws_auth_error_to_codex_error)?;
             Ok(BedrockAuthMethod::AwsSdkAuth { context })
@@ -191,8 +200,9 @@ pub(super) async fn resolve_provider_auth(
     managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) -> Result<SharedAuthProvider> {
-    match resolve_auth_method(source, managed_auth, aws, endpoint).await? {
+    match resolve_auth_method(source, managed_auth, aws, endpoint, http_client_factory).await? {
         BedrockAuthMethod::ManagedBearerToken { token, .. }
         | BedrockAuthMethod::EnvBearerToken { token, .. } => Ok(Arc::new(BearerAuthProvider {
             token: Some(token),
@@ -210,19 +220,20 @@ pub(super) async fn resolve_region(
     managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
     endpoint: BedrockEndpoint,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) -> Result<String> {
     if source == BedrockAuthSource::CommandBearerToken {
         let config = match endpoint {
             BedrockEndpoint::Mantle => aws_auth_config(aws),
             BedrockEndpoint::Runtime => runtime::aws_auth_config(aws),
         };
-        let context = AwsAuthContext::load(config)
+        let context = AwsAuthContext::load(config, http_client_factory.clone())
             .await
             .map_err(aws_auth_error_to_codex_error)?;
         return Ok(context.region().to_string());
     }
 
-    match resolve_auth_method(source, managed_auth, aws, endpoint).await? {
+    match resolve_auth_method(source, managed_auth, aws, endpoint, http_client_factory).await? {
         BedrockAuthMethod::ManagedBearerToken { region, .. }
         | BedrockAuthMethod::EnvBearerToken { region, .. } => Ok(region),
         BedrockAuthMethod::AwsSdkAuth { context } => Ok(context.region().to_string()),

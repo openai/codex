@@ -60,6 +60,26 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
         .start_thread(ThreadStartParams::default())
         .await?;
 
+    let contains = |requests: &[wiremock::Request], path: &str, value: &str| {
+        requests.iter().any(|request| {
+            request.url.path() == path && String::from_utf8_lossy(&request.body).contains(value)
+        })
+    };
+    timeout(TEST_TIMEOUT, async {
+        let mut poll = tokio::time::interval(Duration::from_millis(/*millis*/ 25));
+        loop {
+            poll.tick().await;
+            let requests = collector.received_requests().await.unwrap_or_default();
+            if contains(&requests, "/initial/logs", INITIAL_EMAIL)
+                && contains(&requests, "/initial/traces", PARENT_TRACE_ID)
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .context("initial account telemetry must be exported before its permission is revoked")?;
+
     let next_endpoint = format!("{}/next", collector.uri());
     write_otel_config(codex_home.path(), &next_endpoint)?;
     let access_token = encode_id_token(
@@ -84,9 +104,21 @@ async fn account_switch_reloads_telemetry_collectors_and_preserves_trace_context
         app_server.wait_for_json_log_event("codex.app_server.otel_reloaded"),
     )
     .await??;
-    app_server
-        .start_thread(ThreadStartParams::default())
-        .await?;
+    timeout(TEST_TIMEOUT, async {
+        let mut poll = tokio::time::interval(Duration::from_secs(/*secs*/ 1));
+        loop {
+            poll.tick().await;
+            app_server
+                .start_thread(ThreadStartParams::default())
+                .await?;
+            let requests = collector.received_requests().await.unwrap_or_default();
+            if contains(&requests, "/next/logs", NEXT_EMAIL) {
+                break Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await
+    .context("new account telemetry must reach the replacement collector")??;
 
     let status = timeout(TEST_TIMEOUT, app_server.shutdown_gracefully()).await??;
     assert!(status.success(), "app-server did not shut down cleanly");

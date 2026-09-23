@@ -168,11 +168,14 @@ impl ExecServerCommand {
             let direct_transport = self.remote_transport == ExecServerRemoteTransport::Direct;
             let (_otel, telemetry) = exec_server_telemetry::init(Some(&config));
             let auth_provider = if self.aws_sigv4 {
-                exec_server_auth::aws_sigv4_auth_provider(codex_aws_auth::AwsAuthConfig {
-                    profile: self.aws_profile,
-                    region: self.aws_region,
-                    service: self.aws_service,
-                })
+                exec_server_auth::aws_sigv4_auth_provider(
+                    codex_aws_auth::AwsAuthConfig {
+                        profile: self.aws_profile,
+                        region: self.aws_region,
+                        service: self.aws_service,
+                    },
+                    config.http_client_factory(),
+                )
                 .await?
             } else {
                 load_exec_server_remote_auth_provider(

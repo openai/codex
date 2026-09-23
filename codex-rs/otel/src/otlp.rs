@@ -146,23 +146,23 @@ fn build_http_client_inner(
 }
 
 pub(crate) fn build_async_http_client(
+    factory: &codex_http_client::HttpClientFactory,
     tls: Option<&OtelTlsConfig>,
     timeout_var: &str,
-) -> Result<reqwest::Client, Box<dyn Error>> {
-    let mut builder = reqwest::Client::builder().timeout(resolve_otlp_timeout(timeout_var));
+) -> Result<crate::network_policy::RuntimeHttpClient, Box<dyn Error>> {
+    let mut config = codex_http_client::HttpClientTlsConfig::default();
 
     if let Some(tls) = tls {
         if let Some(path) = tls.ca_certificate.as_ref() {
             let (pem, location) = read_bytes(path)?;
-            let certificate = ReqwestCertificate::from_pem(pem.as_slice()).map_err(|error| {
-                config_error(format!(
-                    "failed to parse certificate {}: {error}",
-                    location.display()
-                ))
-            })?;
-            builder = builder
-                .tls_built_in_root_certs(false)
-                .add_root_certificate(certificate);
+            config = config
+                .with_root_certificate_pem(pem.as_slice())
+                .map_err(|error| {
+                    config_error(format!(
+                        "failed to parse certificate {}: {error}",
+                        location.display()
+                    ))
+                })?;
         }
 
         match (&tls.client_certificate, &tls.client_private_key) {
@@ -170,14 +170,15 @@ pub(crate) fn build_async_http_client(
                 let (mut cert_pem, cert_location) = read_bytes(cert_path)?;
                 let (key_pem, key_location) = read_bytes(key_path)?;
                 cert_pem.extend_from_slice(key_pem.as_slice());
-                let identity = ReqwestIdentity::from_pem(cert_pem.as_slice()).map_err(|error| {
-                    config_error(format!(
-                        "failed to parse client identity using {} and {}: {error}",
-                        cert_location.display(),
-                        key_location.display()
-                    ))
-                })?;
-                builder = builder.identity(identity).https_only(true);
+                config = config
+                    .with_client_identity_pem(cert_pem.as_slice())
+                    .map_err(|error| {
+                        config_error(format!(
+                            "failed to parse client identity using {} and {}: {error}",
+                            cert_location.display(),
+                            key_location.display()
+                        ))
+                    })?;
             }
             (Some(_), None) | (None, Some(_)) => {
                 return Err(config_error(
@@ -188,9 +189,13 @@ pub(crate) fn build_async_http_client(
         }
     }
 
-    builder
-        .build()
-        .map_err(|error| Box::new(error) as Box<dyn Error>)
+    Ok(crate::network_policy::RuntimeHttpClient {
+        client: codex_http_client::HttpClientBuilder::new()
+            .without_request_logging()
+            .build_with_tls(factory, codex_http_client::ClientRouteClass::Other, config),
+        timeout: resolve_otlp_timeout(timeout_var),
+        runtime: tokio::runtime::Handle::try_current()?,
+    })
 }
 
 pub(crate) fn resolve_otlp_timeout(signal_var: &str) -> Duration {

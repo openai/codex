@@ -61,7 +61,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::item_event_to_server_notification;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::default_client::create_client;
 use codex_plugin::PluginId;
 use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::ThreadId;
@@ -867,7 +866,8 @@ async fn send_track_events(
         return;
     }
 
-    let Some(auth) = auth_manager.auth().await else {
+    let Some((auth, http_client_factory)) = auth_manager.auth_with_http_client_factory().await
+    else {
         return;
     };
     if auth.is_api_key_auth() {
@@ -880,7 +880,7 @@ async fn send_track_events(
     }
 
     for events in track_event_request_batches(events) {
-        send_track_events_request(&auth, destination, events).await;
+        send_track_events_request(&auth, destination, events, &http_client_factory).await;
     }
 }
 
@@ -911,6 +911,7 @@ async fn send_track_events_request(
     auth: &CodexAuth,
     destination: &AnalyticsEventsDestination,
     events: Vec<TrackEventRequest>,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) {
     if events.is_empty() {
         return;
@@ -928,7 +929,21 @@ async fn send_track_events_request(
         #[cfg(debug_assertions)]
         AnalyticsEventsDestination::CaptureFile { .. } => return,
     };
-    let response = create_client()
+    let client = match codex_login::default_client::create_client_for_route_async(
+        http_client_factory.clone(),
+        url.clone(),
+        codex_http_client::ClientRouteClass::Api,
+        codex_login::default_client::ClientRedirectPolicy::Default,
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "failed to build events client");
+            return;
+        }
+    };
+    let response = client
         .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())

@@ -98,13 +98,17 @@ impl AccountRequestProcessor {
                 if profile.is_empty() {
                     return Err(invalid_request("AWS profile name must not be empty."));
                 }
-                codex_aws_auth::validate_aws_profile(profile, region)
-                    .await
-                    .map_err(|err| {
-                        invalid_request(format!(
-                            "failed to load credentials for AWS profile `{profile}`: {err}"
-                        ))
-                    })?;
+                codex_aws_auth::validate_aws_profile(
+                    profile,
+                    region,
+                    self.config.http_client_factory(),
+                )
+                .await
+                .map_err(|err| {
+                    invalid_request(format!(
+                        "failed to load credentials for AWS profile `{profile}`: {err}"
+                    ))
+                })?;
                 Some(profile.to_string())
             }
             BedrockSetupParams::Environment { .. } => {

@@ -26,8 +26,16 @@ pub(super) async fn bedrock_runtime_base_url(
     source: BedrockAuthSource,
     managed_auth: Option<&CodexAuth>,
     aws: &ModelProviderAwsAuthInfo,
+    http_client_factory: &codex_http_client::HttpClientFactory,
 ) -> Result<String> {
-    let region = resolve_region(source, managed_auth, aws, BedrockEndpoint::Runtime).await?;
+    let region = resolve_region(
+        source,
+        managed_auth,
+        aws,
+        BedrockEndpoint::Runtime,
+        http_client_factory,
+    )
+    .await?;
     Ok(base_url(&region))
 }
 

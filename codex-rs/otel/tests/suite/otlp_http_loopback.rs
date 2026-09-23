@@ -1,3 +1,5 @@
+use codex_http_client::HttpClientFactory;
+use codex_http_client::OutboundProxyPolicy;
 use codex_otel::EXEC_SERVER_CLIENT_REQUEST_COUNT_METRIC;
 use codex_otel::MetricsClient;
 use codex_otel::MetricsConfig;
@@ -355,6 +357,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
     });
 
     let otel = OtelProvider::try_new(&OtelSettings {
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -414,6 +417,7 @@ fn otlp_http_exporter_sends_logs_to_collector()
 #[test]
 fn otel_provider_rejects_header_unsafe_configured_tracestate() {
     let result = OtelProvider::try_new(&OtelSettings {
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -479,6 +483,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
     });
 
     let otel = OtelProvider::try_new(&OtelSettings {
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -624,6 +629,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_with_bounded_shutdown_in_t
     });
 
     let otel = OtelProvider::try_new(&OtelSettings {
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
         environment: "test".to_string(),
         service_name: "codex-cli".to_string(),
         service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -717,6 +723,7 @@ fn otlp_http_exporter_times_out_when_collector_stalls_during_bounded_shutdown() 
         .expect("build tokio runtime");
     let (result, elapsed) = runtime.block_on(async move {
         let otel = OtelProvider::try_new(&OtelSettings {
+            http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
             environment: "test".to_string(),
             service_name: "codex-cli".to_string(),
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -816,6 +823,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
 
         let result = runtime.block_on(async move {
             let otel = OtelProvider::try_new(&OtelSettings {
+                http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
                 environment: "test".to_string(),
                 service_name: "codex-cli".to_string(),
                 service_version: env!("CARGO_PKG_VERSION").to_string(),

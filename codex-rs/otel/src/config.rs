@@ -49,6 +49,7 @@ pub fn validate_span_attributes(attributes: &BTreeMap<String, String>) -> std::i
 
 #[derive(Clone, Debug)]
 pub struct OtelSettings {
+    pub http_client_factory: codex_http_client::HttpClientFactory,
     pub environment: String,
     pub service_name: String,
     pub service_version: String,

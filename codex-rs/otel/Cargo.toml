@@ -13,6 +13,9 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+bytes = { workspace = true }
+codex-http-client = { workspace = true }
+opentelemetry-http = "0.31.0"
 chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
