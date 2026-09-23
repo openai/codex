@@ -249,6 +249,13 @@ fn conversation_history_snapshot_binds_review_mode_and_hash_to_the_latest_item(
         "text": "Only publish to a private repository.", "complete": true
     }]
 }); "retained instructions")]
+#[test_case(serde_json::json!({
+    "verified_answers": [], "incomplete": false, "next_order": 1,
+    "assistant_messages": [{
+        "turn_id": "turn", "message_id": "question",
+        "text": "May I publish to the private repository?", "complete": true
+    }]
+}); "retained assistant context")]
 fn checkpoint_retained_evidence_survives_legacy_review(saved_context: serde_json::Value) {
     let mut history = ContextManager::with_guardian_context_mode(
         GuardianContextMode::ThreadOwned,
@@ -288,7 +295,7 @@ fn checkpoint_retained_evidence_survives_legacy_review(saved_context: serde_json
 }
 
 #[test]
-fn checkpoint_replayed_instructions_keep_legacy_review_when_the_source_survives() {
+fn checkpoint_replayed_messages_keep_legacy_review_when_the_source_survives() {
     let mut history = ContextManager::with_guardian_context_mode(
         GuardianContextMode::ThreadOwned,
         &codex_protocol::protocol::SessionSource::Cli,
@@ -304,7 +311,10 @@ fn checkpoint_replayed_instructions_keep_legacy_review_when_the_source_survives(
         /*reviewer_compaction_hash*/ None,
     );
     history.record_items(
-        &[user_input_text_msg("Only publish privately.")],
+        &[
+            user_input_text_msg("Only publish privately."),
+            assistant_msg("May I publish to the private repository?"),
+        ],
         TruncationPolicy::Bytes(10_000),
     );
     let retained = history.retained_context().clone();
@@ -1457,6 +1467,41 @@ fn drop_last_n_user_turns_preserves_prefix() {
     // Rollback removes evidence, but does not reuse its arrival-order sequence numbers.
     expected["next_order"] = serde_json::json!(3);
     assert_eq!(serde_json::to_value(retained).unwrap(), expected);
+}
+
+#[test]
+fn rollback_removes_assistant_sources_recorded_ahead_of_queued_input() {
+    let mut history = ContextManager::with_guardian_context_mode(
+        GuardianContextMode::ThreadOwned,
+        &codex_protocol::protocol::SessionSource::Exec,
+    );
+    let original = user_msg("Staging only.");
+    let items = [
+        (original.clone(), 0),
+        (assistant_msg("Deploy staging?"), 2),
+        (user_msg("Also run tests."), 1),
+    ]
+    .map(|(item, order)| ResponseItemEnvelope {
+        item,
+        metadata: Some(CodexHarnessMetadata {
+            user_input_order: Some(order),
+            ..Default::default()
+        }),
+    });
+    history.record_annotated_items(&items, TruncationPolicy::Tokens(10_000));
+    history.drop_last_n_user_turns(/*num_turns*/ 1);
+    assert_eq!(raw_items(&history), vec![original]);
+    assert!(
+        !history
+            .retained_context()
+            .ordered_entries()
+            .any(|(_, entry)| {
+                matches!(
+                    entry,
+                    codex_history::RetainedContextEntry::AssistantMessage(_)
+                )
+            })
+    );
 }
 
 #[test]

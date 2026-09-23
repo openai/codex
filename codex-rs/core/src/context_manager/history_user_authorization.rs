@@ -1,4 +1,4 @@
-//! Captures local authorization and adopts copied instructions when a worker becomes a root.
+//! Captures original user/assistant exchanges and adopts copied context when a worker becomes a root.
 //! Inherited history remains excluded for workers; roots also recover it from checkpoints.
 //! Oversized originals retain bounded, incomplete excerpts for root review.
 //! Checkpoint copies cannot establish original completeness, even when their text is short.
@@ -16,7 +16,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 /// Checkpoint items may have been shortened while preserving their original metadata.
-pub(super) enum UserMessageSource {
+pub(super) enum RetainedMessageSource {
     Original,
     Checkpoint,
 }
@@ -36,27 +36,33 @@ impl ContextManager {
                     .as_ref()
                     .is_some_and(|metadata| metadata.inherited_user_message)
             }) {
-                self.record_user_authorization(
+                self.record_retained_message(
                     &envelope.item,
                     envelope.metadata.as_ref(),
-                    UserMessageSource::Checkpoint,
+                    RetainedMessageSource::Checkpoint,
                 );
             }
         }
     }
 
-    pub(super) fn record_user_authorization(
+    pub(super) fn record_retained_message(
         &mut self,
         item: &ResponseItem,
         metadata: Option<&CodexHarnessMetadata>,
-        source: UserMessageSource,
+        source: RetainedMessageSource,
     ) {
-        if !crate::context::is_user_authorization_message(item) {
+        let is_assistant =
+            matches!(item, ResponseItem::Message { role, .. } if role == "assistant");
+        if metadata.is_some_and(|metadata| metadata.compaction_output)
+            || (!is_assistant && !crate::context::is_user_authorization_message(item))
+        {
             return;
         }
         let inherited = metadata.is_some_and(|metadata| metadata.inherited_user_message);
         if self.guardian_context_mode == GuardianContextMode::Legacy {
-            Arc::make_mut(&mut self.retained_context).mark_user_messages_incomplete();
+            if !is_assistant {
+                Arc::make_mut(&mut self.retained_context).mark_user_messages_incomplete();
+            }
         } else if (!inherited || self.retain_inherited_user_messages)
             && let ResponseItem::Message {
                 content,
@@ -64,14 +70,15 @@ impl ContextManager {
                 ..
             } = item
         {
-            let mut complete = matches!(source, UserMessageSource::Original)
-                && internal_chat_message_metadata_passthrough
-                    .as_ref()
-                    .and_then(|metadata| metadata.content_item_kinds.as_ref())
-                    .is_some_and(|kinds| {
-                        kinds.len() == content.len()
-                            && kinds.iter().all(|kind| kind.0.starts_with("user."))
-                    });
+            let mut complete = matches!(source, RetainedMessageSource::Original)
+                && (is_assistant
+                    || internal_chat_message_metadata_passthrough
+                        .as_ref()
+                        .and_then(|metadata| metadata.content_item_kinds.as_ref())
+                        .is_some_and(|kinds| {
+                            kinds.len() == content.len()
+                                && kinds.iter().all(|kind| kind.0.starts_with("user."))
+                        }));
             let text = content
                 .iter()
                 .filter_map(|content| match content {
@@ -90,16 +97,21 @@ impl ContextManager {
             // Local instruction sections still omit incomplete originals whole.
             let (text, truncated) = guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS);
             complete &= !truncated;
-            Arc::make_mut(&mut self.retained_context).record_user_message(
-                RetainedUserMessage {
-                    turn_id: item.turn_id().unwrap_or_default().to_owned(),
-                    message_id: item.id().map(|id| id.as_str().to_owned()),
-                    text,
-                    complete,
-                },
-                metadata.into(),
-            );
+            let message = RetainedUserMessage {
+                turn_id: item.turn_id().unwrap_or_default().to_owned(),
+                message_id: item.id().map(|id| id.as_str().to_owned()),
+                text,
+                complete,
+            };
+            let retained = Arc::make_mut(&mut self.retained_context);
+            if is_assistant {
+                retained.record_assistant_message(message, metadata.into());
+            } else {
+                retained.record_user_message(message, metadata.into());
+            }
         }
-        self.user_message_revision = self.user_message_revision.saturating_add(1);
+        if !is_assistant {
+            self.user_message_revision = self.user_message_revision.saturating_add(1);
+        }
     }
 }

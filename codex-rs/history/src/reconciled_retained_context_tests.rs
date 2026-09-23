@@ -61,7 +61,9 @@ fn recovery_preserves_source_identity_acceptance_order_and_checkpoint_gaps() {
             reconciled
                 .ordered_entries()
                 .map(|(order, entry)| match entry {
-                    RetainedContextEntry::UserMessage(message) => (order, message.text.as_str()),
+                    RetainedContextEntry::UserMessage(message)
+                    | RetainedContextEntry::AssistantMessage(message) =>
+                        (order, message.text.as_str()),
                     RetainedContextEntry::VerifiedAnswer(answer) => {
                         (order, answer.questions[0].answer.as_str())
                     }
@@ -110,7 +112,8 @@ fn recovery_marks_missing_and_conflicting_orders_incomplete() {
                 reconciled
                     .ordered_entries()
                     .map(|(order, entry)| match entry {
-                        RetainedContextEntry::UserMessage(message) =>
+                        RetainedContextEntry::UserMessage(message)
+                        | RetainedContextEntry::AssistantMessage(message) =>
                             (order, message.text.as_str()),
                         RetainedContextEntry::VerifiedAnswer(_) => panic!("unexpected answer"),
                     })

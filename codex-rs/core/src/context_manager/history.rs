@@ -262,7 +262,14 @@ impl ContextManager {
                 !context.verified_answers_complete()
                     || context.ordered_entries().any(|(_, entry)| match entry {
                         RetainedContextEntry::VerifiedAnswer(_) => true,
-                        RetainedContextEntry::UserMessage(message) => {
+                        RetainedContextEntry::UserMessage(message)
+                        | RetainedContextEntry::AssistantMessage(message) => {
+                            let source_role =
+                                if matches!(entry, RetainedContextEntry::UserMessage(_)) {
+                                    "user"
+                                } else {
+                                    "assistant"
+                                };
                             !self.raw_items().any(|item| {
                                 if item.id().map(codex_protocol::ResponseItemId::as_str)
                                     != message.message_id.as_deref()
@@ -273,7 +280,10 @@ impl ContextManager {
                                 let ResponseItem::Message { role, content, .. } = item else {
                                     return false;
                                 };
-                                if role != "user" || is_contextual_user_message_content(content) {
+                                if role != source_role
+                                    || (role == "user"
+                                        && is_contextual_user_message_content(content))
+                                {
                                     return false;
                                 }
                                 let text = content
@@ -457,10 +467,10 @@ impl ContextManager {
             {
                 self.user_message_revision = self.user_message_revision.saturating_add(1);
             }
-            self.record_user_authorization(
+            self.record_retained_message(
                 item,
                 metadata,
-                user_authorization::UserMessageSource::Original,
+                user_authorization::RetainedMessageSource::Original,
             );
         }
     }
@@ -657,6 +667,19 @@ impl ContextManager {
             self.trim_pre_turn_context_updates(&snapshot, first_instruction_turn_idx, cut_idx);
 
         let mut retained_items = snapshot[..cut_idx].to_vec();
+        if self.guardian_context_mode == GuardianContextMode::ThreadOwned
+            && let Some(boundary) = source.acceptance_order()
+        {
+            // A later assistant item may have finished before an earlier-accepted
+            // steer was persisted. Drop its raw source too, so recovery cannot
+            // reintroduce context removed at the retained rollback boundary.
+            retained_items.retain(|envelope| {
+                !(matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "assistant")
+                    || matches!(&envelope.item, ResponseItem::FunctionCall { .. }))
+                    || RetainedInputSource::from(envelope.metadata.as_ref())
+                        .acceptance_order().is_none_or(|order| order < boundary)
+            });
+        }
         if cut_idx == first_instruction_turn_idx
             && let Some(first_turn_id) = snapshot[first_instruction_turn_idx].turn_id()
         {

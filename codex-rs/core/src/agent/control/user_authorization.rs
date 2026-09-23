@@ -1,5 +1,7 @@
 //! Projects bounded root evidence for worker reviewers using the session's capture policy.
 //! Retained root instructions stay authoritative while old checkpoints use legacy review.
+//! User evidence wins, then assistant context preceding ordinary replies, then other live evidence.
+//! Thread-owned recovery includes commentary; legacy projection keeps its phase filter.
 //! Projection limits do not change authorization completeness; unavailable source text does.
 //! Retained-history reconciliation owns recovery order and missing-instruction provenance.
 //! Known positions preserve host order, not delivery order or inferred question-answer pairs.
@@ -163,39 +165,114 @@ impl LocalAgentControl {
                         codex_guardian_context::render_verified_answer(answer)
                             .map(|text| (Some(order), GuardianRootMessage::UserInput(text)))
                     }
+                    RetainedContextEntry::AssistantMessage(_) => None,
                 })
                 .collect::<Vec<_>>();
             messages.drain(..messages.len().saturating_sub(MAX_ROOT_MESSAGES));
-            // Optional assistant context cannot evict required grants or restrictions.
-            let mut assistant_messages = root_history
+            let mut missing_assistant_context = retained_context.has_omitted_assistant_messages();
+            // Prefer a renderable retained original over a shortened checkpoint copy.
+            // Otherwise preserve the bounded live evidence, including confirmed messaging sends.
+            let live_assistant_messages = root_history
                 .annotated_items()
                 .iter()
+                .filter(|envelope| {
+                    !envelope
+                        .metadata
+                        .as_ref()
+                        .is_some_and(|metadata| metadata.compaction_output)
+                })
                 .filter_map(|envelope| {
                     let text = root_assistant_text(&envelope.item, &delivered_messages)?;
+                    let id = envelope
+                        .item
+                        .id()
+                        .map(codex_protocol::ResponseItemId::as_str);
+                    let retained = reconciled.ordered_entries().find_map(|(order, entry)| {
+                        let RetainedContextEntry::AssistantMessage(message) = entry else {
+                            return None;
+                        };
+                        id.filter(|id| message.message_id.as_deref() == Some(*id))
+                            .map(|_| (order, message))
+                    });
+                    if let Some((order, message)) = retained
+                        && let Some(message) =
+                            codex_guardian_context::retained_assistant_message(message)
+                    {
+                        return Some((id, Some(order), message));
+                    }
                     let order = envelope
                         .metadata
                         .as_ref()
                         .filter(|metadata| !metadata.inherited_user_message)
                         .and_then(|metadata| metadata.user_input_order)
                         .map(RetainedContextOrder::Local);
+                    let order = retained.map(|(order, _)| order).or(order);
                     let message = if order.is_some() {
                         GuardianRootMessage::Assistant(text)
                     } else {
                         GuardianRootMessage::UnorderedAssistant(text)
                     };
-                    Some((order, message))
+                    Some((id, order, message))
                 })
                 .collect::<Vec<_>>();
+            let mut assistant_messages = reconciled
+                .ordered_entries()
+                .filter_map(|(order, entry)| {
+                    let RetainedContextEntry::AssistantMessage(message) = entry else {
+                        return None;
+                    };
+                    if message.message_id.as_deref().is_some_and(|id| {
+                        live_assistant_messages
+                            .iter()
+                            .any(|(live_id, _, _)| *live_id == Some(id))
+                    }) {
+                        return None;
+                    }
+                    let rendered = codex_guardian_context::retained_assistant_message(message);
+                    missing_assistant_context |= rendered.is_none();
+                    rendered.map(|message| (Some(order), message))
+                })
+                .collect::<Vec<_>>();
+            assistant_messages.extend(
+                live_assistant_messages
+                    .into_iter()
+                    .map(|(_, order, message)| (order, message)),
+            );
+            // Keep the nearest known assistant context for each ordinary reply. Verified
+            // answers already include their questions; unsequenced sources cannot be paired.
+            let reply_context_orders = messages
+                .iter()
+                .filter_map(|(user_order, message)| {
+                    let (Some(user_order), GuardianRootMessage::User(_)) = (user_order, message)
+                    else {
+                        return None;
+                    };
+                    assistant_messages
+                        .iter()
+                        .filter_map(|(order, _)| *order)
+                        .filter(|order| order < user_order)
+                        .max()
+                })
+                .collect::<Vec<_>>();
+            // Stable sorting keeps other live evidence ahead of retained-only extras.
+            assistant_messages.sort_by_key(|(order, _)| {
+                order.filter(|order| reply_context_orders.contains(order))
+            });
             let available = MAX_ROOT_MESSAGES.saturating_sub(messages.len());
+            missing_assistant_context |= assistant_messages.len() > available;
             assistant_messages.drain(..assistant_messages.len().saturating_sub(available));
             messages.extend(assistant_messages);
-            // Select evidence by priority first, then restore recorded order. Older assistant
-            // context has no comparable position and is explicitly labeled at the end.
             messages.sort_by_key(|(order, _)| (order.is_none(), *order));
             let mut messages = messages
                 .into_iter()
                 .map(|(_, message)| message)
                 .collect::<Vec<_>>();
+            if missing_assistant_context {
+                messages.insert(
+                    /*index*/ 0,
+                    GuardianRootMessage::IncompleteAssistantContext,
+                );
+            }
             let mut authorization_version = root_evidence.authorization_version(history.as_ref());
             if !authorization_version.retained_context_complete {
                 messages.insert(
@@ -231,6 +308,11 @@ impl LocalAgentControl {
                     (_, ResponseItem::FunctionCall { call_id, .. }) => root_evidence
                         .user_input_for_call(history.as_ref(), call_id)
                         .map(GuardianRootMessage::UserInput),
+                    (Some(TurnItem::AgentMessage(message)), _)
+                        if !matches!(message.phase, None | Some(MessagePhase::FinalAnswer)) =>
+                    {
+                        None
+                    }
                     _ => root_assistant_text(item, &delivered_messages)
                         .map(GuardianRootMessage::Assistant),
                 })
@@ -268,9 +350,6 @@ fn root_assistant_text(
             let Some(TurnItem::AgentMessage(message)) = parse_turn_item(item) else {
                 return None;
             };
-            if !matches!(message.phase, None | Some(MessagePhase::FinalAnswer)) {
-                return None;
-            }
             message
                 .content
                 .iter()

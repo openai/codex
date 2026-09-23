@@ -158,6 +158,19 @@ impl RollbackPlanner {
         match &line.item {
             RolloutItem::SessionMeta(_) => self.record_boundaries[index] = None,
             RolloutItem::ResponseItem(response) => {
+                if matches!(&response.item, ResponseItem::Message { role, .. } if role == "assistant")
+                    || matches!(&response.item, ResponseItem::FunctionCall { .. })
+                {
+                    self.retained_fact_sources.push(RetainedFactSource {
+                        record_index: index,
+                        turn_id: response.turn_id().unwrap_or_default().to_owned(),
+                        acceptance_order: response
+                            .metadata
+                            .as_ref()
+                            .filter(|metadata| !metadata.inherited_user_message)
+                            .and_then(|metadata| metadata.user_input_order),
+                    });
+                }
                 if let Some(boundary) = paired_delivery_boundary {
                     self.record_boundaries[index] = Some(boundary);
                     self.boundaries[boundary].message_id = response.id().cloned();

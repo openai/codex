@@ -141,9 +141,19 @@ impl CollectedContext {
                 ContextSection::SenderUserMessages { items } => {
                     (1, "sender_user_messages", text_content(items))
                 }
-                ContextSection::RetainedUserInstructions { items } => {
-                    (2, "retained_user_instructions", text_content(items))
-                }
+                ContextSection::RetainedUserInstructions { items } => (
+                    2,
+                    "retained_user_instructions",
+                    SectionDelivery::UserContent(
+                        items
+                            .into_iter()
+                            .map(|item| Budgeted {
+                                content: ContentItem::InputText { text: item.content },
+                                retention: item.retention,
+                            })
+                            .collect(),
+                    ),
+                ),
                 ContextSection::TrustedUserAnswers { items } => {
                     (3, "trusted_user_answers", text_content(items))
                 }

@@ -2927,21 +2927,24 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt(
     let history = test.codex.conversation_history_snapshot().await;
     assert_eq!(history.retained_context().is_some(), thread_context_enabled);
     let retained = serde_json::to_value(history.retained_context().cloned().unwrap_or_default())?;
+    let messages = retained["user_messages"]
+        .as_array()
+        .expect("retained user messages");
     assert_eq!(
-        retained["user_messages"]
-            .as_array()
-            .expect("retained user messages")
+        messages
             .iter()
-            .map(|message| (message["order"].clone(), message["text"].clone()))
+            .map(|message| message["text"].clone())
             .collect::<Vec<_>>(),
         if thread_context_enabled {
-            vec![
-                (json!(0), json!("initial prompt")),
-                (json!(1), json!("accepted queued prompt")),
-            ]
+            vec![json!("initial prompt"), json!("accepted queued prompt")]
         } else {
             Vec::new()
         },
+    );
+    assert!(
+        messages
+            .windows(2)
+            .all(|pair| pair[0]["order"].as_u64() < pair[1]["order"].as_u64())
     );
     assert_eq!(
         retained["next_order"],

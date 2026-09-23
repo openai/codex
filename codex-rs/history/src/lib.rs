@@ -82,11 +82,17 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_model_hash: Option<String>,
 
-    /// Thread acceptance order, independent of when queued user input reaches model history.
+    /// User acceptance or assistant delivery order, independent of queued input recording.
+    /// The serialized name is retained for compatibility with saved history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_input_order: Option<u64>,
 
-    /// Copied parent context stays model-visible but must not become child-local authorization.
+    /// Output generated for compaction is not an original user-visible assistant message.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compaction_output: bool,
+
+    /// Copied parent user/assistant context must not become child-local authorization.
+    /// The serialized field name is retained for compatibility with saved history.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inherited_user_message: bool,
 

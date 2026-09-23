@@ -20,7 +20,7 @@ pub enum ContextSection<T = ConversationTranscriptEntry> {
     ConversationTranscript { items: Vec<T> },
     RootConversation { items: Vec<String> },
     TrustedUserAnswers { items: Vec<String> },
-    RetainedUserInstructions { items: Vec<String> },
+    RetainedUserInstructions { items: Vec<crate::Budgeted<String>> },
     SenderUserMessages { items: Vec<String> },
     PlannedAction(PlannedAction),
     PreviousReviews(PreviousReviews),

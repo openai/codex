@@ -1155,7 +1155,7 @@ async fn guardian_checkpoint_migration_request_history() -> Result<()> {
     use super::guardian_checkpoint_migration::migration_scenario;
     let requests = migration_scenario().await?;
     let mut snapshot = context_snapshot::format_request_history_snapshot(
-        "An old checkpoint retains a user restriction and verified answer. Incompatible automatic compaction keeps legacy review across restart with its saved answer; compatible manual compaction immediately activates thread-owned review.",
+        "An old checkpoint retains a user restriction, assistant questions, and a verified answer. Incompatible automatic compaction keeps legacy review across restart with its saved answer; compatible manual compaction immediately activates thread-owned review.",
         &requests,
         &ContextSnapshotOptions::default()
             .rewrite_known_segments()

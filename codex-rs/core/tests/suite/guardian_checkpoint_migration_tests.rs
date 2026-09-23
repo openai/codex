@@ -145,6 +145,10 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
         &server,
         vec![
             responses::sse(vec![
+                responses::ev_assistant_message(
+                    "ordinary-question",
+                    "May I publish after these checks?",
+                ),
                 responses::ev_function_call(
                     "ask",
                     "request_user_input",
@@ -289,6 +293,17 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
     // The answer has survived suffix replay, both compactions, and checkpoint replay.
     let thread = resume(&test, &thread, after_compaction).await?;
     let history = thread.conversation_history_snapshot().await;
+    assert!(
+        history
+            .retained_context()
+            .expect("retained context")
+            .ordered_entries()
+            .any(|(_, entry)| {
+                matches!(entry, codex_history::RetainedContextEntry::AssistantMessage(message)
+            if message.message_id.as_deref() == Some("ordinary-question")
+                && message.text == "May I publish after these checks?")
+            })
+    );
     let answers = history
         .retained_context()
         .expect("retained answer evidence")

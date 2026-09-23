@@ -807,10 +807,16 @@ async fn drain_to_completed(
                     // the live history and persisted rollout intact.
                     output.push(item);
                 } else {
-                    sess.record_conversation_items(
+                    sess.record_annotated_conversation_items(
                         turn_context,
                         turn_context.model_info(),
-                        std::slice::from_ref(&item),
+                        vec![ResponseItemEnvelope {
+                            item,
+                            metadata: Some(CodexHarnessMetadata {
+                                compaction_output: true,
+                                ..Default::default()
+                            }),
+                        }],
                     )
                     .await;
                 }

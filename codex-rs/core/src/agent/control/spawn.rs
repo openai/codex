@@ -988,9 +988,9 @@ impl LocalAgentControl {
         let retain_forked_item = |envelope: &mut ResponseItemEnvelope, replaced: &mut bool| {
             if context_mode == GuardianContextMode::ThreadOwned
                 && multi_agent_version == MultiAgentVersion::V2
-                && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user")
+                && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant")
             {
-                // Persist the scope of every inherited user message, including the suffix
+                // Persist the scope of every inherited conversational message, including the suffix
                 // after a checkpoint. Resume must not recapture it as local authorization.
                 envelope
                     .metadata

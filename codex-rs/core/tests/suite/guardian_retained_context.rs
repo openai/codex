@@ -274,7 +274,8 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     const INITIAL: &str = "Never publish publicly.";
-    const STEER: &str = "Also inspect the README.";
+    const QUESTION: &str = "Should I also inspect the README?";
+    const STEER: &str = "Yes, inspect the README.";
     let initial = match instruction_size {
         InstructionSize::Normal => INITIAL.to_owned(),
         InstructionSize::Oversized => format!(
@@ -311,7 +312,7 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
     let mut responses = questions
         .iter()
         .map(|(call_id, question, _)| {
-            sse(vec![
+            let mut events = vec![
                 ev_function_call(
                     call_id,
                     "request_user_input",
@@ -325,7 +326,14 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
                     .to_string(),
                 ),
                 ev_completed(call_id),
-            ])
+            ];
+            if *call_id == "before-steer" {
+                events.insert(
+                    /*index*/ 0,
+                    ev_assistant_message("ordinary-question", QUESTION),
+                );
+            }
+            sse(events)
         })
         .collect::<Vec<_>>();
     responses.push(sse(vec![ev_completed("done")]));
@@ -402,9 +410,9 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
         }
     }
     let history = thread.conversation_history_snapshot().await;
-    // Shared order: initial input, first question, steer, first answer, second
-    // question, second answer. Recording the queued steer later must not move it.
-    let user_messages = [(0, initial.as_str()), (2, STEER)]
+    // Shared order: initial input, ordinary question, first tool call, steer, first
+    // answer, second tool call, second answer. Recording the queued steer later must not move it.
+    let user_messages = [(0, initial.as_str()), (3, STEER)]
         .into_iter()
         .enumerate()
         .map(|(index, (order, text))| {
@@ -432,21 +440,25 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
         .collect::<Vec<_>>();
     let ordered_answers = answers
         .iter()
-        .zip([3, 5])
+        .zip([4, 6])
         .map(|(answer, order)| {
             let mut value = json!(answer);
             value["order"] = json!(order);
             value
         })
         .collect::<Vec<_>>();
-    let mut next_order = if thread_context_enabled { 6_u64 } else { 0 };
+    let next_order = if thread_context_enabled { 7_u64 } else { 0 };
     let mut expected = json!({
         "user_messages": user_messages, "user_messages_incomplete": false,
+        "assistant_messages": [{"order": 1, "turn_id": answers[0].turn_id,
+            "message_id": "ordinary-question", "text": QUESTION, "complete": true}],
+        "assistant_messages_incomplete": false,
         "verified_answers": ordered_answers, "incomplete": false, "next_order": next_order,
     });
     if !thread_context_enabled {
         expected = json!({
             "user_messages": [], "user_messages_incomplete": true,
+            "assistant_messages": [], "assistant_messages_incomplete": false,
             "verified_answers": [], "incomplete": false, "next_order": 0,
         });
         answers.clear();
@@ -470,14 +482,15 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
             serde_json::Value::Null
         }
     );
-    // Each local compaction records one assistant summary in the shared sequence.
-    next_order += u64::from(thread_context_enabled);
-    expected["next_order"] = json!(next_order);
     assert_eq!(
         serde_json::to_value(compact_and_assert_answers(&test, &thread, &answers).await?)?,
         expected
     );
     let compacted = thread.conversation_history_snapshot().await;
+    assert!(!compacted.items().any(|item| {
+        item.id()
+            .is_some_and(|id| id.as_str() == "ordinary-question")
+    }));
     for message in &user_messages {
         assert_eq!(
             compacted
@@ -627,7 +640,6 @@ async fn legacy_checkpoint_recovers_root_excerpt_before_discarding_backup(
         Some(&expected)
     );
     // The excerpt must survive another compaction and resume after the backup is gone.
-    expected.reserve_order(); // The compactor's assistant summary consumes a position.
     assert_eq!(
         compact_and_assert_answers(&test, &resumed, &[]).await?,
         expected
@@ -902,9 +914,10 @@ async fn standalone_fork_retains_inherited_user_instructions(
     assert_eq!(
         retained
             .ordered_entries()
-            .map(|(_, entry)| match entry {
+            .filter_map(|(_, entry)| match entry {
                 codex_history::RetainedContextEntry::UserMessage(message) =>
-                    (message.text.clone(), message.complete),
+                    Some((message.text.clone(), message.complete)),
+                codex_history::RetainedContextEntry::AssistantMessage(_) => None,
                 codex_history::RetainedContextEntry::VerifiedAnswer(_) =>
                     panic!("no answers before root adoption"),
             })
@@ -1112,8 +1125,10 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
     assert_eq!(
         expected.as_ref().map(|context| context
             .ordered_entries()
-            .map(|(_, entry)| match entry {
-                codex_history::RetainedContextEntry::UserMessage(message) => message.text.as_str(),
+            .filter_map(|(_, entry)| match entry {
+                codex_history::RetainedContextEntry::UserMessage(message) =>
+                    Some(message.text.as_str()),
+                codex_history::RetainedContextEntry::AssistantMessage(_) => None,
                 codex_history::RetainedContextEntry::VerifiedAnswer(_) =>
                     panic!("unexpected answer"),
             })
