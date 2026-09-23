@@ -262,6 +262,7 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
             ExecServerTelemetry::default(),
             http_client_factory,
             request_dispatch_mode,
+            codex_websocket_auth::WebsocketAuthSettings::default(),
         )
         .await
     }) {

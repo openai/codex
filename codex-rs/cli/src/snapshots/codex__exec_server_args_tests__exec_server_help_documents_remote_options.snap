@@ -41,6 +41,29 @@ Options:
           Transport endpoint URL. Supported values: `ws://IP:PORT` (default),
           `stdio`, `stdio://`
 
+      --ws-auth <MODE>
+          Authentication mode for incoming WebSocket connections
+
+          [possible values: capability-token, signed-bearer-token]
+
+      --ws-token-file <PATH>
+          Absolute path to the capability-token file
+
+      --ws-token-sha256 <HEX>
+          Hex-encoded SHA-256 digest of the capability token
+
+      --ws-shared-secret-file <PATH>
+          Absolute path to the shared secret file for signed JWT bearer tokens
+
+      --ws-issuer <ISSUER>
+          Expected issuer for signed JWT bearer tokens
+
+      --ws-audience <AUDIENCE>
+          Expected audience for signed JWT bearer tokens
+
+      --ws-max-clock-skew-seconds <SECONDS>
+          Maximum clock skew when validating signed JWT bearer tokens
+
       --remote <URL>
           Register this exec-server as a remote environment using the given base
           URL

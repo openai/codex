@@ -23,6 +23,7 @@ use codex_login::is_workload_identity_selected;
 use codex_login::read_codex_access_token_from_env;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use codex_websocket_auth::WebsocketAuthArgs;
 
 use crate::exec_server_auth;
 use crate::exec_server_telemetry;
@@ -57,6 +58,9 @@ pub(super) struct ExecServerCommand {
         conflicts_with = "exec_server_remote"
     )]
     listen: Option<String>,
+
+    #[command(flatten)]
+    websocket_auth: WebsocketAuthArgs,
 
     /// Register this exec-server as a remote environment using the given base URL.
     #[arg(
@@ -147,6 +151,10 @@ impl ExecServerCommand {
     ) -> anyhow::Result<()> {
         let strict_config = self.strict_config;
         self.validate_remote_transport()?;
+        let websocket_auth = self.websocket_auth.try_into_settings()?;
+        if websocket_auth.config.is_some() && (self.remote.is_some() || self.command.is_some()) {
+            anyhow::bail!("WebSocket listener auth cannot be used with --remote or forward");
+        }
         let codex_self_exe = arg0_paths
             .codex_self_exe
             .clone()
@@ -279,6 +287,7 @@ impl ExecServerCommand {
                     telemetry,
                     http_client_factory,
                     self.request_dispatch_mode,
+                    websocket_auth,
                 ),
                 exec_server_telemetry::ParentLifetime::Independent,
                 exec_server_telemetry::ShutdownBehavior::Immediate,

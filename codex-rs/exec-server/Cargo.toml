@@ -37,6 +37,7 @@ codex-utils-home-dir = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
+codex-websocket-auth = { workspace = true }
 codex-websocket-client = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }

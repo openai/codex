@@ -1,8 +1,12 @@
+//! Exec-server stdio and WebSocket listeners. Configured authentication gates
+//! WebSocket upgrades; unauthenticated listeners remain supported for compatibility.
+
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header::ORIGIN;
@@ -13,6 +17,10 @@ use axum::response::Response;
 use axum::routing::any;
 use axum::routing::get;
 use codex_http_client::HttpClientFactory;
+use codex_websocket_auth::WebsocketAuthPolicy;
+use codex_websocket_auth::WebsocketAuthSettings;
+use codex_websocket_auth::authorize_upgrade;
+use codex_websocket_auth::policy_from_settings;
 use std::io::Write as _;
 use std::net::SocketAddr;
 use tokio::io;
@@ -87,6 +95,7 @@ pub(crate) async fn run_transport(
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
+    websocket_auth: WebsocketAuthSettings,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_listen_url(listen_url)? {
         ExecServerListenTransport::WebSocket(bind_address) => {
@@ -96,10 +105,18 @@ pub(crate) async fn run_transport(
                 telemetry,
                 http_client_factory,
                 request_dispatch_mode,
+                policy_from_settings(&websocket_auth)?,
             )
             .await
         }
         ExecServerListenTransport::Stdio => {
+            if websocket_auth.config.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "WebSocket auth requires a WebSocket listener, not stdio",
+                )
+                .into());
+            }
             run_stdio_connection(
                 runtime_paths,
                 telemetry,
@@ -164,6 +181,7 @@ async fn run_websocket_listener(
     telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
+    auth_policy: WebsocketAuthPolicy,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
@@ -181,7 +199,10 @@ async fn run_websocket_listener(
         .route("/", any(websocket_upgrade_handler))
         .route("/readyz", get(readiness_handler))
         .layer(middleware::from_fn(reject_requests_with_origin_header))
-        .with_state(ExecServerWebSocketState { processor });
+        .with_state(ExecServerWebSocketState {
+            processor,
+            auth_policy,
+        });
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -193,6 +214,7 @@ async fn run_websocket_listener(
 #[derive(Clone)]
 struct ExecServerWebSocketState {
     processor: ConnectionProcessor,
+    auth_policy: WebsocketAuthPolicy,
 }
 
 async fn readiness_handler() -> StatusCode {
@@ -219,20 +241,26 @@ async fn websocket_upgrade_handler(
     websocket: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<ExecServerWebSocketState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Err(err) = authorize_upgrade(&headers, &state.auth_policy) {
+        return (err.status_code(), err.message()).into_response();
+    }
     info!(%peer_addr, "exec-server websocket client connected");
-    websocket.on_upgrade(move |stream| async move {
-        state
-            .processor
-            .run_connection(
-                JsonRpcConnection::from_axum_websocket(
-                    stream,
-                    format!("exec-server websocket {peer_addr}"),
-                ),
-                ConnectionTransport::WebSocket,
-            )
-            .await;
-    })
+    websocket
+        .on_upgrade(move |stream| async move {
+            state
+                .processor
+                .run_connection(
+                    JsonRpcConnection::from_axum_websocket(
+                        stream,
+                        format!("exec-server websocket {peer_addr}"),
+                    ),
+                    ConnectionTransport::WebSocket,
+                )
+                .await;
+        })
+        .into_response()
 }
 
 #[cfg(test)]
