@@ -1,8 +1,11 @@
 use super::MetadataOverrideFileSystem;
 use super::create_test_git_repo;
+use super::resolve_root_git_project_for_trust;
 use super::write_linked_worktree_metadata;
 use codex_exec_server::LOCAL_FS;
-use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_git_utils::resolve_root_git_project_uri_for_trust;
+#[cfg(unix)]
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -10,6 +13,74 @@ use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;
 use tokio::process::Command;
+
+#[tokio::test]
+async fn portable_trust_roots_support_posix_windows_drive_and_unc_paths() {
+    for root in [
+        "file:///repo%20with%20spaces",
+        "file:///C:/Repo%20%23",
+        "file://server/share/Repo%20%23",
+    ] {
+        let root = PathUri::parse(root).unwrap();
+        let checkout = root.parent().unwrap().join("checkout").unwrap();
+        let dot_git = root.join(".git").unwrap();
+        let git_dir = dot_git.join("worktrees/dev").unwrap();
+        let checkout_dot_git = checkout.join(".git").unwrap();
+        let fs = MetadataOverrideFileSystem::with_entries([
+            (root.join("src").unwrap(), None),
+            (dot_git.clone(), None),
+            (
+                dot_git.join("HEAD").unwrap(),
+                Some("ref: refs/heads/main\n".into()),
+            ),
+            (checkout.clone(), None),
+            (checkout.join("src").unwrap(), None),
+            (git_dir.clone(), None),
+            (
+                checkout_dot_git.clone(),
+                Some(format!(
+                    "gitdir: {}\n",
+                    git_dir.inferred_native_path_string()
+                )),
+            ),
+            (
+                git_dir.join("gitdir").unwrap(),
+                Some(checkout_dot_git.inferred_native_path_string()),
+            ),
+            (git_dir.join("commondir").unwrap(), Some("../..".into())),
+        ]);
+        for cwd in [root.join("src").unwrap(), checkout.join("src").unwrap()] {
+            assert_eq!(
+                resolve_root_git_project_uri_for_trust(&fs, &cwd)
+                    .await
+                    .map(|path| path.to_url()),
+                Some(root.to_url().clone()),
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn opaque_uri_ancestry_remains_available_only_to_native_trust_lookup() {
+    // This POSIX spelling would imply a Windows drive in an ordinary URI.
+    let root = AbsolutePathBuf::try_from("/C:/project").unwrap();
+    let cwd = root.join("src");
+    let cwd_uri = PathUri::from_abs_path(&cwd);
+    assert!(cwd_uri.is_opaque());
+    let fs = MetadataOverrideFileSystem::with_entries([
+        (cwd_uri.clone(), None),
+        (PathUri::from_abs_path(&root.join(".git")), None),
+        (
+            PathUri::from_abs_path(&root.join(".git/HEAD")),
+            Some("ref: refs/heads/main\n".into()),
+        ),
+    ]);
+    assert_eq!(
+        resolve_root_git_project_for_trust(&fs, &cwd).await,
+        Some(root)
+    );
+}
 
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_validates_main_checkout_ownership() {
@@ -51,12 +122,12 @@ async fn resolve_root_git_project_for_trust_rejects_dot_git_swapped_after_stat()
     fs::create_dir_all(&attacker).unwrap();
     fs::copy(checkout.join(".git"), attacker.join(".git")).unwrap();
     let fs = MetadataOverrideFileSystem {
-        path: PathUri::from_abs_path(&attacker.join(".git").abs()),
+        path: Some(PathUri::from_abs_path(&attacker.join(".git").abs())),
         replacement: Some(checkout.join(".git")),
-        canonical_overrides: Vec::new(),
+        ..Default::default()
     };
     assert_eq!(
-        resolve_root_git_project_for_trust(&fs, &attacker.abs()).await,
+        codex_git_utils::resolve_root_git_project_for_trust(&fs, &attacker.abs()).await,
         None
     );
     assert!(
@@ -84,8 +155,6 @@ async fn resolve_root_git_project_for_trust_preserves_canonical_checkout_case() 
         ("file:///C:/REAL", None),
     ] {
         let fs = MetadataOverrideFileSystem {
-            path: PathUri::from_abs_path(&tmp.path().join("unused").abs()),
-            replacement: None,
             canonical_overrides: vec![
                 (
                     registered_uri.clone(),
@@ -96,6 +165,7 @@ async fn resolve_root_git_project_for_trust_preserves_canonical_checkout_case() 
                     PathUri::parse(canonical_attacker).unwrap(),
                 ),
             ],
+            ..Default::default()
         };
         assert_eq!(
             resolve_root_git_project_for_trust(&fs, &attacker.abs()).await,

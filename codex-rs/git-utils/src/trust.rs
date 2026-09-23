@@ -1,5 +1,8 @@
+//! Resolve repository trust roots through local or remote filesystem access.
+
 use codex_file_system::ExecutorFileSystem;
 use codex_file_system::FindUpErrorPolicy;
+use codex_file_system::find_nearest_ancestor_with_markers;
 use codex_file_system::find_nearest_native_ancestor_with_markers;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
@@ -14,7 +17,59 @@ pub async fn resolve_root_git_project_for_trust(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let cwd_uri = PathUri::from_abs_path(cwd);
+    match resolve_root(fs, TrustPath::Native(cwd.clone())).await? {
+        TrustPath::Native(root) => Some(root),
+        TrustPath::Uri(_) => None,
+    }
+}
+
+/// Resolve the main repository's trust root using the executor's path convention.
+///
+/// Uses existing filesystem operations so this also works with independently
+/// deployed executors. Native callers should use [`resolve_root_git_project_for_trust`]
+/// to preserve paths whose URI representation is opaque.
+pub async fn resolve_root_git_project_uri_for_trust(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &PathUri,
+) -> Option<PathUri> {
+    resolve_root(fs, TrustPath::Uri(cwd.clone()))
+        .await
+        .map(|root| root.uri())
+}
+
+// Keep native ancestry native: an opaque URI cannot supply parents or children.
+// Everything after ancestry discovery shares the same repository validation.
+#[derive(Clone)]
+enum TrustPath {
+    Native(AbsolutePathBuf),
+    Uri(PathUri),
+}
+
+impl TrustPath {
+    fn uri(&self) -> PathUri {
+        match self {
+            Self::Native(path) => PathUri::from_abs_path(path),
+            Self::Uri(path) => path.clone(),
+        }
+    }
+
+    fn parent(&self) -> Option<Self> {
+        match self {
+            Self::Native(path) => path.parent().map(Self::Native),
+            Self::Uri(path) => path.parent().map(Self::Uri),
+        }
+    }
+
+    fn join(&self, component: &str) -> Option<Self> {
+        match self {
+            Self::Native(path) => Some(Self::Native(path.join(component))),
+            Self::Uri(path) => path.join(component).ok().map(Self::Uri),
+        }
+    }
+}
+
+async fn resolve_root(fs: &dyn ExecutorFileSystem, cwd: TrustPath) -> Option<TrustPath> {
+    let cwd_uri = cwd.uri();
     let base = match fs
         .get_metadata(&cwd_uri, Default::default(), /*sandbox*/ None)
         .await
@@ -24,28 +79,38 @@ pub async fn resolve_root_git_project_for_trust(
     };
     let mut base = base;
     let repo_root = loop {
-        let candidate = find_nearest_native_ancestor_with_markers(
-            fs,
-            &base,
-            vec![".git".to_string()],
-            FindUpErrorPolicy::Ignore,
-            /*sandbox*/ None,
-        )
-        .await
-        .ok()??;
-        let dot_git = candidate.join(".git");
-        let metadata = fs
-            .get_metadata(
-                &PathUri::from_abs_path(&dot_git),
-                Default::default(),
+        let candidate = match &base {
+            TrustPath::Native(path) => find_nearest_native_ancestor_with_markers(
+                fs,
+                path,
+                vec![".git".to_string()],
+                FindUpErrorPolicy::Ignore,
                 /*sandbox*/ None,
             )
+            .await
+            .ok()?
+            .map(TrustPath::Native)?,
+            TrustPath::Uri(path) => TrustPath::Uri(
+                find_nearest_ancestor_with_markers(
+                    fs,
+                    path,
+                    vec![".git".to_string()],
+                    FindUpErrorPolicy::Ignore,
+                    /*sandbox*/ None,
+                )
+                .await
+                .ok()??,
+            ),
+        };
+        let dot_git = candidate.join(".git")?;
+        let metadata = fs
+            .get_metadata(&dot_git.uri(), Default::default(), /*sandbox*/ None)
             .await
             .ok()?;
         if !metadata.is_directory
             || fs
                 .get_metadata(
-                    &PathUri::from_abs_path(&dot_git.join("HEAD")),
+                    &dot_git.join("HEAD")?.uri(),
                     Default::default(),
                     /*sandbox*/ None,
                 )
@@ -56,8 +121,7 @@ pub async fn resolve_root_git_project_for_trust(
         }
         base = candidate.parent()?;
     };
-    let dot_git = repo_root.join(".git");
-    let dot_git_uri = PathUri::from_abs_path(&dot_git);
+    let dot_git_uri = repo_root.join(".git")?.uri();
     let dot_git_metadata = fs
         .get_metadata(&dot_git_uri, Default::default(), /*sandbox*/ None)
         .await
@@ -73,7 +137,10 @@ pub async fn resolve_root_git_project_for_trust(
     }
 
     let git_dir_uri = read_gitdir_file(fs, &dot_git_uri).await?;
-    let git_dir_path = git_dir_uri.to_abs_path().ok()?;
+    let git_dir_path = match &repo_root {
+        TrustPath::Native(_) => TrustPath::Native(git_dir_uri.to_abs_path().ok()?),
+        TrustPath::Uri(_) => TrustPath::Uri(git_dir_uri.clone()),
+    };
     let git_dir_metadata = fs
         .get_metadata(&git_dir_uri, Default::default(), /*sandbox*/ None)
         .await
@@ -112,7 +179,7 @@ pub async fn resolve_root_git_project_for_trust(
     }
     let linked_common_dir_uri = canonical_git_dir_uri.join_native_bytes(commondir).ok()?;
     let registered_checkout_uri = worktree_dot_git_uri.parent()?;
-    let checkout_uri = PathUri::from_abs_path(&repo_root);
+    let checkout_uri = repo_root.uri();
     // Compare checkout directories, not the final .git entries. Following a
     // substituted .git symlink must never turn an unrelated checkout into the
     // registered one, even if it is swapped after the metadata check above.
@@ -134,7 +201,7 @@ pub async fn resolve_root_git_project_for_trust(
     // checkout made with --separate-git-dir may have a regular .git pointer.
     let common_dir = git_dir_path.parent()?.parent()?;
     let main_root = common_dir.parent()?;
-    let main_dot_git_uri = PathUri::from_abs_path(&main_root.join(".git"));
+    let main_dot_git_uri = main_root.join(".git")?.uri();
     let main_metadata = fs
         .get_metadata(&main_dot_git_uri, Default::default(), /*sandbox*/ None)
         .await
