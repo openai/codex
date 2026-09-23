@@ -1311,7 +1311,11 @@ pub async fn start_websocket_server_with_headers(
             };
             let close_after_requests = connection.close_after_requests;
             for request_events in connection.requests {
-                let Some(Ok(message)) = ws_stream.next().await else {
+                let message = tokio::select! {
+                    _ = &mut shutdown_rx => return,
+                    message = ws_stream.next() => message,
+                };
+                let Some(Ok(message)) = message else {
                     break;
                 };
                 if let Some(body) = parse_ws_request_body(message) {
