@@ -115,6 +115,11 @@ impl TranscriptView {
         let Some(mut selection) = self.selection.take() else {
             return;
         };
+        // A Shift-click starts a new pointer gesture while retaining the text anchor.
+        if !selection.dragging {
+            selection.pointer_origin_row = row;
+            selection.moved_vertically = false;
+        }
         let cells = Arc::clone(&selection.snapshot.cells);
         let range = selection.unit.range(layout.text(), end.offset);
         let origin = selection.origin;

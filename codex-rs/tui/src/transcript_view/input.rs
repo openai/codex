@@ -1,5 +1,6 @@
 //! Transcript gestures leave ordinary typing and composer editing with the existing input path.
 //! Stationary link clicks open on release; dragging or scrolling keeps the gesture in selection.
+//! Shift-click extends the existing selection from its original text unit.
 
 use crate::key_hint::KeyBindingListExt;
 use crossterm::event::KeyCode;
@@ -352,6 +353,15 @@ impl TranscriptView {
                 .layout
                 .link_at(visible.row, event.column.saturating_sub(self.area.x))
                 .map(ViewAction::OpenLink);
+        }
+        if event.modifiers == KeyModifiers::SHIFT && self.has_selection_range() {
+            self.last_click = None;
+            self.extend_selection(event.column, event.row);
+            if let Some(selection) = &mut self.selection {
+                selection.dragging = true;
+                selection.pressed_link = None;
+            }
+            return Some(ViewAction::Changed);
         }
         let clicks =
             crate::text_selection::click_count(&mut self.last_click, event.column, event.row);
