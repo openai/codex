@@ -38,6 +38,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 
 #[cfg(windows)]
@@ -169,8 +170,12 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     Ok(())
 }
 
+#[test_case(CommandExecutionApprovalDecision::Decline; "declined")]
+#[test_case(CommandExecutionApprovalDecision::Accept; "launch_failure")]
 #[tokio::test]
-async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
+async fn turn_start_shell_zsh_fork_exec_approval_v2(
+    decision: CommandExecutionApprovalDecision,
+) -> Result<()> {
     // TODO(anp): Remove after zsh-fork fixtures can run in the selected remote environment.
     skip_if_remote!(
         Ok(()),
@@ -190,6 +195,8 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
+    let launch_failed = matches!(decision, CommandExecutionApprovalDecision::Accept);
+    let missing_cwd = workspace.join("missing-work-directory");
     let responses = vec![
         create_escalated_command_execution_sse_response(
             vec![
@@ -197,7 +204,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            /*workdir*/ None,
+            launch_failed.then_some(missing_cwd.as_path()),
             Some(5000),
             "call-zsh-fork-decline",
         )?,
@@ -209,6 +216,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         &server.uri(),
         "on-request",
         &BTreeMap::from([
+            (Feature::UnifiedExec, true),
             (Feature::ShellZshFork, true),
             (Feature::ShellSnapshot, false),
         ]),
@@ -253,9 +261,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
 
     mcp.send_response(
         request_id,
-        serde_json::to_value(CommandExecutionRequestApprovalResponse {
-            decision: CommandExecutionApprovalDecision::Decline,
-        })?,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse { decision })?,
     )
     .await?;
 
@@ -280,6 +286,8 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         id,
         status,
         exit_code,
+        process_id,
+        duration_ms,
         aggregated_output,
         ..
     } = completed_command_execution
@@ -287,15 +295,41 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(id, "call-zsh-fork-decline");
-    assert_eq!(status, CommandExecutionStatus::Declined);
-    assert!(exit_code.is_none());
-    assert!(aggregated_output.is_none());
+    assert_eq!(process_id, None);
+    if launch_failed {
+        assert_eq!(
+            (status, exit_code, duration_ms),
+            (CommandExecutionStatus::Failed, Some(-1), Some(0))
+        );
+        assert!(
+            aggregated_output
+                .expect("launch diagnostic")
+                .starts_with("Failed to create unified exec process:")
+        );
+    } else {
+        assert_eq!(
+            (status, exit_code, duration_ms),
+            (CommandExecutionStatus::Declined, None, None)
+        );
+        assert!(aggregated_output.is_none());
+    }
 
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let mut command_events = Vec::new();
+    for method in mcp.pending_notification_methods() {
+        let notification = mcp.read_stream_until_notification_message(&method).await?;
+        if notification.params.expect("notification params")["item"]["id"]
+            == "call-zsh-fork-decline"
+        {
+            command_events.push(method);
+        }
+    }
+    assert_eq!(command_events, ["item/started"]);
 
     Ok(())
 }

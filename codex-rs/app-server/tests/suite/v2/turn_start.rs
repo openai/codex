@@ -5495,9 +5495,13 @@ async fn run_turn_start_file_change_approval_rejection_v2(
     Ok(())
 }
 
+#[cfg_attr(not(windows), test_case(None; "started"))]
+#[test_case(Some(json!({"cmd": "echo unreachable", "workdir": "missing-work-directory", "tty": false})); "pipe_launch_failure")]
+#[test_case(Some(json!({"cmd": "echo unreachable\u{0}", "tty": true, "login": false})); "pty_launch_failure")]
 #[tokio::test]
-#[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
-async fn command_execution_notifications_include_process_id() -> Result<()> {
+async fn command_execution_notifications_include_process_id(
+    launch_failure_args: Option<Value>,
+) -> Result<()> {
     // TODO(anp): Add target-Windows process-id expectations for remote executors.
     skip_if_wine_exec!(
         Ok(()),
@@ -5505,8 +5509,18 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     );
     skip_if_no_network!(Ok(()));
 
+    let launch_failed = launch_failure_args.is_some();
+    let command = if let Some(args) = launch_failure_args {
+        responses::sse(vec![
+            responses::ev_response_created("launch"),
+            responses::ev_function_call("uexec-1", "exec_command", &args.to_string()),
+            responses::ev_completed("launch"),
+        ])
+    } else {
+        create_exec_command_sse_response("uexec-1")?
+    };
     let responses = vec![
-        create_exec_command_sse_response("uexec-1")?,
+        command,
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -5514,6 +5528,8 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     MockResponsesConfig::new(&server.uri())
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::UnifiedExec)
+        .disable_feature(Feature::ShellZshFork)
+        .disable_feature(Feature::ShellSnapshot)
         .write(codex_home.path())?;
 
     let mut mcp = TestAppServer::builder()
@@ -5564,7 +5580,7 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     };
     assert_eq!(id, "uexec-1");
     assert_eq!(status, CommandExecutionStatus::InProgress);
-    let started_process_id = started_process_id.expect("process id should be present");
+    assert_eq!(started_process_id.is_none(), launch_failed);
 
     let completed_command = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -5581,6 +5597,8 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         process_id: completed_process_id,
         status: completed_status,
         exit_code,
+        duration_ms,
+        aggregated_output,
         ..
     } = completed_command
     else {
@@ -5594,15 +5612,22 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
         ),
         "unexpected command execution status: {completed_status:?}"
     );
-    if completed_status == CommandExecutionStatus::Completed {
+    if launch_failed {
+        assert_eq!(
+            (completed_status, exit_code, duration_ms),
+            (CommandExecutionStatus::Failed, Some(-1), Some(0))
+        );
+        assert!(
+            aggregated_output
+                .context("launch diagnostic")?
+                .starts_with("Failed to create unified exec process:")
+        );
+    } else if completed_status == CommandExecutionStatus::Completed {
         assert_eq!(exit_code, Some(0));
     } else {
         assert!(exit_code.is_some(), "expected exit_code for failed command");
     }
-    assert_eq!(
-        completed_process_id.as_deref(),
-        Some(started_process_id.as_str())
-    );
+    assert_eq!(completed_process_id, started_process_id);
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -5610,16 +5635,30 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     )
     .await??;
 
+    for method in mcp.pending_notification_methods() {
+        let notification = mcp.read_stream_until_notification_message(&method).await?;
+        assert_ne!(
+            notification.params.context("notification params")?["item"]["id"],
+            "uexec-1"
+        );
+    }
+
     Ok(())
 }
 
 #[cfg_attr(windows, ignore = "plugin attribution fixture is Unix-only")]
+#[test_case(CommandExecutionStatus::Completed; "completed")]
+#[test_case(CommandExecutionStatus::Failed; "launch_failure")]
 #[tokio::test]
-async fn command_execution_notifications_include_trusted_plugin_id() -> Result<()> {
+async fn command_execution_notifications_include_trusted_plugin_id(
+    expected_status: CommandExecutionStatus,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_wine_exec!(Ok(()), "plugin attribution fixture is Unix-only");
 
     let codex_home = TempDir::new()?;
+    let missing_cwd = codex_home.path().join("missing-work-directory");
+    let launch_failed = expected_status == CommandExecutionStatus::Failed;
     let curated_sha = "0123456789abcdef0123456789abcdef01234567";
     let plugin_root = codex_home
         .path()
@@ -5661,7 +5700,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
                 "/bin/sh".to_string(),
                 script_path.to_string_lossy().into_owned(),
             ],
-            /*workdir*/ None,
+            launch_failed.then_some(missing_cwd.as_path()),
             /*timeout_ms*/ None,
             "plugin-command",
         )?,
@@ -5672,7 +5711,10 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         .with_approval_policy("on-request")
         .with_sandbox_mode("danger-full-access")
         .enable_feature(Feature::Plugins)
+        .enable_feature(Feature::UnifiedExec)
         .disable_feature(Feature::RemotePlugin)
+        .disable_feature(Feature::ShellZshFork)
+        .disable_feature(Feature::ShellSnapshot)
         .with_extra_config("[plugins.\"google-calendar@openai-api-curated\"]\nenabled = true")
         .write(codex_home.path())?;
 
@@ -5733,7 +5775,7 @@ async fn command_execution_notifications_include_trusted_plugin_id() -> Result<(
         if method == "item/started" {
             assert_eq!(status, CommandExecutionStatus::InProgress);
         } else {
-            assert_eq!(status, CommandExecutionStatus::Completed);
+            assert_eq!(status, expected_status);
         }
     }
 
