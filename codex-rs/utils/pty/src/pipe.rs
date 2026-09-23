@@ -1,19 +1,26 @@
+//! Pipe I/O and process-tree ownership on top of the shared local child launcher.
+
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 
+use crate::ChildStdin;
+use crate::Command;
+#[cfg(unix)]
+use crate::DescriptorPolicy;
+#[cfg(unix)]
+use crate::ProcessMode;
+use crate::child_command::ChildDropPolicy;
 use anyhow::Result;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -23,9 +30,6 @@ use crate::process::ProcessHandle;
 use crate::process::ProcessSignal;
 use crate::process::SpawnedProcess;
 use crate::process::exit_code_from_status;
-
-#[cfg(target_os = "linux")]
-use libc;
 
 #[cfg(windows)]
 enum WindowsChildTerminator {
@@ -147,40 +151,24 @@ async fn spawn_process_with_stdin_mode(
     if let Some(arg0) = arg0 {
         command.arg0(arg0);
     }
+    #[cfg(unix)]
+    command
+        .process_mode(ProcessMode::NewSession)
+        .descriptor_policy(DescriptorPolicy::Explicit)
+        .preserve_fds(inherited_fds);
     #[cfg(target_os = "linux")]
-    let parent_pid = unsafe { libc::getpid() };
-    #[cfg(unix)]
-    let inherited_fds = inherited_fds.to_vec();
-    #[cfg(unix)]
-    unsafe {
-        command.pre_exec(move || {
-            crate::process_group::detach_from_tty()?;
-            #[cfg(target_os = "linux")]
-            crate::process_group::set_parent_death_signal(parent_pid)?;
-            crate::pty::close_inherited_fds_except(&inherited_fds);
-            Ok(())
-        });
-    }
+    command.terminate_on_parent_death();
     #[cfg(not(unix))]
     let _ = arg0;
-    command.current_dir(cwd);
-    command.env_clear();
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    for arg in args {
-        command.arg(arg);
-    }
-    match stdin_mode {
-        PipeStdinMode::Piped => {
-            command.stdin(Stdio::piped());
-        }
-        PipeStdinMode::Null => {
-            command.stdin(Stdio::null());
-        }
-    }
-    command.stdout(Stdio::piped());
-    command.stderr(Stdio::piped());
+    command
+        .current_dir(cwd)
+        .envs(env)
+        .args(args)
+        .drop_policy(ChildDropPolicy::ReapOnly)
+        .stdin(match stdin_mode {
+            PipeStdinMode::Piped => ChildStdin::Piped,
+            PipeStdinMode::Null => ChildStdin::Null,
+        });
 
     #[cfg(windows)]
     let job = crate::win::JobObject::create().map(Arc::new);
@@ -193,6 +181,7 @@ async fn spawn_process_with_stdin_mode(
             .id()
             .ok_or_else(|| io::Error::other("missing child pid"))?;
         let assigned_job = job.and_then(|job| {
+            let crate::child::ChildKind::Tokio(child) = &child.inner;
             let process_handle = child
                 .raw_handle()
                 .ok_or_else(|| io::Error::other("missing child process handle"))?;
@@ -368,3 +357,7 @@ pub async fn spawn_process_no_stdin(
 #[cfg(all(test, windows))]
 #[path = "pipe_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "pipe_unix_tests.rs"]
+mod unix_tests;

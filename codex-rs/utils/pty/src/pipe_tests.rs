@@ -1,4 +1,5 @@
 use super::*;
+use std::process::Stdio;
 
 #[test]
 fn process_fallback_interrupt_terminates_root() -> anyhow::Result<()> {

@@ -4,6 +4,7 @@
 //! change settings that the native backend cannot inspect. Children receive only
 //! explicitly supplied environment variables and default to kill-on-drop. Stdio,
 //! descriptor inheritance, and compatibility fallbacks are configured independently.
+//! Original Unix inputs retain their NUL validation even when std replaces them.
 
 use std::ffi::OsStr;
 #[cfg(unix)]
@@ -53,10 +54,6 @@ pub(crate) enum ChildDropPolicy {
     /// Kill the direct child, then reap it. This is the default.
     KillAndReap,
     /// Reap the child when it exits, leaving termination to the caller.
-    #[allow(
-        dead_code,
-        reason = "Used by the pipe adapter in the next stacked change."
-    )]
     ReapOnly,
 }
 
@@ -71,6 +68,8 @@ pub enum ChildStdin {
 /// A local command whose complete launch contract is known to both backends.
 pub struct Command {
     pub(crate) inner: tokio::process::Command,
+    #[cfg(unix)]
+    saw_nul: bool,
     pub(crate) process_mode: ProcessMode,
     pub(crate) descriptor_policy: DescriptorPolicy,
     pub(crate) fallback: SpawnFallback,
@@ -86,6 +85,7 @@ pub struct Command {
 
 impl Command {
     pub fn new(program: impl AsRef<OsStr>) -> Self {
+        let program = program.as_ref();
         let mut inner = tokio::process::Command::new(program);
         inner
             .env_clear()
@@ -95,6 +95,8 @@ impl Command {
             .stderr(TokioStdio::piped());
         Self {
             inner,
+            #[cfg(unix)]
+            saw_nul: program.as_encoded_bytes().contains(&0),
             process_mode: ProcessMode::Inherit,
             descriptor_policy: DescriptorPolicy::Inherit,
             fallback: SpawnFallback::Compatible,
@@ -110,12 +112,19 @@ impl Command {
     }
 
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
+        let arg = arg.as_ref();
+        #[cfg(unix)]
+        {
+            self.saw_nul |= arg.as_encoded_bytes().contains(&0);
+        }
         self.inner.arg(arg);
         self
     }
 
     pub fn args(&mut self, args: impl IntoIterator<Item = impl AsRef<OsStr>>) -> &mut Self {
-        self.inner.args(args);
+        for arg in args {
+            self.arg(arg);
+        }
         self
     }
 
@@ -134,6 +143,11 @@ impl Command {
     }
 
     pub fn current_dir(&mut self, cwd: impl AsRef<Path>) -> &mut Self {
+        let cwd = cwd.as_ref();
+        #[cfg(unix)]
+        {
+            self.saw_nul |= cwd.as_os_str().as_encoded_bytes().contains(&0);
+        }
         self.inner.current_dir(cwd);
         self
     }
@@ -144,10 +158,6 @@ impl Command {
     }
 
     /// Choose who owns termination when the child handle is dropped.
-    #[allow(
-        dead_code,
-        reason = "Used by the pipe adapter in the next stacked change."
-    )]
     pub(crate) fn drop_policy(&mut self, policy: ChildDropPolicy) -> &mut Self {
         self.drop_policy = policy;
         self.inner.kill_on_drop(match policy {
@@ -200,6 +210,7 @@ impl Command {
 
     #[cfg(unix)]
     pub fn arg0(&mut self, arg0: impl AsRef<OsStr>) -> &mut Self {
+        self.saw_nul |= arg0.as_ref().as_encoded_bytes().contains(&0);
         self.inner.arg0(arg0.as_ref());
         self.arg0 = Some(arg0.as_ref().to_owned());
         self
@@ -211,8 +222,22 @@ impl Command {
         job.prepare_suspended_spawn(&mut self.inner);
     }
 
+    /// Reject original inputs that std replaced with a NUL-free placeholder.
+    #[cfg(unix)]
+    pub(crate) fn validate(&self) -> io::Result<()> {
+        if self.saw_nul {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "nul byte found in provided data",
+            ));
+        }
+        Ok(())
+    }
+
     /// Launch with native macOS path handling and the existing compatibility fallback.
     pub fn spawn(mut self) -> io::Result<Child> {
+        #[cfg(unix)]
+        self.validate()?;
         #[cfg(unix)]
         if let ProcessMode::NewGroup = self.process_mode {
             self.inner.process_group(/*pgroup*/ 0);
@@ -294,6 +319,10 @@ impl Command {
         })
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "command_validation_tests.rs"]
+mod validation_tests;
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "macos_child_tests.rs"]
