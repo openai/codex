@@ -179,7 +179,7 @@ async fn model_migration_prompt_only_shows_for_deprecated_models() {
     ));
     assert!(should_show_model_migration_prompt(
         "gpt-5.4",
-        "gpt-5.6-terra",
+        "gpt-6-sol",
         &seen,
         &presets
     ));
@@ -369,8 +369,12 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
     let presets = all_model_presets();
     let mut migration_copies = Vec::new();
     for (model, replacement) in [
-        ("gpt-5.4", "gpt-5.6-terra"),
-        ("gpt-5.4-mini", "gpt-5.6-luna"),
+        ("gpt-5.4", "gpt-6-sol"),
+        ("gpt-5.4-mini", "gpt-6-luna"),
+        ("gpt-5.5", "gpt-6-sol"),
+        ("gpt-5.6-luna", "gpt-6-luna"),
+        ("gpt-5.6-terra", "gpt-6-sol"),
+        ("gpt-5.6-sol", "gpt-6-sol"),
     ] {
         let codex_home = tempdir()?;
         std::fs::write(
@@ -383,7 +387,7 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
             .await?;
         let current_model = config.model.clone().expect("saved model");
         let upgrade = model_upgrade_for_migration(&current_model, &presets)
-            .expect("retired selection should still migrate");
+            .expect("catalog selection should have an upgrade");
         assert_eq!(upgrade.id, replacement);
         assert!(should_show_model_migration_prompt(
             &current_model,
@@ -449,11 +453,27 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
     assert_snapshot!(migration_copies.join("\n"), @r"
     GPT-5.4 is no longer available
 
-    Codex now uses GPT-5.6 Terra in place of GPT-5.4. Switch to GPT-5.6 Terra to continue.
+    Codex now uses GPT-6 Sol in place of GPT-5.4. Switch to GPT-6 Sol to continue.
 
     GPT-5.4 Mini is no longer available
 
-    Codex now uses GPT-5.6 Luna in place of GPT-5.4 Mini. Switch to GPT-5.6 Luna to continue.
+    Codex now uses GPT-6 Luna in place of GPT-5.4 Mini. Switch to GPT-6 Luna to continue.
+
+    Meet GPT-6 Sol
+
+    Our latest Sol is more intelligent and more efficient so your usage limits go further. This model is a great daily driver for complex tasks, especially coding.
+
+    Meet GPT-6 Luna
+
+    Our latest Luna is significantly more efficient, so your usage limits go even further. Reach for it for any job that doesn't require frontier intelligence.
+
+    Meet GPT-6 Sol
+
+    Our latest Sol is more intelligent and more efficient so your usage limits go further. This model is a great daily driver for complex tasks, especially coding.
+
+    Meet GPT-6 Sol
+
+    Our latest Sol is more intelligent and more efficient so your usage limits go further. This model is a great daily driver for complex tasks, especially coding.
     ");
     Ok(())
 }
@@ -462,16 +482,24 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
 async fn model_migration_prompt_respects_hide_flag_and_self_target() {
     let presets = all_model_presets();
     let mut seen = BTreeMap::new();
+    // A previously acknowledged intermediate upgrade must not hide the new target.
     seen.insert("gpt-5.4-mini".to_string(), "gpt-5.6-luna".to_string());
+    assert!(should_show_model_migration_prompt(
+        "gpt-5.4-mini",
+        "gpt-6-luna",
+        &seen,
+        &presets
+    ));
+    seen.insert("gpt-5.4-mini".to_string(), "gpt-6-luna".to_string());
     assert!(!should_show_model_migration_prompt(
         "gpt-5.4-mini",
-        "gpt-5.6-luna",
+        "gpt-6-luna",
         &seen,
         &presets
     ));
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.6-luna",
-        "gpt-5.6-luna",
+        "gpt-6-luna",
+        "gpt-6-luna",
         &seen,
         &presets
     ));
@@ -480,31 +508,31 @@ async fn model_migration_prompt_respects_hide_flag_and_self_target() {
 #[tokio::test]
 async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
     let mut available = all_model_presets();
-    available.retain(|preset| preset.model != "gpt-5.6-luna");
+    available.retain(|preset| preset.model != "gpt-6-luna");
 
     assert!(!should_show_model_migration_prompt(
         "gpt-5.4-mini",
-        "gpt-5.6-luna",
+        "gpt-6-luna",
         &BTreeMap::new(),
         &available,
     ));
 
-    assert!(target_preset_for_upgrade(&available, "gpt-5.6-luna").is_none());
+    assert!(target_preset_for_upgrade(&available, "gpt-6-luna").is_none());
 
     let mut with_hidden_target = all_model_presets();
     let target = with_hidden_target
         .iter_mut()
-        .find(|preset| preset.model == "gpt-5.6-luna")
+        .find(|preset| preset.model == "gpt-6-luna")
         .expect("target preset present");
     target.show_in_picker = false;
 
     assert!(!should_show_model_migration_prompt(
         "gpt-5.4-mini",
-        "gpt-5.6-luna",
+        "gpt-6-luna",
         &BTreeMap::new(),
         &with_hidden_target,
     ));
-    assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-5.6-luna").is_none());
+    assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-6-luna").is_none());
 }
 
 #[tokio::test]

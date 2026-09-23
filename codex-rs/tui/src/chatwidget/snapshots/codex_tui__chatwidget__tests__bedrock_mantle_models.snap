@@ -1,16 +1,15 @@
 ---
 source: tui/src/chatwidget/tests/bedrock_catalog_tests.rs
-assertion_line: 42
 expression: "render_bottom_popup(&chat, 100)"
 ---
   Select Model and Effort
 
 
-› 1. GPT-5.6 Sol (current)  Latest frontier agentic coding model.
-  2. GPT-6-Astra            Our most capable model for complex, demanding work.
-  3. GPT-5.6 Terra          Balanced agentic coding model for everyday work.
-  4. GPT-5.6 Luna           Fast and affordable agentic coding model.
-  5. GPT-5.5                Frontier model for complex coding, research, and real-world work.
+› 1. GPT-5.6 Sol (current)  Older coding model for complex work.
+  2. GPT-6-Astra            Frontier intelligence for the most demanding work.
+  3. GPT-5.6 Terra          Older balanced model for straightforward work.
+  4. GPT-5.6 Luna           Older fast and efficient model.
+  5. GPT-5.5                Legacy coding model.
   6. GPT-5.4                Strong model for everyday coding.
 
   enter select · esc back

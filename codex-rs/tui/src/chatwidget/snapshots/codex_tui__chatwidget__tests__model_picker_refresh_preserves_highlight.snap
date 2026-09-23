@@ -6,9 +6,8 @@ expression: "render_bottom_popup(&chat, 80)"
   Select Model and Effort
 
 
-› 1. Renamed model                  Balanced agentic coding model for everyday
+› 1. Renamed model                  Older balanced model for straightforward
                                     work.
-  2. Shared display name (current)  Frontier model for complex coding, research,
-                                    and real-world work.
+  2. Shared display name (current)  Legacy coding model.
 
   enter select · esc back
