@@ -601,6 +601,9 @@ pub struct OtelConfigToml {
     pub tool_result: codex_protocol::config_types::ToolResultLogConfig,
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
+    /// Opt in to logging final main-agent and spawned-subagent responses to an OTLP log exporter.
+    /// Defaults to false. Response text can be sensitive and is capped at 64 KiB.
+    pub log_agent_responses: Option<bool>,
 
     /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
     pub environment: Option<String>,
@@ -626,6 +629,7 @@ pub struct OtelConfigToml {
 pub struct OtelConfig {
     pub tool_result: codex_protocol::config_types::ToolResultLogConfig,
     pub log_user_prompt: bool,
+    pub log_agent_responses: bool,
     pub environment: String,
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
@@ -639,6 +643,7 @@ impl Default for OtelConfig {
         OtelConfig {
             tool_result: Default::default(),
             log_user_prompt: false,
+            log_agent_responses: false,
             environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
@@ -646,6 +651,17 @@ impl Default for OtelConfig {
             span_attributes: BTreeMap::new(),
             tracestate: BTreeMap::new(),
         }
+    }
+}
+
+impl OtelConfig {
+    /// Response text requires a separate opt-in and an explicit OTLP log destination.
+    pub fn agent_response_logging_enabled(&self) -> bool {
+        self.log_agent_responses
+            && matches!(
+                self.exporter,
+                OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. }
+            )
     }
 }
 

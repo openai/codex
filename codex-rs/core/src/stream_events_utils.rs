@@ -104,6 +104,22 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
         std::slice::from_ref(item),
     )
     .await;
+    if turn_context.config.otel.agent_response_logging_enabled() {
+        turn_context
+            .extension_data
+            .get_or_init(codex_otel::AgentResponseLogger::default)
+            .record(
+                &step_context.session_telemetry,
+                item,
+                codex_otel::AgentResponseContext {
+                    turn_id: &turn_context.sub_id,
+                    session_source: &turn_context.session_source,
+                    parent_turn_id: turn_context.turn_metadata_state.parent_turn_id(),
+                    root_turn_id: turn_context.turn_metadata_state.root_turn_id(),
+                    initiating_agent_path: turn_context.turn_metadata_state.initiating_agent_path(),
+                },
+            );
+    }
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
             completed_item_defers_mailbox_delivery_to_next_turn(

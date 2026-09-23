@@ -28,6 +28,7 @@ pub(crate) fn resolve_config(
     OtelConfig {
         tool_result: config.tool_result,
         log_user_prompt,
+        log_agent_responses: config.log_agent_responses.unwrap_or(false),
         environment,
         exporter,
         trace_exporter,
