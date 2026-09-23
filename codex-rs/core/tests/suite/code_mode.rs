@@ -26,6 +26,8 @@ use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 use codex_features::CurrentTimeSource;
 use codex_features::Feature;
+use codex_http_client::DestinationPolicy;
+use codex_http_client::NetworkPolicyController;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::codex_apps_mcp_server_config;
@@ -108,6 +110,7 @@ use image::codecs::png::PngEncoder;
 use image::metadata::Orientation;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Cursor;
@@ -486,28 +489,68 @@ async fn disabled_process_host_with_fallback_disabled_attempts_the_host() -> Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_standalone_web_search() -> Result<()> {
-    assert_code_mode_standalone_web_search(WebSearchMode::Live, serde_json::json!(true)).await
+    assert_code_mode_standalone_web_search(
+        WebSearchMode::Live,
+        serde_json::json!(true),
+        SearchPolicy::Unmanaged,
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_call_indexed_standalone_web_search() -> Result<()> {
-    assert_code_mode_standalone_web_search(WebSearchMode::Indexed, serde_json::json!("indexed"))
+    assert_code_mode_standalone_web_search(
+        WebSearchMode::Indexed,
+        serde_json::json!("indexed"),
+        SearchPolicy::Unmanaged,
+    )
+    .await
+}
+
+#[test_case(SearchPolicy::DenySearch; "initial_request")]
+#[test_case(SearchPolicy::DenyRedirect; "redirect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_web_search_preserves_managed_policy(policy: SearchPolicy) -> Result<()> {
+    assert_code_mode_standalone_web_search(WebSearchMode::Live, serde_json::json!(true), policy)
         .await
+}
+
+enum SearchPolicy {
+    Unmanaged,
+    DenySearch,
+    DenyRedirect,
 }
 
 async fn assert_code_mode_standalone_web_search(
     web_search_mode: WebSearchMode,
     expected_external_web_access: Value,
+    policy: SearchPolicy,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
+    let denied = responses::start_mock_server().await;
+    let managed = !matches!(policy, SearchPolicy::Unmanaged);
+    let deny_search = matches!(policy, SearchPolicy::DenySearch);
+    let search_response = match policy {
+        SearchPolicy::DenyRedirect => {
+            ResponseTemplate::new(/*s*/ 307).insert_header("location", denied.uri())
+        }
+        SearchPolicy::Unmanaged | SearchPolicy::DenySearch => {
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"output": "Search result"}))
+        }
+    };
+    let controller = NetworkPolicyController::default();
+    let mut allowed_endpoints = BTreeSet::from([format!("{}/v1/responses", server.uri()).parse()?]);
+    if !deny_search {
+        allowed_endpoints.insert(format!("{}/v1/alpha/search", server.uri()).parse()?);
+    }
+    let policy = controller.policy().restrict_to_endpoints(allowed_endpoints);
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
     Mock::given(method("POST"))
         .and(path("/v1/alpha/search"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "output": "Search result",
-        })))
-        .expect(1)
+        .respond_with(search_response)
+        .expect(if deny_search { 0 } else { 1 })
         .mount(&server)
         .await;
 
@@ -547,6 +590,10 @@ text(result);
         .with_extensions(Arc::new(extension_builder.build()))
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
+            if managed {
+                config.application_network_policy = policy;
+                config.respect_system_proxy = false;
+            }
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -560,9 +607,20 @@ text(result);
                 .set(web_search_mode)
                 .expect("web search mode should be accepted");
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
 
     test.submit_turn("Search the web from code mode").await?;
+
+    if managed {
+        let output =
+            custom_tool_output_body_and_success(&follow_up_mock.single_request(), "call-1").0;
+        assert!(
+            output.contains("destination denied by application network policy"),
+            "{output}"
+        );
+        assert!(denied.received_requests().await.unwrap().is_empty());
+        return Ok(());
+    }
 
     let search_request = server
         .received_requests()
