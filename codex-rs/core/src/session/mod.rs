@@ -3623,6 +3623,9 @@ impl Session {
                 .current_time_reminder
                 .note_recorded_items(&response_items);
             if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
+                let pending_orders = turn_context
+                    .extension_data
+                    .get::<retained_context::PendingAssistantMessageOrders>();
                 for envelope in &mut items {
                     if envelope
                         .metadata
@@ -3635,12 +3638,22 @@ impl Session {
                         || matches!(&envelope.item, ResponseItem::FunctionCall { .. })
                         || crate::context::is_user_authorization_message(&envelope.item)
                     {
-                        // Preserve accepted input order; assign delivery order to other originals.
+                        let message_order = pending_orders.as_ref().and_then(|orders| {
+                            orders
+                                .0
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .remove(envelope.item.id()?.as_str())
+                        });
+                        // Preserve input acceptance and source-message start order.
+                        // Synthetic messages still receive their order here.
                         envelope
                             .metadata
                             .get_or_insert_default()
                             .user_input_order
-                            .get_or_insert_with(|| state.history.reserve_input_order());
+                            .get_or_insert_with(|| {
+                                message_order.unwrap_or_else(|| state.history.reserve_input_order())
+                            });
                     }
                 }
             }

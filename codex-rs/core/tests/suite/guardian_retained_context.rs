@@ -31,12 +31,16 @@ use codex_history::RolloutItem;
 use codex_history::VerifiedAnswer;
 use codex_history::VerifiedQuestionAnswer;
 use codex_protocol::ResponseItemId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -47,11 +51,16 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
+use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -60,6 +69,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 use tokio::sync::Notify;
+use tokio::sync::oneshot;
 use wiremock::MockServer;
 use wiremock::matchers::header;
 
@@ -226,6 +236,143 @@ async fn resume(test: &TestCodex, thread: &CodexThread) -> Result<Arc<CodexThrea
         )
         .await?
         .thread)
+}
+
+#[test_case("question", ModeKind::Default, ""; "server message id")]
+#[test_case("", ModeKind::Default, ""; "generated message id")]
+#[test_case("question", ModeKind::Plan, ""; "plan with server message id")]
+#[test_case("", ModeKind::Plan, ""; "plan with generated message id")]
+#[test_case("question", ModeKind::Plan, "Here is the plan:\n"; "text and plan share one order")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streamed_question_precedes_reply_across_resume(
+    message_id: &str,
+    mode: ModeKind,
+    preamble: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const INITIAL: &str = "Prepare the deployment. Staging only.";
+    const QUESTION: &str = "Deploy abc123?";
+    const ANSWER: &str = "Yes.";
+    let (prefix, suffix) = if mode == ModeKind::Plan {
+        (format!("{preamble}<proposed_plan>\n"), "\n</proposed_plan>")
+    } else {
+        (String::new(), "")
+    };
+    let question = format!("{prefix}{QUESTION}{suffix}");
+    let (release, gate) = oneshot::channel();
+    let (server, _completions) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![
+                    ev_response_created("question-response"),
+                    ev_message_item_added(message_id, ""),
+                    ev_output_text_delta(&format!("{prefix}Deploy ")),
+                    ev_output_text_delta("abc123?"),
+                    ev_output_text_delta(suffix),
+                ]),
+            },
+            StreamingSseChunk {
+                gate: Some(gate),
+                body: sse(vec![
+                    ev_assistant_message(message_id, &question),
+                    ev_completed("question-response"),
+                ]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_completed("answer-response")]),
+        }],
+    ])
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_history_mode(ThreadHistoryMode::Paginated)
+        .with_config(|config| {
+            config.experimental_thread_store = ThreadStoreConfig::Local;
+            config
+                .features
+                .enable(Feature::GuardianThreadContext)
+                .expect("enable retained context");
+        })
+        .build_with_streaming_server(&server)
+        .await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: INITIAL.to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode,
+                    settings: Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::AgentMessageContentDelta(delta) => delta.delta.contains("abc123?"),
+        EventMsg::PlanDelta(delta) => delta.delta.contains("abc123?"),
+        _ => false,
+    })
+    .await;
+    // The reply is accepted while the question's completed item is still withheld.
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: ANSWER.to_owned(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    release.send(()).expect("release question completion");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let history = test.codex.conversation_history_snapshot().await;
+    let retained = history
+        .retained_context()
+        .context("live retained context")?;
+    assert_eq!(
+        retained
+            .ordered_entries()
+            .map(|(order, entry)| match entry {
+                RetainedContextEntry::UserMessage(message) =>
+                    (order, "user", message.text.as_str()),
+                RetainedContextEntry::AssistantMessage(message) => {
+                    (order, "assistant", message.text.as_str())
+                }
+                RetainedContextEntry::VerifiedAnswer(_) => panic!("expected plain chat messages"),
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (RetainedContextOrder::Local(0), "user", INITIAL),
+            (
+                RetainedContextOrder::Local(1),
+                "assistant",
+                question.as_str()
+            ),
+            (RetainedContextOrder::Local(2), "user", ANSWER),
+        ],
+    );
+    let resumed = resume(&test, &test.codex).await?;
+    assert_eq!(
+        resumed
+            .conversation_history_snapshot()
+            .await
+            .retained_context(),
+        Some(retained),
+    );
+    resumed.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
 }
 
 async fn compact_and_assert_answers(
