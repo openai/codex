@@ -19,7 +19,7 @@ use super::super::footer::shows_passive_footer_line;
 use super::ActivePopup;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
+use ratatui::style::Styled;
 use ratatui::text::Line;
 use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
@@ -30,6 +30,7 @@ use crate::bottom_pane::footer::FooterMode;
 use crate::bottom_pane::footer::GoalStatusIndicator;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::ShortcutHint;
+use crate::style::secondary_text_style;
 use std::time::Duration;
 
 /// Resolved rectangles shared by painting and cursor placement, without retained layout state.
@@ -175,10 +176,10 @@ impl super::ChatComposer {
         {
             let mut shortcuts = Line::default();
             if line.width() > 0 {
-                shortcuts.push_span(" · ".dim());
+                shortcuts.push_span(" · ".set_style(secondary_text_style()));
             }
             shortcuts.extend(key.spans());
-            shortcuts.push_span(" shortcuts".dim());
+            shortcuts.push_span(" shortcuts".set_style(secondary_text_style()));
             if line.width() + shortcuts.width() <= usize::from(hint_area.width) {
                 line.extend(shortcuts.spans);
             }
