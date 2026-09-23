@@ -5,8 +5,7 @@ expression: "render_bottom_popup(&chat, 80)"
   Select Model and Effort
   Access legacy models by running codex -m <model_name> or in your config.toml
 
-› 1. gpt-5.6-terra      Balanced agentic coding model for everyday work.
-  2. gpt-5.5 (current)  Frontier model for complex coding, research, and real-
-                        world work.
+› 1. gpt-5.6-terra      Older balanced model for straightforward work.
+  2. gpt-5.5 (current)  Legacy coding model.
 
   Press enter to confirm or esc to go back

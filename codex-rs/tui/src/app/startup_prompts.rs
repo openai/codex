@@ -120,7 +120,7 @@ pub(super) fn model_upgrade_for_migration(
 
     // Saved selections can outlive their catalog entries. Keep only their migration metadata.
     let (target_model, current_name, target_name) = match model {
-        "gpt-5.4-mini" => ("gpt-5.6-luna", "GPT-5.4 Mini", "GPT-5.6 Luna"),
+        "gpt-5.4-mini" => ("gpt-6-luna", "GPT-5.4 Mini", "GPT-6 Luna"),
         _ => return None,
     };
     Some(ModelUpgrade {
