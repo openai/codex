@@ -279,6 +279,13 @@ impl FeedbackRequestProcessor {
                     upload_tags.entry(key).or_insert(value);
                 }
             }
+            extra_attachments.extend(
+                super::feedback_rollout_history::history_base_attachments(
+                    &self.config.codex_home,
+                    &attachment_paths,
+                )
+                .await,
+            );
         }
 
         let session_source = self.thread_manager.session_source();
