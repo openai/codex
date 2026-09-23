@@ -98,3 +98,51 @@ async fn async_question_notification_summarizes_batches_and_bounds_long_titles()
         @"Question: Which environment should we..."
     );
 }
+
+#[tokio::test]
+async fn async_question_notification_expires_when_turn_ends() {
+    let mut outcomes = Vec::new();
+    for (status, expected) in [
+        (AppServerTurnStatus::Completed, Some("Agent turn complete")),
+        (AppServerTurnStatus::Interrupted, None),
+        (AppServerTurnStatus::Failed, None),
+    ] {
+        let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        handle_turn_started(&mut chat, "turn");
+        chat.add_async_questions(
+            "question",
+            &[AsyncUserInputQuestion {
+                title: "Which way?".into(),
+                options: None,
+            }],
+        );
+        chat.handle_server_notification(
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: "thread".into(),
+                turn: app_server_turn(
+                    "ended-turn",
+                    status.clone(),
+                    /*duration_ms*/ None,
+                    /*error*/ None,
+                ),
+            }),
+            /*replay_kind*/ None,
+        );
+        assert_eq!(
+            (
+                chat.pending_notification
+                    .as_ref()
+                    .map(Notification::display),
+                chat.bottom_pane.question_editor().unanswered_count(),
+            ),
+            (expected.map(str::to_string), 0),
+        );
+        outcomes.push((
+            status,
+            chat.pending_notification
+                .as_ref()
+                .map(Notification::display),
+        ));
+    }
+    insta::assert_debug_snapshot!("async_question_turn_end_notifications", outcomes);
+}

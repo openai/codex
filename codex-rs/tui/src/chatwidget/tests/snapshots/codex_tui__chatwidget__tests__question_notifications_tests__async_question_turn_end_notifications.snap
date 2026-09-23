@@ -1,0 +1,21 @@
+---
+source: tui/src/chatwidget/tests/question_notifications_tests.rs
+assertion_line: 142
+expression: outcomes
+---
+[
+    (
+        Completed,
+        Some(
+            "Agent turn complete",
+        ),
+    ),
+    (
+        Interrupted,
+        None,
+    ),
+    (
+        Failed,
+        None,
+    ),
+]

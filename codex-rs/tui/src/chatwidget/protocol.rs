@@ -455,7 +455,7 @@ impl ChatWidget {
                     self.speak_completed_realtime_delegation(&notification.turn.id, item);
                 }
                 if replay_kind.is_none() {
-                    question_drafts = self.bottom_pane.take_question_drafts();
+                    question_drafts = self.take_question_drafts();
                 }
                 self.last_non_retry_error = None;
                 let completion = self.completion_cell(&notification.turn, replay_kind);
@@ -467,7 +467,7 @@ impl ChatWidget {
             }
             TurnStatus::Interrupted => {
                 if replay_kind.is_none() {
-                    question_drafts = self.bottom_pane.take_question_drafts();
+                    question_drafts = self.take_question_drafts();
                 }
                 self.last_non_retry_error = None;
                 let reason = if self
@@ -482,7 +482,7 @@ impl ChatWidget {
             }
             TurnStatus::Failed => {
                 if replay_kind.is_none() {
-                    question_drafts = self.bottom_pane.take_question_drafts();
+                    question_drafts = self.take_question_drafts();
                 }
                 if let Some(error) = notification.turn.error {
                     if replay_kind.is_none()

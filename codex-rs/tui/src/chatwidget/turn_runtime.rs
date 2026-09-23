@@ -479,7 +479,7 @@ impl ChatWidget {
         let question_drafts = if self.thread_usage.replaying_turn_completion {
             None
         } else {
-            self.bottom_pane.take_question_drafts()
+            self.take_question_drafts()
         };
         if codex_error_info == Some(AppServerCodexErrorInfo::MisalignmentPolicyViolation) {
             self.on_misalignment_policy_violation();
