@@ -221,3 +221,146 @@ fn exec_server_websocket_auth_rejects_invalid_configuration() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn app_server_executor_auth_supports_tokens_and_legacy_configuration() -> Result<()> {
+    use app_test_support::TestAppServer;
+    use app_test_support::to_response;
+    use codex_app_server_protocol::EnvironmentInfoResponse;
+    use codex_app_server_protocol::RequestId;
+
+    #[derive(Debug, PartialEq)]
+    enum Source {
+        Rpc,
+        Toml,
+    }
+
+    tokio::time::timeout(Duration::from_secs(/*secs*/ 90), async {
+        let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+        for token in [None, Some("executor-capability-for-app-server")] {
+            let executor_home = TempDir::new()?;
+            let mut command = Command::new(&codex);
+            command.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
+            if let Some(token) = token {
+                command.args([
+                    "--ws-auth",
+                    "capability-token",
+                    "--ws-token-sha256",
+                    &format!("{:x}", Sha256::digest(token.as_bytes())),
+                ]);
+            }
+            let mut executor = command
+                .env("CODEX_HOME", executor_home.path())
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .kill_on_drop(true)
+                .spawn()?;
+            let mut lines =
+                BufReader::new(executor.stdout.take().context("executor stdout")?).lines();
+            let url = loop {
+                let line = lines.next_line().await?.context("executor exited")?;
+                if line.starts_with("ws://") {
+                    break line;
+                }
+            };
+
+            for source in [Source::Rpc, Source::Toml] {
+                let home = TempDir::new()?;
+                let builder = TestAppServer::builder()
+                    .with_program(&codex)
+                    .with_plugin_startup_tasks()
+                    .with_args(&["-c", "features.plugins=false", "app-server"])
+                    .with_codex_home(home.path())
+                    .without_auto_env()
+                    .with_env_overrides(&[
+                        ("CODEX_EXEC_SERVER_URL", None),
+                        ("CODEX_EXEC_SERVER_NOISE_REGISTRY_URL", None),
+                    ]);
+                match source {
+                    Source::Toml => {
+                        let mut config =
+                            format!("[[environments]]\nid = \"remote\"\nurl = {url:?}\n");
+                        if let Some(token) = token {
+                            config.push_str(&format!("auth_bearer_token = {token:?}\n"));
+                        }
+                        std::fs::write(home.path().join("environments.toml"), config)?;
+                    }
+                    Source::Rpc => {}
+                }
+                let mut app = builder.build().await?;
+                app.initialize().await?;
+                if source == Source::Rpc {
+                    for credential in ["private-token\r\nInjected: true", "private-token\n"] {
+                        let id = app
+                            .send_raw_request(
+                                "environment/add",
+                                Some(json!({
+                                    "environmentId": "invalid", "execServerUrl": url,
+                                    "authBearerToken": credential,
+                                })),
+                            )
+                            .await?;
+                        let error = app
+                            .read_stream_until_error_message(RequestId::Integer(id))
+                            .await?;
+                        assert!(!format!("{error:?}").contains("private-token"));
+                    }
+                    // Omitted and null tokens preserve old-client requests. They succeed
+                    // with an unauthenticated executor and fail when authentication is enabled.
+                    let credentials = match token {
+                        Some(token) => vec![
+                            None,
+                            Some(serde_json::Value::Null),
+                            Some(json!("wrong-token")),
+                            Some(json!(token)),
+                        ],
+                        None => vec![None, Some(serde_json::Value::Null)],
+                    };
+                    for credential in credentials {
+                        let mut params = json!({
+                            "environmentId": "remote", "execServerUrl": url,
+                        });
+                        if let Some(credential) = &credential {
+                            params["authBearerToken"] = credential.clone();
+                        }
+                        let id = app
+                            .send_raw_request("environment/add", Some(params))
+                            .await?;
+                        app.read_stream_until_response_message(RequestId::Integer(id))
+                            .await?;
+                        let id = app
+                            .send_raw_request(
+                                "environment/info",
+                                Some(json!({"environmentId": "remote"})),
+                            )
+                            .await?;
+                        if token.is_some()
+                            && credential.as_ref().and_then(serde_json::Value::as_str) != token
+                        {
+                            app.read_stream_until_error_message(RequestId::Integer(id))
+                                .await?;
+                        } else {
+                            app.read_stream_until_response_message(RequestId::Integer(id))
+                                .await?;
+                        }
+                    }
+                }
+                let id = app
+                    .send_raw_request("environment/info", Some(json!({"environmentId": "remote"})))
+                    .await?;
+                let response = app
+                    .read_stream_until_response_message(RequestId::Integer(id))
+                    .await?;
+                let info: EnvironmentInfoResponse = to_response(response)?;
+                assert!(
+                    !info.shell.name.is_empty(),
+                    "{source:?} should reach the executor"
+                );
+            }
+            executor.kill().await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await?
+}

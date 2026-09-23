@@ -164,6 +164,7 @@ async fn add_environment(
     exec_server_url: &str,
 ) -> Result<()> {
     let params = EnvironmentAddParams {
+        auth_bearer_token: None,
         environment_id: environment_id.to_string(),
         exec_server_url: exec_server_url.to_string(),
         connect_timeout_ms: None,

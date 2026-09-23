@@ -3163,6 +3163,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-path-uri",
  "codex-utils-pty",
+ "codex-utils-redacted-string",
  "codex-utils-rustls-provider",
  "codex-websocket-auth",
  "codex-websocket-client",

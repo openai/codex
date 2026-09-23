@@ -17,7 +17,7 @@ use crate::environment_provider::normalize_exec_server_url;
 ///
 /// Headers are sent only on the direct WebSocket upgrade request and subsequent
 /// reconnects. The embedding host must derive them from trusted request or
-/// session context; they are not exposed through the app-server protocol.
+/// session context, including app-server environment registration or environment configuration.
 #[derive(Clone, Eq, PartialEq)]
 pub struct RemoteEnvironmentOptions {
     /// Direct `ws://` or `wss://` endpoint for the remote environment.
@@ -39,7 +39,7 @@ impl std::fmt::Debug for RemoteEnvironmentOptions {
 }
 
 impl RemoteEnvironmentOptions {
-    pub(super) fn into_transport_params(
+    pub(crate) fn into_transport_params(
         self,
     ) -> Result<ExecServerTransportParams, ExecServerError> {
         let (exec_server_url, disabled) = normalize_exec_server_url(Some(self.exec_server_url));
@@ -86,7 +86,7 @@ impl RemoteEnvironmentOptions {
                     "exec-server WebSocket header `{header_name}` is controlled by the connection"
                 )));
             }
-            let header_value = HeaderValue::from_str(&value).map_err(|_| {
+            let mut header_value = HeaderValue::from_str(&value).map_err(|_| {
                 ExecServerError::Protocol(format!(
                     "invalid value for exec-server WebSocket header `{header_name}`"
                 ))
@@ -96,6 +96,7 @@ impl RemoteEnvironmentOptions {
                     "duplicate exec-server WebSocket header `{header_name}`"
                 )));
             }
+            header_value.set_sensitive(true);
             http_headers.insert(header_name, header_value);
         }
 

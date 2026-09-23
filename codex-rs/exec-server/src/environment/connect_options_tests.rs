@@ -211,6 +211,10 @@ async fn trusted_headers_are_sent_on_initial_websocket_and_session_reconnect() {
                 connect_timeout: Some(Duration::from_secs(1)),
                 http_headers: HashMap::from([
                     (
+                        "authorization".to_string(),
+                        "Bearer reconnect-capability".to_string(),
+                    ),
+                    (
                         "x-account-id".to_string(),
                         "customer-account-456".to_string(),
                     ),
@@ -246,6 +250,10 @@ async fn trusted_headers_are_sent_on_initial_websocket_and_session_reconnect() {
 async fn accept_routing_headers_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {
     let (stream, _) = listener.accept().await.expect("listener should accept");
     accept_hdr_async(stream, |request: &Request, response: Response| {
+        assert_eq!(
+            request.headers().get(http::header::AUTHORIZATION),
+            Some(&HeaderValue::from_static("Bearer reconnect-capability"))
+        );
         assert_eq!(
             request.headers().get("x-account-id"),
             Some(&HeaderValue::from_static("customer-account-456"))

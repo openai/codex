@@ -4,7 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use http::HeaderMap;
+use crate::RemoteEnvironmentOptions;
+use codex_utils_redacted_string::RedactedString;
 use serde::Deserialize;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -38,6 +39,7 @@ struct EnvironmentsToml {
 struct EnvironmentToml {
     id: String,
     url: Option<String>,
+    auth_bearer_token: Option<RedactedString>,
     program: Option<String>,
     args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
@@ -115,6 +117,7 @@ fn parse_environment_toml(
     let EnvironmentToml {
         id,
         url,
+        auth_bearer_token,
         program,
         args,
         env,
@@ -126,6 +129,11 @@ fn parse_environment_toml(
     if program.is_none() && (args.is_some() || env.is_some() || cwd.is_some()) {
         return Err(ExecServerError::Protocol(format!(
             "environment `{id}` args, env, and cwd require program"
+        )));
+    }
+    if url.is_none() && auth_bearer_token.is_some() {
+        return Err(ExecServerError::Protocol(format!(
+            "environment `{id}` auth_bearer_token requires url"
         )));
     }
     if url.is_none() && connect_timeout_sec.is_some() {
@@ -141,12 +149,28 @@ fn parse_environment_toml(
     let transport_params = match (url, program) {
         (Some(url), None) => {
             let url = validate_websocket_url(url)?;
-            ExecServerTransportParams::WebSocketUrl {
-                websocket_url: url,
-                connect_timeout,
-                initialize_timeout,
-                http_headers: HeaderMap::new(),
+            let options = RemoteEnvironmentOptions {
+                exec_server_url: url,
+                connect_timeout: Some(connect_timeout),
+                http_headers: auth_bearer_token
+                    .into_iter()
+                    .map(|token| {
+                        (
+                            "Authorization".to_string(),
+                            format!("Bearer {}", token.into_inner()),
+                        )
+                    })
+                    .collect(),
+            };
+            let mut transport = options.into_transport_params()?;
+            if let ExecServerTransportParams::WebSocketUrl {
+                initialize_timeout: timeout,
+                ..
+            } = &mut transport
+            {
+                *timeout = initialize_timeout;
             }
+            transport
         }
         (None, Some(program)) => {
             let program = program.trim().to_string();
@@ -305,7 +329,8 @@ fn load_environments_toml(path: &Path) -> Result<Option<EnvironmentsToml>, ExecS
     };
 
     toml::from_str(&contents)
-        .map_err(|err| {
+        .map_err(|mut err| {
+            err.set_input(/*input*/ None);
             ExecServerError::Protocol(format!(
                 "failed to parse environment config `{}`: {err}",
                 path.display()
@@ -336,6 +361,47 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn auth_bearer_token_requires_websocket_and_preserves_timeouts() {
+        let config: EnvironmentsToml = toml::from_str(
+            r#"
+            [[environments]]
+            id = "remote"
+            url = "wss://executor.example"
+            auth_bearer_token = "private-token"
+            initialize_timeout_sec = 17
+        "#,
+        )
+        .unwrap();
+        assert!(!format!("{config:?}").contains("private-token"));
+        let provider = TomlEnvironmentProvider::new(config).unwrap();
+        let ExecServerTransportParams::WebSocketUrl {
+            http_headers,
+            initialize_timeout,
+            ..
+        } = &provider.environments[0].1
+        else {
+            panic!("expected websocket")
+        };
+        assert_eq!(
+            http_headers[http::header::AUTHORIZATION],
+            "Bearer private-token"
+        );
+        assert!(http_headers[http::header::AUTHORIZATION].is_sensitive());
+        assert_eq!(*initialize_timeout, Duration::from_secs(/*secs*/ 17));
+        let error = TomlEnvironmentProvider::new(EnvironmentsToml {
+            environments: vec![EnvironmentToml {
+                id: "stdio".to_string(),
+                program: Some("executor".to_string()),
+                auth_bearer_token: Some("private-token".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("auth_bearer_token requires url"));
+    }
 
     #[tokio::test]
     async fn toml_provider_includes_local_and_adds_configured_environments() {

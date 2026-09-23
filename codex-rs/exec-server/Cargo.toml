@@ -36,6 +36,7 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-path-uri = { workspace = true }
 codex-utils-pty = { workspace = true }
+codex-utils-redacted-string = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 codex-websocket-auth = { workspace = true }
 codex-websocket-client = { workspace = true }

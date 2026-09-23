@@ -30,6 +30,9 @@ The CLI entrypoint supports:
 Direct WebSocket listeners support app-server's opt-in auth flags, including `--ws-auth capability-token --ws-token-sha256 HEX`, token files, and signed bearer tokens; clients send `Authorization: Bearer TOKEN` on each connection.
 Use a protected transport or TLS proxy for remote access; authentication is checked at connection time and these flags do not apply to stdio, remote registration, or forwarding.
 
+App-server clients can supply the raw token through `environment/add.authBearerToken` or `auth_bearer_token` in an `environments.toml` URL entry; omission preserves unauthenticated behavior.
+Tokens require `wss://` or a loopback destination, are redacted in diagnostics, and are reused on reconnect without automatic refresh.
+
 ## Remote connections
 
 Remote mode registers the local exec-server with the environment registry,
