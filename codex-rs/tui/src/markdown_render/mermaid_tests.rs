@@ -42,6 +42,27 @@ fn mermaid_nested_fences_and_unicode() {
 }
 
 #[test]
+fn mermaid_quoted_labels_and_ampersands() {
+    let source = r#"```mermaid
+flowchart LR
+    A["Your saved order"] --> B["Review & confirm"] --> C["DoorDash checkout"]
+```"#;
+    let output = markdown_text(source, /*width*/ 100);
+    assert!(output.starts_with('┌'));
+    assert_snapshot!(output);
+}
+
+#[test]
+fn mermaid_entities_keep_source() {
+    let source = "```mermaid\nsequenceDiagram\nA->>B: &amp;\n```";
+    let output = markdown_text(source, /*width*/ 100);
+    assert!(output.ends_with(&markdown_text(
+        &source.replacen("mermaid", "unknown", /*count*/ 1),
+        /*width*/ 100,
+    )));
+}
+
+#[test]
 fn mermaid_stadium_flowchart() {
     let source = "```mermaid
 flowchart TD

@@ -36,6 +36,72 @@ fn stadiums_with_other_shapes_in_every_direction() {
 }
 
 #[test]
+fn quoted_flowchart_labels_match_unquoted_labels() {
+    let quoted = r#"A["Review & confirm"] -->|"Yes & continue"| B{"Ready?"}
+B --> C(["Checkout"])
+A[Review & confirm]"#;
+    let unquoted = quoted.replace('"', "");
+    assert_eq!(
+        super::parse::parse("flowchart TD", &quoted.lines().collect::<Vec<_>>()).unwrap(),
+        super::parse::parse("flowchart TD", &unquoted.lines().collect::<Vec<_>>()).unwrap(),
+    );
+}
+
+#[test]
+fn entity_labels_keep_source_fallback() {
+    for entity in ["&amp;", "&#38;", "&#x26;"] {
+        for source in [
+            format!("sequenceDiagram\nA->>B: {entity}"),
+            format!("flowchart TD; A[\"{entity}\"]"),
+            format!("flowchart TD; A -->|\"{entity}\"| B"),
+        ] {
+            assert_eq!(
+                render(&source, /*max_width*/ 100),
+                Err(RenderError::Unsupported),
+                "{source:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn flowchart_ampersands_preserve_statement_separators() {
+    let source = "flowchart TD; A[R&D] -->|R&D| B[Review & confirm]; B --> C";
+    assert_eq!(
+        render(&format!("%% &amp;\n{source}"), /*max_width*/ 100),
+        render(&source.replace(';', "\n"), /*max_width*/ 100),
+    );
+    assert!(
+        render(source, /*max_width*/ 100)
+            .unwrap()
+            .contains("Review & confirm")
+    );
+}
+
+#[test]
+fn quoted_flowchart_labels_reject_malformed_and_unsafe_text() {
+    for label in [
+        "\"unfinished",
+        "unfinished\"",
+        "\"embedded\"quote\"",
+        "\"\"",
+        "\"<b>HTML</b>\"",
+        "\"\u{1b}\"",
+    ] {
+        for source in [
+            format!("flowchart TD; A[{label}]"),
+            format!("flowchart TD; A -->|{label}| B"),
+        ] {
+            assert_eq!(
+                render(&source, /*max_width*/ 100),
+                Err(RenderError::Unsupported),
+                "{source:?}",
+            );
+        }
+    }
+}
+
+#[test]
 fn branches_merges_and_retry_loop() {
     let source = "flowchart TD\nA[Checkout] --> B{In stock?}\nB -->|yes| C[Reserve]\nB -->|no| D[Waitlist]\nC --> E{Paid?}\nE -->|yes| F[Ship]\nE -->|no| G[Retry payment]\nG --> E\nD --> H[Notify buyer]\nF --> H";
     assert_snapshot!(render(source, /*max_width*/ 100).unwrap());
@@ -72,7 +138,6 @@ fn rejects_partial_or_unsupported_input() {
         "flowchart TD; A([same]); A[same]",
         "flowchart TD; A{same}; A([same])",
         "flowchart TD; A -->|unclosed B",
-        "flowchart TD; A[\"quoted\"]",
         "flowchart TD; A[foo;bar]",
         "flowchart TD; A[لا]",
         "flowchart TD; A -->|yes┐| B",

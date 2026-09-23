@@ -22,6 +22,10 @@ example `class Order {` followed by member lines and a final `}`). Class member 
 is retained in one compartment, including visibility, signatures, and return types.
 ER attribute types and names use the identifier grammar above.
 
+Flowchart node and edge labels may be enclosed in double quotes. Literal ampersands
+are supported in these flowchart labels; other diagram families retain their stricter
+label subset. HTML and entity escapes remain unsupported.
+
 These are explicit subsets, not complete Mermaid compatibility. Compound states,
 flowchart subgraphs, other shapes, sequence activation and parallel fragments,
 styling, front matter, directives, HTML, escapes, combining/zero-width characters,
