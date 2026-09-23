@@ -6403,7 +6403,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let mut state = SessionState::new(session_configuration.clone());
     state.history = ContextManager::with_guardian_context_mode(
-        GuardianContextMode::from_features(&config.features),
+        GuardianContextMode::ThreadOwned,
         &session_configuration.session_source,
     );
     let (environment_manager, resolved_environments) =
@@ -6551,7 +6551,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_settings_persistence: Semaphore::new(/*permits*/ 1),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
-        guardian_context_mode: GuardianContextMode::from_features(&config.features),
+        guardian_context_mode: GuardianContextMode::ThreadOwned,
         isolation: codex_extension_api::SessionIsolation::Inherit,
         tool_policy: Arc::default(),
         windows_sandbox_proxy_settings_mode:
@@ -8675,7 +8675,7 @@ where
 
     let mut state = SessionState::new(session_configuration.clone());
     state.history = ContextManager::with_guardian_context_mode(
-        GuardianContextMode::from_features(&config.features),
+        GuardianContextMode::ThreadOwned,
         &session_configuration.session_source,
     );
     let (environment_manager, resolved_turn_environments) =
@@ -8822,7 +8822,7 @@ where
         thread_settings_persistence: Semaphore::new(/*permits*/ 1),
         managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
         features: config.features.clone(),
-        guardian_context_mode: GuardianContextMode::from_features(&config.features),
+        guardian_context_mode: GuardianContextMode::ThreadOwned,
         isolation: codex_extension_api::SessionIsolation::Inherit,
         tool_policy: Arc::default(),
         windows_sandbox_proxy_settings_mode:

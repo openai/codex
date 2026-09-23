@@ -16,11 +16,24 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
+#[test_case::test_case(None; "default")]
+#[test_case::test_case(Some(false); "retired opt out")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_receives_sender_user_messages_by_default() -> Result<()> {
+async fn guardian_receives_sender_user_messages_by_default(
+    thread_context: Option<bool>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            if let Some(enabled) = thread_context {
+                std::fs::write(
+                    home.join("config.toml"),
+                    format!("[features.guardianv2]\nthread_context = {enabled}\n"),
+                )
+                .expect("write compatibility configuration");
+            }
+        })
         .with_model_info_override("gpt-5.5", |model| {
             model.auto_review_model_override = Some("gpt-5.6-luna".to_owned());
         })
@@ -120,7 +133,7 @@ async fn guardian_receives_sender_user_messages_by_default() -> Result<()> {
         let review_body = captured[1].body_json();
         let review = review_body["input"]
             .as_array()
-            .unwrap()
+            .expect("review input")
             .iter()
             .filter_map(|item| item["content"].as_array())
             .flatten()
@@ -130,9 +143,9 @@ async fn guardian_receives_sender_user_messages_by_default() -> Result<()> {
         let history = receiver.conversation_history_snapshot().await;
         let snapshot = history
             .retained_context()
-            .unwrap()
+            .expect("thread-owned context")
             .sender_user_messages()
-            .unwrap();
+            .expect("sender user messages");
         assert_eq!(
             snapshot
                 .text
@@ -145,11 +158,11 @@ async fn guardian_receives_sender_user_messages_by_default() -> Result<()> {
         let end = ">>> SENDER USER MESSAGES END\n";
         let current = review
             .rsplit_once(start)
-            .unwrap()
+            .expect("sender context start")
             .1
             .split(end)
             .next()
-            .unwrap();
+            .expect("sender context body");
         assert_eq!(format!("{start}{current}{end}"), snapshot.text);
         requests.extend(captured);
     }

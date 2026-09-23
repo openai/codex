@@ -342,10 +342,9 @@ async fn run_remote_compact_task_inner_impl(
             replacement_history: &replacement_history,
         });
     }
-    let reviewer_compaction_hash = if sess.enabled(Feature::GuardianThreadContext)
-        && crate::context::GuardianContextMode::from_history(
-            sess.conversation_history_snapshot().await.as_ref(),
-        ) == crate::context::GuardianContextMode::Legacy
+    let reviewer_compaction_hash = if crate::context::GuardianContextMode::from_history(
+        sess.conversation_history_snapshot().await.as_ref(),
+    ) == crate::context::GuardianContextMode::Legacy
         && let Some(review_turn) = sess.turn_context_for_sub_id(&turn_context.sub_id).await
     {
         // Previous-model compaction must remain compatible with the continuing turn's

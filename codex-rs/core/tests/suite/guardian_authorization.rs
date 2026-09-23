@@ -149,7 +149,6 @@ async fn guardian_revalidates_owning_session_before_allow(
                 .set_legacy_sandbox_policy(SandboxPolicy::new_workspace_write_policy())
                 .expect("set sandbox policy");
             for feature in [
-                Feature::GuardianThreadContext,
                 Feature::CodeMode,
                 Feature::CodeModeInterrupt,
                 Feature::DefaultModeRequestUserInput,

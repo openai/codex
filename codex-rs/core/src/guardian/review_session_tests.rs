@@ -27,10 +27,6 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             codex_login::CodexAuth::from_api_key("Test API Key"),
             Vec::new(),
             |config| {
-                config
-                    .features
-                    .enable(Feature::GuardianThreadContext)
-                    .unwrap();
                 config.features.disable(Feature::TokenBudget).unwrap();
             },
         )
@@ -64,7 +60,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
         &params.spawn_config,
         parent.inherited_instructions().await,
         params.parent_history.history_version(),
-        parent.guardian_context_mode,
+        GuardianContextMode::ThreadOwned,
     )
     .with_environments(params.parent_context.environments())
     .with_node_repl_policy_eligibility(
@@ -298,7 +294,7 @@ async fn spawned_guardian_reuse_key_matches_inherited_instructions() {
             ..Default::default()
         },
         /*parent_history_version*/ 0,
-        parent.guardian_context_mode,
+        GuardianContextMode::ThreadOwned,
     );
     let expected_key = GuardianReviewSessionReuseKey {
         user_instructions: latest_global,
@@ -448,17 +444,14 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
     );
 }
 
-#[test_case::test_case(true; "thread owned")]
-#[test_case::test_case(false; "legacy")]
+#[test_case::test_case(GuardianContextMode::ThreadOwned; "thread owned")]
+#[test_case::test_case(GuardianContextMode::Legacy; "legacy checkpoint")]
 #[tokio::test]
-async fn encrypted_parent_compaction_requires_original_item_id(thread_context_enabled: bool) {
+async fn encrypted_parent_compaction_requires_original_item_id(mode: GuardianContextMode) {
     let (session, _) = crate::session::tests::make_session_and_context().await;
-    let mut features = session.get_config().await.features.clone();
-    features
-        .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-        .expect("context mode");
-    let policy =
-        ReviewContextPolicy::for_context(GuardianContextMode::from_features(&features), &features);
+    let features = session.get_config().await.features.clone();
+
+    let policy = ReviewContextPolicy::for_context(mode, &features);
     let item = ResponseItem::Compaction {
         id: Some(codex_protocol::ResponseItemId::from_server(
             "cmp_guardian_parent_summary".to_string(),
@@ -493,7 +486,7 @@ async fn encrypted_parent_compaction_requires_original_item_id(thread_context_en
     );
     history.replace_annotated(items);
     let result = policy.parent_compaction(&history);
-    if thread_context_enabled {
+    if mode == GuardianContextMode::ThreadOwned {
         assert!(result.is_err());
     } else {
         assert_eq!(result.expect("legacy omission"), None);

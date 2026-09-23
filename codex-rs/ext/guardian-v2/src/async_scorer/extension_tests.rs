@@ -3147,7 +3147,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             /*metrics*/ None,
         )
         .await,
-        (!thread_context_enabled).then_some(ReviewDecision::Approved),
+        None,
     );
 
     let oversized_compaction = ResponseItem::Compaction {

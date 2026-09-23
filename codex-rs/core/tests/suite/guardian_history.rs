@@ -208,13 +208,10 @@ async fn guardian_history_uses_deltas_between_eviction_batches() -> Result<()> {
         "Guardian approval actions require host-native paths"
     );
     let server = start_mock_server().await;
-    let test = test_codex()
+    let mut test = test_codex()
         .with_config(|config| {
             config.features.enable(Feature::TokenBudget).unwrap();
-            config
-                .features
-                .disable(Feature::GuardianThreadContext)
-                .expect("use the retained legacy history");
+
             config.update_plan_enabled = true;
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
@@ -233,11 +230,19 @@ async fn guardian_history_uses_deltas_between_eviction_batches() -> Result<()> {
     .await;
     let restriction = "Only inspect the repository; do not publish it.";
     test.submit_text_turn(restriction).await?;
-    test.codex.submit(Op::Compact).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
+    // Restore a pre-rollout encrypted checkpoint with its legacy review transcript.
+    let history = test.codex.conversation_history_snapshot().await;
+    let checkpoint: RolloutItem = serde_json::from_value(json!({
+        "type": "compacted", "payload": {
+            "message": "old checkpoint",
+            "replacement_history": [{
+                "type": "compaction", "id": "old", "encrypted_content": "opaque checkpoint"
+            }],
+            "guardian_history": history.review_items().cloned().collect::<Vec<_>>()
+        }
+    }))?;
+    test.codex =
+        super::guardian_checkpoint_migration::resume(&test, &test.codex, vec![checkpoint]).await?;
 
     let mut responses = Vec::new();
     for index in 0..3 {

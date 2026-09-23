@@ -980,7 +980,7 @@ impl LocalAgentControl {
                 break;
             }
         }
-        let context_mode = GuardianContextMode::from_features(&config.features);
+        let context_mode = GuardianContextMode::ThreadOwned;
         let mut replaced_parent_developer_instructions = false;
         // Scrub inherited hints and replace only the parent's developer-instruction fragment.
         // Compaction stores response items separately, so sanitize both top-level messages and
