@@ -543,6 +543,7 @@ impl MetricsClient {
 
     /// Flush metrics and stop the underlying OTEL meter provider.
     pub fn shutdown(&self) -> Result<()> {
+        super::buffered::GLOBAL.suspend(self);
         self.inner.shutdown()
     }
 }

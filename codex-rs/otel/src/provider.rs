@@ -201,6 +201,7 @@ impl OtelProvider {
             // Tracestate propagation is process-global; clear it when these
             // settings do not install an active provider.
             crate::trace_context::set_tracestate_entries(BTreeMap::new())?;
+            crate::metrics::buffered::GLOBAL.disable();
             debug!("No OTEL exporter enabled in settings.");
             return Ok(None);
         }
@@ -279,6 +280,8 @@ impl OtelProvider {
                     environment: settings.environment.clone(),
                 });
             }
+        } else {
+            crate::metrics::buffered::GLOBAL.disable();
         }
         Ok(Some(provider))
     }

@@ -4,6 +4,9 @@ pub type Result<T> = std::result::Result<T, MetricsError>;
 
 #[derive(Debug, Error)]
 pub enum MetricsError {
+    #[error("operation metrics exceed the metadata size or tag count limit")]
+    OperationMetadataTooLarge,
+
     // Metrics.
     #[error("metric name cannot be empty")]
     EmptyMetricName,

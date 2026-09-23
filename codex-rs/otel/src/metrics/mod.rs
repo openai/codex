@@ -1,3 +1,4 @@
+pub(crate) mod buffered;
 mod client;
 mod config;
 mod error;
@@ -9,6 +10,7 @@ pub(crate) mod timer;
 pub(crate) mod validation;
 
 use crate::config::StatsigMetricsSettings;
+pub use crate::metrics::buffered::record_global_operation;
 pub use crate::metrics::client::MetricsClient;
 pub use crate::metrics::config::MetricsConfig;
 pub use crate::metrics::config::MetricsExporter;
@@ -36,6 +38,7 @@ pub(crate) fn install_global(mut metrics: MetricsClient) -> MetricsClient {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::clone(&metrics.inner);
     metrics.active = Some(active);
     let _ = GLOBAL_METRICS.set(metrics.clone());
+    buffered::GLOBAL.enable(&metrics);
     metrics
 }
 
