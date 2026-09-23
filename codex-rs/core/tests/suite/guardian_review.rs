@@ -262,6 +262,9 @@ async fn guardian_session_inherits_parent_http_fallback(
         guardian_request.header("x-codex-guardian").as_deref(),
         credits_enabled.then_some("reviewer")
     );
+    if credits_enabled {
+        assert_eq!(guardian_request.header("x-codex-routing-hint"), None);
+    }
     let body = guardian_request.body_json();
     assert_eq!(
         (

@@ -1521,6 +1521,42 @@ async fn provider_auth_command_refreshes_after_401() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn provider_auth_command_refreshes_during_websocket_preconnect() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let auth_fixture = ProviderAuthCommandFixture::new(&["first-token", "second-token"]).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer first-token"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Auth must recover during preconnect, before the ordinary HTTP fallback turn.
+    Mock::given(method("GET"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer second-token"))
+        .respond_with(ResponseTemplate::new(426))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_sse_once_match(
+        &server,
+        header("authorization", "Bearer second-token"),
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut provider =
+        ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri())));
+    provider.requires_openai_auth = false;
+    provider.auth = Some(auth_fixture.auth());
+    provider.supports_websockets = true;
+    send_request_with_provider(provider).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_auth_command_recovers_after_initial_resolution_failure() {
     skip_if_no_network!();
 
@@ -1629,6 +1665,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
 
 #[expect(clippy::unwrap_used)]
 async fn send_request_with_provider(provider: ModelProviderInfo) {
+    let preconnect = provider.supports_websockets;
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
@@ -1678,6 +1715,17 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
+    if preconnect {
+        client_session
+            .preconnect_websocket(
+                &model_info,
+                /*service_tier*/ None,
+                &session_telemetry,
+                &responses_metadata,
+            )
+            .await
+            .expect("preconnect should recover authentication before the first turn");
+    }
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Message {
         id: None,

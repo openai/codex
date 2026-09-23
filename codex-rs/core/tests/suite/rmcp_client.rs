@@ -26,6 +26,7 @@ use codex_config::types::OAuthCredentialsStoreMode;
 use codex_core::EnvironmentConfig;
 use codex_core::EnvironmentMcpPolicy;
 use codex_core::TurnInputRequest;
+use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::config::Config;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_exec_server::CreateDirectoryOptions;
@@ -45,6 +46,7 @@ use codex_history::RolloutItem;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp_policy::McpServerIdentity;
@@ -60,9 +62,11 @@ use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ConfirmationPolicies;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -1562,6 +1566,18 @@ async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::R
                 },
                 TestMcpServerOptions::default(),
             );
+            // Wait for discovery instead of skipping the pending optional server.
+            // Its startup timeout exceeds every bounded wait in this test.
+            config.mcp_optional_startup_grace = Duration::ZERO;
+            let mut servers = config.mcp_servers.get().clone();
+            let pending = servers
+                .get_mut("shutdown_prewarm")
+                .expect("pending MCP server");
+            pending.startup_timeout_sec = Some(Duration::from_secs(300));
+            config
+                .mcp_servers
+                .set(servers)
+                .expect("valid MCP configuration");
         })
         .build_with_websocket_server(&server)
         .await?;
@@ -1570,15 +1586,214 @@ async fn shutdown_cancels_startup_prewarm_waiting_for_mcp_startup() -> anyhow::R
         tokio::time::timeout(Duration::from_secs(5), pending_mcp_listener.accept())
             .await
             .context("startup prewarm should start the MCP connection")??;
+    assert!(
+        server
+            .wait_for_connections(/*expected*/ 1, Duration::from_secs(2))
+            .await,
+        "websocket handshake should overlap pending MCP tool startup"
+    );
+    assert!(
+        server.single_connection().is_empty(),
+        "prewarm should wait for tools before sending generate=false"
+    );
     tokio::time::timeout(Duration::from_secs(2), fixture.codex.shutdown_and_wait())
         .await
         .context("shutdown should not wait for startup prewarm MCP startup")??;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Dropping the thread closes its cached socket. Wait for the server to drain preceding frames.
+    drop(fixture);
     assert!(
-        server.connections().is_empty(),
-        "startup prewarm should not send a websocket request after shutdown"
+        server
+            .wait_for_closed_connections(/*expected*/ 1, Duration::from_secs(3))
+            .await,
+        "websocket server should drain pending frames after startup cancellation"
+    );
+    assert_eq!(
+        server.single_connection().len(),
+        0,
+        "blocked MCP discovery must prevent any startup prewarm request"
     );
 
+    server.shutdown().await;
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PrewarmMcpScenario {
+    Responses,
+    ResponsesLite,
+    EagerSocketCloses,
+}
+
+#[test_case(PrewarmMcpScenario::Responses; "responses")]
+#[test_case(PrewarmMcpScenario::ResponsesLite; "responses lite")]
+#[test_case(PrewarmMcpScenario::EagerSocketCloses; "first turn reconnects when the eager socket closes")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_prewarm_connects_before_delayed_mcp_tools_then_reuses_socket(
+    scenario: PrewarmMcpScenario,
+) -> anyhow::Result<()> {
+    skip_if_wine_exec!(
+        Ok(()),
+        "requires a Windows test_stdio_server in the Wine-exec environment"
+    );
+    skip_if_no_network!(Ok(()));
+    let use_responses_lite = scenario == PrewarmMcpScenario::ResponsesLite;
+    let close_eager_socket = scenario == PrewarmMcpScenario::EagerSocketCloses;
+
+    let warmup_events = vec![
+        responses::ev_response_created("warm-1"),
+        responses::ev_completed("warm-1"),
+    ];
+    let turn_events = vec![
+        responses::ev_response_created("turn-1"),
+        responses::ev_assistant_message("message-1", "done"),
+        responses::ev_completed("turn-1"),
+    ];
+    let connections = if close_eager_socket {
+        // A connection without scripted requests closes as soon as it is accepted.
+        vec![Vec::new(), vec![turn_events]]
+    } else {
+        vec![vec![warmup_events, turn_events]]
+    };
+    let server = responses::start_websocket_server(connections).await;
+    let command = stdio_server_bin()?;
+    let service_tier = ServiceTier::Fast.request_value();
+    let fixture = test_codex()
+        .with_model("gpt-5.4")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", move |model| {
+            model.supports_search_tool = false;
+            model.use_responses_lite = use_responses_lite;
+            if use_responses_lite {
+                model.tool_mode = Some(ToolMode::CodeMode);
+            }
+            model.service_tiers.push(ModelServiceTier {
+                id: service_tier.to_string(),
+                name: "Fast".to_string(),
+                description: "Priority processing".to_string(),
+            });
+        })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::FastMode)
+                .expect("enable Fast Mode for routing hint");
+            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+            config.tool_registry.turn_metadata_includes_tool_info = use_responses_lite;
+            config.mcp_optional_startup_grace = Duration::ZERO;
+            let barrier_file = config.cwd.join("allow-prewarm-mcp-initialize");
+            insert_mcp_server(
+                config,
+                "delayed_prewarm",
+                stdio_transport(
+                    command,
+                    Some(HashMap::from([(
+                        "MCP_TEST_INITIALIZE_BARRIER_FILE".to_string(),
+                        barrier_file.to_string_lossy().to_string(),
+                    )])),
+                    Vec::new(),
+                ),
+                TestMcpServerOptions::default(),
+            );
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+
+    assert!(
+        server
+            .wait_for_connections(/*expected*/ 1, Duration::from_secs(5))
+            .await,
+        "websocket handshake should finish while MCP discovery is blocked"
+    );
+    assert_eq!(
+        server
+            .single_handshake()
+            .header(X_CODEX_ROUTING_HINT_HEADER),
+        Some(format!("model=gpt-5.4;tier={service_tier}"))
+    );
+    assert!(
+        server.single_connection().is_empty(),
+        "prewarm should wait for delayed MCP discovery"
+    );
+    if close_eager_socket {
+        assert!(
+            server
+                .wait_for_closed_connections(/*expected*/ 1, Duration::from_secs(5))
+                .await,
+            "the eager socket must close before MCP discovery is released"
+        );
+    }
+    std::fs::write(
+        fixture.workspace_path("allow-prewarm-mcp-initialize"),
+        b"ready",
+    )?;
+    wait_for_mcp_server(&fixture.codex, "delayed_prewarm").await?;
+
+    let namespace = "mcp__delayed_prewarm";
+    if close_eager_socket {
+        fixture.submit_text_turn("hello").await?;
+        let first_turn = server
+            .wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
+            .await
+            .body_json();
+        assert_eq!(first_turn["type"], "response.create");
+        assert_eq!(first_turn.get("generate"), None);
+        assert_eq!(first_turn.get("previous_response_id"), None);
+        assert!(responses::namespace_child_tool(&first_turn, namespace, "echo").is_some());
+        assert!(server.connections()[0].is_empty());
+        let handshakes = server.handshakes();
+        assert_eq!(handshakes.len(), 2);
+        assert_eq!(
+            handshakes[1].header(X_CODEX_ROUTING_HINT_HEADER),
+            handshakes[0].header(X_CODEX_ROUTING_HINT_HEADER)
+        );
+        fixture.codex.shutdown_and_wait().await?;
+        server.shutdown().await;
+        return Ok(());
+    }
+
+    let prewarm = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await
+    .context("prewarm should send its request after MCP discovery")?
+    .body_json();
+    assert_eq!(prewarm["type"].as_str(), Some("response.create"));
+    assert_eq!(prewarm["generate"].as_bool(), Some(false));
+    assert_eq!(prewarm["service_tier"].as_str(), Some(service_tier));
+    let tool_body = if use_responses_lite {
+        &prewarm["input"][0]
+    } else {
+        &prewarm
+    };
+    assert!(
+        responses::namespace_child_tool(tool_body, namespace, "echo").is_some(),
+        "prewarm should contain the discovered MCP echo tool: {prewarm:?}"
+    );
+    let metadata: Value = serde_json::from_str(
+        prewarm["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .context("prewarm should include turn metadata")?,
+    )?;
+    if use_responses_lite {
+        assert!(
+            metadata["tool_namespaces_info"][namespace]["functions"]["echo"].is_object(),
+            "Responses Lite prewarm metadata should reflect discovered MCP tools: {metadata:?}"
+        );
+    }
+
+    fixture.submit_text_turn("hello").await?;
+    let first_turn = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 1),
+    )
+    .await
+    .context("first turn should reuse the prewarmed socket")?
+    .body_json();
+    assert_eq!(first_turn["previous_response_id"], "warm-1");
+    assert_eq!(server.handshakes().len(), 1);
+
+    fixture.codex.shutdown_and_wait().await?;
     server.shutdown().await;
     Ok(())
 }

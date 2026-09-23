@@ -1,7 +1,10 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsOverrides;
@@ -10,6 +13,7 @@ use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_exec_command_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
@@ -18,9 +22,132 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 use std::time::Duration;
 
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+
+#[test_case::test_case(true; "fast mode enabled")]
+#[test_case::test_case(false; "fast mode disabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_agent_prewarm_handshake_inherits_effective_root_service_tier(
+    fast_mode_enabled: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("root-warm"), ev_completed("root-warm")],
+            vec![
+                ev_response_created("root-spawn"),
+                ev_function_call_with_namespace(
+                    "spawn-worker",
+                    "collaboration",
+                    "spawn_agent",
+                    &json!({ "message": "hello", "task_name": "worker", "fork_turns": "none" })
+                        .to_string(),
+                ),
+                ev_completed("root-spawn"),
+            ],
+            vec![ev_response_created("root-done"), ev_completed("root-done")],
+        ],
+        vec![
+            vec![
+                ev_response_created("child-warm"),
+                ev_completed("child-warm"),
+            ],
+            vec![
+                ev_response_created("child-done"),
+                ev_completed("child-done"),
+            ],
+        ],
+    ])
+    .await;
+    let tier = ServiceTier::Fast.request_value();
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", move |model| {
+            model.service_tiers.push(ModelServiceTier {
+                id: tier.to_string(),
+                name: "Fast".to_string(),
+                description: "Priority processing".to_string(),
+            });
+        })
+        .with_config(move |config| {
+            for feature in [Feature::Collab, Feature::MultiAgentV2] {
+                config.features.enable(feature).expect("spawn feature");
+            }
+            if fast_mode_enabled {
+                config
+                    .features
+                    .enable(Feature::FastMode)
+                    .expect("fast mode");
+            } else {
+                config
+                    .features
+                    .disable(Feature::FastMode)
+                    .expect("fast mode");
+            }
+            config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "spawn a worker".to_string(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                service_tier: Some(Some(tier.to_string())),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let child_thread_id =
+        tokio::time::timeout(Duration::from_secs(5), created_threads.recv()).await??;
+    let child = test.thread_manager.get_thread(child_thread_id).await?;
+
+    assert!(
+        server
+            .wait_for_handshakes(/*expected*/ 2, Duration::from_secs(5))
+            .await,
+        "child startup should connect before its first turn"
+    );
+    let handshakes = server.handshakes();
+    let expected_hint = if fast_mode_enabled {
+        format!("model=gpt-5.4;tier={tier}")
+    } else {
+        "model=gpt-5.4".to_string()
+    };
+    assert_eq!(
+        handshakes[1].header(X_CODEX_ROUTING_HINT_HEADER),
+        Some(expected_hint)
+    );
+    let child_warmup = tokio::time::timeout(
+        Duration::from_secs(5),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+    )
+    .await?
+    .body_json();
+    assert_eq!(child_warmup["generate"], false);
+    assert_eq!(
+        child_warmup["service_tier"].as_str(),
+        fast_mode_enabled.then_some(tier)
+    );
+    assert_eq!(server.handshakes().len(), 2);
+    child.shutdown_and_wait().await?;
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_model_switch_to_responses_lite_omits_top_level_tools() -> Result<()> {
@@ -388,26 +515,57 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(None, Some("ultrafast"); "standard to ultrafast")]
+#[test_case::test_case(Some("ultrafast"), None; "ultrafast to standard")]
+#[test_case::test_case(Some("priority"), Some("ultrafast"); "priority to ultrafast")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() -> Result<()> {
+async fn websocket_v2_first_turn_sends_full_create_when_tier_changes_after_startup_prewarm(
+    startup_tier: Option<&'static str>,
+    turn_tier: Option<&'static str>,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    let warmup_turn_state = "startup-turn-state";
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+        vec![
+            ev_response_created("warm-1"),
+            json!({
+                "type": "response.metadata",
+                "headers": {"x-codex-turn-state": warmup_turn_state},
+            }),
+            ev_completed("warm-1"),
+        ],
         vec![
             ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "fast"),
+            ev_assistant_message("msg_1", "done"),
             ev_completed("resp-1"),
         ],
     ]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketsV2)
-            .expect("test config should allow feature update");
-    });
+    let model = "gpt-5.6-sol";
+    let mut builder = test_codex()
+        .with_model_info_override(model, |model_info| {
+            // Exercise tier transitions independently of the bundled model catalog.
+            model_info.service_tiers = ["priority", "ultrafast"]
+                .into_iter()
+                .map(|tier| ModelServiceTier {
+                    id: tier.to_string(),
+                    name: tier.to_string(),
+                    description: String::new(),
+                })
+                .collect();
+        })
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            for feature in [Feature::ResponsesWebsocketsV2, Feature::FastMode] {
+                config
+                    .features
+                    .enable(feature)
+                    .expect("test config should allow feature update");
+            }
+            config.service_tier = startup_tier.map(str::to_string);
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     let warmup = server
@@ -416,68 +574,21 @@ async fn websocket_v2_first_turn_uses_updated_fast_tier_after_startup_prewarm() 
         .body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
-    assert_eq!(warmup.get("service_tier"), None);
+    assert_eq!(warmup["service_tier"].as_str(), startup_tier);
 
-    test.submit_turn_with_service_tier("hello", Some(ServiceTier::Fast.request_value()))
+    test.submit_turn_with_service_tier("hello", turn_tier)
         .await?;
 
     assert_eq!(server.handshakes().len(), 1);
-    let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
-    let first_turn = connection
-        .get(1)
-        .expect("missing first turn request")
-        .body_json();
-
-    assert_eq!(first_turn["type"].as_str(), Some("response.create"));
-    assert_eq!(first_turn["service_tier"].as_str(), Some("priority"));
-    assert_eq!(first_turn.get("previous_response_id"), None);
-    assert!(
-        first_turn
-            .get("input")
-            .and_then(Value::as_array)
-            .is_some_and(|items| !items.is_empty())
+    assert_eq!(
+        server
+            .single_handshake()
+            .header(X_CODEX_ROUTING_HINT_HEADER),
+        Some(match startup_tier {
+            Some(tier) => format!("model={model};tier={tier}"),
+            None => format!("model={model}"),
+        })
     );
-
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
-        vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg_1", "standard"),
-            ev_completed("resp-1"),
-        ],
-    ]])
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketsV2)
-            .expect("test config should allow feature update");
-        config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
-    });
-    let test = builder.build_with_websocket_server(&server).await?;
-
-    let warmup = server
-        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
-        .await
-        .body_json();
-    assert_eq!(warmup["type"].as_str(), Some("response.create"));
-    assert_eq!(warmup["generate"].as_bool(), Some(false));
-    assert_eq!(warmup["service_tier"].as_str(), Some("priority"));
-
-    test.submit_turn_with_service_tier("hello", /*service_tier*/ None)
-        .await?;
-
-    assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
     assert_eq!(connection.len(), 2);
     let first_turn = connection
@@ -486,7 +597,13 @@ async fn websocket_v2_first_turn_drops_fast_tier_after_startup_prewarm() -> Resu
         .body_json();
 
     assert_eq!(first_turn["type"].as_str(), Some("response.create"));
-    assert_eq!(first_turn.get("service_tier"), None);
+    assert_eq!(first_turn["model"].as_str(), Some(model));
+    assert_eq!(first_turn["service_tier"].as_str(), turn_tier);
+    assert_ne!(first_turn["generate"].as_bool(), Some(false));
+    assert_eq!(
+        first_turn["client_metadata"]["x-codex-turn-state"].as_str(),
+        Some(warmup_turn_state)
+    );
     assert_eq!(first_turn.get("previous_response_id"), None);
     assert!(
         first_turn
