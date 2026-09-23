@@ -20,10 +20,10 @@ use http::Method;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::net::TcpListener;
 use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::net::TcpSocket;
 use tokio::sync::mpsc;
 use tracing::Event;
 use tracing::Subscriber;
@@ -62,6 +62,7 @@ struct RetryTelemetryVisitor {
     delay_ms: Option<u64>,
     layer: Option<String>,
     operation: Option<String>,
+    is_responses_request: bool,
 }
 
 impl Visit for RetryTelemetryVisitor {
@@ -84,6 +85,12 @@ impl Visit for RetryTelemetryVisitor {
             "event.name" => self.name = Some(value.to_string()),
             "retry.layer" => self.layer = Some(value.to_string()),
             "retry.operation" => self.operation = Some(value.to_string()),
+            "message" => {
+                self.is_responses_request = value
+                    .split_once(": ")
+                    .and_then(|(request, _)| request.split_whitespace().nth(2))
+                    .is_some_and(|url| url.ends_with("/responses"));
+            }
             _ => {}
         }
     }
@@ -97,19 +104,26 @@ impl Visit for RetryTelemetryVisitor {
 struct RetryTelemetryLayer {
     events: mpsc::UnboundedSender<RetryTelemetryEvent>,
     resumptions: mpsc::UnboundedSender<Duration>,
+    last_request: Mutex<Option<Instant>>,
     pending_retry: Mutex<Option<Instant>>,
 }
 
 impl RetryTelemetryLayer {
     fn record_request_after_retry(&self) {
+        let now = Instant::now();
+        let mut last_request = self
+            .last_request
+            .lock()
+            .expect("last request should not be poisoned");
         let started = self
             .pending_retry
             .lock()
             .expect("pending retry should not be poisoned")
             .take();
         if let Some(started) = started {
-            let _ = self.resumptions.send(started.elapsed());
+            let _ = self.resumptions.send(now.duration_since(started));
         }
+        *last_request = Some(now);
     }
 }
 
@@ -119,7 +133,11 @@ where
 {
     fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
         if event.metadata().target() == "codex_http_client::transport" {
-            self.record_request_after_retry();
+            let mut visitor = RetryTelemetryVisitor::default();
+            event.record(&mut visitor);
+            if visitor.is_responses_request {
+                self.record_request_after_retry();
+            }
             return;
         }
 
@@ -149,16 +167,24 @@ where
                 .operation
                 .expect("retry event should identify its operation"),
         };
-        let started = Instant::now();
+        // The deadline is captured before retry telemetry. Starting at the failed request
+        // gives a lower bound that still holds if the test is descheduled before telemetry.
+        let started = *self
+            .last_request
+            .lock()
+            .expect("last request should not be poisoned");
         *self
             .pending_retry
             .lock()
-            .expect("pending retry should not be poisoned") = Some(started);
+            .expect("pending retry should not be poisoned") = started;
         let _ = self.events.send(retry);
     }
 
     fn on_new_span(&self, attributes: &Attributes<'_>, _id: &Id, _context: Context<'_, S>) {
-        if attributes.metadata().name() == "responses_websocket.connect" {
+        if matches!(
+            attributes.metadata().name(),
+            "responses_websocket.connect" | "responses_websocket.stream_request"
+        ) {
             self.record_request_after_retry();
         }
     }
@@ -168,35 +194,39 @@ struct RetryTelemetryCapture {
     events: mpsc::UnboundedReceiver<RetryTelemetryEvent>,
     resumptions: mpsc::UnboundedReceiver<Duration>,
     _subscriber: DefaultGuard,
+    _interest_cache_guard: tracing::Dispatch,
 }
 
 impl RetryTelemetryCapture {
     fn install() -> Self {
         let (sender, events) = mpsc::unbounded_channel();
         let (resumptions_sender, resumptions) = mpsc::unbounded_channel();
+        // Avoid caching no interest when another test first reaches a shared callsite.
+        let interest_cache_guard =
+            tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
         let subscriber = tracing_subscriber::registry()
             .with(RetryTelemetryLayer {
                 events: sender,
                 resumptions: resumptions_sender,
+                last_request: Mutex::new(None),
                 pending_retry: Mutex::new(None),
             })
             .set_default();
+        tracing::callsite::rebuild_interest_cache();
 
         Self {
             events,
             resumptions,
             _subscriber: subscriber,
+            _interest_cache_guard: interest_cache_guard,
         }
     }
 
     async fn next_retry(&mut self) -> RetryTelemetryEvent {
-        let retry = tokio::time::timeout(Duration::from_secs(10), self.events.recv())
+        tokio::time::timeout(Duration::from_secs(10), self.events.recv())
             .await
             .expect("timed out waiting for retry telemetry")
-            .expect("retry telemetry subscriber should remain installed");
-        // Parallel tests may first register request callsites without our thread-local subscriber.
-        tracing::callsite::rebuild_interest_cache();
-        retry
+            .expect("retry telemetry subscriber should remain installed")
     }
 }
 
@@ -1334,9 +1364,9 @@ async fn connection_failures_increment_retry_telemetry_without_consuming_retry_b
 
     let mut telemetry = RetryTelemetryCapture::install();
     let bootstrap_server = responses::start_mock_server().await;
-    let unavailable_listener = TcpListener::bind("127.0.0.1:0")?;
-    let unavailable_address = unavailable_listener.local_addr()?;
-    drop(unavailable_listener);
+    let unavailable_socket = TcpSocket::new_v4()?;
+    unavailable_socket.bind("127.0.0.1:0".parse()?)?;
+    let unavailable_address = unavailable_socket.local_addr()?;
 
     let test = test_codex()
         .with_config(move |config| {
@@ -1374,7 +1404,7 @@ async fn connection_failures_increment_retry_telemetry_without_consuming_retry_b
     );
 
     let recovered_server = MockServer::builder()
-        .listener(TcpListener::bind(unavailable_address)?)
+        .listener(unavailable_socket.listen(/*backlog*/ 128)?.into_std()?)
         .start()
         .await;
     let response_mock = responses::mount_sse_once(
@@ -1434,6 +1464,10 @@ async fn websocket_connection_limit_retries_with_local_backoff() -> Result<()> {
         .build_with_websocket_server(&server)
         .await?;
 
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
     submit_user_input(&test, "retry after reaching the websocket connection limit").await?;
     let retry = telemetry.next_retry().await;
     assert!((FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY).contains(&retry.delay));
@@ -1494,6 +1528,10 @@ async fn websocket_rate_limit_with_nested_retry_after_is_terminal() -> Result<()
         .build_with_websocket_server(&server)
         .await?;
 
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
     submit_user_input(&test, "surface the websocket rate limit").await?;
 
     let mut error_events = 0;
@@ -1566,6 +1604,10 @@ async fn websocket_rate_limit_without_retry_after_is_terminal() -> Result<()> {
         .build_with_websocket_server(&server)
         .await?;
 
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
     submit_user_input(&test, "surface the headerless websocket rate limit").await?;
 
     let mut error_events = 0;
@@ -1642,6 +1684,10 @@ async fn websocket_overload_with_nested_retry_after_is_terminal() -> Result<()> 
         .build_with_websocket_server(&server)
         .await?;
 
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
     submit_user_input(&test, "reject the websocket overload despite retry advice").await?;
 
     let mut error_events = 0;
@@ -1726,6 +1772,10 @@ async fn websocket_overload_without_retry_after_is_terminal() -> Result<()> {
         .build_with_websocket_server(&server)
         .await?;
 
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    assert_eq!(warmup.body_json()["generate"].as_bool(), Some(false));
     submit_user_input(&test, "reject the websocket overload").await?;
 
     let mut error_events = 0;
