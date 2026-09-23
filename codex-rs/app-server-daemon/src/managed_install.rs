@@ -187,16 +187,26 @@ pub(crate) struct ExecutableIdentity {
 }
 
 pub(crate) async fn executable_identity(executable: &Path) -> Result<ExecutableIdentity> {
-    let bytes = fs::read(executable)
-        .await
-        .with_context(|| format!("failed to read executable {}", executable.display()))?;
-    Ok(executable_identity_from_bytes(&bytes))
+    let executable = executable.to_path_buf();
+    // Debug executables can be hundreds of MB. Stream the digest off the async
+    // runtime instead of allocating the whole file and blocking a runtime thread.
+    tokio::task::spawn_blocking(move || {
+        std::fs::File::open(&executable)
+            .and_then(executable_identity_from_reader)
+            .with_context(|| format!("failed to read executable {}", executable.display()))
+    })
+    .await
+    .context("executable identity task failed")?
 }
 
-pub(crate) fn executable_identity_from_bytes(bytes: &[u8]) -> ExecutableIdentity {
-    ExecutableIdentity {
-        digest: *blake3::hash(bytes).as_bytes(),
-    }
+pub(crate) fn executable_identity_from_reader(
+    reader: impl std::io::Read,
+) -> std::io::Result<ExecutableIdentity> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(reader)?;
+    Ok(ExecutableIdentity {
+        digest: *hasher.finalize().as_bytes(),
+    })
 }
 
 fn managed_codex_file_name() -> &'static str {
