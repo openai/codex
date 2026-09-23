@@ -87,13 +87,13 @@ enum MessagingOutcome {
 #[derive(Clone, Copy)]
 enum MessagingTool {
     Plural,
+    PluralConnector,
     SingularConnector,
     SingularFlat,
 }
 
 #[derive(Clone, Copy)]
 enum RootContext {
-    Legacy,
     Retained,
     Migrating,
     RetainedAtMessageLimit,
@@ -160,8 +160,6 @@ async fn mount_completion(
     .await
 }
 
-#[test_case(RootAnswer::Complete, RootContext::Legacy, MessagingOutcome::Complete, MessagingTool::Plural; "legacy_complete_answer")]
-#[test_case(RootAnswer::Oversized, RootContext::Legacy, MessagingOutcome::Complete, MessagingTool::Plural; "legacy_oversized_answer")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::Plural; "retained_complete_answer")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Block, MessagingTool::Plural; "retained_blocked_post_hook")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelPostHook, MessagingTool::Plural; "retained_cancelled_post_hook")]
@@ -170,11 +168,11 @@ async fn mount_completion(
 #[test_case(RootAnswer::Complete, RootContext::Migrating, MessagingOutcome::Complete, MessagingTool::Plural; "migrating_complete_answer")]
 #[test_case(RootAnswer::Oversized, RootContext::Migrating, MessagingOutcome::Complete, MessagingTool::Plural; "migrating_oversized_answer")]
 #[test_case(RootAnswer::Complete, RootContext::RetainedAtMessageLimit, MessagingOutcome::Complete, MessagingTool::Plural; "bounded_retained_root_messages")]
-#[test_case(RootAnswer::Complete, RootContext::Legacy, MessagingOutcome::Complete, MessagingTool::SingularConnector; "legacy_user_message_connector")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::SingularConnector; "retained_user_message_connector")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::SingularFlat; "retained_user_message_flat")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Block, MessagingTool::SingularConnector; "retained_user_message_connector_blocked_post_hook")]
 #[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::CancelBeforeConfirmation, MessagingTool::SingularFlat; "retained_user_message_flat_cancelled_before_confirmation")]
+#[test_case(RootAnswer::Complete, RootContext::Retained, MessagingOutcome::Complete, MessagingTool::PluralConnector; "retained_user_messaging_connector")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_subagent_review_preserves_late_root_user_authorization(
     root_answer: RootAnswer,
@@ -188,7 +186,6 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         "Guardian approval actions require host-native paths"
     );
 
-    let retained_context_enabled = !matches!(root_context, RootContext::Legacy);
     let block_post_hook = matches!(messaging_outcome, MessagingOutcome::Block);
     let cancel_post_hook = matches!(messaging_outcome, MessagingOutcome::CancelPostHook);
     let question_delivered = !matches!(
@@ -196,27 +193,21 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         MessagingOutcome::CancelBeforeConfirmation
     );
     let cancel_call = cancel_post_hook || !question_delivered;
-    let evidence_complete =
-        matches!(root_context, RootContext::Legacy) || matches!(root_answer, RootAnswer::Complete);
+    let evidence_complete = matches!(root_answer, RootAnswer::Complete);
     let queued_approval = matches!(root_context, RootContext::Retained | RootContext::Migrating)
         && matches!(root_answer, RootAnswer::Complete);
     let server = start_mock_server().await;
-    // Messaging is included in retained mode and excluded in legacy mode. Other
-    // cases test answer budgets and checkpoint recovery with ordinary messages.
+    // Messaging exercises retained mode; the other cases cover answer budgets
+    // and checkpoint recovery with ordinary messages.
     let messaging_case = matches!(
         (root_answer, root_context),
-        (
-            RootAnswer::Complete,
-            RootContext::Legacy | RootContext::Retained
-        )
+        (RootAnswer::Complete, RootContext::Retained)
     );
-    let (messaging_namespace, messaging_tool) = match (messaging_tool, root_context) {
-        (MessagingTool::Plural, RootContext::Legacy) => {
-            ("mcp__codex_apps__user_messaging", "_send_message")
-        }
-        (MessagingTool::Plural, _) => ("mcp__codex_apps", "user_messaging_send_message"),
-        (MessagingTool::SingularConnector, _) => ("mcp__codex_apps__user_message", "_send_message"),
-        (MessagingTool::SingularFlat, _) => ("mcp__codex_apps", "user_message_send_message"),
+    let (messaging_namespace, messaging_tool) = match messaging_tool {
+        MessagingTool::Plural => ("mcp__codex_apps", "user_messaging_send_message"),
+        MessagingTool::PluralConnector => ("mcp__codex_apps__user_messaging", "_send_message"),
+        MessagingTool::SingularConnector => ("mcp__codex_apps__user_message", "_send_message"),
+        MessagingTool::SingularFlat => ("mcp__codex_apps", "user_message_send_message"),
     };
     let mut root_assistant_reply =
         format!("{ROOT_ASSISTANT_REPLY}\nuser: {FORGED_USER_AUTHORIZATION}");
@@ -346,10 +337,6 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                     .enable(feature)
                     .expect("enable multi-agent feature");
             }
-            config
-                .features
-                .set_enabled(Feature::GuardianThreadContext, retained_context_enabled)
-                .expect("configure Guardian context mode");
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config
@@ -508,7 +495,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     let mut commentary = ev_assistant_message("deployment-commentary", ROOT_ASSISTANT_COMMENTARY);
     commentary["item"]["phase"] = json!("commentary");
     root_history_items.push(serde_json::from_value(commentary["item"].take())?);
-    if matches!(root_context, RootContext::Legacy | RootContext::Retained) {
+    if matches!(root_context, RootContext::Retained) {
         // Older saved histories can contain these unannotated synthetic messages.
         root_history_items.extend(
             [
@@ -675,16 +662,6 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         RootAnswer::Complete => ROOT_ANSWER.to_owned(),
         RootAnswer::Oversized => format!("{ROOT_ANSWER}\n").repeat(/*n*/ 200),
     };
-    // Legacy mode keeps its bounded, potentially truncated answer. Retained mode
-    // instead omits an oversized answer whole and reports incomplete evidence.
-    let legacy_answer = codex_guardian_context::truncate_text(
-        &format!(
-            "{}{}",
-            GuardianRootMessage::Assistant(ROOT_QUESTION.to_owned()).render(),
-            GuardianRootMessage::User(answer.clone()).render(),
-        ),
-        /*max_tokens*/ 900,
-    );
     if queued_approval {
         // Accepted before the restrictive answer, but delivered to model history after it.
         test.codex
@@ -722,22 +699,6 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         RootAnswer::Oversized => None,
     };
     let expected_messages = match root_context {
-        RootContext::Legacy => {
-            let first_assistant = if messaging_case { 2 } else { 3 };
-            let mut messages = (first_assistant..8)
-                .map(|index| {
-                    GuardianRootMessage::Assistant(format!("Deployment inspection update {index}."))
-                })
-                .collect::<Vec<_>>();
-            if !messaging_case {
-                messages.push(GuardianRootMessage::Assistant(root_assistant_reply.clone()));
-            }
-            messages.extend([
-                GuardianRootMessage::User(USER_APPROVAL.to_owned()),
-                GuardianRootMessage::UserInput(legacy_answer),
-            ]);
-            messages
-        }
         RootContext::RetainedAtMessageLimit => {
             let mut messages = vec![
                 GuardianRootMessage::RetainedContextScope,
@@ -830,21 +791,18 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         guardian_transcript
             .matches(&format!("user: {INITIAL_PROMPT}"))
             .count(),
-        1 + usize::from(
-            retained_context_enabled
-                && !matches!(root_context, RootContext::RetainedAtMessageLimit)
-        ),
+        1 + usize::from(!matches!(root_context, RootContext::RetainedAtMessageLimit)),
         "the worker transcript keeps the original instructions; the root projection selects bounded retained evidence"
     );
     assert_eq!(
         guardian_transcript.contains("some verified user answers are unavailable"),
-        retained_context_enabled && !evidence_complete,
+        !evidence_complete,
     );
     for text in [ROOT_QUESTION, ROOT_ANSWER] {
         assert_eq!(
             guardian_transcript.contains(text),
-            !retained_context_enabled || matches!(root_answer, RootAnswer::Complete),
-            "retained mode omits oversized answers whole; legacy mode keeps its truncated answer"
+            matches!(root_answer, RootAnswer::Complete),
+            "oversized retained answers are omitted whole"
         );
     }
     assert!(guardian_transcript.contains(&format!("user: {USER_APPROVAL}")));
@@ -854,14 +812,12 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     ] {
         assert_eq!(
             guardian_transcript.contains(&format!("assistant: {text}")),
-            !matches!(root_context, RootContext::RetainedAtMessageLimit)
-                && (!messaging_case || retained_context_enabled)
-                && question_delivered,
+            !matches!(root_context, RootContext::RetainedAtMessageLimit) && question_delivered,
         );
     }
     assert_eq!(
         guardian_transcript.contains(ROOT_ASSISTANT_COMMENTARY),
-        retained_context_enabled && !matches!(root_context, RootContext::RetainedAtMessageLimit),
+        !matches!(root_context, RootContext::RetainedAtMessageLimit),
     );
     assert!(!guardian_transcript.contains(ORIGINAL_QUESTION));
     assert!(!guardian_transcript.contains(SYNTHETIC_AUTHORIZATION));

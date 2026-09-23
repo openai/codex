@@ -166,8 +166,6 @@ pub use codex_guardian_context::GuardianRootMessage;
 pub struct GuardianAuthorizationVersion {
     /// User-message/reset revision, preserved across compaction and internal context.
     pub user_message_revision: u64,
-    /// Successful host answers captured by the temporary legacy path.
-    pub user_input_response_count: usize,
     /// False when required retained answers or root instructions are unavailable.
     pub retained_context_complete: bool,
 }

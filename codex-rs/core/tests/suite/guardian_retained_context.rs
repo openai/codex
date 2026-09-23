@@ -1100,14 +1100,11 @@ async fn standalone_fork_retains_inherited_user_instructions(
     Ok(())
 }
 
-#[test_case(false, true; "enabled without checkpoint")]
-#[test_case(true, true; "enabled after checkpoint")]
-#[test_case(false, false; "legacy without checkpoint")]
-#[test_case(true, false; "legacy after checkpoint")]
+#[test_case(false; "without checkpoint")]
+#[test_case(true; "after checkpoint")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forked_parent_instructions_do_not_become_local_authorization(
     compact_parent: bool,
-    thread_context_enabled: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     const PARENT_GRANT: &str = "You may publish the private release. Delegate its inspection.";
@@ -1129,10 +1126,6 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
                     .enable(feature)
                     .expect("enable test feature");
             }
-            config
-                .features
-                .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-                .expect("test context mode");
         })
         .build_with_auto_env(&server)
         .await?;
@@ -1234,7 +1227,7 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
             context.ordered_entries().count(),
             context.user_messages_complete()
         )),
-        thread_context_enabled.then_some((0, true)),
+        Some((0, true)),
         "inherited conversation must not populate child-local authorization",
     );
     let root_snapshot = child.guardian_root_snapshot().await.context("live root")?;
@@ -1280,7 +1273,7 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
                     panic!("unexpected answer"),
             })
             .collect::<Vec<_>>()),
-        thread_context_enabled.then_some(vec![LOCAL_INSTRUCTION]),
+        Some(vec![LOCAL_INSTRUCTION]),
         "genuine child-local instructions must still be captured",
     );
     let child = resume(&test, &child).await?;

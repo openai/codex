@@ -1,6 +1,5 @@
 //! Selects Guardian answer evidence from the review's history snapshot and retains reviews.
 //! Retained answers survive restart even while incompatible checkpoints use legacy review.
-//! Sessions without retained capture continue using the bounded runtime buffer.
 
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
@@ -11,22 +10,14 @@ use std::sync::PoisonError;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_guardian_context::MAX_PREVIOUS_REVIEWS;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GuardianAssessmentEvent;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
-use codex_protocol::request_user_input::RequestUserInputResponse;
 use serde_json::json;
 
 use super::ContextualUserFragment;
 use crate::codex_thread::GuardianAuthorizationVersion;
-use crate::codex_thread::GuardianRootMessage;
-use crate::guardian::guardian_truncate_text;
 
-const MAX_RETAINED_USER_INPUTS: usize = 8;
 const MAX_TRUSTED_SKILLS: usize = 16;
 const MAX_TRUSTED_SKILL_PATHS_BYTES: usize = 2_048;
-const MAX_GUARDIAN_USER_INPUT_ANSWERS: usize = 8;
-const MAX_GUARDIAN_USER_INPUT_TOKENS: usize = 900;
 
 /// Selected answer fragments and the authorization state they describe.
 pub struct GuardianUserInputSnapshot {
@@ -47,68 +38,11 @@ pub struct GuardianReviewEvidence {
 #[derive(Debug, Default)]
 struct GuardianReviewEvidenceState {
     reviews: VecDeque<Arc<GuardianReviewEvidenceRecord>>,
-    user_inputs: VecDeque<(String, String)>,
-    user_input_response_count: usize,
     trusted_skill_turn_id: Option<String>,
     trusted_skill_paths: BTreeSet<String>,
 }
 
 impl GuardianReviewEvidence {
-    /// Preserves the legacy capture limits before hooks can replace the tool output.
-    pub(crate) fn record_user_input(
-        &self,
-        history: &dyn ConversationHistorySnapshot,
-        call_id: &str,
-        questions: &[RequestUserInputQuestion],
-        response: &RequestUserInputResponse,
-    ) {
-        if history.retained_context().is_some() {
-            return;
-        }
-        let fragment = questions
-            .iter()
-            .filter_map(|question| {
-                let response = response.answers.get(&question.id)?;
-                let answers = response
-                    .answers
-                    .iter()
-                    .filter(|answer| !answer.trim().is_empty())
-                    .take(MAX_GUARDIAN_USER_INPUT_ANSWERS)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if answers.is_empty() {
-                    return None;
-                }
-                let mut question_text = question.question.clone();
-                for option in question
-                    .options
-                    .iter()
-                    .flatten()
-                    .filter(|option| response.answers.contains(&option.label))
-                    .take(MAX_GUARDIAN_USER_INPUT_ANSWERS)
-                {
-                    question_text.push_str(&format!("\n{}: {}", option.label, option.description));
-                }
-                Some(format!(
-                    "{}{}",
-                    GuardianRootMessage::Assistant(question_text).render(),
-                    GuardianRootMessage::User(answers.join("\n")).render()
-                ))
-            })
-            .take(MAX_GUARDIAN_USER_INPUT_ANSWERS)
-            .collect::<String>();
-        if fragment.is_empty() {
-            return;
-        }
-        let fragment = guardian_truncate_text(&fragment, MAX_GUARDIAN_USER_INPUT_TOKENS).0;
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.user_input_response_count = state.user_input_response_count.saturating_add(1);
-        state.user_inputs.push_back((call_id.to_owned(), fragment));
-        while state.user_inputs.len() > MAX_RETAINED_USER_INPUTS {
-            state.user_inputs.pop_front();
-        }
-    }
-
     /// Reads the selected answer path against the caller's action-time history snapshot.
     pub fn user_input_snapshot(
         &self,
@@ -119,7 +53,6 @@ impl GuardianReviewEvidence {
                 let answers = codex_guardian_context::render_verified_answers(context);
                 let authorization_version = GuardianAuthorizationVersion {
                     user_message_revision: history.user_message_revision(),
-                    user_input_response_count: 0,
                     retained_context_complete: answers.complete,
                 };
                 GuardianUserInputSnapshot {
@@ -127,27 +60,13 @@ impl GuardianReviewEvidence {
                     authorization_version,
                 }
             }
-            None => {
-                let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                let fragments = state
-                    .user_inputs
-                    .iter()
-                    .filter(|(call_id, _)| {
-                        history.items().chain(history.review_items()).any(|item| {
-                            matches!(item, ResponseItem::FunctionCall { call_id: id, .. } if id == call_id)
-                        })
-                    })
-                    .map(|(_, fragment)| fragment.clone())
-                    .collect();
-                GuardianUserInputSnapshot {
-                    fragments,
-                    authorization_version: GuardianAuthorizationVersion {
-                        user_message_revision: history.user_message_revision(),
-                        user_input_response_count: state.user_input_response_count,
-                        retained_context_complete: true,
-                    },
-                }
-            }
+            None => GuardianUserInputSnapshot {
+                fragments: Vec::new(),
+                authorization_version: GuardianAuthorizationVersion {
+                    user_message_revision: history.user_message_revision(),
+                    retained_context_complete: true,
+                },
+            },
         }
     }
 
@@ -156,26 +75,6 @@ impl GuardianReviewEvidence {
         history: &dyn ConversationHistorySnapshot,
     ) -> GuardianAuthorizationVersion {
         self.user_input_snapshot(history).authorization_version
-    }
-
-    pub(crate) fn user_input_for_call(
-        &self,
-        history: &dyn ConversationHistorySnapshot,
-        call_id: &str,
-    ) -> Option<String> {
-        match history.retained_context() {
-            Some(context) => context
-                .verified_answers()
-                .find(|answer| answer.call_id == call_id)
-                .and_then(codex_guardian_context::render_verified_answer),
-            None => self
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .user_inputs
-                .iter()
-                .find_map(|(id, fragment)| (id == call_id).then(|| fragment.clone())),
-        }
     }
 
     /// Records a bounded, verified user-owned skill path for one host-owned turn.
