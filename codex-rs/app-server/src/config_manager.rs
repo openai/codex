@@ -31,7 +31,7 @@ use tracing::instrument;
 use tracing::warn;
 
 #[path = "application_network.rs"]
-mod application_network;
+pub(crate) mod application_network;
 
 #[derive(Debug, thiserror::Error)]
 #[error(
@@ -98,6 +98,15 @@ impl ConfigManager {
 
     pub(crate) fn codex_home(&self) -> &Path {
         self.codex_home.as_path()
+    }
+
+    pub(crate) fn with_embedded_network_policy(
+        mut self,
+        policy: crate::in_process::EmbeddedNetworkPolicy,
+    ) -> Self {
+        self.network_policy = policy.effective;
+        self.local_network_policy = policy.local;
+        self
     }
 
     pub(crate) fn user_config_path(&self) -> std::io::Result<AbsolutePathBuf> {

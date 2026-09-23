@@ -321,6 +321,7 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
             /*log_db*/ None,
             &mut state_db,
             Arc::new(EnvironmentManager::default_for_tests()),
+            Default::default(),
         )
         .await;
         reject_handshake.abort();

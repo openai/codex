@@ -12,7 +12,9 @@ use codex_http_client::NetworkPolicyDenied;
 use std::io;
 use std::sync::Arc;
 
-fn destination_policy(application: Option<&ApplicationRequirementsToml>) -> DestinationPolicy {
+pub(crate) fn destination_policy(
+    application: Option<&ApplicationRequirementsToml>,
+) -> DestinationPolicy {
     match application.and_then(|application| application.network.as_ref()) {
         Some(network) if network.enabled => DestinationPolicy::Restricted {
             allowed_hosts: network

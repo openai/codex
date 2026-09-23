@@ -126,6 +126,7 @@ pub(super) async fn prepare(
     target: &AppServerTarget,
     arg0_paths: &Arg0DispatchPaths,
     source_bundle: CloudConfigBundleLoader,
+    embedded_network_policy: &codex_app_server_client::EmbeddedNetworkPolicy,
 ) -> color_eyre::Result<(Config, CloudConfigBundleLoader, ManagedTuiWorktree)> {
     if let Some(id_or_name) = cli.fork_session_id.as_deref() {
         let prepared = if should_load_configured_environments(&loader_overrides, target) {
@@ -142,7 +143,7 @@ pub(super) async fn prepare(
                 arg0_paths.codex_self_exe.clone(),
                 arg0_paths.codex_linux_sandbox_exe.clone(),
             )?),
-            source.http_client_factory(),
+            embedded_network_policy.bind(source.http_client_factory()),
         )?;
         let state =
             init_state_db_for_app_server_target(&source, &AppServerTarget::Embedded).await?;
@@ -159,6 +160,7 @@ pub(super) async fn prepare(
             /*log_db*/ None,
             state,
             Arc::new(environment),
+            embedded_network_policy.clone(),
         )
         .await?;
         let mut lookup = AppServerSession::new(
@@ -190,9 +192,13 @@ pub(super) async fn prepare(
                 CloudConfigBundleLoader::default(),
             )
             .await;
-            let source_bundle =
-                cloud_config_bundle_for_app_server_target(target, &bootstrap, &source.codex_home)
-                    .await?;
+            let source_bundle = cloud_config_bundle_for_app_server_target(
+                target,
+                &bootstrap,
+                &source.codex_home,
+                embedded_network_policy,
+            )
+            .await?;
             overrides.cwd = Some(cwd.into_path_buf());
             source = load_config_or_exit(
                 cli_overrides.clone(),
@@ -263,8 +269,13 @@ pub(super) async fn prepare(
         },
     )
     .await?;
-    let bundle =
-        cloud_config_bundle_for_app_server_target(target, &bootstrap, &source.codex_home).await?;
+    let bundle = cloud_config_bundle_for_app_server_target(
+        target,
+        &bootstrap,
+        &source.codex_home,
+        embedded_network_policy,
+    )
+    .await?;
     managed
         .check_source_policy(
             &cli_overrides,

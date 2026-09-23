@@ -321,6 +321,7 @@ async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result
         loader_overrides: overrides,
         strict_config: false,
         cloud_config_bundle: CloudConfigBundleLoader::default(),
+        embedded_network_policy: Default::default(),
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
