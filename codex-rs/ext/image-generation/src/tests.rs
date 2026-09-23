@@ -62,6 +62,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
         request_for_call_args(
             &ImagegenArgs {
                 prompt: "paint a moonlit lake".to_string(),
+                transparent_background: false,
                 referenced_image_paths: None,
                 num_last_images_to_include: None,
             },
@@ -72,7 +73,7 @@ async fn omitted_references_generate_with_fixed_defaults() {
         .expect("generation request should build"),
         ImageRequest::Generate(ImageGenerationRequest {
             prompt: "paint a moonlit lake".to_string(),
-            background: Some(ImageBackground::Auto),
+            background: Some(ImageBackground::Opaque),
             model: "gpt-image-2".to_string(),
             n: None,
             quality: Some(ImageQuality::Auto),
@@ -151,6 +152,7 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
         request_for_call_args(
             &ImagegenArgs {
                 prompt: "change the lighting".to_string(),
+                transparent_background: false,
                 referenced_image_paths: None,
                 num_last_images_to_include: Some(5),
             },
@@ -172,6 +174,7 @@ async fn recent_image_fallback_rejects_file_backed_image_in_requested_window() {
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
+            transparent_background: false,
             referenced_image_paths: None,
             num_last_images_to_include: Some(1),
         },
@@ -208,6 +211,7 @@ async fn recent_image_fallback_rejects_file_backed_tool_output_in_requested_wind
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
+            transparent_background: false,
             referenced_image_paths: None,
             num_last_images_to_include: Some(1),
         },
@@ -252,6 +256,7 @@ async fn conflicting_image_selectors_return_tool_error() {
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
+            transparent_background: false,
             referenced_image_paths: Some(vec![
                 "/tmp/image.png"
                     .try_into()
@@ -276,6 +281,7 @@ async fn too_many_referenced_image_paths_return_tool_error() {
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
+            transparent_background: false,
             referenced_image_paths: Some(
                 (0..6)
                     .map(|index| {
@@ -304,6 +310,7 @@ async fn recent_image_fallback_requires_requested_count() {
     let error = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
+            transparent_background: false,
             referenced_image_paths: None,
             num_last_images_to_include: Some(2),
         },
@@ -430,7 +437,7 @@ fn expected_edit_request(prompt: &str, images: &[&str]) -> ImageEditRequest {
             })
             .collect(),
         prompt: prompt.to_string(),
-        background: Some(ImageBackground::Auto),
+        background: Some(ImageBackground::Opaque),
         model: "gpt-image-2".to_string(),
         n: None,
         quality: Some(ImageQuality::Auto),

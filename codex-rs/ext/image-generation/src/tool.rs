@@ -89,6 +89,9 @@ impl ImageGenerationTool {
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
     prompt: String,
+    /// Whether the output should have a transparent background. Defaults to false.
+    #[serde(default)]
+    transparent_background: bool,
     #[schemars(length(max = 5))]
     referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
     #[schemars(range(min = 1, max = 5))]
@@ -120,7 +123,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ImageGenerationTool {
         ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
     }
 
-    /// Advertises the model contract: a rewritten prompt and optional edit references.
+    /// Advertises a rewritten prompt, background choice, and optional edit references.
     fn spec(&self) -> ToolSpec {
         imagegen_tool_spec()
     }
@@ -427,6 +430,11 @@ async fn request_for_call_args(
     history: &[ResponseItem],
     environments: &[ToolEnvironment<'_>],
 ) -> Result<ImageRequest, FunctionCallError> {
+    let background = if args.transparent_background {
+        ImageBackground::Transparent
+    } else {
+        ImageBackground::Opaque
+    };
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
     if paths.len() > MAX_EDIT_IMAGES {
         return Err(FunctionCallError::RespondToModel(format!(
@@ -437,7 +445,7 @@ async fn request_for_call_args(
         (true, None) => {
             return Ok(ImageRequest::Generate(ImageGenerationRequest {
                 prompt: args.prompt.clone(),
-                background: Some(ImageBackground::Auto),
+                background: Some(background),
                 model: IMAGE_MODEL.to_string(),
                 n: None,
                 quality: Some(ImageQuality::Auto),
@@ -481,7 +489,7 @@ async fn request_for_call_args(
     Ok(ImageRequest::Edit(ImageEditRequest {
         images,
         prompt: args.prompt.clone(),
-        background: Some(ImageBackground::Auto),
+        background: Some(background),
         model: IMAGE_MODEL.to_string(),
         n: None,
         quality: Some(ImageQuality::Auto),

@@ -28,6 +28,7 @@ use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
+use test_case::test_case;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -59,8 +60,14 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(any(target_os = "macos", windows)))]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[test_case(Some(true), "transparent"; "transparent")]
+#[test_case(Some(false), "opaque"; "opaque")]
+#[test_case(None, "opaque"; "omitted_defaults_to_opaque")]
 #[tokio::test]
-async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Result<()> {
+async fn standalone_image_generation_returns_saved_path_hint_to_model(
+    requested_transparent_background: Option<bool>,
+    expected_background: &str,
+) -> Result<()> {
     let call_id = "image-run-1";
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
@@ -80,6 +87,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         .expect(1)
         .mount(&server)
         .await;
+    let arguments = imagegen_arguments("paint a blue whale", requested_transparent_background);
 
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -90,10 +98,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
                     call_id,
                     "image_gen",
                     "imagegen",
-                    &json!({
-                        "prompt": "paint a blue whale",
-                    })
-                    .to_string(),
+                    &arguments.to_string(),
                 ),
                 responses::ev_completed("resp-1"),
             ]),
@@ -158,6 +163,16 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         .into_iter()
         .find(|request| request.url.path() == "/api/codex/images/generations")
         .context("image generation request should be sent")?;
+    assert_eq!(
+        image_request.body_json::<serde_json::Value>()?,
+        json!({
+            "prompt": "paint a blue whale",
+            "background": expected_background,
+            "model": "gpt-image-2",
+            "quality": "auto",
+            "size": "auto",
+        })
+    );
     assert_eq!(
         image_request
             .headers
@@ -231,7 +246,11 @@ async fn transparent_image_preserves_output_metadata_and_persisted_history() -> 
                     call_id,
                     "image_gen",
                     "imagegen",
-                    &json!({"prompt": "a blue whale on a transparent background"}).to_string(),
+                    &json!({
+                        "prompt": "a blue whale on a transparent background",
+                        "transparent_background": true,
+                    })
+                    .to_string(),
                 ),
                 responses::ev_completed("resp-1"),
             ]),
@@ -386,6 +405,79 @@ async fn automatic_image_background_preserves_unknown_transparency() -> Result<(
         value.get("transparentBackground"),
         Some(&serde_json::Value::Null),
         "v2 image-generation items must always include nullable transparency metadata"
+    );
+    Ok(())
+}
+
+#[test_case(json!(null); "null")]
+#[test_case(json!("true"); "string")]
+#[test_case(json!(1); "number")]
+#[tokio::test]
+async fn invalid_transparent_background_does_not_dispatch(
+    transparent_background: serde_json::Value,
+) -> Result<()> {
+    let call_id = "invalid-background";
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    "image_gen",
+                    "imagegen",
+                    &json!({
+                        "prompt": "paint a blue whale",
+                        "transparent_background": transparent_background,
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "The background argument was invalid."),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    start_image_generation_turn(&mut mcp, ThreadStartParams::default()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let output = requests[1].function_call_output(call_id);
+    assert!(
+        output["output"]
+            .as_str()
+            .is_some_and(|text| text.contains("expected a boolean")),
+        "the model should receive the argument validation error: {output}"
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .context("failed to fetch received requests")?
+            .iter()
+            .all(|request| !request.url.path().starts_with("/api/codex/images/"))
     );
     Ok(())
 }
@@ -624,8 +716,14 @@ async fn image_generation_usage_limit_preserves_correlated_failure_metadata() ->
     Ok(())
 }
 
+#[test_case(Some(true), "transparent"; "transparent")]
+#[test_case(Some(false), "opaque"; "opaque")]
+#[test_case(None, "opaque"; "omitted_defaults_to_opaque")]
 #[tokio::test]
-async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
+async fn standalone_image_edit_uses_attached_model_visible_image(
+    requested_transparent_background: Option<bool>,
+    expected_background: &str,
+) -> Result<()> {
     skip_if_remote!(
         Ok(()),
         "remote executors use different imagegen storage approaches, so host-local image paths are unavailable"
@@ -634,11 +732,10 @@ async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()>
     let (edit_request, _) = run_image_edit_test(|codex_home| {
         let image_path = codex_home.join("attached.png");
         std::fs::write(&image_path, TINY_PNG_BYTES)?;
+        let mut arguments = imagegen_arguments("add a red hat", requested_transparent_background);
+        arguments["referenced_image_paths"] = json!([image_path.display().to_string()]);
         Ok((
-            json!({
-                "prompt": "add a red hat",
-                "referenced_image_paths": [image_path.display().to_string()],
-            }),
+            arguments,
             vec![
                 V2UserInput::Text {
                     text: "Edit the attached image".to_string(),
@@ -652,21 +749,35 @@ async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()>
         ))
     })
     .await?;
-    assert_eq!(edit_request["prompt"], "add a red hat");
-    assert_eq!(edit_request["images"][0]["image_url"], TINY_PNG_DATA_URL);
+    assert_eq!(
+        edit_request,
+        json!({
+            "prompt": "add a red hat",
+            "images": [{"image_url": TINY_PNG_DATA_URL}],
+            "background": expected_background,
+            "model": "gpt-image-2",
+            "quality": "auto",
+            "size": "auto",
+        })
+    );
 
     Ok(())
 }
 
+#[test_case(Some(true), "transparent"; "transparent")]
+#[test_case(Some(false), "opaque"; "opaque")]
+#[test_case(None, "opaque"; "omitted_defaults_to_opaque")]
 #[tokio::test]
-async fn transparent_image_edit_preserves_metadata_and_recent_pathless_image() -> Result<()> {
+async fn transparent_image_edit_preserves_metadata_and_recent_pathless_image(
+    requested_transparent_background: Option<bool>,
+    expected_background: &str,
+) -> Result<()> {
     let image_url = TINY_PNG_DATA_URL;
     let (edit_request, completed_image) = run_image_edit_test(|_| {
+        let mut arguments = imagegen_arguments("add a red hat", requested_transparent_background);
+        arguments["num_last_images_to_include"] = json!(1);
         Ok((
-            json!({
-                "prompt": "add a red hat",
-                "num_last_images_to_include": 1,
-            }),
+            arguments,
             vec![
                 V2UserInput::Text {
                     text: "Edit the attached image".to_string(),
@@ -682,8 +793,17 @@ async fn transparent_image_edit_preserves_metadata_and_recent_pathless_image() -
         ))
     })
     .await?;
-    assert_eq!(edit_request["prompt"], "add a red hat");
-    assert_eq!(edit_request["images"][0]["image_url"], image_url);
+    assert_eq!(
+        edit_request,
+        json!({
+            "prompt": "add a red hat",
+            "images": [{"image_url": image_url}],
+            "background": expected_background,
+            "model": "gpt-image-2",
+            "quality": "auto",
+            "size": "auto",
+        })
+    );
     assert_eq!(completed_image.transparent_background, Some(true));
 
     Ok(())
@@ -735,11 +855,18 @@ async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()
 }
 
 #[cfg(not(windows))]
+#[test_case(Some(true), "transparent"; "transparent")]
+#[test_case(Some(false), "opaque"; "opaque")]
+#[test_case(None, "opaque"; "omitted_defaults_to_opaque")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn standalone_image_generation_is_callable_from_code_mode_only() -> Result<()> {
+async fn standalone_image_generation_is_callable_from_code_mode_only(
+    requested_transparent_background: Option<bool>,
+    expected_background: &str,
+) -> Result<()> {
     let call_id = "code-mode-image-run-1";
     let server = responses::start_mock_server().await;
     mount_image_response_with_background(&server, "opaque").await;
+    let arguments = imagegen_arguments("paint a blue whale", requested_transparent_background);
 
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -749,12 +876,12 @@ async fn standalone_image_generation_is_callable_from_code_mode_only() -> Result
                 responses::ev_custom_tool_call(
                     call_id,
                     "exec",
-                    r#"
-const result = await tools.image_gen__imagegen({
-  prompt: "paint a blue whale",
-});
+                    &format!(
+                        r#"
+const result = await tools.image_gen__imagegen({arguments});
 generatedImage(result);
-"#,
+"#
+                    ),
                 ),
                 responses::ev_completed("resp-1"),
             ]),
@@ -808,8 +935,33 @@ generatedImage(result);
             .is_some_and(|text| text.contains("Generated images are saved"))
     );
     assert_eq!(output["output"].as_array().map(Vec::len), Some(3));
+    let image_request = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?
+        .into_iter()
+        .find(|request| request.url.path() == "/api/codex/images/generations")
+        .context("image generation request should be sent")?;
+    assert_eq!(
+        image_request.body_json::<serde_json::Value>()?,
+        json!({
+            "prompt": "paint a blue whale",
+            "background": expected_background,
+            "model": "gpt-image-2",
+            "quality": "auto",
+            "size": "auto",
+        })
+    );
 
     Ok(())
+}
+
+fn imagegen_arguments(prompt: &str, transparent_background: Option<bool>) -> serde_json::Value {
+    let mut arguments = json!({"prompt": prompt});
+    if let Some(transparent_background) = transparent_background {
+        arguments["transparent_background"] = json!(transparent_background);
+    }
+    arguments
 }
 
 async fn start_image_generation_turn(
