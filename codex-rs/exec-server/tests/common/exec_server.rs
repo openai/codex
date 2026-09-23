@@ -96,11 +96,18 @@ where
 }
 
 impl ExecServerHarness {
-    pub(crate) async fn start(mut command: Command) -> anyhow::Result<Self> {
+    pub(crate) async fn start(command: Command) -> anyhow::Result<Self> {
+        Self::start_with_stderr(command, Stdio::inherit()).await
+    }
+
+    pub(crate) async fn start_with_stderr(
+        mut command: Command,
+        stderr: Stdio,
+    ) -> anyhow::Result<Self> {
         let codex_home = TempDir::new()?;
         command.stdin(Stdio::null());
         command.stdout(Stdio::piped());
-        command.stderr(Stdio::inherit());
+        command.stderr(stderr);
         command.kill_on_drop(true);
         if !command
             .as_std()

@@ -165,6 +165,17 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
     if command != "exec-server" {
         return;
     }
+    // Enable requested child diagnostics so integration tests can observe background failures.
+    if env::var_os("RUST_LOG").is_some()
+        && let Err(error) = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .try_init()
+    {
+        eprintln!("failed to initialize executor test logging: {error}");
+        std::process::exit(1);
+    }
     // Initialize in the executor child, just as the real CLI does at startup.
     codex_build_info::BuildInfo::initialize(TEST_BUILD_COMMIT);
 

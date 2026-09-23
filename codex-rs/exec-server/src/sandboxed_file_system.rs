@@ -9,6 +9,7 @@ use crate::CapabilityRootsDiscoverParams;
 use crate::CapabilityRootsDiscoverResponse;
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
+use crate::DiscoverV2CapabilitiesResponse;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::ExecutorFileSystemFuture;
@@ -24,6 +25,7 @@ use crate::RemoveOptions;
 use crate::WalkOptions;
 use crate::WalkOutcome;
 use crate::WriteFileOptions;
+use crate::discover_v2::capability_locations::CapabilityLocation;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_sandbox::FileSystemSandboxRunner;
@@ -43,6 +45,25 @@ pub struct SandboxedFileSystem {
 }
 
 impl SandboxedFileSystem {
+    pub(crate) async fn load_sandboxed_capability_discoveries(
+        &self,
+        locations: Vec<CapabilityLocation>,
+        warnings: Vec<String>,
+        sandbox: &FileSystemSandboxContext,
+    ) -> FileSystemResult<DiscoverV2CapabilitiesResponse> {
+        require_platform_sandbox(Some(sandbox))?;
+        self.run_sandboxed(
+            sandbox,
+            FsHelperRequest::LoadCapabilityDiscoveries {
+                locations,
+                warnings,
+            },
+        )
+        .await?
+        .expect_capability_discoveries()
+        .map_err(map_sandbox_error)
+    }
+
     #[tracing::instrument(
         name = "capability_roots.discover_v1",
         skip_all,

@@ -44,6 +44,7 @@ members = [
     "skills",
     "core",
     "core-api",
+    "core-plugin-common",
     "core-plugins",
     "diagnostics",
     "guardian-context",
@@ -208,6 +209,7 @@ codex-connectors-extension = { path = "ext/connectors" }
 codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
+codex-core-plugin-common = { path = "core-plugin-common" }
 codex-core-plugins = { path = "core-plugins" }
 codex-diagnostics = { path = "diagnostics" }
 codex-exec = { path = "exec" }

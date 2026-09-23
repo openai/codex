@@ -101,6 +101,86 @@ async fn exec_server_accepts_initialize(version: Option<&str>) -> anyhow::Result
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discovery_support_does_not_require_client_opt_in() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    #[cfg(not(windows))]
+    let discovery_home = {
+        // Fail the scan before startup, without racing the background task.
+        std::fs::write(codex_home.path().join("plugins"), "not a directory")?;
+        codex_home.path().to_path_buf()
+    };
+    // Windows treats the file-parent fixture as NotFound, which discovery skips.
+    // A missing explicit home instead makes home resolution fail deterministically.
+    #[cfg(windows)]
+    let discovery_home = codex_home.path().join("missing");
+    let user_home = codex_home.path().join("home");
+    std::fs::create_dir_all(user_home.join(".agents/skills"))?;
+    let stderr_path = codex_home.path().join("executor.log");
+    let stderr = std::fs::File::create(&stderr_path)?;
+    let helper_paths = common::exec_server::test_codex_helper_paths()?;
+    let mut command = Command::new(helper_paths.codex_exe);
+    command.args(["exec-server", "--listen", "ws://127.0.0.1:0"]);
+    command.env("CODEX_HOME", discovery_home);
+    command.env("HOME", &user_home);
+    command.env("USERPROFILE", &user_home);
+    command.env("RUST_LOG", "codex_exec_server=warn");
+    let mut server = ExecServerHarness::start_with_stderr(command, stderr.into()).await?;
+    let observed_failure = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let logs = tokio::fs::read_to_string(&stderr_path).await?;
+            if logs.contains("capability location prewarming unavailable") {
+                return Ok::<_, std::io::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    anyhow::ensure!(
+        observed_failure.is_ok(),
+        "prewarm failure was not observed; executor stderr:\n{}",
+        std::fs::read_to_string(&stderr_path)?
+    );
+    observed_failure??;
+    let initialize_id = server
+        .send_request(
+            "initialize",
+            serde_json::to_value(InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            })?,
+        )
+        .await?;
+
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = server.next_event().await?
+    else {
+        anyhow::bail!("expected initialize response without V2 opt-in");
+    };
+    assert_eq!(id, initialize_id);
+    let response: InitializeResponse = serde_json::from_value(result)?;
+    assert!(
+        response
+            .environment_info
+            .context("initialize metadata missing")?
+            .capabilities
+            .capability_discovery_v2
+    );
+    server
+        .send_notification("initialized", serde_json::json!({}))
+        .await?;
+
+    let environment_info_id = server
+        .send_request("environment/info", serde_json::json!({}))
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, .. }) = server.next_event().await? else {
+        panic!("expected environment info response after degraded discovery startup");
+    };
+    assert_eq!(id, environment_info_id);
+
+    server.shutdown().await?;
+    Ok(())
+}
+
 /// Requests retain their wire-order initialization errors even when later handshake messages are pipelined.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_rejects_pipelined_requests_before_initialized() -> anyhow::Result<()> {

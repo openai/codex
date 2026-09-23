@@ -7,7 +7,7 @@ pub use codex_utils_plugins::mention_syntax;
 mod bundled_hooks;
 mod load_outcome;
 pub mod manifest;
-mod plugin_id;
+use codex_core_plugin_common::plugin_id;
 mod provider;
 
 pub use bundled_hooks::is_allowlisted_bundled_cleanup_hook;

@@ -75,6 +75,10 @@ async fn discovers_a_complete_capability_bundle_in_one_request() -> anyhow::Resu
         r#"{"apps":{"demo":{"connector_id":"connector-demo"}}}"#,
     )?;
     write_file(
+        &root.path().join(".app.json"),
+        r#"{"apps":{"fallback":{"id":"connector-fallback"}}}"#,
+    )?;
+    write_file(
         &root.path().join("skills/deploy/SKILL.md"),
         "---\nname: deploy\ndescription: Deploy the service.\n---\n\nDeploy instructions.\n",
     )?;
@@ -156,6 +160,29 @@ async fn discovers_a_complete_capability_bundle_in_one_request() -> anyhow::Resu
         ]
     );
 
+    // Without an apps declaration, discovery returns the default .app.json.
+    let mut manifest: serde_json::Value = serde_json::from_str(&plugin.manifest.contents)?;
+    manifest
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("manifest must be an object"))?
+        .remove("apps");
+    write_file(
+        &root.path().join(".codex-plugin/plugin.json"),
+        &serde_json::to_string(&manifest)?,
+    )?;
+    let fallback = discover_root(&mut server, "demo@1", root_uri.clone()).await?;
+    assert_eq!(fallback.error, None);
+    assert_eq!(fallback.warnings, Vec::<String>::new());
+    let apps = fallback
+        .plugin
+        .and_then(|plugin| plugin.apps_config)
+        .ok_or_else(|| anyhow::anyhow!("missing fallback apps config"))?;
+    assert_eq!(apps.path, root_uri.join(".app.json")?);
+    assert_eq!(
+        apps.contents,
+        r#"{"apps":{"fallback":{"id":"connector-fallback"}}}"#,
+    );
+
     server.shutdown().await?;
     Ok(())
 }
@@ -186,6 +213,7 @@ async fn discovers_cursor_plugin_without_reading_default_mcp_for_inline_servers(
         root_uri.join(".cursor-plugin/plugin.json")?
     );
     assert_eq!(plugin.mcp_config, None);
+    assert_eq!(plugin.apps_config, None);
     assert_eq!(
         discovery
             .namespace_manifests
@@ -905,6 +933,113 @@ async fn executor_legacy_filesystem_cwd_keeps_absolute_read_allow_and_deny_rules
     }
 
     server.shutdown().await?;
+    Ok(())
+}
+
+// Exercise one helper request with multiple roots, including the response budget before IPC.
+#[tokio::test]
+async fn v2_helper_batches_roots_and_bounds_its_response() -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let workspace = tempfile::tempdir()?;
+    let mut locations = Vec::new();
+    // Five individually valid configs exceed the shared 4 MiB response budget.
+    let config = serde_json::to_string(&serde_json::json!({"padding": "x".repeat(900 * 1024)}))?;
+    for index in 0..5 {
+        let root = workspace.path().join(format!("plugin-{index}"));
+        write_file(
+            &root.join(".codex-plugin/plugin.json"),
+            r#"{"name":"demo"}"#,
+        )?;
+        write_file(&root.join(".mcp.json"), &config)?;
+        write_file(
+            &root.join("skills/deploy/SKILL.md"),
+            "---\nname: deploy\ndescription: Deploy.\n---\n",
+        )?;
+        locations.push(serde_json::json!({
+            "root": PathUri::from_host_native_path(root)?,
+            "plugin": {
+                "id": format!("plugin-{index}@test"),
+                "version": "local",
+                "remote_plugin_id": null,
+            },
+        }));
+    }
+    let small_root = workspace.path().join("plugin-small");
+    write_file(
+        &small_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"small"}"#,
+    )?;
+    write_file(
+        &small_root.join("skills/deploy/SKILL.md"),
+        "---\nname: deploy\ndescription: Deploy.\n---\n",
+    )?;
+    locations.push(serde_json::json!({
+        "root": PathUri::from_host_native_path(small_root)?,
+        "plugin": {
+            "id": "plugin-small@test",
+            "version": "local",
+            "remote_plugin_id": null,
+        },
+    }));
+    let request = serde_json::json!({
+        "operation": "capabilities/loadDiscoveries",
+        "params": {"locations": locations, "warnings": []},
+    });
+    let (helper_binary, _) = common::current_test_binary_helper_paths()?;
+    let mut child = tokio::process::Command::new(helper_binary)
+        .arg(codex_exec_server::CODEX_FS_HELPER_ARG1)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("helper stdin missing"))?;
+    stdin.write_all(format!("{request}\n").as_bytes()).await?;
+    drop(stdin);
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(/*secs*/ 30),
+        child.wait_with_output(),
+    )
+    .await??;
+    assert!(
+        output.status.success(),
+        "helper failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let wire: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(wire["status"], "ok", "helper response: {wire}");
+    assert_eq!(wire["payload"]["operation"], "capabilities/loadDiscoveries");
+    let response: codex_exec_server_protocol::DiscoverV2CapabilitiesResponse =
+        serde_json::from_value(wire["payload"]["response"].clone())?;
+    assert_eq!(
+        response
+            .plugins
+            .iter()
+            .map(|plugin| plugin.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "plugin-0@test",
+            "plugin-1@test",
+            "plugin-2@test",
+            "plugin-3@test",
+            "plugin-small@test",
+        ],
+    );
+    assert!(
+        response
+            .plugins
+            .iter()
+            .all(|plugin| plugin.skills.len() == 1)
+    );
+    assert_eq!(
+        response.warnings,
+        vec!["capability discovery size limit reached"]
+    );
+    assert!(serde_json::to_vec(&response)?.len() <= 4 * 1024 * 1024);
     Ok(())
 }
 

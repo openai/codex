@@ -18,6 +18,7 @@ codex-analytics = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
+codex-core-plugin-common = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
@@ -41,7 +42,6 @@ flate2 = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 regex = { workspace = true }
-semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true }

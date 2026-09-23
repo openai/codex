@@ -142,6 +142,9 @@ pub struct EnvironmentCapabilities {
     /// Whether capability discovery applies the filesystem sandbox sent with each root.
     #[serde(default)]
     pub capability_discovery_sandbox: bool,
+    /// Whether this executor supports V2 capability discovery.
+    #[serde(default)]
+    pub capability_discovery_v2: bool,
     /// Whether this executor supports the `environmentConfig/read` request.
     #[serde(default)]
     pub environment_config_read: bool,
@@ -248,6 +251,7 @@ impl EnvironmentInfo {
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
+                capability_discovery_v2: true,
                 environment_config_read: true,
                 http_header_env_vars: true,
                 sandboxed_file_streaming: true,
@@ -1158,6 +1162,20 @@ mod base64_bytes {
 #[cfg(test)]
 mod tests {
     use super::CapabilityRootDiscoverRequest;
+    #[test]
+    fn discovery_v2_support_defaults_off_for_older_executors() -> serde_json::Result<()> {
+        let legacy: super::EnvironmentCapabilities = serde_json::from_value(serde_json::json!({}))?;
+        assert!(!legacy.capability_discovery_v2);
+        let capabilities = super::EnvironmentInfo::local().capabilities;
+        assert_eq!(
+            serde_json::from_value::<super::EnvironmentCapabilities>(serde_json::to_value(
+                &capabilities
+            )?)?,
+            capabilities
+        );
+        Ok(())
+    }
+
     use super::EnvironmentCapabilities;
     use super::EnvironmentInfo;
     use super::ExecExitedNotification;
@@ -1366,6 +1384,7 @@ mod tests {
             EnvironmentCapabilities {
                 network_proxy_launch: true,
                 capability_discovery_sandbox: true,
+                capability_discovery_v2: false,
                 environment_config_read: false,
                 http_header_env_vars: false,
                 sandboxed_file_streaming: false,
@@ -1388,6 +1407,7 @@ mod tests {
             "capabilities": {
                 "networkProxyLaunch": false,
                 "capabilityDiscoverySandbox": false,
+                "capabilityDiscoveryV2": false,
                 "environmentConfigRead": false,
                 "httpHeaderEnvVars": false,
                 "sandboxedFileStreaming": false,
