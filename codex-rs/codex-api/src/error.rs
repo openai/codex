@@ -1,8 +1,8 @@
 use crate::rate_limits::RateLimitError;
 use codex_client::TransportError;
+use codex_http_client::RetryAfter;
 use codex_protocol::protocol::MisalignmentErrorDetails;
 use http::StatusCode;
-use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -22,12 +22,12 @@ pub enum ApiError {
     #[error("retryable error: {message}")]
     Retryable {
         message: String,
-        delay: Option<Duration>,
+        retry_after: Option<RetryAfter>,
     },
     #[error("rate limit exceeded: {message}")]
     RateLimitExceeded {
         message: String,
-        delay: Option<Duration>,
+        retry_after: Option<RetryAfter>,
     },
     #[error("rate limit: {0}")]
     RateLimit(String),
@@ -45,7 +45,7 @@ pub enum ApiError {
         misalignment: Option<MisalignmentErrorDetails>,
     },
     #[error("server overloaded")]
-    ServerOverloaded,
+    ServerOverloaded { retry_after: Option<RetryAfter> },
 }
 
 impl From<RateLimitError> for ApiError {

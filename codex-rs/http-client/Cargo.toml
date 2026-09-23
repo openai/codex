@@ -10,6 +10,7 @@ codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 http-body = "1.0.1"
+httpdate = { workspace = true }
 native-tls = "0.2"
 opentelemetry = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots", "stream"] }
@@ -45,6 +46,7 @@ opentelemetry_sdk = { workspace = true }
 pretty_assertions = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 
 [lib]

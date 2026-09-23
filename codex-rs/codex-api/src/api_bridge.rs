@@ -19,26 +19,42 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub fn map_api_error(err: ApiError) -> CodexErr {
+    let retry_after = match &err {
+        ApiError::Retryable { retry_after, .. }
+        | ApiError::RateLimitExceeded { retry_after, .. }
+        | ApiError::ServerOverloaded { retry_after }
+        | ApiError::Transport(TransportError::Http { retry_after, .. }) => *retry_after,
+        ApiError::Transport(_)
+        | ApiError::Api { .. }
+        | ApiError::Stream(_)
+        | ApiError::ContextWindowExceeded
+        | ApiError::QuotaExceeded
+        | ApiError::UsageNotIncluded
+        | ApiError::RateLimit(_)
+        | ApiError::InvalidRequest { .. }
+        | ApiError::InvalidPrompt { .. }
+        | ApiError::CyberPolicy { .. }
+        | ApiError::BioPolicy { .. }
+        | ApiError::MisalignmentPolicyViolation { .. } => None,
+    };
+    let error = map_api_error_details(err);
+    match retry_after {
+        Some(retry_after) => error.with_retry_after(retry_after),
+        None => error,
+    }
+}
+
+fn map_api_error_details(err: ApiError) -> CodexErr {
     match err {
         ApiError::ContextWindowExceeded => CodexErr::ContextWindowExceeded,
         ApiError::QuotaExceeded => CodexErr::QuotaExceeded,
         ApiError::UsageNotIncluded => CodexErr::UsageNotIncluded,
-        ApiError::Retryable { message, delay } => {
-            let error = CodexErr::Stream(message);
-            match delay {
-                Some(delay) => error.with_retry_delay(delay),
-                None => error,
-            }
-        }
-        ApiError::RateLimitExceeded { message, delay } => {
-            let error = CodexErr::new(CodexErrorDetails::RateLimitExceeded(message));
-            match delay {
-                Some(delay) => error.with_retry_delay(delay),
-                None => error,
-            }
+        ApiError::Retryable { message, .. } => CodexErr::Stream(message),
+        ApiError::RateLimitExceeded { message, .. } => {
+            CodexErr::new(CodexErrorDetails::RateLimitExceeded(message))
         }
         ApiError::Stream(msg) => CodexErr::Stream(msg),
-        ApiError::ServerOverloaded => CodexErr::ServerOverloaded,
+        ApiError::ServerOverloaded { .. } => CodexErr::ServerOverloaded,
         ApiError::Api { status, message } => {
             let user_message = api_error_user_message(status, &message);
             CodexErr::UnexpectedStatus(UnexpectedResponseError {
@@ -73,6 +89,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                 url,
                 headers,
                 body,
+                ..
             } => {
                 let body_text = body.unwrap_or_default();
 

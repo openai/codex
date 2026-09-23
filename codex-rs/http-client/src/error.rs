@@ -1,6 +1,7 @@
 //! Errors returned by the shared Codex HTTP transport.
 
 use crate::client::HttpError;
+use crate::retry_after::RetryAfter;
 use http::HeaderMap;
 use http::StatusCode;
 use thiserror::Error;
@@ -15,6 +16,7 @@ pub enum TransportError {
         url: Option<String>,
         headers: Option<HeaderMap>,
         body: Option<String>,
+        retry_after: Option<RetryAfter>,
     },
     #[error("retry limit reached")]
     RetryLimit,
@@ -28,6 +30,22 @@ pub enum TransportError {
     Build(String),
     #[error("response body exceeds the {max_bytes} byte limit")]
     ResponseTooLarge { max_bytes: usize },
+}
+
+impl TransportError {
+    /// Returns retry advice captured when this error response arrived.
+    pub fn retry_after(&self) -> Option<RetryAfter> {
+        match self {
+            Self::Http { retry_after, .. } => *retry_after,
+            Self::Policy(_)
+            | Self::RetryLimit
+            | Self::Timeout
+            | Self::Connection(_)
+            | Self::Network(_)
+            | Self::Build(_)
+            | Self::ResponseTooLarge { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

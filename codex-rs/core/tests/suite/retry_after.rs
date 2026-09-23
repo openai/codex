@@ -1,8 +1,11 @@
 use anyhow::Result;
+use codex_api::ApiError;
+use codex_api::map_api_error;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use codex_client::run_with_retry;
 use codex_http_client::Request;
+use codex_http_client::RetryAfter;
 use codex_http_client::TransportError;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
@@ -272,10 +275,9 @@ async fn wait_for_turn_completion(test: &TestCodex) {
     assert_eq!(completed.error, None, "turn should complete successfully");
 }
 
-// TODO(anp) respect Retry-After
-/// HTTP overloads currently retry with local backoff instead of the upstream header delay.
+/// HTTP overloads use the upstream header before another HTTP request.
 #[tokio::test(flavor = "current_thread")]
-async fn responses_http_uses_local_backoff_despite_retry_after() -> Result<()> {
+async fn responses_http_uses_retry_after() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut telemetry = RetryTelemetryCapture::install();
@@ -303,7 +305,7 @@ async fn responses_http_uses_local_backoff_despite_retry_after() -> Result<()> {
 
     submit_user_input(&test, "retry the upstream overload").await?;
     let retry = telemetry.next_retry().await;
-    assert!((FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY).contains(&retry.delay));
+    assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
@@ -313,7 +315,7 @@ async fn responses_http_uses_local_backoff_despite_retry_after() -> Result<()> {
             operation: "request".into(),
         }
     );
-    wait_for_retry(&mut telemetry, &retry).await;
+    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
     wait_for_turn_completion(&test).await;
 
     assert_eq!(response_mock.requests().len(), 2);
@@ -345,6 +347,7 @@ async fn http_retry_backoff_exhausts_attempts() {
                 .expect("retry attempts should not be poisoned")
                 .push((attempt, tokio::time::Instant::now()));
             std::future::ready(Err::<(), _>(TransportError::Http {
+                retry_after: None,
                 status: StatusCode::SERVICE_UNAVAILABLE,
                 url: None,
                 headers: None,
@@ -374,6 +377,52 @@ async fn http_retry_backoff_exhausts_attempts() {
         (SECOND_RETRY_MIN_DELAY..=SECOND_RETRY_MAX_DELAY)
             .contains(&(attempts[2].1 - attempts[1].1))
     );
+}
+
+/// Exhausting HTTP retries and mapping the error preserve the last server deadline.
+#[tokio::test(start_paused = true)]
+async fn exhausted_http_retries_preserve_deadline_through_error_mapping() {
+    use tokio::time::Instant;
+
+    let started = Instant::now();
+    let transport_error = run_with_retry(
+        RetryPolicy {
+            max_attempts: 1,
+            base_delay: Duration::from_millis(200),
+            retry_on: RetryOn {
+                retry_429: false,
+                retry_5xx: true,
+                retry_transport: false,
+            },
+        },
+        || Request::new(Method::POST, "http://localhost/v1/responses".into()),
+        |_, attempt| {
+            let elapsed = Instant::now() - started;
+            assert_eq!(elapsed.as_secs(), attempt * 3);
+            let seconds = if attempt == 0 { 3 } else { 10 };
+            std::future::ready(Err::<(), _>(TransportError::Http {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                url: None,
+                headers: None,
+                body: None,
+                retry_after: RetryAfter::from_delay(Duration::from_secs(seconds)),
+            }))
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(Instant::now() - started, Duration::from_secs(3));
+    tokio::time::advance(Duration::from_secs(4)).await;
+    let outer_error = map_api_error(ApiError::Transport(transport_error));
+    let retry_after = outer_error.retry_after().expect("retry advice");
+    assert_eq!(retry_after.deadline(), started + Duration::from_secs(13));
+    assert_eq!(
+        outer_error.server_retry_delay(),
+        Some(Duration::from_secs(6))
+    );
+    tokio::time::advance(Duration::from_secs(6)).await;
+    assert_eq!(outer_error.retry_after(), Some(retry_after));
+    assert_eq!(outer_error.server_retry_delay(), Some(Duration::ZERO));
 }
 
 /// Headerless HTTP overloads currently exhaust request retries before emitting one terminal error.
@@ -447,10 +496,9 @@ async fn responses_http_overload_without_retry_after_exhausts_request_retries() 
     Ok(())
 }
 
-// TODO(anp) respect Retry-After
-/// Remote compaction v2 currently retries with local backoff instead of the upstream header delay.
+/// Remote compaction v2 uses the upstream header before another HTTP request.
 #[tokio::test(flavor = "current_thread")]
-async fn compact_v2_uses_local_backoff_despite_retry_after() -> Result<()> {
+async fn compact_v2_uses_retry_after() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let mut telemetry = RetryTelemetryCapture::install();
@@ -490,7 +538,7 @@ async fn compact_v2_uses_local_backoff_despite_retry_after() -> Result<()> {
 
     test.codex.submit(Op::Compact).await?;
     let retry = telemetry.next_retry().await;
-    assert!((FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY).contains(&retry.delay));
+    assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
@@ -500,7 +548,7 @@ async fn compact_v2_uses_local_backoff_despite_retry_after() -> Result<()> {
             operation: "request".into(),
         }
     );
-    wait_for_retry(&mut telemetry, &retry).await;
+    assert!(wait_for_retry(&mut telemetry, &retry).await >= Duration::from_secs(1));
     wait_for_turn_completion(&test).await;
 
     let requests = response_mock.requests();
@@ -735,11 +783,12 @@ async fn compact_v2_rate_limit_message_uses_server_advised_retry_delay() -> Resu
 
     test.codex.submit(Op::Compact).await?;
     let retry = telemetry.next_retry().await;
+    assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
             attempt: 1,
-            delay: Duration::from_secs(1),
+            delay: retry.delay,
             layer: "stream".into(),
             operation: "remote_compaction_v2".into(),
         }
@@ -809,11 +858,12 @@ async fn compact_v2_rate_limit_message_without_retry_after_uses_server_advised_d
 
     test.codex.submit(Op::Compact).await?;
     let retry = telemetry.next_retry().await;
+    assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
             attempt: 1,
-            delay: Duration::from_secs(1),
+            delay: retry.delay,
             layer: "stream".into(),
             operation: "remote_compaction_v2".into(),
         }
@@ -1134,11 +1184,12 @@ async fn sse_rate_limit_message_uses_server_advised_retry_delay(code: &str) -> R
 
     submit_user_input(&test, "retry after the rate-limit message delay").await?;
     let retry = telemetry.next_retry().await;
+    assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
             attempt: 1,
-            delay: Duration::from_secs(1),
+            delay: retry.delay,
             layer: "stream".into(),
             operation: "sampling".into(),
         }
@@ -1189,11 +1240,12 @@ async fn sse_rate_limit_message_with_retry_after_uses_server_advised_retry_delay
 
     submit_user_input(&test, "retry after both rate-limit delay signals").await?;
     let retry = telemetry.next_retry().await;
+    assert!(retry.delay <= Duration::from_secs(1));
     assert_eq!(
         retry,
         RetryTelemetryEvent {
             attempt: 1,
-            delay: Duration::from_secs(1),
+            delay: retry.delay,
             layer: "stream".into(),
             operation: "sampling".into(),
         }

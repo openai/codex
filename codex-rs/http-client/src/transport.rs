@@ -13,6 +13,7 @@ use crate::request::Request;
 use crate::request::RequestBody;
 use crate::request::Response;
 use crate::request_draft::RequestDraft;
+use crate::retry_after::RetryAfter;
 use bytes::Bytes;
 use bytes::BytesMut;
 use futures::StreamExt;
@@ -179,6 +180,7 @@ impl HttpTransport for ReqwestTransport {
         let resp = self.send(req).await?;
         let status = resp.status();
         let headers = resp.headers().clone();
+        let retry_after = RetryAfter::from_headers(&headers);
         let bytes = match response_body_limit_bytes {
             Some(max_bytes) => bounded_response_bytes(resp, max_bytes).await,
             None => resp.bytes().await.map_err(Self::map_error),
@@ -191,6 +193,8 @@ impl HttpTransport for ReqwestTransport {
                 ) => return Err(error),
                 // Keep bounded diagnostic-body failures from hiding HTTP auth/retry status.
                 Err(_) if response_body_limit_bytes.is_some() => None,
+                // TODO(anp): Preserve retry advice on body failures without changing their
+                // network/timeout classification to HTTP status handling.
                 Err(error) => return Err(error),
             };
             return Err(TransportError::Http {
@@ -198,6 +202,7 @@ impl HttpTransport for ReqwestTransport {
                 url: Some(url),
                 headers: Some(headers),
                 body,
+                retry_after,
             });
         }
         Ok(Response {
@@ -216,6 +221,7 @@ impl HttpTransport for ReqwestTransport {
         let status = resp.status();
         let headers = resp.headers().clone();
         if !status.is_success() {
+            let retry_after = RetryAfter::from_headers(&headers);
             let body = match response_body_limit_bytes {
                 Some(max_bytes) => match bounded_response_bytes(resp, max_bytes).await {
                     Ok(bytes) => {
@@ -242,6 +248,7 @@ impl HttpTransport for ReqwestTransport {
                 url: Some(url),
                 headers: Some(headers),
                 body,
+                retry_after,
             });
         }
         let bytes = match response_body_limit_bytes {

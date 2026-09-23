@@ -1,23 +1,25 @@
 use super::*;
 use base64::Engine;
+use codex_http_client::RetryAfter;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::RateLimitReachedType;
 use pretty_assertions::assert_eq;
 
 #[test]
 fn map_api_error_maps_server_overloaded() {
-    let err = map_api_error(ApiError::ServerOverloaded);
+    let err = map_api_error(ApiError::ServerOverloaded { retry_after: None });
     assert!(matches!(err.details(), CodexErrorDetails::ServerOverloaded));
 }
 
-#[test]
-fn map_api_error_preserves_retry_delay() {
+#[tokio::test(start_paused = true)]
+async fn map_api_error_preserves_retry_delay() {
     let retry_delay = std::time::Duration::from_secs(17);
+    let retry_after = RetryAfter::from_delay(retry_delay).expect("retry advice");
     for (error, expected_code, expected_message) in [
         (
             ApiError::Retryable {
                 message: "retry later".to_string(),
-                delay: Some(retry_delay),
+                retry_after: Some(retry_after),
             },
             CodexErrorInfo::Other,
             "stream disconnected before completion: retry later",
@@ -25,7 +27,7 @@ fn map_api_error_preserves_retry_delay() {
         (
             ApiError::RateLimitExceeded {
                 message: "retry later".to_string(),
-                delay: Some(retry_delay),
+                retry_after: Some(retry_after),
             },
             CodexErrorInfo::RateLimitExceeded,
             "rate limit exceeded: retry later",
@@ -36,6 +38,7 @@ fn map_api_error_preserves_retry_delay() {
             (
                 err.to_codex_protocol_error(),
                 err.retry_delay(/*retry_count*/ 1),
+                err.retry_after(),
                 err.server_retry_delay(),
                 err.http_status_code_value(),
                 err.to_string(),
@@ -43,6 +46,7 @@ fn map_api_error_preserves_retry_delay() {
             (
                 expected_code,
                 Some(retry_delay),
+                Some(retry_after),
                 Some(retry_delay),
                 None,
                 expected_message.to_string(),
@@ -63,6 +67,7 @@ fn map_api_error_distinguishes_capacity_from_slow_down() {
         ("unknown_error", CodexErrorInfo::Other, true),
     ] {
         let err = map_api_error(ApiError::Transport(TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::SERVICE_UNAVAILABLE,
             url: None,
             headers: None,
@@ -85,6 +90,7 @@ fn map_api_error_maps_cloudflare_blocked_response_to_user_message() {
     let mut headers = HeaderMap::new();
     headers.insert(CF_RAY_HEADER, http::HeaderValue::from_static("ray-id"));
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::FORBIDDEN,
         url: Some("http://example.com/blocked".to_string()),
         headers: Some(headers),
@@ -120,6 +126,7 @@ fn map_api_error_maps_cyber_policy_from_400_body() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::BAD_REQUEST,
         url: Some("http://example.com/v1/responses".to_string()),
         headers: None,
@@ -148,6 +155,7 @@ fn map_api_error_maps_wrapped_websocket_cyber_policy_from_400_body() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::BAD_REQUEST,
         url: Some("ws://example.com/v1/responses".to_string()),
         headers: None,
@@ -169,6 +177,7 @@ fn map_api_error_uses_cyber_policy_fallback_for_missing_message() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::BAD_REQUEST,
         url: Some("http://example.com/v1/responses".to_string()),
         headers: None,
@@ -241,6 +250,7 @@ fn map_api_error_maps_http_and_wrapped_websocket_typed_errors() {
                     body["status"] = serde_json::json!(400);
                 }
                 let err = map_api_error(ApiError::Transport(TransportError::Http {
+                    retry_after: None,
                     status: http::StatusCode::BAD_REQUEST,
                     url: None,
                     headers: None,
@@ -275,6 +285,7 @@ fn assert_misalignment_policy_violation_from_http_body(status: http::StatusCode)
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status,
         url: Some("http://example.com/v1/responses".to_string()),
         headers: None,
@@ -308,6 +319,7 @@ fn map_api_error_preserves_misalignment_details_from_403_body() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::FORBIDDEN,
         url: Some("http://example.com/v1/responses".to_string()),
         headers: None,
@@ -352,6 +364,7 @@ fn map_api_error_preserves_misalignment_details_from_wrapped_websocket_error() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::FORBIDDEN,
         url: Some("ws://example.com/v1/responses".to_string()),
         headers: None,
@@ -393,6 +406,7 @@ fn map_api_error_keeps_other_400_errors_generic() {
         })
         .to_string();
         let err = map_api_error(ApiError::Transport(TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::BAD_REQUEST,
             url: Some("http://example.com/v1/responses".to_string()),
             headers: None,
@@ -426,6 +440,7 @@ fn map_api_error_distinguishes_http_quota_errors_from_rate_limits() {
             CodexErrorInfo::UsageLimitExceeded
         };
         let err = map_api_error(ApiError::Transport(TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::TOO_MANY_REQUESTS,
             url: None,
             headers: None,
@@ -455,6 +470,7 @@ fn map_api_error_maps_usage_limit_limit_name_header() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::TOO_MANY_REQUESTS,
         url: Some("http://example.com/v1/responses".to_string()),
         headers: Some(headers),
@@ -488,6 +504,7 @@ fn map_api_error_does_not_fallback_limit_name_to_limit_id() {
     })
     .to_string();
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::TOO_MANY_REQUESTS,
         url: Some("http://example.com/v1/responses".to_string()),
         headers: Some(headers),
@@ -537,6 +554,7 @@ fn map_api_error_copies_rate_limit_reached_type_to_usage_limit_snapshot() {
         .to_string();
 
         let err = map_api_error(ApiError::Transport(TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::TOO_MANY_REQUESTS,
             url: Some("http://example.com/v1/responses".to_string()),
             headers: Some(headers),
@@ -588,6 +606,7 @@ fn map_api_error_ignores_unparseable_rate_limit_reached_type_headers() {
         })
         .to_string();
         let err = map_api_error(ApiError::Transport(TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::TOO_MANY_REQUESTS,
             url: Some("http://example.com/v1/responses".to_string()),
             headers: Some(headers),
@@ -618,6 +637,7 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
     );
 
     let err = map_api_error(ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status: http::StatusCode::UNAUTHORIZED,
         url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
         headers: Some(headers),

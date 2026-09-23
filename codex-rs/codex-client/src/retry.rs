@@ -1,4 +1,5 @@
 use codex_http_client::Request;
+use codex_http_client::RetryAfter;
 use codex_http_client::TransportError;
 use rand::Rng;
 use std::future::Future;
@@ -99,10 +100,16 @@ where
                     .should_retry(&err, attempt, policy.max_attempts) =>
             {
                 let retry_attempt = attempt + 1;
-                // TODO(anp): Respect Retry-After from HTTP responses before retrying the request.
-                let delay = backoff(policy.base_delay, retry_attempt);
+                let retry_after = err.retry_after();
+                let delay = retry_after
+                    .map(RetryAfter::remaining_delay)
+                    .unwrap_or_else(|| backoff(policy.base_delay, retry_attempt));
                 crate::record_retry!(retry_attempt, delay, RetryOperation::HttpRequest);
-                tokio::time::sleep(delay).await;
+                if let Some(retry_after) = retry_after {
+                    tokio::time::sleep_until(retry_after.deadline()).await;
+                } else {
+                    tokio::time::sleep(delay).await;
+                }
             }
             Err(err) => return Err(err),
         }

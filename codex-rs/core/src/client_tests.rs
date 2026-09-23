@@ -214,6 +214,7 @@ async fn workspace_routed_http_rejects_redirects_without_a_routing_header() {
                 matches!(
                     result,
                     Err(TransportError::Http {
+                        retry_after: None,
                         status: http::StatusCode::TEMPORARY_REDIRECT,
                         ..
                     })
@@ -1411,6 +1412,7 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
     let url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses";
     let error = super::handle_unauthorized(
         TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::UNAUTHORIZED,
             url: Some(url.to_string()),
             headers: None,
@@ -1504,6 +1506,7 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
         assert!(provider.auth_manager().is_none());
 
         let unauthorized = || TransportError::Http {
+            retry_after: None,
             status: http::StatusCode::UNAUTHORIZED,
             url: Some("https://example.com/v1/responses".to_string()),
             headers: None,

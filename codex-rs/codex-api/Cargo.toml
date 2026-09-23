@@ -37,6 +37,7 @@ pretty_assertions = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tokio-test = { workspace = true }
 wiremock = { workspace = true }
 

@@ -87,7 +87,7 @@ pub fn telemetry_api_error_message(error: &ApiError) -> String {
         ApiError::CyberPolicy { .. } => "cyber policy".to_string(),
         ApiError::BioPolicy { .. } => "bio policy".to_string(),
         ApiError::MisalignmentPolicyViolation { .. } => "misalignment policy violation".to_string(),
-        ApiError::ServerOverloaded => "server overloaded".to_string(),
+        ApiError::ServerOverloaded { .. } => "server overloaded".to_string(),
     }
 }
 
@@ -119,6 +119,7 @@ mod tests {
         );
 
         let context = extract_response_debug_context(&TransportError::Http {
+            retry_after: None,
             status: StatusCode::UNAUTHORIZED,
             url: Some("https://chatgpt.com/backend-api/codex/models".to_string()),
             headers: Some(headers),
@@ -139,6 +140,7 @@ mod tests {
     #[test]
     fn telemetry_error_messages_omit_upstream_bodies() {
         let transport = TransportError::Http {
+            retry_after: None,
             status: StatusCode::UNAUTHORIZED,
             url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
             headers: None,
@@ -153,7 +155,7 @@ mod tests {
         assert_eq!(
             telemetry_api_error_message(&ApiError::RateLimitExceeded {
                 message: "private upstream diagnostic".to_string(),
-                delay: Some(std::time::Duration::from_secs(1)),
+                retry_after: None,
             }),
             "rate limit exceeded"
         );

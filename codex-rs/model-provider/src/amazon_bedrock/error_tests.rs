@@ -1,7 +1,9 @@
 use std::num::NonZeroU64;
+use std::time::Duration;
 
 use codex_api::ApiError;
 use codex_api::TransportError;
+use codex_http_client::RetryAfter;
 use codex_model_provider_info::AwsCredentialExportConfig;
 use codex_model_provider_info::ModelProviderAwsAuthInfo;
 use codex_model_provider_info::ModelProviderInfo;
@@ -24,6 +26,7 @@ fn http_error(status: StatusCode, body: &str) -> ApiError {
     let mut headers = HeaderMap::new();
     headers.insert("x-request-id", HeaderValue::from_static("req-bedrock"));
     ApiError::Transport(TransportError::Http {
+        retry_after: None,
         status,
         url: Some(BEDROCK_RESPONSES_URL.to_string()),
         headers: Some(headers),
@@ -51,6 +54,20 @@ fn expired_signature_has_actionable_guidance() {
             "{BEDROCK_EXPIRED_SIGNATURE_MESSAGE}, url: {BEDROCK_RESPONSES_URL}, request id: req-bedrock"
         )
     );
+}
+
+/// Rewording an expired-signature error must not replace the server's original deadline.
+#[test]
+fn expired_signature_preserves_the_retry_deadline() {
+    let advice = RetryAfter::from_delay(Duration::from_secs(10)).expect("retry advice");
+    let error = map_api_error(ApiError::Transport(TransportError::Http {
+        status: StatusCode::UNAUTHORIZED,
+        url: None,
+        headers: None,
+        body: Some("Signature expired: old is now earlier than new".into()),
+        retry_after: Some(advice),
+    }));
+    assert_eq!(error.retry_after(), Some(advice));
 }
 
 #[test]
@@ -123,6 +140,7 @@ fn classifies_only_refreshable_bedrock_auth_failures() {
 
     for (status, body, expected) in cases {
         let error = TransportError::Http {
+            retry_after: None,
             status,
             url: Some(BEDROCK_RESPONSES_URL.to_string()),
             headers: None,

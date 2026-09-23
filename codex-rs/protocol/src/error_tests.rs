@@ -11,13 +11,17 @@ use http::StatusCode;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 
-#[test]
-fn codex_err_debug_preserves_legacy_shape() {
+#[tokio::test(start_paused = true)]
+async fn codex_err_debug_preserves_legacy_shape() {
     let actual = [
         CodexErr::Timeout,
         CodexErr::Stream("disconnected".to_string()),
-        CodexErr::Stream("retry later".to_string()).with_retry_delay(Duration::from_secs(2)),
-        CodexErr::InternalServerError.with_retry_delay(Duration::from_secs(3)),
+        CodexErr::Stream("retry later".to_string()).with_retry_after(
+            RetryAfter::from_delay(Duration::from_secs(2)).expect("retry deadline"),
+        ),
+        CodexErr::InternalServerError.with_retry_after(
+            RetryAfter::from_delay(Duration::from_secs(3)).expect("retry deadline"),
+        ),
     ]
     .map(|err| format!("{err:?}"));
 
@@ -88,7 +92,8 @@ fn retry_delay_distinguishes_server_advice_backoff_and_terminal_errors() {
     assert_eq!(error.server_retry_delay(), None);
 
     let advice = Duration::ZERO;
-    let error = error.with_retry_delay(advice);
+    let retry_after = RetryAfter::from_delay(advice).expect("retry deadline");
+    let error = error.with_retry_after(retry_after);
     assert_eq!(
         (
             error.retry_delay(/*retry_count*/ 1),
@@ -98,7 +103,7 @@ fn retry_delay_distinguishes_server_advice_backoff_and_terminal_errors() {
         (Some(advice), Some(advice), Some(advice)),
     );
 
-    let error = CodexErr::QuotaExceeded.with_retry_delay(advice);
+    let error = CodexErr::QuotaExceeded.with_retry_after(retry_after);
     assert_eq!(
         (
             error.retry_delay(/*retry_count*/ 1),

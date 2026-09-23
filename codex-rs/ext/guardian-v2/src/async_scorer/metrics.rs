@@ -53,7 +53,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             ApiError::CyberPolicy { .. }
             | ApiError::BioPolicy { .. }
             | ApiError::MisalignmentPolicyViolation { .. } => "policy_error",
-            ApiError::ServerOverloaded => "server_overloaded",
+            ApiError::ServerOverloaded { .. } => "server_overloaded",
         },
     }
 }
