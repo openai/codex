@@ -1,6 +1,7 @@
 //! Read-only recovery of retained instructions from eligible live messages.
 //! Missing retained instructions use persisted acceptance order; unknown ordering stays incomplete.
 //! Recovering surviving sources cannot clear a checkpoint's record of missing instructions.
+//! Legacy candidates use the same source matching without inventing an acceptance order.
 
 use std::collections::HashSet;
 
@@ -47,12 +48,8 @@ impl<'a> ReconciledRetainedContext<'a> {
                         let RetainedContextEntry::UserMessage(retained) = entry else {
                             return false;
                         };
-                        let matches_source = if let Some(id) = &retained.message_id {
-                            message.message_id.as_ref() == Some(id)
-                        } else {
-                            message.turn_id == retained.turn_id && message.text == retained.text
-                        };
-                        matches_source && matched_entries.insert(index)
+                        same_user_message_source(retained, &message)
+                            && matched_entries.insert(index)
                     })
                 {
                     continue;
@@ -93,6 +90,38 @@ impl<'a> ReconciledRetainedContext<'a> {
         );
         entries.sort_by_key(|(order, _)| *order);
         entries.into_iter()
+    }
+
+    /// Filters legacy candidates already represented by retained or recovered instructions.
+    /// Unmatched sources keep their original text and identity; this does not assign an order.
+    pub fn unmatched_user_messages<'b>(
+        &'b self,
+        messages: impl Iterator<Item = RetainedUserMessage> + 'b,
+    ) -> impl Iterator<Item = RetainedUserMessage> + 'b {
+        let sources = self
+            .ordered_entries()
+            .filter_map(|(_, entry)| match entry {
+                RetainedContextEntry::UserMessage(message) => Some(message),
+                RetainedContextEntry::AssistantMessage(_)
+                | RetainedContextEntry::VerifiedAnswer(_) => None,
+            })
+            .collect::<Vec<_>>();
+        messages.filter(move |message| {
+            !sources
+                .iter()
+                .any(|source| same_user_message_source(source, message))
+        })
+    }
+}
+
+fn same_user_message_source(
+    retained: &RetainedUserMessage,
+    candidate: &RetainedUserMessage,
+) -> bool {
+    if let Some(id) = &retained.message_id {
+        candidate.message_id.as_ref() == Some(id)
+    } else {
+        candidate.turn_id == retained.turn_id && candidate.text == retained.text
     }
 }
 

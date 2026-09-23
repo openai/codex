@@ -5,9 +5,11 @@
 //! Projection limits do not change authorization completeness; unavailable source text does.
 //! Retained-history reconciliation owns recovery order and missing-instruction provenance.
 //! Known positions preserve host order, not delivery order or inferred question-answer pairs.
+//! Unmatched legacy instructions supplement retained facts without claiming a known ordering.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use super::LocalAgentControl;
 use crate::codex_thread::GuardianRootMessage;
@@ -129,9 +131,14 @@ impl LocalAgentControl {
                             // Older records may omit a large instruction. Recover that exact
                             // source while it remains available in the parent context.
                             let original = message.message_id.as_deref().and_then(|id| {
-                                root_history.raw_items().chain(history.review_items()).find(
-                                    |item| item.id().is_some_and(|item_id| item_id.as_str() == id),
-                                )
+                                root_history
+                                    .raw_items()
+                                    .chain(
+                                        root_history.guardian_history_items().into_iter().flatten(),
+                                    )
+                                    .find(|item| {
+                                        item.id().is_some_and(|item_id| item_id.as_str() == id)
+                                    })
                             });
                             let Some(TurnItem::UserMessage(original)) =
                                 original.and_then(parse_turn_item)
@@ -169,6 +176,26 @@ impl LocalAgentControl {
                 })
                 .collect::<Vec<_>>();
             messages.drain(..messages.len().saturating_sub(MAX_ROOT_MESSAGES));
+            // Old opt-out checkpoints have genuine instructions but no retained source order.
+            // Keep them separately bounded and explicitly unordered; never replace newer facts.
+            let mut legacy_messages = VecDeque::new();
+            let legacy_capacity = MAX_ROOT_MESSAGES.saturating_sub(messages.len());
+            if missing_root_instructions && legacy_capacity > 0 {
+                let mut latest_legacy_turn_id = None;
+                for message in
+                    reconciled.unmatched_user_messages(root_history.legacy_user_messages())
+                {
+                    latest_legacy_turn_id =
+                        (!message.turn_id.is_empty()).then_some(message.turn_id);
+                    legacy_messages.push_back(GuardianRootMessage::User(message.text));
+                    if legacy_messages.len() > legacy_capacity {
+                        legacy_messages.pop_front();
+                    }
+                }
+                if latest_user_turn_id.is_none() {
+                    latest_user_turn_id = latest_legacy_turn_id;
+                }
+            }
             let mut missing_assistant_context = retained_context.has_omitted_assistant_messages();
             // Prefer a renderable retained original over a shortened checkpoint copy.
             // Otherwise preserve the bounded live evidence, including confirmed messaging sends.
@@ -258,7 +285,8 @@ impl LocalAgentControl {
             assistant_messages.sort_by_key(|(order, _)| {
                 order.filter(|order| reply_context_orders.contains(order))
             });
-            let available = MAX_ROOT_MESSAGES.saturating_sub(messages.len());
+            let available =
+                MAX_ROOT_MESSAGES.saturating_sub(messages.len() + legacy_messages.len());
             missing_assistant_context |= assistant_messages.len() > available;
             assistant_messages.drain(..assistant_messages.len().saturating_sub(available));
             messages.extend(assistant_messages);
@@ -288,6 +316,11 @@ impl LocalAgentControl {
                 );
             }
             messages.insert(/*index*/ 0, GuardianRootMessage::RetainedContextScope);
+            if !legacy_messages.is_empty() {
+                legacy_messages.push_front(GuardianRootMessage::LegacyContextScope);
+                legacy_messages.extend(messages);
+                messages = legacy_messages.into_iter().collect();
+            }
             (messages, authorization_version)
         } else {
             let mut messages = history

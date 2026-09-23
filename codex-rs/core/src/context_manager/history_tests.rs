@@ -331,6 +331,129 @@ fn checkpoint_replayed_messages_keep_legacy_review_when_the_source_survives() {
     assert_eq!(history.retained_context(), &retained);
 }
 
+#[test_case(None; "no retained checkpoint")]
+#[test_case(Some(serde_json::json!({
+    "verified_answers": [], "incomplete": false
+})); "legacy retained checkpoint without instructions")]
+fn plaintext_checkpoint_without_backup_preserves_root_instructions(
+    saved_context: Option<serde_json::Value>,
+) {
+    let instruction = serde_json::from_value(serde_json::json!({
+        "type": "message", "id": "original-restriction", "role": "user",
+        "content": [{"type": "input_text", "text": "Only publish privately."}]
+    }))
+    .expect("old instruction without ordering metadata");
+    let saved_context: Option<RetainedContext> =
+        saved_context.map(|value| serde_json::from_value(value).expect("legacy retained context"));
+    let mut history = ContextManager::with_guardian_context_mode(
+        GuardianContextMode::ThreadOwned,
+        &SessionSource::Cli,
+    );
+    history.replace(vec![instruction]);
+    history.restore_review_context(
+        saved_context.as_ref(),
+        /*checkpoint*/ None,
+        Some("reviewer"),
+    );
+
+    // Compaction removes the only plaintext copy. Resume must keep it available
+    // to worker authorization without adding it back to the reviewer's model window.
+    let compacted = vec![ResponseItemEnvelope {
+        item: serde_json::from_value(serde_json::json!({
+            "type": "compaction", "id": "new-checkpoint", "encrypted_content": "opaque"
+        }))
+        .expect("new checkpoint"),
+        metadata: Some(CodexHarnessMetadata {
+            compaction_model_hash: Some("reviewer".to_owned()),
+            ..Default::default()
+        }),
+    }];
+    history.replace_compacted(compacted.clone(), Some("reviewer"));
+    let mut resumed = ContextManager::with_guardian_context_mode(
+        GuardianContextMode::ThreadOwned,
+        &SessionSource::Cli,
+    );
+    resumed.replace_annotated(compacted.clone());
+    resumed.restore_review_context(
+        Some(history.retained_context()),
+        history.guardian_history_checkpoint().as_ref(),
+        Some("reviewer"),
+    );
+    let snapshot = resumed.conversation_history_snapshot();
+    assert_eq!(
+        (
+            GuardianContextMode::from_history(snapshot.as_ref()),
+            snapshot.review_items().cloned().collect::<Vec<_>>(),
+            resumed
+                .legacy_user_messages()
+                .map(|message| message.text)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            GuardianContextMode::ThreadOwned,
+            compacted
+                .into_iter()
+                .map(|envelope| envelope.item)
+                .collect::<Vec<_>>(),
+            vec!["Only publish privately.".to_owned()],
+        ),
+    );
+}
+
+#[test]
+fn legacy_checkpoint_rollback_keeps_answers_before_a_same_turn_steer() {
+    let mut checkpoint: codex_history::CompactedItem = serde_json::from_value(serde_json::json!({
+        "message": "Legacy checkpoint without accepted-input metadata.",
+        "replacement_history": [
+            {"type": "message", "id": "initial", "role": "user",
+             "content": [{"type": "input_text", "text": "Inspect the release."}]},
+            {"type": "function_call", "call_id": "before", "name": "request_user_input", "arguments": "{}"},
+            {"type": "message", "id": "steer", "role": "user",
+             "content": [{"type": "input_text", "text": "Inspect the README too."}]},
+            {"type": "function_call", "call_id": "after", "name": "request_user_input", "arguments": "{}"}
+        ],
+        "retained_context": {"verified_answers": [
+            {"turn_id": "shared-turn", "call_id": "before",
+             "questions": [{"question": "Publish?", "answer": "Only privately."}]},
+            {"turn_id": "shared-turn", "call_id": "after",
+             "questions": [{"question": "Publish the README?", "answer": "Never."}]}
+        ], "incomplete": false}
+    })).expect("legacy checkpoint");
+    for envelope in checkpoint.replacement_history.as_mut().unwrap() {
+        envelope.item.set_turn_id_if_missing("shared-turn");
+    }
+    let expected = checkpoint
+        .retained_context
+        .as_ref()
+        .unwrap()
+        .verified_answers()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut history = ContextManager::with_guardian_context_mode(
+        GuardianContextMode::ThreadOwned,
+        &SessionSource::Cli,
+    );
+    history.replace_annotated(checkpoint.replacement_history.take().unwrap());
+    history.restore_review_context(
+        checkpoint.retained_context.as_ref(),
+        /*checkpoint*/ None,
+        /*reviewer_compaction_hash*/ None,
+    );
+    // The old checkpoint has no acceptance order; use the surviving source calls
+    // to remove only the answer belonging to each rolled-back input.
+    for remaining in [1, 0] {
+        history.drop_last_n_user_turns(/*num_turns*/ 1);
+        assert_eq!(
+            history
+                .retained_context()
+                .verified_answers()
+                .cloned()
+                .collect::<Vec<_>>(),
+            expected[..remaining],
+        );
+    }
+}
+
 #[test]
 fn conversation_history_snapshot_excludes_contextual_user_messages() {
     let contextual_message = crate::context::ContextualUserFragment::into(UserInstructions {

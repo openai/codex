@@ -996,6 +996,8 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             (partial, MissingCheckpointSource::RootInstruction, false),
             // Rebuild the local counter even when all retained metadata is absent.
             (Value::Null, MissingCheckpointSource::None, true),
+            // Old text checkpoints have neither retained facts, acceptance order, nor a backup.
+            (Value::Null, MissingCheckpointSource::None, false),
             // Prefix and local orders can collide numerically. Recovery must keep
             // the inherited instruction first without losing the queued local grant.
             (inherited_prefix, MissingCheckpointSource::None, true),
@@ -1069,6 +1071,16 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                         .as_array()
                         .is_some_and(|entries| entries.iter().any(|entry| entry["text"] == *text))
                 });
+                let mut legacy = vec![GuardianRootMessage::LegacyContextScope];
+                if retained.is_null() {
+                    legacy.extend([
+                        GuardianRootMessage::User(INITIAL_PROMPT.to_owned()),
+                        GuardianRootMessage::User(USER_APPROVAL.to_owned()),
+                    ]);
+                }
+                legacy.push(GuardianRootMessage::User(QUEUED_APPROVAL.to_owned()));
+                legacy.extend(expected);
+                expected = legacy;
             }
             let mut checkpoint: CompactedItem = serde_json::from_value(json!({
                 "message": "Legacy checkpoint.",
@@ -1107,9 +1119,13 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 .expect("worker root snapshot after checkpoint resume");
             if retained.is_null() {
                 // The question must be recovered from raw commentary without a retained copy.
-                assert!(snapshot.messages.contains(&GuardianRootMessage::Assistant(
-                    ROOT_ASSISTANT_COMMENTARY.to_owned(),
-                )));
+                let commentary = ROOT_ASSISTANT_COMMENTARY.to_owned();
+                let expected_commentary = if preserve_acceptance_order {
+                    GuardianRootMessage::Assistant(commentary)
+                } else {
+                    GuardianRootMessage::UnorderedAssistant(commentary)
+                };
+                assert!(snapshot.messages.contains(&expected_commentary));
             }
             let exchange = snapshot
                 .messages

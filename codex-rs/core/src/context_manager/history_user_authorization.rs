@@ -6,13 +6,18 @@
 use std::sync::Arc;
 
 use super::ContextManager;
+use crate::compact::is_summary_message;
 use crate::context::GuardianContextMode;
+use crate::context::is_contextual_user_fragment;
+use crate::event_mapping::parse_turn_item;
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
 use crate::guardian::guardian_truncate_text;
 use codex_history::CodexHarnessMetadata;
+use codex_history::ReconciledRetainedContext;
 use codex_history::RetainedContext;
 use codex_history::RetainedInputSource;
 use codex_history::RetainedUserMessage;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
@@ -23,6 +28,42 @@ pub(super) enum RetainedMessageSource {
 }
 
 impl ContextManager {
+    pub(super) fn has_legacy_user_messages(&self) -> bool {
+        ReconciledRetainedContext::new(Some(&self.retained_context), std::iter::empty())
+            .unmatched_user_messages(self.legacy_user_messages())
+            .next()
+            .is_some()
+    }
+
+    /// Bounded instruction candidates from the legacy backup; their ordering is unknown.
+    pub(crate) fn legacy_user_messages(&self) -> impl Iterator<Item = RetainedUserMessage> + '_ {
+        self.guardian_history_items()
+            .into_iter()
+            .flatten()
+            .filter_map(move |item| {
+                if !crate::context::is_user_authorization_message(item) {
+                    return None;
+                }
+                let Some(TurnItem::UserMessage(message)) = parse_turn_item(item) else {
+                    return None;
+                };
+                let text = message.message();
+                if is_summary_message(&text)
+                    || text.trim_start().starts_with("<user_action>")
+                    || is_contextual_user_fragment(&ContentItem::InputText { text: text.clone() })
+                {
+                    return None;
+                }
+                let text = guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0;
+                Some(RetainedUserMessage {
+                    turn_id: item.turn_id().unwrap_or_default().to_owned(),
+                    message_id: item.id().map(|id| id.as_str().to_owned()),
+                    text,
+                    complete: false,
+                })
+            })
+    }
+
     pub(crate) fn restore_retained_context(&mut self, checkpoint: Option<&RetainedContext>) {
         Arc::make_mut(&mut self.retained_context).restore(checkpoint, &self.items);
         if self.guardian_context_mode == GuardianContextMode::ThreadOwned {

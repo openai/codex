@@ -194,7 +194,6 @@ struct MockResponsesState {
     root_user_restriction: bool,
     root_user_input_restriction: bool,
     compact_root_after_answer: bool,
-    thread_context_enabled: bool,
     late_root_restriction: bool,
     user_input_restriction: bool,
 }
@@ -504,7 +503,7 @@ async fn parent_response(
                 .contains("Completed synchronous Guardian review.")
         );
         let request_number = state.parent_requests.fetch_add(1, Ordering::SeqCst);
-        if state.thread_context_enabled && state.late_root_restriction && request_number == 1 {
+        if state.late_root_restriction && request_number == 1 {
             let output = request["input"]
                 .as_array()
                 .expect("worker model input")
@@ -656,15 +655,10 @@ async fn guardian_v2_routes_tool_approvals(
         transcript_content,
         GuardianToolScope::AllTools,
         /*sensitive_action*/ None,
-        /*thread_context_enabled*/ false,
     )
     .await
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The shared fixture varies independent review and context-mode test dimensions."
-)]
 async fn guardian_v2_routes_scoped_tool_approvals(
     risk: GuardianRisk,
     lifecycle: ThreadLifecycle,
@@ -673,7 +667,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
     transcript_content: TranscriptContent,
     scope: GuardianToolScope,
     sensitive_action: Option<bool>,
-    thread_context_enabled: bool,
 ) -> Result<()> {
     let server_name = match scope {
         GuardianToolScope::AllTools => TEST_SERVER_NAME,
@@ -720,7 +713,6 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         root_worker: lifecycle.uses_root_worker(),
         root_user_restriction: matches!(lifecycle, ThreadLifecycle::RootUserRestriction),
         root_user_input_restriction: lifecycle.has_root_user_input(),
-        thread_context_enabled,
         compact_root_after_answer: matches!(lifecycle, ThreadLifecycle::RootUserInputCompaction),
         late_root_restriction,
         user_input_restriction: lifecycle.has_user_input(),
@@ -879,7 +871,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             analytics_server.uri(),
         ))
         .with_extra_config(&format!(
-            "[mcp_servers.{server_name}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"{tool_approval_mode}\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}\n\n[features.guardianv2]\nenabled = true\nthread_context = {thread_context_enabled}{guardian_scope_config}"
+            "[mcp_servers.{server_name}]\nurl = \"{mcp_server_url}/mcp\"\ndefault_tools_approval_mode = \"{tool_approval_mode}\"\n\n[analytics]\nenabled = true\n\n[otel]\nmetrics_exporter = {{ otlp-http = {{ endpoint = \"{responses_url}/metrics\", protocol = \"json\" }} }}\n\n[features.guardianv2]\nenabled = true{guardian_scope_config}"
         ))
         .enable_feature(Feature::GuardianApproval);
     if lifecycle.has_user_input() || lifecycle.has_root_user_input() {
@@ -1200,9 +1192,10 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 .filter_map(|item| item["text"].as_str())
                 .collect::<Vec<_>>();
             assert_eq!(
-                history_texts.first().copied(),
-                Some(">>> TRANSCRIPT START\n")
+                history_texts.first().and_then(|text| text.lines().next()),
+                Some(">>> RETAINED USER INSTRUCTIONS START")
             );
+            assert!(history_texts.contains(&">>> TRANSCRIPT START\n"));
             assert!(history_texts.iter().any(|text| text.contains(USER_CONTEXT)));
             assert!(history_texts.iter().any(|text| text.contains("guardian-0")));
             assert_eq!(
@@ -2102,7 +2095,6 @@ async fn guardian_v2_inherits_root_user_skills_for_delegated_workers() -> Result
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
-        /*thread_context_enabled*/ false,
     )
     .await
 }
@@ -2125,7 +2117,6 @@ async fn guardian_v2_computer_use_only_scopes_classification_and_fast_reviews(
         TranscriptContent::Normal,
         GuardianToolScope::ComputerUseOnly { server_name },
         /*sensitive_action*/ None,
-        /*thread_context_enabled*/ false,
     )
     .await
 }
@@ -2423,7 +2414,6 @@ async fn guardian_v2_required_model_computer_use_preserves_strict_approval(
         TranscriptContent::Normal,
         GuardianToolScope::ComputerUseOnly { server_name },
         sensitive_action,
-        /*thread_context_enabled*/ false,
     )
     .await
 }
@@ -2445,7 +2435,6 @@ async fn guardian_v2_discards_sync_reviews_after_user_input_answer(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
-        /*thread_context_enabled*/ false,
     )
     .await
 }
@@ -2468,20 +2457,16 @@ async fn guardian_v2_validates_user_input_before_history_truncation(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
-        /*thread_context_enabled*/ false,
     )
     .await
 }
 
-#[test_case(ThreadLifecycle::RootUserInputRestriction, false; "legacy root answer reaches worker")]
-#[test_case(ThreadLifecycle::RootUserInputHookBlocked, false; "legacy blocked root answer reaches worker")]
-#[test_case(ThreadLifecycle::RootUserInputRestriction, true; "root answer reaches worker")]
-#[test_case(ThreadLifecycle::RootUserInputHookBlocked, true; "blocked root answer reaches worker")]
-#[test_case(ThreadLifecycle::RootUserInputCompaction, true; "root answer survives parent compaction")]
+#[test_case(ThreadLifecycle::RootUserInputRestriction; "root answer reaches worker")]
+#[test_case(ThreadLifecycle::RootUserInputHookBlocked; "blocked root answer reaches worker")]
+#[test_case(ThreadLifecycle::RootUserInputCompaction; "root answer survives parent compaction")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_v2_propagates_root_user_input_to_worker_reviews(
     lifecycle: ThreadLifecycle,
-    thread_context_enabled: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     guardian_v2_routes_scoped_tool_approvals(
@@ -2494,7 +2479,6 @@ async fn guardian_v2_propagates_root_user_input_to_worker_reviews(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
-        thread_context_enabled,
     )
     .await
 }
@@ -2626,10 +2610,6 @@ async fn guardian_v2_low_scores_require_current_authorization(
             server_name: "node_repl",
         },
         /*sensitive_action*/ None,
-        matches!(
-            lifecycle,
-            ThreadLifecycle::RootRestrictionDuringClassification
-        ),
     )
     .await
 }
