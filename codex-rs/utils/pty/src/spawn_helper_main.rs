@@ -1,4 +1,4 @@
-//! Early executable dispatch for Linux pipe spawns. All child setup happens
+//! Early executable dispatch for Linux pipe and PTY spawns. All child setup happens
 //! after exec, before application initialization or runtime threads exist.
 //! A report prefix precedes target exec; failures append errno before exit.
 
@@ -31,6 +31,14 @@ pub(super) fn dispatch(mut args: impl Iterator<Item = std::ffi::OsString>) -> ! 
             .and_then(|arg| arg.to_str()?.parse::<libc::pid_t>().ok())
             .filter(|pid| *pid > 0)
             .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
+        let setup = args
+            .next()
+            .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
+        let setup = match setup.to_str() {
+            Some("pipe") => crate::spawn_helper::Setup::Pipe,
+            Some("pty") => crate::spawn_helper::Setup::Pty,
+            _ => return Err(io::Error::from_raw_os_error(libc::EINVAL)),
+        };
         let preserved = args
             .next()
             .ok_or_else(|| io::Error::from_raw_os_error(libc::EINVAL))?;
@@ -57,8 +65,13 @@ pub(super) fn dispatch(mut args: impl Iterator<Item = std::ffi::OsString>) -> ! 
         if unsafe { libc::fcntl(control_fd, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
             return Err(io::Error::last_os_error());
         }
-        crate::process_group::detach_from_tty()?;
-        crate::process_group::set_parent_death_signal(parent_pid)?;
+        match setup {
+            crate::spawn_helper::Setup::Pipe => {
+                crate::process_group::detach_from_tty()?;
+                crate::process_group::set_parent_death_signal(parent_pid)?;
+            }
+            crate::spawn_helper::Setup::Pty => crate::pty::configure_child_terminal()?,
+        }
         // Allocation is safe in this fresh, single-threaded image. CLOEXEC
         // leaves the report socket open until the target actually execs.
         crate::pty::close_inherited_fds_except(&inherited_fds);

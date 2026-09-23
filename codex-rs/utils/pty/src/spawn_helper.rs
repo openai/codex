@@ -20,6 +20,14 @@ use tokio::io::AsyncWriteExt;
 
 use crate::child_command::ChildDropPolicy;
 
+/// Setup that needs a fresh, single-threaded image before target exec.
+pub(crate) enum Setup {
+    /// Detach from the terminal and terminate when the parent dies.
+    Pipe,
+    /// Establish a controlling terminal and reset interactive signal state.
+    Pty,
+}
+
 pub(super) const HELPER_ARG: &str = "--codex-run-as-process-setup";
 pub(super) const MAX_ENV_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const REPORT_PREFIX: u8 = 0;
@@ -56,12 +64,19 @@ pub fn init_spawn_helper(args: impl IntoIterator<Item = std::ffi::OsString>) {
     }
 }
 
+pub(crate) fn is_available() -> bool {
+    HELPER_READY.load(Ordering::Relaxed)
+}
+
 /// Start the helper and await target exec without blocking a runtime worker.
 /// Return `None` when registration, helper resource setup, or helper launch fails,
 /// preserving compatibility with callers and sandboxes that only permit the target.
-pub(crate) async fn spawn(target: &crate::Command) -> io::Result<Option<crate::Child>> {
+pub(crate) async fn spawn(
+    target: &crate::Command,
+    setup: Setup,
+) -> io::Result<Option<crate::Child>> {
     target.validate()?;
-    if !HELPER_READY.load(Ordering::Relaxed) {
+    if !is_available() {
         return Ok(None);
     }
     let settings = target.inner.as_std();
@@ -88,6 +103,10 @@ pub(crate) async fn spawn(target: &crate::Command) -> io::Result<Option<crate::C
             .arg(HELPER_ARG)
             .arg(fd.to_string())
             .arg(std::process::id().to_string())
+            .arg(match setup {
+                Setup::Pipe => "pipe",
+                Setup::Pty => "pty",
+            })
             .arg(
                 target
                     .inherited_fds
@@ -106,6 +125,16 @@ pub(crate) async fn spawn(target: &crate::Command) -> io::Result<Option<crate::C
                 crate::ChildStdin::Null => crate::ChildStdin::Null,
                 crate::ChildStdin::File(fd) => crate::ChildStdin::File(fd.try_clone()?),
             });
+        helper.stdout_file = target
+            .stdout_file
+            .as_ref()
+            .map(std::os::fd::OwnedFd::try_clone)
+            .transpose()?;
+        helper.stderr_file = target
+            .stderr_file
+            .as_ref()
+            .map(std::os::fd::OwnedFd::try_clone)
+            .transpose()?;
         helper.inherited_fds = target.inherited_fds.clone();
         helper.inherited_fds.push(fd);
         Ok((control, helper, helper_control))

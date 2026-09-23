@@ -80,6 +80,10 @@ pub struct Command {
     #[cfg(target_os = "linux")]
     parent_pid: Option<libc::pid_t>,
     #[cfg(unix)]
+    pub(crate) stdout_file: Option<std::os::fd::OwnedFd>,
+    #[cfg(unix)]
+    pub(crate) stderr_file: Option<std::os::fd::OwnedFd>,
+    #[cfg(unix)]
     pub(crate) arg0: Option<OsString>,
 }
 
@@ -106,6 +110,10 @@ impl Command {
             inherited_fds: Vec::new(),
             #[cfg(target_os = "linux")]
             parent_pid: None,
+            #[cfg(unix)]
+            stdout_file: None,
+            #[cfg(unix)]
+            stderr_file: None,
             #[cfg(unix)]
             arg0: None,
         }
@@ -295,6 +303,15 @@ impl Command {
                         Ok(())
                     });
                 }
+            }
+        }
+        #[cfg(unix)]
+        {
+            if let Some(fd) = self.stdout_file {
+                self.inner.stdout(TokioStdio::from(fd));
+            }
+            if let Some(fd) = self.stderr_file {
+                self.inner.stderr(TokioStdio::from(fd));
             }
         }
         #[cfg(unix)]

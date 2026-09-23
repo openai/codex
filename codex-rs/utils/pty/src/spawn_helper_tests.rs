@@ -179,7 +179,9 @@ async fn native_helper_available() -> anyhow::Result<bool> {
         return Ok(false);
     }
     let command = crate::Command::new("/bin/true");
-    let Some(child) = crate::spawn_helper::spawn(&command).await? else {
+    let Some(child) =
+        crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await?
+    else {
         return Ok(false);
     };
     Ok(child.wait_with_output().await?.status.success())
@@ -263,7 +265,8 @@ async fn target_loader_environment_does_not_disable_helper_dispatch() -> anyhow:
     let mut command = crate::Command::new("/codex-missing-loader-env-target");
     command.current_dir("/").env("LD_TRACE_LOADED_OBJECTS", "1");
     // A failed helper bootstrap returns None; require the helper's target error.
-    let Err(error) = crate::spawn_helper::spawn(&command).await else {
+    let Err(error) = crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await
+    else {
         panic!("helper must reach target exec despite loader settings");
     };
     assert_eq!(error.raw_os_error(), Some(libc::ENOENT));
@@ -285,9 +288,12 @@ async fn large_environment_can_cross_the_control_socket() -> anyhow::Result<()> 
         ])
         .current_dir("/")
         .envs((0..8).map(|index| (format!("LARGE_{index}"), "x".repeat(8_192))));
-    let child = tokio::time::timeout(Duration::from_secs(5), crate::spawn_helper::spawn(&command))
-        .await??
-        .expect("native helper must transfer the environment");
+    let child = tokio::time::timeout(
+        Duration::from_secs(5),
+        crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe),
+    )
+    .await??
+    .expect("native helper must transfer the environment");
     assert!(child.wait_with_output().await?.status.success());
     Ok(())
 }
@@ -311,7 +317,7 @@ async fn helper_preserves_inheritable_fds_and_closes_unrequested_fds() -> anyhow
         .current_dir("/")
         .descriptor_policy(crate::DescriptorPolicy::Explicit)
         .preserve_fds(&[preserved]);
-    let child = crate::spawn_helper::spawn(&command)
+    let child = crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe)
         .await?
         .expect("native helper must preserve requested descriptors");
     assert!(child.wait_with_output().await?.status.success());
@@ -550,6 +556,64 @@ async fn helper_exit_before_acknowledgement_falls_back() -> anyhow::Result<()> {
     wait_for_fallback_reaping(pid)
 }
 
+#[tokio::test]
+async fn pty_helper_establishes_a_controlling_terminal_without_forking() -> anyhow::Result<()> {
+    use std::cell::Cell;
+    thread_local! { static FORKS: Cell<usize> = const { Cell::new(0) }; }
+    extern "C" fn after_fork() {
+        FORKS.with(|count| count.set(count.get() + 1));
+    }
+    FORKS.with(|count| count.set(0));
+    // SAFETY: The parent callback only updates initialized thread-local storage.
+    assert_eq!(
+        unsafe {
+            libc::pthread_atfork(/*prepare*/ None, Some(after_fork), /*child*/ None)
+        },
+        0
+    );
+    let mut spawned = crate::spawn_pty_process(
+        "/bin/sh",
+        &[
+            "-c".to_owned(),
+            "test -t 0 && test -t 1 && test -t 2 && printf ready >/dev/tty".to_owned(),
+        ],
+        std::path::Path::new("."),
+        &std::env::vars().collect(),
+        /*arg0*/ &None,
+        crate::TerminalSize::default(),
+        &[],
+    )
+    .await?;
+    let mut output = Vec::new();
+    while let Some(chunk) = spawned.stdout_rx.recv().await {
+        output.extend(chunk);
+    }
+    assert_eq!((spawned.exit_rx.await?, output), (0, b"ready".to_vec()));
+    if native_helper_available().await? {
+        assert_eq!(FORKS.with(Cell::get), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn pty_helper_preserves_portable_signal_exit_status() -> anyhow::Result<()> {
+    let env = std::env::vars().collect();
+    for program in ["/bin/sh", "sh"] {
+        let spawned = crate::spawn_pty_process(
+            program,
+            &["-c".to_owned(), "kill -TERM $$".to_owned()],
+            std::path::Path::new("."),
+            &env,
+            /*arg0*/ &None,
+            crate::TerminalSize::default(),
+            &[],
+        )
+        .await?;
+        assert_eq!(spawned.exit_rx.await?, 1);
+    }
+    Ok(())
+}
+
 #[test]
 fn helper_dispatch_before_rust_initializes_argv() -> anyhow::Result<()> {
     let output = std::process::Command::new(std::env::current_exe()?)
@@ -605,7 +669,9 @@ async fn helper_control_socket_survives_closed_stdio() -> anyhow::Result<()> {
     }
     let mut command = crate::Command::new("/bin/echo");
     command.arg("closed-stdio").stdin(crate::ChildStdin::Null);
-    let Some(probe) = crate::spawn_helper::spawn(&command).await? else {
+    let Some(probe) =
+        crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await?
+    else {
         return Ok(());
     };
     assert!(probe.wait_with_output().await?.status.success());
@@ -618,7 +684,7 @@ async fn helper_control_socket_survives_closed_stdio() -> anyhow::Result<()> {
     for fd in [0, 1] {
         assert_eq!(unsafe { libc::close(fd) }, 0);
     }
-    let result = crate::spawn_helper::spawn(&command).await;
+    let result = crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await;
     for (fd, saved) in [0, 1].into_iter().zip(saved) {
         assert_eq!(unsafe { libc::dup2(saved.as_raw_fd(), fd) }, fd);
     }
@@ -692,7 +758,11 @@ async fn helper_descriptor_pressure_falls_back_to_direct_spawn() -> anyhow::Resu
     // Direct spawning fits, but the helper also clones stdin and opens its control socket.
     anyhow::ensure!(occupied.len() >= 7, "not enough descriptors to reserve");
     occupied.truncate(occupied.len() - 7);
-    assert!(crate::spawn_helper::spawn(&command).await?.is_none());
+    assert!(
+        crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe)
+            .await?
+            .is_none()
+    );
     let output = command.spawn()?.wait_with_output().await?;
     assert_eq!(
         (output.status.code(), output.stdout, output.stderr),
@@ -723,7 +793,8 @@ async fn parent_loader_environment_does_not_disable_helper_dispatch() -> anyhow:
     }
     let mut command = crate::Command::new("/codex-missing-parent-loader-env-target");
     command.current_dir("/");
-    let Err(error) = crate::spawn_helper::spawn(&command).await else {
+    let Err(error) = crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pipe).await
+    else {
         panic!("helper must reach target exec despite parent loader settings");
     };
     assert_eq!(error.raw_os_error(), Some(libc::ENOENT));

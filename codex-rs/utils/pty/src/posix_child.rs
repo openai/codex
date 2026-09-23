@@ -148,15 +148,19 @@ impl NativeChild {
             crate::ChildStdin::Null => (std::fs::File::open("/dev/null")?.into(), None),
             crate::ChildStdin::File(fd) => (fd.try_clone()?, None),
         };
-        let (stdout_read, stdout_write) = io::pipe()?;
-        let (stderr_read, stderr_write) = io::pipe()?;
+        let (stdout_read, stdout_write) = child_output(request.stdout_file.as_ref())?;
+        let (stderr_read, stderr_write) = child_output(request.stderr_file.as_ref())?;
         let child_fds = [
             child_fd(stdin_read)?,
-            child_fd(stdout_write.into())?,
-            child_fd(stderr_write.into())?,
+            child_fd(stdout_write)?,
+            child_fd(stderr_write)?,
         ];
-        let stdout = ChildStdout::from_std(OwnedFd::from(stdout_read).into())?;
-        let stderr = ChildStderr::from_std(OwnedFd::from(stderr_read).into())?;
+        let stdout = stdout_read
+            .map(|fd| ChildStdout::from_std(fd.into()))
+            .transpose()?;
+        let stderr = stderr_read
+            .map(|fd| ChildStderr::from_std(fd.into()))
+            .transpose()?;
 
         let mut actions = MaybeUninit::uninit();
         // SAFETY: Successful initialization makes each object valid; RAII only
@@ -184,7 +188,7 @@ impl NativeChild {
                 let result =
                     libc::posix_spawn_file_actions_adddup2(&mut actions.0, *target, *target);
                 // macOS file actions can reject valid high descriptors below
-                // RLIMIT_NOFILE. The existing dup2 fallback supports them.
+                // RLIMIT_NOFILE. The compatibility backend can inherit them directly.
                 if result == libc::EBADF && request.fallback == crate::SpawnFallback::Compatible {
                     return Ok(None);
                 }
@@ -293,8 +297,8 @@ impl NativeChild {
         Ok(Some(crate::Child {
             inner: super::ChildKind::Native(child),
             stdin,
-            stdout: Some(stdout),
-            stderr: Some(stderr),
+            stdout,
+            stderr,
         }))
     }
 
@@ -451,5 +455,15 @@ impl Drop for Attributes {
         unsafe {
             libc::posix_spawnattr_destroy(&mut self.0);
         }
+    }
+}
+
+/// Wire a caller-owned output descriptor or return a new pipe for the parent.
+fn child_output(file: Option<&OwnedFd>) -> io::Result<(Option<OwnedFd>, OwnedFd)> {
+    if let Some(fd) = file {
+        Ok((None, fd.try_clone()?))
+    } else {
+        let (reader, writer) = io::pipe()?;
+        Ok((Some(reader.into()), writer.into()))
     }
 }

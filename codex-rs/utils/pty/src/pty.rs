@@ -8,12 +8,12 @@ use std::os::fd::AsRawFd;
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::fd::RawFd;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Command as StdCommand;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -141,6 +141,18 @@ pub async fn spawn_process(
     #[cfg(not(unix))]
     let _ = inherited_fds;
 
+    #[cfg(target_os = "linux")]
+    if crate::spawn_helper::is_available()
+        && inherited_fds.is_empty()
+        && Path::new(program).is_absolute()
+        && arg0.is_none()
+        && cwd.is_dir()
+    {
+        // Keep portable-pty's PATH, argv0, and missing-cwd behavior for requests
+        // whose launch settings require its command builder.
+        return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
+            .await;
+    }
     #[cfg(unix)]
     if !inherited_fds.is_empty() {
         return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
@@ -299,84 +311,99 @@ async fn spawn_process_preserving_fds(
 ) -> Result<SpawnedProcess> {
     let (master, slave) = open_unix_pty(size)?;
     let io = crate::unix_io::PtyIo::new(master.as_raw_fd())?;
-    let mut command = StdCommand::new(program);
-    if let Some(arg0) = arg0 {
-        command.arg0(arg0);
-    }
-    command.current_dir(cwd);
-    command.env_clear();
-    for arg in args {
-        command.arg(arg);
-    }
-    for (key, value) in env {
-        command.env(key, value);
-    }
-
-    // The child should see one terminal on all three stdio streams. Cloning
-    // the slave fd gives us three owned handles to the same PTY slave device
-    // so Command can wire them up independently as stdin/stdout/stderr.
-    let stdin = slave.try_clone()?;
-    let stdout = slave.try_clone()?;
-    let stderr = slave.try_clone()?;
-    let inherited_fds = inherited_fds.to_vec();
-
-    unsafe {
+    let uses_portable_status = inherited_fds.is_empty();
+    let stdin_close_behavior = if inherited_fds.is_empty() {
+        crate::unix_io::StdinCloseBehavior::SendEof
+    } else {
+        crate::unix_io::StdinCloseBehavior::NoEof
+    };
+    #[cfg(target_os = "linux")]
+    let mut child = {
+        let mut command = crate::Command::new(program);
+        if inherited_fds.is_empty() && !env.contains_key("SHELL") {
+            // portable-pty supplies the login shell when SHELL is absent.
+            let mut builder = CommandBuilder::new(program);
+            builder.env_clear();
+            command.env("SHELL", builder.get_shell());
+        }
         command
-            .stdin(Stdio::from(stdin))
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .pre_exec(move || {
-                for signo in &[
-                    libc::SIGCHLD,
-                    libc::SIGHUP,
-                    libc::SIGINT,
-                    libc::SIGQUIT,
-                    libc::SIGTERM,
-                    libc::SIGALRM,
-                ] {
-                    libc::signal(*signo, libc::SIG_DFL);
+            .args(args)
+            .current_dir(cwd)
+            .envs(env)
+            .drop_policy(crate::child_command::ChildDropPolicy::ReapOnly)
+            .descriptor_policy(crate::DescriptorPolicy::Explicit)
+            .preserve_fds(inherited_fds)
+            .stdin(crate::ChildStdin::File(slave.try_clone()?.into()));
+        if let Some(arg0) = arg0 {
+            command.arg0(arg0);
+        }
+        command.stdout_file = Some(slave.try_clone()?.into());
+        command.stderr_file = Some(slave.try_clone()?.into());
+        match crate::spawn_helper::spawn(&command, crate::spawn_helper::Setup::Pty).await? {
+            Some(child) => child,
+            None if inherited_fds.is_empty() => {
+                // Free the first PTY before allocating its portable replacement.
+                drop(command);
+                drop(io);
+                drop(slave);
+                drop(master);
+                return spawn_process_portable(program, args, cwd, env, arg0, size).await;
+            }
+            None => {
+                // Explicit descriptors select the shared fallback on Linux. Keep
+                // terminal setup there when this executable cannot run the helper.
+                unsafe {
+                    command.inner.pre_exec(configure_child_terminal);
                 }
-
-                let empty_set: libc::sigset_t = std::mem::zeroed();
-                libc::sigprocmask(libc::SIG_SETMASK, &empty_set, std::ptr::null_mut());
-
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-
-                // stdin now refers to the PTY slave, so make that fd the
-                // controlling terminal for the child's new session. stdout and
-                // stderr point at clones of the same slave device.
-                #[allow(clippy::cast_lossless)]
-                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-
-                close_inherited_fds_except(&inherited_fds);
-                Ok(())
-            });
-    }
-
-    let mut child = command.spawn()?;
+                command.spawn()?
+            }
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let mut child = {
+        let mut command = StdCommand::new(program);
+        if let Some(arg0) = arg0 {
+            command.arg0(arg0);
+        }
+        command.current_dir(cwd).env_clear().args(args).envs(env);
+        let inherited_fds = inherited_fds.to_vec();
+        // The child sees the same terminal on stdin, stdout, and stderr.
+        unsafe {
+            command
+                .stdin(Stdio::from(slave.try_clone()?))
+                .stdout(Stdio::from(slave.try_clone()?))
+                .stderr(Stdio::from(slave.try_clone()?))
+                .pre_exec(move || {
+                    configure_child_terminal()?;
+                    close_inherited_fds_except(&inherited_fds);
+                    Ok(())
+                });
+        }
+        command.spawn()?
+    };
     drop(slave);
+    #[cfg(target_os = "linux")]
+    let process_group_id = child
+        .id()
+        .ok_or_else(|| std::io::Error::other("missing child pid"))?;
+    #[cfg(not(target_os = "linux"))]
     let process_group_id = child.id();
 
     let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
     let (_stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(1);
-    let (reader_handle, writer_handle) = io.spawn(
-        stdout_tx,
-        writer_rx,
-        crate::unix_io::StdinCloseBehavior::NoEof,
-    );
+    let (reader_handle, writer_handle) = io.spawn(stdout_tx, writer_rx, stdin_close_behavior);
 
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
     let exit_status = Arc::new(AtomicBool::new(false));
     let wait_exit_status = Arc::clone(&exit_status);
     let exit_code = Arc::new(StdMutex::new(None));
     let wait_exit_code = Arc::clone(&exit_code);
-    let wait_handle: JoinHandle<()> = tokio::task::spawn_blocking(move || {
-        let code = match child.wait() {
+    let on_exit = move |status: std::io::Result<std::process::ExitStatus>| {
+        let code = match status {
+            Ok(status) if uses_portable_status => {
+                portable_pty::ExitStatus::from(status).exit_code() as i32
+            }
             Ok(status) => exit_code_from_status(status),
             Err(_) => -1,
         };
@@ -385,7 +412,11 @@ async fn spawn_process_preserving_fds(
             *guard = Some(code);
         }
         let _ = exit_tx.send(code);
-    });
+    };
+    #[cfg(target_os = "linux")]
+    let wait_handle = tokio::spawn(async move { on_exit(child.wait().await) });
+    #[cfg(not(target_os = "linux"))]
+    let wait_handle = tokio::task::spawn_blocking(move || on_exit(child.wait()));
 
     let handles = PtyHandles {
         _slave: None,
@@ -561,3 +592,42 @@ pub(crate) fn close_inherited_fds_except(preserved_fds: &[RawFd]) {
         }
     }
 }
+
+/// Establish the controlling terminal and signal state before a PTY target exec.
+/// This also runs in the legacy pre-exec callback, so it must stay async-signal-safe.
+#[cfg(unix)]
+pub(crate) fn configure_child_terminal() -> std::io::Result<()> {
+    // SAFETY: These operations only change the calling child's signal/session state.
+    unsafe {
+        for signo in &[
+            libc::SIGCHLD,
+            libc::SIGHUP,
+            libc::SIGINT,
+            libc::SIGQUIT,
+            libc::SIGTERM,
+            libc::SIGALRM,
+        ] {
+            libc::signal(*signo, libc::SIG_DFL);
+        }
+
+        let empty_set: libc::sigset_t = std::mem::zeroed();
+        libc::sigprocmask(libc::SIG_SETMASK, &empty_set, std::ptr::null_mut());
+
+        if libc::setsid() == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        // stdin now refers to the PTY slave, so make that fd the
+        // controlling terminal for the child's new session. stdout and
+        // stderr point at clones of the same slave device.
+        #[allow(clippy::cast_lossless)]
+        if libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "pty_linux_tests.rs"]
+mod linux_tests;
