@@ -12,6 +12,7 @@ use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
 use crate::Command;
+use crate::ProcessMode;
 
 #[tokio::test]
 async fn wait_with_output_keeps_eof_pipes_open_until_exit() -> anyhow::Result<()> {
@@ -327,5 +328,78 @@ async fn preserving_descriptors_keeps_parent_record_locks() -> anyhow::Result<()
         .await?;
     let output = child.wait_with_output().await?;
     assert!(output.status.success(), "{output:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn detached_spawn_preserves_child_path_cwd_environment_and_arg0() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::create_dir(root.path().join("bin"))?;
+    std::os::unix::fs::symlink("/bin/sh", root.path().join("bin/child-shell"))?;
+    let mut command = Command::new("child-shell");
+    command
+        .current_dir(root.path())
+        .env("PATH", "bin")
+        .env("MARKER", "child-value")
+        .arg0("custom-shell")
+        .args(["-c", "printf '%s|%s|' \"$0\" \"$MARKER\"; pwd; read -r line; printf '%s' \"$line\"; printf diagnostic >&2"])
+        .process_mode(ProcessMode::NewSession);
+    let mut child = command.spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(b"input\n")
+        .await?;
+    assert_eq!(
+        child.wait_with_output().await?,
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: format!(
+                "custom-shell|child-value|{}\ninput",
+                root.path().canonicalize()?.display()
+            )
+            .into_bytes(),
+            stderr: b"diagnostic".to_vec(),
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn detached_spawn_preserves_exec_errors_and_executable_text_handling() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir()?;
+    let program = root.path().join("script");
+    let mut missing = Command::new(&program);
+    missing.process_mode(ProcessMode::NewSession);
+    let error = missing.spawn().err().expect("missing executable must fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+
+    std::fs::write(&program, "printf '%s' \"$1\"")?;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))?;
+    // Match the existing libc behavior: glibc/macOS retry executable text through
+    // a shell, whereas musl returns ENOEXEC.
+    let mut baseline = tokio::process::Command::new(&program);
+    baseline.env_clear().arg("shell fallback");
+    // SAFETY: The legacy route only performs async-signal-safe session setup.
+    unsafe {
+        baseline.pre_exec(crate::process_group::detach_from_tty);
+    }
+    let expected = baseline.output().await;
+    let mut script = Command::new(&program);
+    script
+        .arg("shell fallback")
+        .process_mode(ProcessMode::NewSession);
+    let actual = match script.spawn() {
+        Ok(child) => child.wait_with_output().await,
+        Err(error) => Err(error),
+    };
+    let error_details = |error: std::io::Error| (error.kind(), error.raw_os_error());
+    assert_eq!(
+        actual.map_err(error_details),
+        expected.map_err(error_details)
+    );
     Ok(())
 }

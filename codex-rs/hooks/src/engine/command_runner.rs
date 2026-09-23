@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-#[cfg(not(windows))]
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::ErrorKind;
 use std::path::Path;
+#[cfg(not(unix))]
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -13,11 +13,14 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::Sender;
-use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
+use codex_protocol::shell_environment::is_non_inheritable_env_var;
+#[cfg(unix)]
+use codex_utils_pty::Command;
 #[cfg(windows)]
 use codex_utils_pty::JobObject;
 use futures::future::try_join;
 use tokio::io::AsyncWriteExt;
+#[cfg(not(unix))]
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -206,7 +209,7 @@ impl CommandHookRuntime {
 pub(crate) async fn run_command(
     runtime: &CommandHookRuntime,
     handler: &ConfiguredHandler,
-    command: &str,
+    command_line: &str,
     env: &HashMap<String, String>,
     input_json: &str,
     cwd: &Path,
@@ -214,21 +217,8 @@ pub(crate) async fn run_command(
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
 
-    let mut command = build_command(&runtime.shell, command, &runtime.environment, env);
-    command
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    #[cfg(unix)]
-    // Keep process-group cleanup without inheriting the controlling terminal, where
-    // shell startup can otherwise stop the hook on background terminal I/O.
-    // SAFETY: detach_from_tty only performs async-signal-safe process setup.
-    unsafe {
-        command.pre_exec(codex_utils_pty::process_group::detach_from_tty);
-    }
+    let mut command = build_command(&runtime.shell, command_line, &runtime.environment, env);
+    command.current_dir(cwd);
 
     #[cfg(windows)]
     let mut process_tree_job = JobObject::create().ok();
@@ -401,45 +391,60 @@ fn build_command(
     env: &HashMap<String, String>,
 ) -> Command {
     let mut command = if shell.program.is_empty() {
-        default_shell_command(environment)
+        Command::new(default_shell_program(environment))
     } else {
         Command::new(&shell.program)
     };
     if shell.program.is_empty() {
         #[cfg(windows)]
-        command.raw_arg(format!(r#""{command_line}""#));
-
+        command.arg("/C");
         #[cfg(not(windows))]
-        command.arg(command_line);
+        command.arg("-lc");
     } else {
         command.args(&shell.args);
-
-        #[cfg(windows)]
-        if shell.args.iter().any(|arg| arg.eq_ignore_ascii_case("/c")) {
-            command.raw_arg(format!(r#""{command_line}""#));
-        } else {
-            command.arg(command_line);
-        }
-
-        #[cfg(not(windows))]
+    }
+    #[cfg(windows)]
+    if shell.program.is_empty() || shell.args.iter().any(|arg| arg.eq_ignore_ascii_case("/c")) {
+        command.raw_arg(format!(r#""{command_line}""#));
+    } else {
         command.arg(command_line);
     }
-    // Replay the session snapshot instead of inheriting the live process environment.
-    command.env_clear();
-    command.envs(environment.iter().cloned());
-    command.envs(env);
-    scrub_non_inheritable_env_vars(command.as_std_mut());
+    #[cfg(not(windows))]
+    command.arg(command_line);
+
+    #[cfg(unix)]
+    command.process_mode(codex_utils_pty::ProcessMode::NewSession);
+    #[cfg(not(unix))]
+    command
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    // Both launchers start with an empty environment. Replay the session snapshot
+    // before hook overrides, filtering restricted names from both sources.
+    command.envs(
+        environment
+            .iter()
+            .map(|(key, value)| (key.as_os_str(), value.as_os_str()))
+            .chain(
+                env.iter()
+                    .map(|(key, value)| (OsStr::new(key), OsStr::new(value))),
+            )
+            .filter(|(key, _)| !key.to_str().is_some_and(is_non_inheritable_env_var)),
+    );
     command
 }
 
-fn default_shell_command(environment: &[(OsString, OsString)]) -> Command {
+fn default_shell_program(environment: &[(OsString, OsString)]) -> OsString {
     #[cfg(windows)]
-    let (environment_variable, fallback_program, argument) = ("COMSPEC", "cmd.exe", "/C");
+    let (environment_variable, fallback_program) = ("COMSPEC", "cmd.exe");
 
     #[cfg(not(windows))]
-    let (environment_variable, fallback_program, argument) = ("SHELL", "/bin/sh", "-lc");
+    let (environment_variable, fallback_program) = ("SHELL", "/bin/sh");
 
-    let program = environment
+    environment
         .iter()
         .find(|(key, _)| {
             #[cfg(windows)]
@@ -454,11 +459,7 @@ fn default_shell_command(environment: &[(OsString, OsString)]) -> Command {
             }
         })
         .map(|(_, value)| value.clone())
-        .unwrap_or_else(|| OsString::from(fallback_program));
-
-    let mut command = Command::new(program);
-    command.arg(argument);
-    command
+        .unwrap_or_else(|| OsString::from(fallback_program))
 }
 
 #[cfg(test)]

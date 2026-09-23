@@ -11,9 +11,9 @@ use tokio::process::ChildStderr;
 use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
-#[cfg(target_os = "macos")]
-#[path = "macos_child.rs"]
-pub(super) mod macos;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "posix_child.rs"]
+pub(super) mod posix;
 
 #[cfg(unix)]
 #[path = "child_reaper.rs"]
@@ -34,8 +34,8 @@ pub(super) enum ChildKind {
         child: Option<tokio::process::Child>,
         reaper: std::sync::mpsc::Sender<reaper::ChildToReap>,
     },
-    #[cfg(target_os = "macos")]
-    Native(macos::NativeChild),
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    Native(posix::NativeChild),
 }
 
 impl Child {
@@ -46,7 +46,7 @@ impl Child {
             ChildKind::TokioReapOnly { child, .. } => {
                 child.as_ref().and_then(tokio::process::Child::id)
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             ChildKind::Native(child) => child.id(),
         }
     }
@@ -64,7 +64,7 @@ impl Child {
                     .wait()
                     .await
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             ChildKind::Native(child) => child.wait().await,
         }
     }
@@ -114,7 +114,7 @@ impl Child {
                     .kill()
                     .await
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             ChildKind::Native(child) => child.kill().await,
         }
     }

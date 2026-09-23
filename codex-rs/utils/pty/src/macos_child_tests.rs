@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::child::ChildKind;
-use crate::child::macos::*;
+use crate::child::posix::*;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::os::fd::AsRawFd;

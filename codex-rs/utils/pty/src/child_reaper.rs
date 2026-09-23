@@ -5,7 +5,7 @@
 //! ownership until reaped, so one live child cannot delay cleanup of another.
 
 use std::io;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::ptr;
 use std::sync::Mutex;
 use std::sync::PoisonError;
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 /// Exclusive ownership transferred by a child handle after its caller drops it.
 pub(crate) enum ChildToReap {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     Native(libc::pid_t),
     Tokio(tokio::process::Child),
 }
@@ -47,7 +47,7 @@ pub(crate) fn sender() -> io::Result<mpsc::Sender<ChildToReap>> {
                 // Amortize scans across bursts without starving reaping when drops continue.
                 pending.extend(receiver.try_iter().take(REAP_BATCH_SIZE - 1));
                 pending.retain_mut(|child| match child {
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "linux"))]
                     ChildToReap::Native(pid) => {
                         // SAFETY: Drop transferred exclusive ownership of this PID.
                         let result = unsafe { libc::waitpid(*pid, ptr::null_mut(), libc::WNOHANG) };

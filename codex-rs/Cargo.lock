@@ -3589,6 +3589,7 @@ dependencies = [
  "codex-utils-path-uri",
  "codex-utils-pty",
  "futures",
+ "libc",
  "pretty_assertions",
  "regex",
  "schemars 0.8.22",

@@ -234,7 +234,7 @@ impl Command {
         Ok(())
     }
 
-    /// Launch with native macOS path handling and the existing compatibility fallback.
+    /// Launch with native platform settings and the existing compatibility fallback.
     pub fn spawn(mut self) -> io::Result<Child> {
         #[cfg(unix)]
         self.validate()?;
@@ -242,17 +242,22 @@ impl Command {
         if let ProcessMode::NewGroup = self.process_mode {
             self.inner.process_group(/*pgroup*/ 0);
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             let command = self.inner.as_std();
             let program = command.get_program();
-            if (Path::new(program).is_relative()
+            #[cfg(target_os = "macos")]
+            let use_native = Path::new(program).is_relative()
                 || self.descriptor_policy == DescriptorPolicy::Explicit
                 || self.fallback == SpawnFallback::ReturnError
                 || matches!(self.process_mode, ProcessMode::NewSession)
-                || !self.inherited_fds.is_empty())
+                || !self.inherited_fds.is_empty();
+            #[cfg(target_os = "linux")]
+            let use_native =
+                matches!(self.process_mode, ProcessMode::NewSession) && self.parent_pid.is_none();
+            if use_native
                 && !program.is_empty()
-                && let Some(child) = crate::child::macos::NativeChild::spawn(&self)?
+                && let Some(child) = crate::child::posix::NativeChild::spawn(&self)?
             {
                 return Ok(child);
             }
@@ -331,3 +336,7 @@ mod tests;
 #[cfg(all(test, target_os = "macos"))]
 #[path = "macos_descriptor_tests.rs"]
 mod descriptor_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "linux_child_tests.rs"]
+mod linux_tests;
