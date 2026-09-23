@@ -94,6 +94,8 @@ async fn provider_requirements_do_not_reload_thread_config() -> Result<()> {
         .load_retained_session_config(&current.config_layer_stack, &current.cwd)
         .await?;
     assert_eq!(retained.model_provider, current.model_provider);
+    let factory = current.http_client_factory();
+    assert_eq!(retained.http_client_factory(), factory);
 
     manager.cloud_config_bundle = Arc::new(RwLock::new(
         CloudConfigBundleFixture::loader_with_enterprise_requirement("model_provider = 'other'"),

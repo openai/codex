@@ -312,6 +312,7 @@ async fn client_revoke_retry_stays_with_original_owner() -> Result<()> {
                 app.read_stream_until_error_message(RequestId::Integer(old)),
             )
             .await??;
+            login(&mut app, refreshed_user, "account-a", "refreshed").await?;
             let id = app
                 .send_remote_control_clients_revoke_request(RemoteControlClientsRevokeParams {
                     environment_id: "environment-id".to_string(),

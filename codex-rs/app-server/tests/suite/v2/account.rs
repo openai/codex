@@ -79,7 +79,6 @@ const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001"
 const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 const WORKSPACE_ID_EMBEDDED: &str = "123e4567-e89b-42d3-a456-426614174010";
 const WORKSPACE_ID_INITIAL: &str = "123e4567-e89b-42d3-a456-426614174011";
-const WORKSPACE_ID_REFRESHED: &str = "123e4567-e89b-42d3-a456-426614174012";
 const WORKSPACE_ID_DEVICE: &str = "123e4567-e89b-42d3-a456-426614174013";
 const WORKSPACE_ID_STALE: &str = "123e4567-e89b-42d3-a456-426614174014";
 
@@ -659,19 +658,15 @@ async fn external_auth_refreshes_on_unauthorized(model_path: &str) -> Result<()>
     let initial_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
-            .chatgpt_user_id("user")
+            .chatgpt_user_id("refresh-user")
             .plan_type("pro")
             .chatgpt_account_id(WORKSPACE_ID_INITIAL),
     )?;
-    let refreshed_workspace = if model_path == "/v1" {
-        WORKSPACE_ID_REFRESHED
-    } else {
-        WORKSPACE_ID_INITIAL
-    };
+    let refreshed_workspace = WORKSPACE_ID_INITIAL;
     let refreshed_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("refreshed@example.com")
-            .chatgpt_user_id("user")
+            .chatgpt_user_id("refresh-user")
             .plan_type("pro")
             .chatgpt_account_id(refreshed_workspace),
     )?;
@@ -747,11 +742,15 @@ async fn external_auth_refreshes_on_unauthorized(model_path: &str) -> Result<()>
     .await?;
     let _: codex_app_server_protocol::TurnStartResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_req)).await??;
-    let _turn_completed = timeout(
+    let turn_completed = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+
+    let completed: TurnCompletedNotification =
+        serde_json::from_value(turn_completed.params.expect("turn/completed params"))?;
+    assert_eq!(completed.turn.status, TurnStatus::Completed);
 
     let requests = responses_mock.requests();
     assert_eq!(requests.len(), if model_path == "/v1" { 2 } else { 1 });

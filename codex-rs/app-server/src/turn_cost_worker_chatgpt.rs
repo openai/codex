@@ -14,6 +14,7 @@ impl WorkerRuntime {
     pub(super) async fn query_chatgpt_turn_costs(
         &self,
         auth: &CodexAuth,
+        http_client_factory: codex_http_client::HttpClientFactory,
         turn_ids: &[String],
     ) -> Result<Vec<ApiKeyTurnCost>, RequestError> {
         let mut threads: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -32,7 +33,7 @@ impl WorkerRuntime {
         let client = BackendClient::from_auth(
             self.config.chatgpt_base_url.clone(),
             auth,
-            self.config.http_client_factory(),
+            http_client_factory,
         );
         let costs = client.query_chatgpt_turn_costs(&threads).await?;
         let mut settled_costs = Vec::new();

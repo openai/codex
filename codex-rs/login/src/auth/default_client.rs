@@ -250,6 +250,22 @@ pub fn create_client_for_route(
         ClientRedirectPolicy::Default => default_http_client_builder(),
         ClientRedirectPolicy::Reject => default_http_client_builder().without_redirects(),
     };
+    if http_client_factory.network_policy().is_managed() {
+        let mut pool = codex_http_client::RouteAwareClientPool::with_builder(
+            http_client_factory.clone(),
+            route_class,
+            builder,
+        );
+        if is_sandboxed() {
+            pool = pool.with_legacy_direct_proxy_and_custom_ca_fallback();
+        } else if matches!(
+            http_client_factory.outbound_proxy_policy(),
+            OutboundProxyPolicy::ReqwestDefault
+        ) {
+            pool = pool.with_legacy_custom_ca_fallback();
+        }
+        return Ok(pool.into_client());
+    }
     if matches!(
         http_client_factory.outbound_proxy_policy(),
         OutboundProxyPolicy::ReqwestDefault
@@ -355,7 +371,7 @@ pub(crate) fn create_raw_auth_client(
     auth_route_config: &AuthRouteConfig,
 ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
     auth_route_config
-        .http_client_factory()
+        .authentication_factory(endpoint)
         .build_client_without_request_logging(endpoint, ClientRouteClass::Auth)
 }
 
@@ -365,7 +381,7 @@ pub(crate) fn create_default_auth_client(
     auth_route_config: &AuthRouteConfig,
 ) -> Result<HttpClient, BuildRouteAwareHttpClientError> {
     create_client_for_route(
-        auth_route_config.http_client_factory(),
+        &auth_route_config.authentication_factory(endpoint),
         endpoint,
         ClientRouteClass::Auth,
         ClientRedirectPolicy::Default,

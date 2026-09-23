@@ -1,5 +1,7 @@
 use super::*;
 use base64::Engine;
+use codex_http_client::DestinationPolicy;
+use codex_http_client::NetworkPolicyController;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -19,7 +21,16 @@ fn chatgpt_auth(user: &str, workspace: &str, token: &str) -> CodexAuth {
 
 #[test]
 fn auth_owner_generation_distinguishes_refreshes_from_identity_changes() {
-    let manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
+    let mut manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    Arc::get_mut(&mut manager).unwrap().auth_route_config =
+        AuthRouteConfig::from_http_client_factory(
+            manager
+                .http_client_factory()
+                .with_network_policy(policy.clone()),
+        );
+    let endpoint = "https://example.com/".parse().unwrap();
     let mut changes = manager.auth_change_state_receiver();
     let mut legacy_changes = manager.auth_change_receiver();
     let initial = chatgpt_auth("user-a", "workspace-a", "token-1");
@@ -34,7 +45,14 @@ fn auth_owner_generation_distinguishes_refreshes_from_identity_changes() {
         (Some(CodexAuth::from_api_key("key-1")), 7, 6),
         (Some(CodexAuth::from_api_key("key-2")), 8, 7),
     ] {
+        let previous_owner = changes.borrow().owner_generation;
+        let factory = manager.http_client_factory();
         manager.set_cached_auth(auth);
+        assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+        assert_eq!(
+            factory.network_policy().acquire(&endpoint).is_ok(),
+            owner_generation == previous_owner,
+        );
         assert_eq!(
             *changes.borrow_and_update(),
             AuthChangeState {
@@ -73,4 +91,43 @@ async fn auth_owner_generation_preserves_logout_and_switches_when_coalesced() {
             owner_generation: 4,
         },
     );
+}
+
+#[tokio::test]
+async fn captured_credentials_are_revoked_if_account_changes_before_client_construction() {
+    let mut manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    Arc::get_mut(&mut manager).unwrap().auth_route_config =
+        AuthRouteConfig::from_http_client_factory(
+            manager
+                .http_client_factory()
+                .with_network_policy(policy.clone()),
+        );
+    let initial = chatgpt_auth("user-a", "workspace-a", "token-a");
+    manager.set_cached_auth(Some(initial.clone()));
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let (auth, factory) = manager.auth_with_http_client_factory().await.unwrap();
+
+    manager.set_cached_auth(Some(chatgpt_auth("user-b", "workspace-b", "token-b")));
+    assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+    let client = crate::default_client::create_client_for_route_async(
+        factory,
+        "https://example.com/".to_string(),
+        codex_http_client::ClientRouteClass::Api,
+        crate::default_client::ClientRedirectPolicy::Default,
+    )
+    .await
+    .unwrap();
+    assert_eq!(auth.get_account_id(), initial.get_account_id());
+    assert!(matches!(
+        client
+            .get("https://example.com/")
+            .bearer_auth(auth.get_token().unwrap())
+            .send()
+            .await,
+        Err(codex_http_client::RouteAwareRequestError::Policy(
+            codex_http_client::NetworkPolicyDenied::Revoked
+        ))
+    ));
 }

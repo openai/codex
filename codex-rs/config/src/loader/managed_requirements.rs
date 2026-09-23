@@ -40,7 +40,12 @@ pub async fn load_managed_requirements_state(
     let mut bundle_requirements = Vec::new();
     if let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)? {
         let base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
-        bundle_requirements = bundle.requirements_toml.into_layers(&base_dir);
+        bundle_requirements = bundle
+            .requirements_toml
+            .into_layers()
+            .into_iter()
+            .map(|layer| layer.with_base_dir(base_dir.clone()))
+            .collect();
     }
     let (requirements, _, _) = load_requirements_from_sources(
         fs,

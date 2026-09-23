@@ -18,6 +18,7 @@ use crate::BuildRouteAwareHttpClientError;
 use crate::ClientRouteClass;
 use crate::HttpClient;
 use crate::HttpClientFactory;
+use crate::HttpClientTlsConfig;
 use crate::OutboundProxyRoute;
 use crate::chatgpt_cloudflare_cookies::ChatGptCookieStore;
 use crate::client::HttpClientBackend;
@@ -33,6 +34,7 @@ use crate::with_chatgpt_cloudflare_cookie_store;
 /// bypass the factory and are restricted to documented exceptional or legacy compatibility paths.
 #[derive(Clone)]
 pub struct HttpClientBuilder {
+    http2_prior_knowledge: bool,
     pub(crate) default_headers: Option<HeaderMap>,
     follow_redirects: bool,
     pub(crate) redirect_observed: Option<Arc<AtomicBool>>,
@@ -41,6 +43,7 @@ pub struct HttpClientBuilder {
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
     pub(crate) request_logging: RequestLogging,
     tls_backend: TlsBackend,
+    tls: HttpClientTlsConfig,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -82,6 +85,25 @@ impl HttpClientFactory {
 }
 
 impl HttpClientBuilder {
+    /// Builds a strict pooled client with explicit TLS settings and the factory's proxy policy.
+    /// Route and transport construction failures are returned when sending a request.
+    pub fn build_with_tls(
+        mut self,
+        http_client_factory: &HttpClientFactory,
+        route_class: ClientRouteClass,
+        tls: HttpClientTlsConfig,
+    ) -> HttpClient {
+        self.tls = tls;
+        crate::RouteAwareClientPool::with_builder(http_client_factory.clone(), route_class, self)
+            .with_tls_backend_fallback()
+            .into_client()
+    }
+
+    /// Uses HTTP/2 for SDKs such as gRPC that require framed bidirectional bodies.
+    pub fn http2_prior_knowledge(mut self) -> Self {
+        self.http2_prior_knowledge = true;
+        self
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -178,12 +200,20 @@ impl HttpClientBuilder {
         route: &OutboundProxyRoute,
     ) -> Result<TransportClient, BuildRouteAwareHttpClientError> {
         self.chatgpt_cookie_store = http_client_factory.chatgpt_cookie_store();
+        let explicit_roots = self.tls.root_certificate.is_some();
         let (builder, request_logging, default_headers) = self.into_reqwest_parts();
-        let inner = http_client_factory.build_reqwest_client_for_resolved_route(
+        let builder = crate::outbound_proxy::configure_builder_for_resolved_route(
             builder,
             route_class,
             route,
         )?;
+        let inner = if explicit_roots {
+            builder
+                .build()
+                .map_err(BuildRouteAwareHttpClientError::ExplicitTls)?
+        } else {
+            build_reqwest_client_with_custom_ca(builder)?
+        };
         Ok(TransportClient::new(
             inner,
             request_logging,
@@ -326,9 +356,20 @@ impl HttpClientBuilder {
 
     fn base_reqwest_builder(self) -> reqwest::ClientBuilder {
         let mut builder = reqwest::Client::builder();
-        if self.tls_backend == TlsBackend::Rustls {
+        if self.http2_prior_knowledge {
+            builder = builder.http2_prior_knowledge();
+        }
+        if self.tls_backend == TlsBackend::Rustls || self.tls.client_identity.is_some() {
             ensure_rustls_crypto_provider();
             builder = builder.use_rustls_tls();
+        }
+        if let Some(certificate) = self.tls.root_certificate {
+            builder = builder
+                .tls_built_in_root_certs(false)
+                .add_root_certificate(certificate);
+        }
+        if let Some(identity) = self.tls.client_identity {
+            builder = builder.identity(identity).https_only(true);
         }
         if !self.follow_redirects {
             builder = builder.redirect(reqwest::redirect::Policy::none());
@@ -354,6 +395,7 @@ impl HttpClientBuilder {
 impl Default for HttpClientBuilder {
     fn default() -> Self {
         Self {
+            http2_prior_knowledge: false,
             default_headers: None,
             follow_redirects: true,
             redirect_observed: None,
@@ -362,6 +404,7 @@ impl Default for HttpClientBuilder {
             chatgpt_cookie_store: None,
             request_logging: RequestLogging::Enabled,
             tls_backend: TlsBackend::TransportDefault,
+            tls: HttpClientTlsConfig::default(),
         }
     }
 }

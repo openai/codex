@@ -55,10 +55,11 @@ pub struct CloudRequirementsTomlBundle {
 }
 
 impl CloudRequirementsTomlBundle {
-    pub(crate) fn into_layers(self, base_dir: &AbsolutePathBuf) -> Vec<RequirementsLayerEntry> {
-        let Self { enterprise_managed } = self;
-        let mut layers = enterprise_managed
+    pub(crate) fn into_layers(self) -> Vec<RequirementsLayerEntry> {
+        // Bundle fragments arrive highest-priority first; requirements merge in reverse order.
+        self.enterprise_managed
             .into_iter()
+            .rev()
             .map(|fragment| {
                 RequirementsLayerEntry::from_toml(
                     RequirementSource::EnterpriseManaged {
@@ -67,13 +68,8 @@ impl CloudRequirementsTomlBundle {
                     },
                     fragment.contents,
                 )
-                .with_base_dir(base_dir.clone())
             })
-            .collect::<Vec<_>>();
-        // Bundle fragments arrive highest-priority first, while requirements
-        // layers are merged lowest-priority to highest-priority.
-        layers.reverse();
-        layers
+            .collect()
     }
 }
 
@@ -132,7 +128,11 @@ impl CloudConfigBundleLayers {
             cloud_config_layers_from_fragments(config_enterprise_managed, base_dir)?
         };
 
-        let enterprise_managed_requirements = requirements_toml.into_layers(base_dir);
+        let enterprise_managed_requirements = requirements_toml
+            .into_layers()
+            .into_iter()
+            .map(|layer| layer.with_base_dir(base_dir.clone()))
+            .collect::<Vec<_>>();
 
         Ok(Self {
             enterprise_managed_config,

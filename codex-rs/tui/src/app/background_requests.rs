@@ -1349,16 +1349,32 @@ mod tests {
         let server = wiremock::MockServer::start().await;
         let thread_id = ThreadId::new();
         app.config.chatgpt_base_url = server.uri();
+        app.cli_kv_overrides = vec![(
+            "chatgpt_base_url".to_string(),
+            toml::Value::String(server.uri()),
+        )];
         app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .and(wiremock::matchers::path("/api/codex/config/bundle"))
+            .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_string("{}"))
+            .mount(&server)
+            .await;
         write_chatgpt_auth(
             app.config.codex_home.as_path(),
             ChatGptAuthFixture::new("chatgpt-token").account_id("account-123"),
             AuthCredentialsStoreMode::File,
         )
         .expect("write ChatGPT authentication");
-        let app_server = crate::start_embedded_app_server_for_picker(&app.config)
-            .await
-            .expect("start authenticated embedded app server");
+        let app_server = crate::start_app_server_for_picker(
+            &app.config,
+            &crate::AppServerTarget::Embedded,
+            app.cli_kv_overrides.clone(),
+            app.loader_overrides.clone(),
+            /*state_db*/ None,
+            app.environment_manager.clone(),
+        )
+        .await
+        .expect("start authenticated embedded app server");
         write_chatgpt_auth(
             app.config.codex_home.as_path(),
             ChatGptAuthFixture::new("different-token").account_id("different-account"),

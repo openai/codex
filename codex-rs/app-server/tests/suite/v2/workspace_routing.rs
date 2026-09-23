@@ -38,13 +38,14 @@ async fn config(home: &TempDir, backend: &MockServer) -> Result<()> {
             backend.uri()
         ),
     )?;
+    // Routing uses a plain HTTP fixture; restricted policies require HTTPS/WSS.
     Mock::given(method("GET")).and(path("/backend-api/wham/config/bundle"))
         .respond_with(|request: &wiremock::Request| {
             let account_id = request.headers.get("chatgpt-account-id").expect("workspace header")
                 .to_str().expect("workspace header text");
             ResponseTemplate::new(200).set_body_json(json!({"requirements_toml": {"enterprise_managed": [{
                 "id": "workspace-policy", "name": "Workspace policy",
-                "contents": format!("[application.network.domains]\n'{account_id}.example' = 'allow'"),
+                "contents": format!("[application.network]\nenabled = false\n[application.network.domains]\n'{account_id}.example' = 'allow'"),
             }]}}))
         }).mount(backend).await;
     Ok(())
@@ -116,7 +117,8 @@ async fn saved_workspace_is_discovered_once_and_not_the_default_account(
                     .set_delay(Duration::from_secs(bundle_delay_secs)),
             )
             .with_priority(1)
-            .expect(2)
+            // Startup and account hydration each retry this delayed response via proxy fallback.
+            .expect(4)
             .mount(&backend)
             .await;
     }
@@ -277,7 +279,7 @@ async fn login_and_workspace_switch_notify_after_routing_is_ready_then_logout_cl
         assert_eq!(
             requirements["requirements"]["application"],
             json!({"network": {
-                "enabled": true, "domains": {format!("{account}.example"): "allow"}
+                "enabled": false, "domains": {format!("{account}.example"): "allow"}
             }})
         );
     }

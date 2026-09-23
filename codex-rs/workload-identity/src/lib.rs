@@ -39,6 +39,8 @@ impl WorkloadIdentityConfig {
 
 #[derive(Clone, Debug, Error)]
 pub enum WorkloadIdentityError {
+    #[error(transparent)]
+    Policy(#[from] codex_http_client::NetworkPolicyDenied),
     #[error("the workload identity federation rule ID must not be empty")]
     InvalidFederationRuleId,
     #[error("the workload identity assertion file path must be absolute")]
@@ -77,7 +79,8 @@ impl WorkloadIdentityError {
                     | std::io::ErrorKind::WouldBlock
             ),
             Self::ExchangeUnavailable | Self::ExchangeRejected(408 | 429 | 500..=599) => true,
-            Self::InvalidFederationRuleId
+            Self::Policy(_)
+            | Self::InvalidFederationRuleId
             | Self::AssertionFileMustBeAbsolute
             | Self::InvalidAssertion
             | Self::AssertionTooLarge

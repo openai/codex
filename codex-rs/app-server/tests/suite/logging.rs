@@ -59,11 +59,13 @@ async fn credentials_stay_out_of_persisted_and_feedback_logs() -> Result<()> {
     let initial_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
+            .chatgpt_user_id("logging-user")
             .chatgpt_account_id(account_id),
     )?;
     let refreshed_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("refreshed@example.com")
+            .chatgpt_user_id("logging-user")
             .chatgpt_account_id(account_id),
     )?;
     let server = MockServer::start().await;

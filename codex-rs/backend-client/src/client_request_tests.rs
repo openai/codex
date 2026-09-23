@@ -19,17 +19,20 @@ use wiremock::matchers::path;
 
 use super::*;
 
-#[test]
-fn client_preserves_supplied_http_client_factory_policy() {
+#[tokio::test]
+async fn client_preserves_supplied_factory_and_typed_policy_denial() {
+    let controller = codex_http_client::NetworkPolicyController::default();
     let client = Client::new(
         "https://example.test",
-        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy),
+        HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy)
+            .with_network_policy(controller.policy()),
     );
-
     assert_eq!(
         client.http.outbound_proxy_policy(),
         OutboundProxyPolicy::RespectSystemProxy
     );
+    let denied = client.get_config_bundle().await;
+    assert!(matches!(denied, Err(RequestError::Policy(_))));
 }
 
 #[test]

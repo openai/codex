@@ -26,6 +26,7 @@ const TRANSIENT_FAILURE_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// Exchanges assertions and retains only the current short-lived access token in memory.
 pub struct WorkloadIdentityExchange {
+    network_policy: codex_http_client::NetworkPolicy,
     client: HttpClient,
     completed_attempts: AtomicU64,
     config: WorkloadIdentityConfig,
@@ -61,6 +62,7 @@ impl WorkloadIdentityExchange {
                 .map_err(|_| WorkloadIdentityError::HttpClientConfiguration)
         }?;
         Ok(Self {
+            network_policy: http_client_factory.network_policy().clone(),
             client,
             completed_attempts: AtomicU64::new(0),
             config,
@@ -170,54 +172,59 @@ impl WorkloadIdentityExchange {
     }
 
     async fn exchange_uncached(&self) -> Result<WorkloadIdentityToken, WorkloadIdentityError> {
-        let assertion = read_assertion(&self.config.assertion_file).await?;
-        let body = {
-            let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-            serializer
-                .append_pair("grant_type", JWT_BEARER_GRANT_TYPE)
-                .append_pair("assertion", &assertion)
-                .append_pair("federation_rule_id", &self.config.federation_rule_id);
-            if let Some(context) = &self.config.workload_identity_context {
-                serializer.append_pair("workload_identity_context", context);
-            }
-            serializer.finish()
-        };
-        let response = self
-            .client
-            .post(self.token_url.as_str())
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body)
-            .timeout(REQUEST_TIMEOUT)
-            .send()
-            .await
-            .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?;
-        if !response.status().is_success() {
-            return Err(WorkloadIdentityError::ExchangeRejected(
-                response.status().as_u16(),
-            ));
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-        {
-            return Err(WorkloadIdentityError::InvalidExchangeResponse);
-        }
+        let permit = self.network_policy.acquire(&self.token_url)?;
+        permit
+            .run(async {
+                let assertion = read_assertion(&self.config.assertion_file).await?;
+                let body = {
+                    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+                    serializer
+                        .append_pair("grant_type", JWT_BEARER_GRANT_TYPE)
+                        .append_pair("assertion", &assertion)
+                        .append_pair("federation_rule_id", &self.config.federation_rule_id);
+                    if let Some(context) = &self.config.workload_identity_context {
+                        serializer.append_pair("workload_identity_context", context);
+                    }
+                    serializer.finish()
+                };
+                let response = self
+                    .client
+                    .post(self.token_url.as_str())
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(body)
+                    .timeout(REQUEST_TIMEOUT)
+                    .send()
+                    .await
+                    .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?;
+                if !response.status().is_success() {
+                    return Err(WorkloadIdentityError::ExchangeRejected(
+                        response.status().as_u16(),
+                    ));
+                }
+                if response
+                    .content_length()
+                    .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+                {
+                    return Err(WorkloadIdentityError::InvalidExchangeResponse);
+                }
 
-        let mut response = response;
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?
-        {
-            if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(bytes.len()) {
-                return Err(WorkloadIdentityError::InvalidExchangeResponse);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        serde_json::from_slice::<TokenExchangeResponse>(&bytes)
-            .map_err(|_| WorkloadIdentityError::InvalidExchangeResponse)?
-            .into_token()
+                let mut response = response;
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| WorkloadIdentityError::ExchangeUnavailable)?
+                {
+                    if chunk.len() > MAX_RESPONSE_BYTES.saturating_sub(bytes.len()) {
+                        return Err(WorkloadIdentityError::InvalidExchangeResponse);
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                serde_json::from_slice::<TokenExchangeResponse>(&bytes)
+                    .map_err(|_| WorkloadIdentityError::InvalidExchangeResponse)?
+                    .into_token()
+            })
+            .await?
     }
 }
 

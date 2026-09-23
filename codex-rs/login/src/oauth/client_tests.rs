@@ -245,3 +245,59 @@ fn decode_form(body: &[u8]) -> Value {
     )
     .unwrap()
 }
+
+#[tokio::test]
+async fn success_body_revocation_preserves_the_policy_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let controller = codex_http_client::NetworkPolicyController::default();
+    controller.publish(
+        controller.policy().revision(),
+        codex_http_client::DestinationPolicy::Unrestricted,
+    );
+    let http = codex_http_client::HttpClientFactory::new(
+        codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+    )
+    .with_network_policy(controller.policy())
+    .build_client(&endpoint, codex_http_client::ClientRouteClass::Auth)
+    .unwrap();
+    let server = async {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"refresh_token=refresh") {
+            let mut buffer = [0; 4096];
+            let read = stream.read(&mut buffer).await.unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n{\"access_token\":")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(/*millis*/ 50)).await;
+        controller.publish(
+            controller.policy().revision(),
+            codex_http_client::DestinationPolicy::Restricted {
+                allowed_hosts: Default::default(),
+            },
+        );
+    };
+    let form = oauth(&http, &endpoint, ErrorBodyLimit::Unlimited);
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        tokio::join!(
+            form.refresh::<Value>(RefreshTokenGrant {
+                refresh_token: "refresh",
+                resource: None
+            }),
+            server
+        )
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        result,
+        Err(OAuthError::Transport(codex_http_client::HttpError::Policy(
+            codex_http_client::NetworkPolicyDenied::Revoked
+        )))
+    ));
+}

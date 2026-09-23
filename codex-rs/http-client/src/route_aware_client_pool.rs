@@ -32,6 +32,7 @@ const MAX_CACHED_ROUTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum CustomCaFallback {
+    LegacyDirect,
     #[default]
     Disabled,
     LegacyTransportDefault,
@@ -128,7 +129,8 @@ impl RouteAwareRequestError {
 
         match self {
             Self::Route(RouteAwareClientPoolError::Build(
-                BuildRouteAwareHttpClientError::CustomCa(_),
+                BuildRouteAwareHttpClientError::CustomCa(_)
+                | BuildRouteAwareHttpClientError::ExplicitTls(_),
             )) => Some(RouteFailureClass::TlsError),
             Self::Route(RouteAwareClientPoolError::Build(
                 BuildRouteAwareHttpClientError::InvalidProxyConfig { .. },
@@ -215,7 +217,7 @@ impl RouteAwareClientPool {
     }
 
     /// Exposes the ordinary request builder while sending through this policy-aware pool.
-    pub(crate) fn into_client(self) -> HttpClient {
+    pub fn into_client(self) -> HttpClient {
         HttpClient {
             backend: HttpClientBackend::Routed(Arc::new(self)),
         }
@@ -329,6 +331,12 @@ impl RouteAwareClientPool {
     /// custom-CA construction failure. System-proxy routes still propagate construction errors.
     pub fn with_legacy_custom_ca_fallback(mut self) -> Self {
         self.custom_ca_fallback = CustomCaFallback::LegacyTransportDefault;
+        self
+    }
+
+    /// Preserves the legacy sandbox client's direct routing and custom-CA fallback.
+    pub fn with_legacy_direct_proxy_and_custom_ca_fallback(mut self) -> Self {
+        self.custom_ca_fallback = CustomCaFallback::LegacyDirect;
         self
     }
 
@@ -447,9 +455,13 @@ impl RouteAwareClientPool {
         F: FnOnce(String) -> Fut,
         Fut: Future<Output = io::Result<OutboundProxyRoute>>,
     {
-        let route = resolve_route(request_url.to_string())
-            .await
-            .map_err(RouteAwareClientPoolError::Resolve)?;
+        let route = if self.custom_ca_fallback == CustomCaFallback::LegacyDirect {
+            OutboundProxyRoute::Direct
+        } else {
+            resolve_route(request_url.to_string())
+                .await
+                .map_err(RouteAwareClientPoolError::Resolve)?
+        };
         if let Some(rustls_clients) = self.rustls_clients.as_ref()
             && let Ok(url) = reqwest::Url::parse(request_url)
             && rustls_clients.requires_rustls(&url, &route)
@@ -475,6 +487,9 @@ impl RouteAwareClientPool {
             self.http_client_factory.outbound_proxy_policy(),
             self.custom_ca_fallback,
         ) {
+            (_, CustomCaFallback::LegacyDirect) => {
+                client_builder.build_with_custom_ca_fallback(ProxyRouting::Direct)
+            }
             (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::LegacyTransportDefault) => {
                 client_builder.build_with_custom_ca_fallback(ProxyRouting::TransportDefault)
             }

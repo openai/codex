@@ -13,12 +13,16 @@ impl App {
         // picker on a fresh event-loop iteration; its auth manager needs more stack headroom.
         let picker_config = self.config.clone();
         let picker_target = self.app_server_target.clone();
+        let picker_cli_kv_overrides = self.cli_kv_overrides.clone();
+        let picker_loader_overrides = self.loader_overrides.clone();
         let picker_state_db = self.state_db.clone();
         let picker_environment_manager = Arc::clone(&self.environment_manager);
         let picker_app_server = tokio::spawn(async move {
             crate::start_app_server_for_picker(
                 &picker_config,
                 &picker_target,
+                picker_cli_kv_overrides,
+                picker_loader_overrides,
                 picker_state_db,
                 picker_environment_manager,
             )

@@ -46,6 +46,8 @@ use tonic::transport::Server;
 mod host;
 #[path = "support/large_tool_delegate.rs"]
 mod large_tool_delegate;
+#[path = "grpc/network_policy_tests.rs"]
+mod network_policy_tests;
 #[path = "support/recording_delegate.rs"]
 mod recording_delegate;
 

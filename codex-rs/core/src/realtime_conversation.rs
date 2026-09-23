@@ -1279,8 +1279,17 @@ async fn prepare_realtime_start(
         .model_client
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
-    let auth = auth_manager.auth().await;
     let config = sess.get_config().await;
+    let (auth, http_client_factory) = match auth_manager.auth_with_http_client_factory().await {
+        Some((auth, captured_factory)) if auth.is_chatgpt_auth() || auth.is_api_key_auth() => (
+            Some(auth),
+            config
+                .http_client_factory()
+                .with_network_policy(captured_factory.network_policy().clone()),
+        ),
+        Some((auth, _)) => (Some(auth), config.http_client_factory()),
+        None => (None, config.http_client_factory()),
+    };
     let transport = params
         .transport
         .clone()
@@ -1387,7 +1396,7 @@ async fn prepare_realtime_start(
     }
     Ok(PreparedRealtimeConversationStart {
         api_provider,
-        http_client_factory: config.http_client_factory(),
+        http_client_factory,
         realtime_sideband_base_url,
         extra_headers: Some(extra_headers),
         client_managed_handoffs: params.client_managed_handoffs,

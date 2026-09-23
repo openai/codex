@@ -53,6 +53,7 @@ pub use thread_usage::ThreadUsageBreakdownGroup;
 
 #[derive(Debug)]
 pub enum RequestError {
+    Policy(codex_http_client::NetworkPolicyDenied),
     UnexpectedStatus {
         method: String,
         url: String,
@@ -67,7 +68,7 @@ impl RequestError {
     pub fn status(&self) -> Option<StatusCode> {
         match self {
             Self::UnexpectedStatus { status, .. } => Some(*status),
-            Self::Other(_) => None,
+            Self::Policy(_) | Self::Other(_) => None,
         }
     }
 
@@ -79,6 +80,7 @@ impl RequestError {
 impl fmt::Display for RequestError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Policy(denied) => denied.fmt(f),
             Self::UnexpectedStatus {
                 method,
                 url,
@@ -97,6 +99,7 @@ impl fmt::Display for RequestError {
 impl std::error::Error for RequestError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Policy(denied) => Some(denied),
             Self::UnexpectedStatus { .. } => None,
             Self::Other(err) => Some(err.as_ref()),
         }
@@ -106,6 +109,20 @@ impl std::error::Error for RequestError {
 impl From<anyhow::Error> for RequestError {
     fn from(err: anyhow::Error) -> Self {
         Self::Other(err)
+    }
+}
+
+impl From<codex_http_client::HttpError> for RequestError {
+    fn from(error: codex_http_client::HttpError) -> Self {
+        match error {
+            codex_http_client::HttpError::Policy(denied) => Self::Policy(denied),
+            error @ (codex_http_client::HttpError::Request(_)
+            | codex_http_client::HttpError::Route(_)
+            | codex_http_client::HttpError::Build(_)
+            | codex_http_client::HttpError::UnsupportedRedirectScheme(_)
+            | codex_http_client::HttpError::TooManyRedirects
+            | codex_http_client::HttpError::Timeout) => Self::Other(error.into()),
+        }
     }
 }
 
@@ -302,7 +319,7 @@ impl Client {
         method: &str,
         url: &str,
     ) -> std::result::Result<(String, String), RequestError> {
-        let res = req.send().await.map_err(anyhow::Error::from)?;
+        let res = req.send().await?;
         let status = res.status();
         let content_type = res
             .headers()
@@ -310,7 +327,7 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let body = res.text().await.map_err(anyhow::Error::from)?;
+        let body = res.text().await?;
         if !status.is_success() {
             return Err(RequestError::UnexpectedStatus {
                 method: method.to_string(),
@@ -511,13 +528,18 @@ impl Client {
     pub async fn get_config_bundle(
         &self,
     ) -> std::result::Result<ConfigBundleResponse, RequestError> {
-        let url = match self.path_style {
-            PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
-        };
+        let url = self.config_bundle_url();
         let (body, ct) = self.exec_bootstrap_get(&url).await?;
         self.decode_json::<ConfigBundleResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
+    }
+
+    /// Returns the normalized discovery endpoint used by this client.
+    pub fn config_bundle_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
+        }
     }
 
     /// Fetch authenticated Codex user settings from the active backend route.

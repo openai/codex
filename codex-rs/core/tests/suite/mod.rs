@@ -45,6 +45,7 @@ mod apply_patch_serialization;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod audio_truncation;
+mod auth_recovery_policy;
 mod auto_review;
 mod catalog_permission_messages;
 mod cli_stream;

@@ -119,10 +119,10 @@ impl<'a> OAuthClient<'a> {
                     .await,
             )));
         }
-        response
-            .json()
-            .await
-            .map_err(|_| OAuthError::InvalidResponse)
+        response.json().await.map_err(|error| match error {
+            error @ codex_http_client::HttpError::Policy(_) => OAuthError::Transport(error),
+            _ => OAuthError::InvalidResponse,
+        })
     }
 }
 

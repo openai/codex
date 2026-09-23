@@ -7914,6 +7914,8 @@ async fn in_app_resume_uses_configured_or_explicit_cwd() -> Result<()> {
                 crate::start_app_server_for_picker(
                     &config,
                     &crate::AppServerTarget::Embedded,
+                    Vec::new(),
+                    LoaderOverrides::without_managed_config_for_tests(),
                     /*state_db*/ None,
                     Arc::clone(&environment_manager),
                 )
@@ -8059,6 +8061,8 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
     let mut app_server = Box::pin(crate::start_app_server_for_picker(
         &config,
         &crate::AppServerTarget::Embedded,
+        Vec::new(),
+        LoaderOverrides::without_managed_config_for_tests(),
         state_db.clone(),
         Arc::new(EnvironmentManager::default_for_tests()),
     ))

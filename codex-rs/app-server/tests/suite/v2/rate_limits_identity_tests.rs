@@ -12,6 +12,7 @@ use axum::http::HeaderMap;
 use axum::routing::get;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::LoginAccountResponse;
+use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -34,10 +35,15 @@ async fn identity_is_rechecked_after_backend_response(
     user: &str,
     verified: bool,
 ) -> Result<()> {
+    let old_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .chatgpt_account_id("workspace-a")
+            .chatgpt_user_id("user-a"),
+    )?;
     let home = TempDir::new()?;
     write_chatgpt_auth(
         home.path(),
-        ChatGptAuthFixture::new("old-token")
+        ChatGptAuthFixture::new(&old_token)
             .account_id("workspace-a")
             .chatgpt_user_id("user-a")
             .plan_type("team"),
@@ -52,13 +58,15 @@ async fn identity_is_rechecked_after_backend_response(
         home.path().join("config.toml"),
         format!("chatgpt_base_url = \"http://{}\"\n", listener.local_addr()?),
     )?;
+    let expected_authorization = format!("Bearer {old_token}");
     let router = Router::new().route(
         "/api/codex/usage",
         get(move |headers: HeaderMap| {
+            let expected_authorization = expected_authorization.clone();
             let entered = Arc::clone(&request_entered);
             let release = Arc::clone(&response_release);
             async move {
-                assert_eq!(headers["authorization"], "Bearer old-token");
+                assert_eq!(headers["authorization"], expected_authorization);
                 assert_eq!(headers["chatgpt-account-id"], "workspace-a");
                 entered.notify_one();
                 release.notified().await;
@@ -77,6 +85,14 @@ async fn identity_is_rechecked_after_backend_response(
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
         .build_initialized_with_timeout(READ_TIMEOUT)
         .await?;
+    let initial_login = app
+        .send_chatgpt_auth_tokens_login_request(
+            old_token,
+            "workspace-a".into(),
+            Some("team".into()),
+        )
+        .await?;
+    let _: LoginAccountResponse = app.read_response(initial_login).await?;
     let request = app
         .send_request(
             "account/rateLimits/read",
@@ -96,6 +112,19 @@ async fn identity_is_rechecked_after_backend_response(
     let response: LoginAccountResponse = timeout(READ_TIMEOUT, app.read_response(login)).await??;
     assert_eq!(response, LoginAccountResponse::ChatgptAuthTokens {});
     release.notify_one();
+    if !verified {
+        let error = timeout(
+            READ_TIMEOUT,
+            app.read_stream_until_error_message(RequestId::Integer(request)),
+        )
+        .await??;
+        server.abort();
+        assert_eq!(
+            error.error.message,
+            "failed to fetch codex rate limits: application network permission was revoked"
+        );
+        return Ok(());
+    }
     let response: GetAccountRateLimitsResponse =
         timeout(READ_TIMEOUT, app.read_response(request)).await??;
     server.abort();

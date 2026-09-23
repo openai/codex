@@ -30,6 +30,13 @@ the choice unset. Ephemeral threads cannot save it.
 Use `thread/metadata/update` for later changes. This preference does not select
 `turn/start.cyberAccessProgram` or grant access to an access program.
 
+# Application network policy
+
+App-server loads application network policy at startup and existing explicit
+config/account reloads. Local requirements-file edits take effect on
+the next explicit reload or restart. Installing a new policy cancels requests
+that it no longer permits; a failed policy load blocks network traffic.
+
 # User verification cancellation (experimental)
 
 Local UI clients can cancel a native user-verification RPC by sending

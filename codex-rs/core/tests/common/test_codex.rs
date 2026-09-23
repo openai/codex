@@ -35,6 +35,7 @@ use codex_extension_api::UserInstructionsProvider;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
@@ -327,9 +328,26 @@ pub fn turn_permission_fields(
     (sandbox_policy, Some(permission_profile))
 }
 
+enum TestAuth {
+    Cached(CodexAuth),
+    Manager(Arc<AuthManager>),
+}
+
+impl TestAuth {
+    fn manager_for_home(&self, home: &Path) -> Arc<AuthManager> {
+        match self {
+            Self::Cached(auth) => codex_core::test_support::auth_manager_from_auth_with_home(
+                auth.clone(),
+                home.to_path_buf(),
+            ),
+            Self::Manager(manager) => manager.clone(),
+        }
+    }
+}
+
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
-    auth: CodexAuth,
+    auth: TestAuth,
     analytics_events_client: Option<AnalyticsEventsClient>,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     workspace_setups: Vec<Box<WorkspaceSetup>>,
@@ -363,7 +381,12 @@ impl TestCodexBuilder {
     }
 
     pub fn with_auth(mut self, auth: CodexAuth) -> Self {
-        self.auth = auth;
+        self.auth = TestAuth::Cached(auth);
+        self
+    }
+
+    pub fn with_auth_manager(mut self, auth_manager: Arc<AuthManager>) -> Self {
+        self.auth = TestAuth::Manager(auth_manager);
         self
     }
 
@@ -715,7 +738,6 @@ impl TestCodexBuilder {
         mut test_env: TestEnv,
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
-        let auth = self.auth.clone();
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = self
             .thread_store
@@ -728,10 +750,7 @@ impl TestCodexBuilder {
                     config.codex_home.clone(),
                 ))
             });
-        let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
-            auth.clone(),
-            config.codex_home.to_path_buf(),
-        );
+        let auth_manager = self.auth.manager_for_home(config.codex_home.as_path());
         let models_manager = self
             .models_manager
             .clone()
@@ -787,10 +806,7 @@ impl TestCodexBuilder {
 
         let new_conversation = match (resume_from, user_shell_override) {
             (Some(path), Some(user_shell_override)) => {
-                let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
-                    auth,
-                    config.codex_home.to_path_buf(),
-                );
+                let auth_manager = self.auth.manager_for_home(config.codex_home.as_path());
                 Box::pin(
                     codex_core::test_support::resume_thread_from_rollout_with_user_shell_override(
                         thread_manager.as_ref(),
@@ -804,10 +820,7 @@ impl TestCodexBuilder {
                 .await?
             }
             (Some(path), None) => {
-                let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
-                    auth,
-                    config.codex_home.to_path_buf(),
-                );
+                let auth_manager = self.auth.manager_for_home(config.codex_home.as_path());
                 Box::pin(thread_manager.resume_thread_from_rollout(
                     config.clone(),
                     path,
@@ -1407,7 +1420,7 @@ pub fn test_codex() -> TestCodexBuilder {
                 .disable(Feature::ShellSnapshot)
                 .expect("test config should allow ShellSnapshot override");
         })],
-        auth: CodexAuth::from_api_key("dummy"),
+        auth: TestAuth::Cached(CodexAuth::from_api_key("dummy")),
         analytics_events_client: None,
         pre_build_hooks: vec![],
         workspace_setups: vec![],

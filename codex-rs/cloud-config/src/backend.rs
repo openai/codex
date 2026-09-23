@@ -25,6 +25,7 @@ impl RetryableFailureKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum BundleRequestError {
+    Policy(codex_http_client::NetworkPolicyDenied),
     Retryable(RetryableFailureKind),
     Unauthorized {
         status_code: Option<u16>,
@@ -72,6 +73,9 @@ impl BundleClient for BackendBundleClient {
                 tracing::warn!(error = %err, "Failed to fetch cloud config bundle");
             })
             .map_err(|err| {
+                if let codex_backend_client::RequestError::Policy(denied) = &err {
+                    return BundleRequestError::Policy(*denied);
+                }
                 let status_code = err.status().map(|status| status.as_u16());
                 if err.is_unauthorized() {
                     BundleRequestError::Unauthorized {

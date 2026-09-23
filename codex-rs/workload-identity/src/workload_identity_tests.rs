@@ -368,3 +368,95 @@ async fn exchange_rejects_oversized_assertions_and_incomplete_responses() {
         Err(WorkloadIdentityError::InvalidExchangeResponse)
     ));
 }
+
+#[tokio::test]
+async fn managed_exchange_denies_before_reading_assertion_or_sending() {
+    let server = MockServer::start().await;
+    let (_home, assertion_path) = assertion_file("assertion");
+    std::fs::remove_file(&assertion_path).unwrap();
+    let controller = codex_http_client::NetworkPolicyController::default();
+    let exchange = WorkloadIdentityExchange::new(
+        WorkloadIdentityConfig::new(
+            "rule".into(),
+            assertion_path,
+            /*workload_identity_context*/ None,
+        )
+        .unwrap(),
+        Url::parse(&format!("{}/oauth/token", server.uri())).unwrap(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+            .with_network_policy(controller.policy()),
+    )
+    .unwrap();
+    assert!(matches!(
+        exchange.resolve().await,
+        Err(WorkloadIdentityError::Policy(
+            codex_http_client::NetworkPolicyDenied::Unavailable
+        ))
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    controller.publish(
+        controller.policy().revision(),
+        codex_http_client::DestinationPolicy::Restricted {
+            allowed_hosts: Default::default(),
+        },
+    );
+    assert!(matches!(
+        exchange.resolve().await,
+        Err(WorkloadIdentityError::Policy(
+            codex_http_client::NetworkPolicyDenied::Destination
+        ))
+    ));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn managed_exchange_revokes_an_active_token_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            success("token", /*expires_in*/ 600).set_delay(Duration::from_secs(/*secs*/ 30)),
+        )
+        .expect(/*r*/ 1)
+        .mount(&server)
+        .await;
+    let (_home, assertion_path) = assertion_file("assertion");
+    let controller = codex_http_client::NetworkPolicyController::default();
+    controller.publish(
+        controller.policy().revision(),
+        codex_http_client::DestinationPolicy::Unrestricted,
+    );
+    let exchange = WorkloadIdentityExchange::new(
+        WorkloadIdentityConfig::new(
+            "rule".into(),
+            assertion_path,
+            /*workload_identity_context*/ None,
+        )
+        .unwrap(),
+        Url::parse(&format!("{}/oauth/token", server.uri())).unwrap(),
+        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+            .with_network_policy(controller.policy()),
+    )
+    .unwrap();
+    let revoke = async {
+        while server.received_requests().await.unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+        controller.publish(
+            controller.policy().revision(),
+            codex_http_client::DestinationPolicy::Restricted {
+                allowed_hosts: Default::default(),
+            },
+        );
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        tokio::join!(exchange.resolve(), revoke)
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        result,
+        Err(WorkloadIdentityError::Policy(
+            codex_http_client::NetworkPolicyDenied::Revoked
+        ))
+    ));
+}

@@ -187,6 +187,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         .clone();
 
     let mut config = Config {
+        application_network_policy: Default::default(),
+        application_auth_route_config: None,
         config_layer_stack: ConfigLayerStack::default(),
         startup_warnings: Vec::new(),
         bypass_hook_trust: false,

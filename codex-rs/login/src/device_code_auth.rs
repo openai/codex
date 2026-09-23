@@ -164,10 +164,11 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
     let base_url = opts.issuer.trim_end_matches('/');
-    // The route selected for the issuer is reused for all device-auth endpoint paths; the endpoint
-    // paths are not resolved separately.
-    let client = create_raw_auth_client(base_url, &opts.auth_route_config)?;
     let api_base_url = format!("{base_url}/api/accounts");
+    let client = create_raw_auth_client(
+        &format!("{api_base_url}/deviceauth/usercode"),
+        &opts.auth_route_config,
+    )?;
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
 
     Ok(DeviceCode {
@@ -183,8 +184,11 @@ pub async fn complete_device_code_login(
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
-    let client = create_raw_auth_client(base_url, &opts.auth_route_config)?;
     let api_base_url = format!("{base_url}/api/accounts");
+    let client = create_raw_auth_client(
+        &format!("{api_base_url}/deviceauth/token"),
+        &opts.auth_route_config,
+    )?;
 
     let code_resp = poll_for_token(
         &client,

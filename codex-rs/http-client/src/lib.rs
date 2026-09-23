@@ -2,6 +2,7 @@ mod chatgpt_cloudflare_cookies;
 mod chatgpt_hosts;
 mod client;
 mod client_builder;
+mod client_tls;
 mod custom_ca;
 mod error;
 mod network_policy;
@@ -20,6 +21,7 @@ pub use crate::chatgpt_hosts::is_allowed_chatgpt_host;
 pub use crate::client::HttpClient;
 pub use crate::client::HttpError;
 pub use crate::client_builder::HttpClientBuilder;
+pub use crate::client_tls::HttpClientTlsConfig;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///

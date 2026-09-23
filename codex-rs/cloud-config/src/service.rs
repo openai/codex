@@ -254,6 +254,13 @@ where
                         .validate_and_cache_remote_bundle(&auth, trigger, attempt, bundle)
                         .await;
                 }
+                Err(BundleRequestError::Policy(denied)) => {
+                    return Err(CloudConfigBundleLoadError::new(
+                        CloudConfigBundleLoadErrorCode::RequestFailed,
+                        /*status_code*/ None,
+                        denied.to_string(),
+                    ));
+                }
                 Err(BundleRequestError::Retryable(status)) => {
                     last_status_code = status.status_code();
                     if self
@@ -416,6 +423,13 @@ where
                     *auth = refreshed_auth;
                     return Ok(UnauthorizedRecoveryAction::RetrySameAttempt);
                 }
+                Err(RefreshTokenError::Policy(error)) => {
+                    return Err(CloudConfigBundleLoadError::new(
+                        CloudConfigBundleLoadErrorCode::Auth,
+                        status_code,
+                        error.to_string(),
+                    ));
+                }
                 Err(RefreshTokenError::Permanent(failed)) => {
                     tracing::warn!(
                         error = %failed,
@@ -491,6 +505,12 @@ where
                         "Timed out refreshing cloud config bundle cache from remote; keeping existing cache"
                     );
                     emit_load_metric("refresh", "error", /*bundle*/ None);
+                    self.publish_refresh_result(Err(CloudConfigBundleLoadError::new(
+                        CloudConfigBundleLoadErrorCode::Timeout,
+                        /*status_code*/ None,
+                        "timed out refreshing cloud config bundle",
+                    )))
+                    .await;
                 }
             }
         }
@@ -510,9 +530,7 @@ where
         {
             Ok(bundle) => {
                 emit_load_metric("refresh", "success", bundle.as_ref());
-                if let Some(latest_bundle) = self.latest_bundle.get() {
-                    *latest_bundle.lock().await = Ok(bundle);
-                }
+                self.publish_refresh_result(Ok(bundle)).await;
             }
             Err(err) => {
                 tracing::error!(
@@ -521,15 +539,23 @@ where
                     "Failed to refresh cloud config bundle cache from remote"
                 );
                 emit_load_metric("refresh", "error", /*bundle*/ None);
-                if let Some(latest_bundle) = self.latest_bundle.get() {
-                    let mut latest_bundle = latest_bundle.lock().await;
-                    if latest_bundle.is_err() {
-                        *latest_bundle = Err(err);
-                    }
-                }
+                self.publish_refresh_result(Err(err)).await;
             }
         }
         true
+    }
+
+    async fn publish_refresh_result(
+        &self,
+        result: Result<Option<CloudConfigBundle>, CloudConfigBundleLoadError>,
+    ) {
+        let Some(latest) = self.latest_bundle.get() else {
+            return;
+        };
+        let mut latest = latest.lock().await;
+        if result.is_ok() || latest.is_err() {
+            *latest = result;
+        }
     }
 }
 

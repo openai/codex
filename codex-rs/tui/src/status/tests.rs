@@ -369,6 +369,22 @@ async fn status_snapshot_includes_reasoning_details() {
 #[tokio::test]
 async fn status_snapshot_shows_chatgpt_plan_without_email() {
     let temp_home = TempDir::new().expect("temp home");
+    let profile_path = temp_home.path().join("work.config.toml");
+    let loader_overrides = LoaderOverrides {
+        user_config_path: Some(profile_path.abs()),
+        user_config_profile: Some("work".parse().expect("profile")),
+        ..LoaderOverrides::without_managed_config_for_tests()
+    };
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/api/codex/config/bundle"))
+        .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_string("{}"))
+        .mount(&server)
+        .await;
+    std::fs::write(
+        &profile_path,
+        format!("chatgpt_base_url = '{}'", server.uri()),
+    )
+    .expect("configure local ChatGPT fixture");
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
@@ -384,9 +400,16 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
     write_models_cache(temp_home.path())
         .await
         .expect("write models cache");
-    let mut app_server = crate::start_embedded_app_server_for_picker(&config)
-        .await
-        .expect("start embedded app server");
+    let mut app_server = crate::start_app_server_for_picker(
+        &config,
+        &crate::AppServerTarget::Embedded,
+        Vec::new(),
+        loader_overrides,
+        /*state_db*/ None,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    )
+    .await
+    .expect("start embedded app server");
     let bootstrap = app_server
         .bootstrap(&config)
         .await

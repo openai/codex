@@ -135,6 +135,11 @@ async fn account_thread_usage_supports_externally_managed_authentication() -> Re
             .plan_type("business")
             .chatgpt_account_id("external-workspace"),
     )?;
+    Mock::given(method("GET"))
+        .and(path("/api/codex/config/bundle"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])

@@ -533,30 +533,18 @@ pub async fn run_main_with_transport_options(
         arg0_paths.clone(),
         Arc::new(NoopThreadConfigLoader),
     );
-    match config_manager
-        .load_latest_config(/*fallback_cwd*/ None)
-        .await
-    {
-        Ok(config) => {
-            let auth_manager =
-                AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
-                    .await
-                    .map_err(std::io::Error::other)?;
-            config_manager.replace_cloud_config_bundle_loader(
-                auth_manager,
-                config.chatgpt_base_url.clone(),
-                config.http_client_factory(),
-            );
-        }
-        Err(err) if is_unsupported_untrusted_approval_policy_error(&err) => {
-            return Err(err);
-        }
-        Err(err) => {
-            warn!(error = %err, "Failed to preload config for cloud config bundle");
-            // If this fails, we cannot install cloud/thread config loaders, so non-strict
-            // startup continues without managed cloud config.
-        }
-    };
+    let bootstrap_config = config_manager
+        .load_startup_config(/*fallback_cwd*/ None)
+        .await?;
+    let bootstrap_auth =
+        AuthManager::shared_from_config(&bootstrap_config, /*enable_codex_api_key_env*/ false)
+            .await
+            .map_err(std::io::Error::other)?;
+    config_manager.replace_cloud_config_bundle_loader(
+        bootstrap_auth,
+        bootstrap_config.chatgpt_base_url.clone(),
+        bootstrap_config.http_client_factory(),
+    );
     let mut config_warnings = Vec::new();
     let mut plugin_startup_config = PluginStartupConfig::Current;
     let config = match config_manager
@@ -584,6 +572,19 @@ pub async fn run_main_with_transport_options(
         }
     };
     config.auth_config().validate()?;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
+            .await
+            .map_err(std::io::Error::other)?;
+    config_manager.replace_cloud_config_bundle_loader(
+        auth_manager.clone(),
+        config.chatgpt_base_url.clone(),
+        config.http_client_factory(),
+    );
+    config_manager
+        .sync_default_client_residency_requirement()
+        .await;
+
     #[cfg(target_os = "macos")]
     let local_runtime_paths = local_runtime_paths.with_allowed_symlinked_codex_home(
         codex_config::allowed_symlinked_codex_home(&config.config_layer_stack, &config.codex_home),
@@ -606,13 +607,19 @@ pub async fn run_main_with_transport_options(
                 ))
             }
         };
+    // Executor credentials belong to the selected environment, not the current account.
+    // Each request and connection still acquires a revocable application-policy permit.
+    let environment_http_client_factory = config
+        .http_client_factory()
+        .with_network_policy(config.application_network_policy.clone());
     let environment_manager = if ignore_user_config {
-        EnvironmentManager::from_env(Some(local_runtime_paths), config.http_client_factory()).await
+        EnvironmentManager::from_env(Some(local_runtime_paths), environment_http_client_factory)
+            .await
     } else {
         EnvironmentManager::from_codex_home(
             codex_home.clone(),
             Some(local_runtime_paths),
-            config.http_client_factory(),
+            environment_http_client_factory,
         )
         .await
     }
@@ -802,11 +809,6 @@ pub async fn run_main_with_transport_options(
         AppServerTransport::Off => {}
     }
     drop(unix_socket_startup_lock);
-
-    let auth_manager =
-        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
-            .await
-            .map_err(std::io::Error::other)?;
 
     let remote_control_enabled = remote_control_policy == RemoteControlPolicy::Allowed
         && remote_control_explicitly_requested

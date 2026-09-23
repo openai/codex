@@ -1,3 +1,4 @@
+mod application;
 mod layer_io;
 mod local;
 #[cfg(target_os = "macos")]
@@ -12,6 +13,9 @@ mod tests;
 mod projectless_directory_tests;
 #[cfg(windows)]
 mod windows;
+
+pub use application::LocalApplicationRequirements;
+pub use application::load_local_application_requirements;
 
 use self::layer_io::LoadedConfigLayers;
 use crate::CONFIG_TOML_FILE;

@@ -89,7 +89,6 @@ use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
-use codex_login::AuthManager;
 use codex_protocol::protocol::SessionSource;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
@@ -98,6 +97,9 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::warn;
+
+#[path = "in_process_bootstrap.rs"]
+mod bootstrap;
 
 const IN_PROCESS_CONNECTION_ID: ConnectionId = ConnectionId(0);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -158,7 +160,7 @@ pub struct InProcessStartArgs {
     pub config_warnings: Vec<ConfigWarningNotification>,
     /// Session source stamped into thread/session metadata.
     pub session_source: SessionSource,
-    /// Whether auth loading should honor the `CODEX_API_KEY` environment variable.
+    /// Whether serving auth should honor `CODEX_API_KEY`; workspace policy still uses stored auth.
     pub enable_codex_api_key_env: bool,
     /// Initialize params used for initial handshake.
     pub initialize: InitializeParams,
@@ -380,7 +382,7 @@ pub async fn start(mut args: InProcessStartArgs) -> IoResult<InProcessClientHand
         });
     }
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args).await?;
+    let client = Box::pin(start_uninitialized(args)).await?;
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -419,14 +421,24 @@ async fn run_outbound_router(
     }
 }
 
-async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
-    args.config.auth_config().validate()?;
+async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    let config_manager = ConfigManager::new(
+        args.config.codex_home.to_path_buf(),
+        args.cli_overrides,
+        args.loader_overrides,
+        args.strict_config,
+        args.cloud_config_bundle,
+        args.arg0_paths.clone(),
+        args.thread_config_loader,
+    );
+    let auth_manager = bootstrap::configure(
+        &config_manager,
+        &mut args.config,
+        args.enable_codex_api_key_env,
+    )
+    .await?;
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
-    let auth_manager =
-        AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
-            .await
-            .map_err(IoError::other)?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
     let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);
 
@@ -464,15 +476,6 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         ));
 
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
-        let config_manager = ConfigManager::new(
-            args.config.codex_home.to_path_buf(),
-            args.cli_overrides,
-            args.loader_overrides,
-            args.strict_config,
-            args.cloud_config_bundle,
-            args.arg0_paths.clone(),
-            args.thread_config_loader,
-        );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {

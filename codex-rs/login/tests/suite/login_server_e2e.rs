@@ -123,11 +123,25 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 
     // Run server in background
     let server_home = codex_home.clone();
+    let content = codex_http_client::NetworkPolicyController::default();
+    let local = codex_http_client::NetworkPolicyController::default();
+    let local_policy = local.policy();
+    local.publish(
+        local_policy.revision(),
+        codex_http_client::DestinationPolicy::Unrestricted,
+    );
+    let factory = codex_http_client::HttpClientFactory::new(
+        codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+    );
+    let routes = codex_login::AuthRouteConfig::from_http_client_factory(
+        factory.clone().with_network_policy(content.policy()),
+    )
+    .with_local_bootstrap_factory(factory.with_network_policy(local_policy));
 
     let opts = ServerOptions {
         codex_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
-        auth_route_config: codex_login::test_support::transport_default_auth_route_config(),
+        auth_route_config: routes,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,

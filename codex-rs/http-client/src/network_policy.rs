@@ -197,6 +197,16 @@ impl NetworkPolicy {
         }
     }
 
+    /// Narrows a bootstrap client's existing local policy to exact endpoint URLs.
+    /// This cannot grant access to a destination denied by the underlying policy.
+    pub fn restrict_to_endpoints(mut self, endpoints: BTreeSet<Url>) -> Self {
+        self.endpoints = Some(Arc::new(match &self.endpoints {
+            Some(existing) => existing.intersection(&endpoints).cloned().collect(),
+            None => endpoints,
+        }));
+        self
+    }
+
     /// Binds a content client to the current account so retained credentials cannot
     /// be used after another workspace's policy has been installed.
     pub fn for_current_account(mut self) -> Self {
