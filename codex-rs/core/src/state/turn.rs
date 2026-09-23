@@ -108,8 +108,8 @@ pub(crate) struct TurnState {
 /// Host receipt metadata follows the response through the asynchronous tool waiter.
 pub(crate) struct AcceptedUserInputResponse {
     pub(crate) response: RequestUserInputResponse,
-    /// Absent in legacy mode, which does not reserve or persist acceptance order.
-    pub(crate) acceptance_order: Option<u64>,
+    /// Order reserved when the host accepts this response.
+    pub(crate) acceptance_order: u64,
 }
 
 pub(crate) struct PendingRequestPermissions {

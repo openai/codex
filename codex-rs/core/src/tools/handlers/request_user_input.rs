@@ -1,4 +1,3 @@
-use crate::context::GuardianContextMode;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -101,10 +100,8 @@ impl RequestUserInputHandler {
                 "failed to serialize {REQUEST_USER_INPUT_TOOL_NAME} response: {err}"
             ))
         })?;
-        // Capture follows the session flag even while an older checkpoint uses legacy review.
-        if turn.config.features.enabled(Feature::GuardianApproval)
-            && session.guardian_context_mode == GuardianContextMode::ThreadOwned
-        {
+        // Persist answers even while an older checkpoint needs compatibility review.
+        if turn.config.features.enabled(Feature::GuardianApproval) {
             let user_input = questions
                 .iter()
                 .filter_map(|question| {
@@ -142,7 +139,7 @@ impl RequestUserInputHandler {
                             call_id,
                             questions: user_input,
                         },
-                        acceptance_order: accepted.acceptance_order,
+                        acceptance_order: Some(accepted.acceptance_order),
                     })
                     .await;
             }

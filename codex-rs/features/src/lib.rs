@@ -1646,7 +1646,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianThreadContext,
         key: "guardianv2.thread_context",
         stage: Stage::Removed,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::GuardianReuseParentCompaction,

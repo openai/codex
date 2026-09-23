@@ -1,4 +1,3 @@
-use crate::context::GuardianContextMode;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -358,12 +357,7 @@ async fn run_compact_task_inner_impl(
         get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default()
     };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let identity = if sess.guardian_context_mode == GuardianContextMode::ThreadOwned {
-        CompactedMessageIdentity::Preserve
-    } else {
-        CompactedMessageIdentity::Regenerate
-    };
-    let user_messages = collect_annotated_user_messages(history_items, identity);
+    let user_messages = collect_annotated_user_messages(history_items);
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
     if let Some(summary_item) = new_history.last_mut() {
@@ -552,24 +546,12 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUser
         .collect()
 }
 
-pub(crate) enum CompactedMessageIdentity {
-    Preserve,
-    Regenerate,
-}
-
 pub(crate) fn collect_annotated_user_messages(
     items: &[ResponseItemEnvelope],
-    identity: CompactedMessageIdentity,
 ) -> Vec<CompactedUserMessage> {
     items
         .iter()
         .filter_map(|envelope| compacted_user_message(&envelope.item, envelope.metadata.clone()))
-        .map(|mut message| {
-            if matches!(identity, CompactedMessageIdentity::Regenerate) {
-                message.id = None;
-            }
-            message
-        })
         .collect()
 }
 

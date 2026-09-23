@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 
-use crate::context::GuardianContextMode;
 use codex_history::RetainedContextEvent;
 use codex_history::RolloutItem;
 use codex_protocol::models::ResponseItem;
@@ -25,10 +24,9 @@ impl Session {
         turn_context: &TurnContext,
         item: &ResponseItem,
     ) {
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned
-            && let ResponseItem::Message {
-                id: Some(id), role, ..
-            } = item
+        if let ResponseItem::Message {
+            id: Some(id), role, ..
+        } = item
             && role == "assistant"
         {
             let mut state = self.state.lock().await;
@@ -49,12 +47,8 @@ impl Session {
         }
     }
 
-    /// Legacy mode neither reserves a sequence nor takes the session-state lock.
-    pub(crate) async fn reserve_user_input_order(&self) -> Option<u64> {
-        if self.guardian_context_mode == GuardianContextMode::Legacy {
-            return None;
-        }
-        Some(self.state.lock().await.history.reserve_input_order())
+    pub(crate) async fn reserve_user_input_order(&self) -> u64 {
+        self.state.lock().await.history.reserve_input_order()
     }
 
     pub(crate) async fn record_retained_context(&self, mut event: RetainedContextEvent) {

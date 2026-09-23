@@ -1,14 +1,14 @@
-//! Session capture policy and the reviewer policy carried by each history snapshot.
+//! Reviewer policy carried by each history snapshot.
 //! Unknown or incompatible checkpoints keep legacy review alongside retained user evidence.
 
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_history::ResponseItemEnvelope;
 
-/// Selects legacy compatibility or thread-owned evidence.
+/// Selects checkpoint compatibility review or thread-owned evidence.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum GuardianContextMode {
-    #[default]
     Legacy,
+    #[default]
     ThreadOwned,
 }
 
@@ -23,14 +23,13 @@ impl GuardianContextMode {
     }
 
     pub(crate) fn for_checkpoint(
-        self,
         items: &[ResponseItemEnvelope],
         reviewer_compaction_hash: Option<&str>,
     ) -> Self {
         if codex_history::CompactionCheckpoint::latest(items)
             .is_none_or(|checkpoint| checkpoint.is_compatible_with(reviewer_compaction_hash))
         {
-            self
+            Self::ThreadOwned
         } else {
             Self::Legacy
         }

@@ -84,8 +84,6 @@ pub(crate) struct ContextManager {
     review_history: Option<TranscriptHistory>,
     /// Host facts independent of the model window; snapshots share immutable state.
     retained_context: Arc<RetainedContext>,
-    /// Capture follows the session flag, including while an older checkpoint uses legacy review.
-    guardian_context_mode: GuardianContextMode,
     /// Reviewer policy travels with the history snapshot, independently of capture.
     guardian_review_mode: GuardianContextMode,
     retain_inherited_user_messages: bool,
@@ -115,7 +113,6 @@ struct SharedConversationHistory {
     items: Arc<Vec<ResponseItemEnvelope>>,
     review_history: Option<TranscriptHistory>,
     retained_context: Arc<RetainedContext>,
-    guardian_context_mode: GuardianContextMode,
     guardian_review_mode: GuardianContextMode,
     history_version: u64,
     user_message_revision: u64,
@@ -134,8 +131,7 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
     }
 
     fn retained_context(&self) -> Option<&RetainedContext> {
-        (self.guardian_context_mode == GuardianContextMode::ThreadOwned)
-            .then_some(&self.retained_context)
+        Some(&self.retained_context)
     }
 
     fn uses_parent_context_for_review(&self) -> bool {
@@ -191,8 +187,7 @@ impl ContextManager {
             items: Arc::new(Vec::new()),
             review_history: None,
             retained_context: Arc::default(),
-            guardian_context_mode: GuardianContextMode::Legacy,
-            guardian_review_mode: GuardianContextMode::Legacy,
+            guardian_review_mode: GuardianContextMode::ThreadOwned,
             retain_inherited_user_messages: false,
             history_version: 0,
             reset_version: 0,
@@ -210,7 +205,6 @@ impl ContextManager {
             items: Arc::clone(&self.items),
             review_history: self.review_history.clone(),
             retained_context: Arc::clone(&self.retained_context),
-            guardian_context_mode: self.guardian_context_mode,
             guardian_review_mode: self.guardian_review_mode,
             history_version: self.history_version,
             user_message_revision: self.user_message_revision,
@@ -221,16 +215,9 @@ impl ContextManager {
         &self.retained_context
     }
 
-    pub(crate) fn with_guardian_context_mode(
-        guardian_context_mode: GuardianContextMode,
-        source: &SessionSource,
-    ) -> Self {
+    pub(crate) fn for_session(source: &SessionSource) -> Self {
         Self {
-            guardian_context_mode,
-            guardian_review_mode: guardian_context_mode,
-            retain_inherited_user_messages: guardian_context_mode
-                == GuardianContextMode::ThreadOwned
-                && !source.is_non_root_agent(),
+            retain_inherited_user_messages: !source.is_non_root_agent(),
             ..Self::new()
         }
     }
@@ -314,32 +301,26 @@ impl ContextManager {
                     })
             });
         self.guardian_review_mode = if requires_parent_context {
-            self.guardian_context_mode
+            GuardianContextMode::ThreadOwned
         } else {
-            self.guardian_context_mode
-                .for_checkpoint(&self.items, reviewer_compaction_hash)
+            GuardianContextMode::for_checkpoint(&self.items, reviewer_compaction_hash)
         };
         self.restore_retained_context(retained_context);
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
-            // Older retained checkpoints cleared oversized instructions. Recover their
-            // bounded root excerpts before discarding the legacy source transcript.
-            let items = &self.items;
-            Arc::make_mut(&mut self.retained_context).recover_user_message_excerpts(|id| {
-                // Prefer the backup over a compacted copy that retains the original ID.
-                let original = checkpoint
-                    .into_iter()
-                    .flat_map(|checkpoint| &checkpoint.0)
-                    .chain(items.iter().map(|envelope| &envelope.item))
-                    .find(|item| item.id().is_some_and(|item_id| item_id.as_str() == id));
-                let Some(TurnItem::UserMessage(original)) = original.and_then(parse_turn_item)
-                else {
-                    return None;
-                };
-                Some(
-                    guardian_truncate_text(&original.message(), GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0,
-                )
-            });
-        }
+        // Older retained checkpoints cleared oversized instructions. Recover their
+        // bounded root excerpts before discarding the legacy source transcript.
+        let items = &self.items;
+        Arc::make_mut(&mut self.retained_context).recover_user_message_excerpts(|id| {
+            // Prefer the backup over a compacted copy that retains the original ID.
+            let original = checkpoint
+                .into_iter()
+                .flat_map(|checkpoint| &checkpoint.0)
+                .chain(items.iter().map(|envelope| &envelope.item))
+                .find(|item| item.id().is_some_and(|item_id| item_id.as_str() == id));
+            let Some(TurnItem::UserMessage(original)) = original.and_then(parse_turn_item) else {
+                return None;
+            };
+            Some(guardian_truncate_text(&original.message(), GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0)
+        });
         let retain_legacy_authorization = self.retain_inherited_user_messages
             && self.retained_context.has_missing_user_messages()
             && (checkpoint.is_some()
@@ -347,9 +328,8 @@ impl ContextManager {
                 // Preserve its surviving instructions without treating an opaque checkpoint's
                 // partial model window as a complete compatibility transcript.
                 || codex_history::CompactionCheckpoint::latest(&self.items).is_none());
-        if (self.guardian_review_mode == GuardianContextMode::ThreadOwned
-            && !retain_legacy_authorization)
-            || (self.guardian_context_mode == GuardianContextMode::Legacy && checkpoint.is_none())
+        if self.guardian_review_mode == GuardianContextMode::ThreadOwned
+            && !retain_legacy_authorization
         {
             self.review_history = None;
             return;
@@ -486,8 +466,7 @@ impl ContextManager {
                 review_history.record(&processed.item);
             }
             Arc::make_mut(&mut self.items).push(processed);
-            if self.guardian_context_mode == GuardianContextMode::ThreadOwned
-                && let Some(metadata) = metadata
+            if let Some(metadata) = metadata
                 && Arc::make_mut(&mut self.retained_context).record_sender_user_messages(metadata)
             {
                 self.user_message_revision = self.user_message_revision.saturating_add(1);
@@ -613,9 +592,7 @@ impl ContextManager {
         reviewer_compaction_hash: Option<&str>,
     ) -> bool {
         let promoted = self.guardian_review_mode == GuardianContextMode::Legacy
-            && self
-                .guardian_context_mode
-                .for_checkpoint(&items, reviewer_compaction_hash)
+            && GuardianContextMode::for_checkpoint(&items, reviewer_compaction_hash)
                 == GuardianContextMode::ThreadOwned;
         if promoted {
             self.guardian_review_mode = GuardianContextMode::ThreadOwned;
@@ -698,9 +675,7 @@ impl ContextManager {
             self.trim_pre_turn_context_updates(&snapshot, first_instruction_turn_idx, cut_idx);
 
         let mut retained_items = snapshot[..cut_idx].to_vec();
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned
-            && let Some(boundary) = source.acceptance_order()
-        {
+        if let Some(boundary) = source.acceptance_order() {
             // A later assistant item may have finished before an earlier-accepted
             // steer was persisted. Drop its raw source too, so recovery cannot
             // reintroduce context removed at the retained rollback boundary.

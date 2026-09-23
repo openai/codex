@@ -15,7 +15,6 @@ use crate::context::ContextualUserFragment;
 use crate::context::CurrentTimeReminder;
 use crate::context::CurrentTimeUnavailable;
 use crate::context::DeveloperInstructions;
-use crate::context::GuardianContextMode;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
@@ -118,11 +117,7 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_context_baselines: bool
     }
 }
 
-fn retain_forked_developer_message(
-    item: &mut ResponseItem,
-    usage_hint_texts: &[String],
-    context_mode: GuardianContextMode,
-) -> bool {
+fn retain_forked_developer_message(item: &mut ResponseItem, usage_hint_texts: &[String]) -> bool {
     if !matches!(item, ResponseItem::Message { role, .. } if role == "developer") {
         return true;
     }
@@ -131,9 +126,7 @@ fn retain_forked_developer_message(
         return false;
     };
     content.retain(|content_item| {
-        if context_mode == GuardianContextMode::ThreadOwned
-            && content_item.kind().0 == "guardian.approved_action"
-        {
+        if content_item.kind().0 == "guardian.approved_action" {
             return false;
         }
         let ContentItem::InputText { text } = content_item.content() else {
@@ -141,10 +134,8 @@ fn retain_forked_developer_message(
         };
 
         !(MultiAgentRoleInstructions::matches_text(text)
-            || (context_mode == GuardianContextMode::ThreadOwned
-                && text.starts_with(
-                    crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX,
-                ))
+            || text
+                .starts_with(crate::guardian::AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX)
             || MultiAgentModeInstructions::matches_text(text)
             || CurrentTimeReminder::matches_text(text)
             || CurrentTimeUnavailable::matches_text(text)
@@ -980,14 +971,12 @@ impl LocalAgentControl {
                 break;
             }
         }
-        let context_mode = GuardianContextMode::ThreadOwned;
         let mut replaced_parent_developer_instructions = false;
         // Scrub inherited hints and replace only the parent's developer-instruction fragment.
         // Compaction stores response items separately, so sanitize both top-level messages and
         // compacted replacement histories with the same policy.
         let retain_forked_item = |envelope: &mut ResponseItemEnvelope, replaced: &mut bool| {
-            if context_mode == GuardianContextMode::ThreadOwned
-                && multi_agent_version == MultiAgentVersion::V2
+            if multi_agent_version == MultiAgentVersion::V2
                 && matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant")
             {
                 // Persist the scope of every inherited conversational message, including the suffix
@@ -1011,7 +1000,6 @@ impl LocalAgentControl {
             if !retain_forked_developer_message(
                 response_item,
                 &multi_agent_v2_usage_hint_texts_to_filter,
-                context_mode,
             ) {
                 return false;
             }
@@ -1097,8 +1085,7 @@ impl LocalAgentControl {
                     compacted.guardian_history = None;
                     // Only V2 fetches root authorization live. Its local scope starts known-empty;
                     // V1 must remain incomplete when inherited authorization has been stripped.
-                    compacted.retained_context = (context_mode == GuardianContextMode::ThreadOwned
-                        && multi_agent_version == MultiAgentVersion::V2)
+                    compacted.retained_context = (multi_agent_version == MultiAgentVersion::V2)
                         .then(codex_history::RetainedContext::default);
                     if let Some(replacement_history) = compacted.replacement_history.as_mut() {
                         // Matches before this checkpoint cannot survive its replacement history.

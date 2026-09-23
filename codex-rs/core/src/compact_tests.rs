@@ -309,7 +309,7 @@ fn collect_annotated_user_messages_extracts_user_text_only() {
         ResponseItemEnvelope::new(ResponseItem::Other),
     ];
 
-    let collected = collect_annotated_user_messages(&items, CompactedMessageIdentity::Preserve);
+    let collected = collect_annotated_user_messages(&items);
 
     assert_eq!(
         vec![CompactedUserMessage {

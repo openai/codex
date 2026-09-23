@@ -207,7 +207,6 @@ fn guardian_thread_context_is_ignored_with_a_migration_notice() {
             },
             FeatureOverrides::default(),
         );
-        assert!(features.enabled(Feature::GuardianThreadContext));
         assert_eq!(
             features
                 .legacy_feature_usages()

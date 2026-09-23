@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use super::ContextManager;
 use crate::compact::is_summary_message;
-use crate::context::GuardianContextMode;
 use crate::context::is_contextual_user_fragment;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
@@ -66,20 +65,18 @@ impl ContextManager {
 
     pub(crate) fn restore_retained_context(&mut self, checkpoint: Option<&RetainedContext>) {
         Arc::make_mut(&mut self.retained_context).restore(checkpoint, &self.items);
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
-            let items = Arc::clone(&self.items);
-            for envelope in items.iter().filter(|envelope| {
-                envelope
-                    .metadata
-                    .as_ref()
-                    .is_some_and(|metadata| metadata.delivered_assistant_message.is_some())
-            }) {
-                self.record_retained_message(
-                    &envelope.item,
-                    envelope.metadata.as_ref(),
-                    RetainedMessageSource::Checkpoint,
-                );
-            }
+        let items = Arc::clone(&self.items);
+        for envelope in items.iter().filter(|envelope| {
+            envelope
+                .metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.delivered_assistant_message.is_some())
+        }) {
+            self.record_retained_message(
+                &envelope.item,
+                envelope.metadata.as_ref(),
+                RetainedMessageSource::Checkpoint,
+            );
         }
         if self.retain_inherited_user_messages
             && !self.retained_context.has_inherited_user_messages()
@@ -108,9 +105,8 @@ impl ContextManager {
         metadata: Option<&CodexHarnessMetadata>,
         source: RetainedMessageSource,
     ) {
-        if self.guardian_context_mode == GuardianContextMode::ThreadOwned
-            && let Some(text) =
-                metadata.and_then(|metadata| metadata.delivered_assistant_message.as_ref())
+        if let Some(text) =
+            metadata.and_then(|metadata| metadata.delivered_assistant_message.as_ref())
             && let ResponseItem::FunctionCallOutput {
                 call_id: Some(call_id),
                 ..
@@ -147,11 +143,7 @@ impl ContextManager {
             return;
         }
         let inherited = metadata.is_some_and(|metadata| metadata.inherited_user_message);
-        if self.guardian_context_mode == GuardianContextMode::Legacy {
-            if !is_assistant {
-                Arc::make_mut(&mut self.retained_context).mark_user_messages_incomplete();
-            }
-        } else if (!inherited || self.retain_inherited_user_messages)
+        if (!inherited || self.retain_inherited_user_messages)
             && let ResponseItem::Message {
                 content,
                 internal_chat_message_metadata_passthrough,

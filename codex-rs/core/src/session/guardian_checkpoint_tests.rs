@@ -14,8 +14,7 @@ use test_case::test_case;
 #[test_case(GuardianContextMode::ThreadOwned; "thread_owned")]
 #[tokio::test]
 async fn guardian_checkpoint_preserves_live_context_without_storage(mode: GuardianContextMode) {
-    let (mut session, turn) = make_session_and_context().await;
-    session.guardian_context_mode = mode;
+    let (session, turn) = make_session_and_context().await;
     // This session has no live store. A checkpoint must still capture the complete context.
     assert!(session.live_thread().is_none());
     let instruction: ResponseItem = serde_json::from_value(json!({
@@ -30,7 +29,7 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
     let world_state = WorldStateSnapshot::from(baseline.as_object().unwrap());
     {
         let mut state = session.state.lock().await;
-        state.history = ContextManager::with_guardian_context_mode(mode, &SessionSource::default());
+        state.history = ContextManager::for_session(&SessionSource::default());
         state
             .history
             .record_items([&instruction], turn.model_info().truncation_policy.into());
@@ -41,8 +40,13 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
                 "type": "compaction", "id": "compaction-1", "encrypted_content": "summary",
             }))
             .unwrap();
-            state.history.replace_compacted(
-                vec![compacted.into()],
+            let retained = state.history.retained_context().clone();
+            state.history.replace_annotated(vec![compacted.into()]);
+            state.history.restore_review_context(
+                Some(&retained),
+                Some(&codex_history::GuardianHistoryCheckpoint(vec![
+                    instruction.clone(),
+                ])),
                 /*reviewer_compaction_hash*/ None,
             );
         }
@@ -88,10 +92,8 @@ async fn guardian_checkpoint_preserves_live_context_without_storage(mode: Guardi
         .replace_history(Vec::new(), /*reference_context_item*/ None)
         .await;
     // Replay into a fresh session so preserved live state cannot mask missing checkpoint data.
-    let (mut fork, _) = make_session_and_context().await;
-    fork.guardian_context_mode = mode;
-    fork.state.lock().await.history =
-        ContextManager::with_guardian_context_mode(mode, &SessionSource::default());
+    let (fork, _) = make_session_and_context().await;
+    fork.state.lock().await.history = ContextManager::for_session(&SessionSource::default());
     fork.record_initial_history(InitialHistory::Forked(items))
         .await;
     let restored = fork.clone_history().await;

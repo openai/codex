@@ -1927,17 +1927,11 @@ async fn spawn_agent_without_fork_from_paginated_parent_stays_fresh_and_paginate
         .expect("parent shutdown should submit");
 }
 
-#[test_case::test_case(true; "thread context enabled")]
-#[test_case::test_case(false; "thread context disabled")]
 #[tokio::test]
-async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata(thread_context_enabled: bool) {
+async fn spawn_agent_fork_sanitizes_inherited_compaction_metadata() {
     let mut harness = AgentControlHarness::new().await;
     let _ = harness.config.features.disable(Feature::MultiAgentV2);
-    harness
-        .config
-        .features
-        .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-        .expect("test context mode");
+
     let (parent_thread_id, parent_thread) = harness.start_paginated_thread().await;
     let parent_resume_metadata = codex_history::CompactionResumeMetadata {
         multi_agent_version: Some(MultiAgentVersion::V2),
@@ -2178,9 +2172,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
     let harness = AgentControlHarness::new().await;
     let mut parent_config = harness.config.clone();
     let _ = parent_config.features.enable(Feature::MultiAgentV2);
-    let _ = parent_config
-        .features
-        .enable(Feature::GuardianThreadContext);
     parent_config.developer_instructions = Some("Parent developer instructions.".to_string());
     parent_config.multi_agent_v2.root_agent_usage_hint_text =
         Some("Parent root guidance.".to_string());
@@ -2188,7 +2179,6 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         Some("Parent subagent guidance.".to_string());
     let mut child_config = harness.config.clone();
     let _ = child_config.features.enable(Feature::MultiAgentV2);
-    let _ = child_config.features.enable(Feature::GuardianThreadContext);
     child_config.developer_instructions = Some("Child developer instructions.".to_string());
     child_config.multi_agent_v2.subagent_developer_instructions =
         Some("Child developer instructions.".to_string());

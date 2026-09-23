@@ -4,7 +4,6 @@
 #[path = "review_request.rs"]
 mod request;
 
-use crate::context::GuardianContextMode;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_core_plugins::PluginCommandAttribution;

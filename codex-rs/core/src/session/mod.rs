@@ -24,7 +24,6 @@ use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
 use crate::context::DeveloperInstructions;
-use crate::context::GuardianContextMode;
 use crate::context::GuardianPolicy;
 use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
@@ -1742,14 +1741,9 @@ impl Session {
             .zip(metadata)
             .map(|(item, metadata)| ResponseItemEnvelope { item, metadata })
             .collect();
-        let reviewer_compaction_hash =
-            if self.guardian_context_mode == crate::context::GuardianContextMode::ThreadOwned {
-                let context = crate::guardian::GuardianReviewContext::from(turn_context);
-                let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
-                reviewer.comp_hash.clone()
-            } else {
-                None
-            };
+        let context = crate::guardian::GuardianReviewContext::from(turn_context);
+        let (_, reviewer) = crate::guardian::resolve_review_model(self, &context).await;
+        let reviewer_compaction_hash = reviewer.comp_hash.clone();
         {
             let mut state = self.state.lock().await;
             state.replace_annotated_history(
@@ -3613,39 +3607,37 @@ impl Session {
             state
                 .current_time_reminder
                 .note_recorded_items(&response_items);
-            if self.guardian_context_mode == GuardianContextMode::ThreadOwned {
-                let pending_orders = turn_context
-                    .extension_data
-                    .get::<retained_context::PendingAssistantMessageOrders>();
-                for envelope in &mut items {
-                    if envelope
+            let pending_orders = turn_context
+                .extension_data
+                .get::<retained_context::PendingAssistantMessageOrders>();
+            for envelope in &mut items {
+                if envelope
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.compaction_output)
+                {
+                    continue;
+                }
+                if matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "assistant")
+                    || matches!(&envelope.item, ResponseItem::FunctionCall { .. })
+                    || crate::context::is_user_authorization_message(&envelope.item)
+                {
+                    let message_order = pending_orders.as_ref().and_then(|orders| {
+                        orders
+                            .0
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .remove(envelope.item.id()?.as_str())
+                    });
+                    // Preserve input acceptance and source-message start order.
+                    // Synthetic messages still receive their order here.
+                    envelope
                         .metadata
-                        .as_ref()
-                        .is_some_and(|metadata| metadata.compaction_output)
-                    {
-                        continue;
-                    }
-                    if matches!(&envelope.item, ResponseItem::Message { role, .. } if role == "assistant")
-                        || matches!(&envelope.item, ResponseItem::FunctionCall { .. })
-                        || crate::context::is_user_authorization_message(&envelope.item)
-                    {
-                        let message_order = pending_orders.as_ref().and_then(|orders| {
-                            orders
-                                .0
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .remove(envelope.item.id()?.as_str())
+                        .get_or_insert_default()
+                        .user_input_order
+                        .get_or_insert_with(|| {
+                            message_order.unwrap_or_else(|| state.history.reserve_input_order())
                         });
-                        // Preserve input acceptance and source-message start order.
-                        // Synthetic messages still receive their order here.
-                        envelope
-                            .metadata
-                            .get_or_insert_default()
-                            .user_input_order
-                            .get_or_insert_with(|| {
-                                message_order.unwrap_or_else(|| state.history.reserve_input_order())
-                            });
-                    }
                 }
             }
             state

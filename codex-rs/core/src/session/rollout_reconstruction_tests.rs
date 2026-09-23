@@ -1,5 +1,4 @@
 use super::*;
-use crate::context::GuardianContextMode;
 
 use super::tests::build_world_state_from_turn_context;
 use super::tests::make_session_and_context;
@@ -33,12 +32,7 @@ use uuid::Uuid;
 
 #[tokio::test]
 async fn recorded_questions_share_queued_input_order_across_resume() {
-    let (mut session, turn) = make_session_and_context().await;
-    session.guardian_context_mode = GuardianContextMode::ThreadOwned;
-    session.state.lock().await.history = ContextManager::with_guardian_context_mode(
-        GuardianContextMode::ThreadOwned,
-        &SessionSource::default(),
-    );
+    let (session, turn) = make_session_and_context().await;
     let question = |call_id: &str| {
         serde_json::from_value::<ResponseItem>(json!({
             "type": "function_call", "call_id": call_id,
@@ -64,7 +58,7 @@ async fn recorded_questions_share_queued_input_order_across_resume() {
                 ResponseItemEnvelope {
                     item: user_message("Yes."),
                     metadata: Some(codex_history::CodexHarnessMetadata {
-                        user_input_order: reply_order,
+                        user_input_order: Some(reply_order),
                         ..Default::default()
                     }),
                 },
@@ -109,17 +103,14 @@ async fn recorded_questions_share_queued_input_order_across_resume() {
             .collect::<Vec<_>>(),
         vec![Some(0), Some(2), Some(1), None]
     );
-    assert_eq!(session.reserve_user_input_order().await, Some(3));
+    assert_eq!(session.reserve_user_input_order().await, 3);
 }
 
 #[tokio::test]
 async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
-    let (mut session, turn_context) = make_session_and_context().await;
-    session.guardian_context_mode = GuardianContextMode::ThreadOwned;
-    let mut live = ContextManager::with_guardian_context_mode(
-        GuardianContextMode::ThreadOwned,
-        &SessionSource::default(),
-    );
+    let (session, turn_context) = make_session_and_context().await;
+
+    let mut live = ContextManager::for_session(&SessionSource::default());
     let mut items = Vec::new();
     let mut snapshots = Vec::new();
     for index in 0..2 {

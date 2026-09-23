@@ -1893,15 +1893,6 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<()> {
-    assert_luna_pool_context(/*thread_context_enabled*/ true).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deprecated_opt_out_still_samples_with_thread_owned_context() -> Result<()> {
-    assert_luna_pool_context(/*thread_context_enabled*/ false).await
-}
-
-async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let conversation_history = vec![
@@ -1946,7 +1937,7 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
         conversation_history,
         r#"{"path":"README.md"}"#,
         Some(TEST_GUARDIAN_POLICY),
-        &format!("[features.guardianv2]\nthread_context = {thread_context_enabled}\n"),
+        "",
         /*model_defaults*/ None,
     )
     .await?;
@@ -2028,6 +2019,7 @@ async fn assert_luna_pool_context(thread_context_enabled: bool) -> Result<()> {
         },
         {"type": "input_text", "text": ">>> APPROVAL REQUEST END\n"},
     ]);
+
     assert_eq!(request["input"][2]["content"], expected_content);
     let score = tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         loop {
@@ -2413,21 +2405,9 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance() -> Result<()> {
-    assert_compaction_approval_policy(/*thread_context_enabled*/ true).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deprecated_opt_out_still_rejects_incompatible_compaction() -> Result<()> {
-    assert_compaction_approval_policy(/*thread_context_enabled*/ false).await
-}
-
-async fn assert_compaction_approval_policy(thread_context_enabled: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let fixture = GuardianFailureFixture::with_config(&format!(
-        "[features.guardianv2]\nthread_context = {thread_context_enabled}\n"
-    ))
-    .await?;
+    let fixture = GuardianFailureFixture::with_config("").await?;
     let thread_store = fixture.test.codex.thread_extension_data();
     set_cached_score(
         thread_store,
@@ -2481,7 +2461,7 @@ async fn assert_compaction_approval_policy(thread_context_enabled: bool) -> Resu
         /*index*/ 1,
         score_authorization,
     );
-    // No new sample runs: only the enabled path rejects cached and initial-call approvals.
+    // No new sample runs: the live checkpoint rejects cached and initial-call approvals.
     for (computer_use_only, prompt) in [
         (false, "review action"),
         (
@@ -2964,25 +2944,22 @@ async fn contributor_sends_compacted_conversation_history_to_luna() -> Result<()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn contributor_reuses_the_latest_compatible_parent_compaction() -> Result<()> {
-    assert_parent_compaction_reuse(/*thread_context_enabled*/ true).await
+    assert_parent_compaction_reuse(/*parent_context_for_review*/ true).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn legacy_contributor_reuses_the_latest_compatible_parent_compaction() -> Result<()> {
-    assert_parent_compaction_reuse(/*thread_context_enabled*/ false).await
+    assert_parent_compaction_reuse(/*parent_context_for_review*/ false).await
 }
 
-async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<()> {
+async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let thread_server = responses::start_mock_server().await;
     let test = test_codex()
         .with_config(move |config| {
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            config
-                .features
-                .set_enabled(Feature::GuardianThreadContext, thread_context_enabled)
-                .expect("test context mode");
+
         })
         .with_pre_build_hook(|home| {
             std::fs::write(
@@ -3074,7 +3051,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
         retained,
         current: conversation_history,
         compaction_model_hash: parent_model.comp_hash.clone(),
-        retained_context: thread_context_enabled.then(codex_history::RetainedContext::default),
+        retained_context: parent_context_for_review.then(codex_history::RetainedContext::default),
     };
     thread_store.insert(parent_model);
 
@@ -3170,7 +3147,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             conversation_history: Arc::new(TestRetainedHistory {
                 current: TestConversationHistory(vec![latest_compaction, oversized_compaction]),
                 retained: Vec::new(),
-                retained_context: thread_context_enabled
+                retained_context: parent_context_for_review
                     .then(codex_history::RetainedContext::default),
                 compaction_model_hash: thread_store
                     .get::<ModelInfo>()
