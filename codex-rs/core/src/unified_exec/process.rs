@@ -97,7 +97,7 @@ pub(crate) struct UnifiedExecProcess {
     state_tx: watch::Sender<ProcessState>,
     state_rx: watch::Receiver<ProcessState>,
     output_task: Option<JoinHandle<()>>,
-    sandbox_type: SandboxType,
+    sandbox_type: Option<SandboxType>,
     timed_out: AtomicBool,
     _spawn_lifecycle: Option<SpawnLifecycleHandle>,
     // The shell may still need to replay this file after process startup returns.
@@ -117,7 +117,7 @@ impl std::fmt::Debug for UnifiedExecProcess {
 impl UnifiedExecProcess {
     fn new(
         process_handle: ProcessHandle,
-        sandbox_type: SandboxType,
+        sandbox_type: Option<SandboxType>,
         spawn_lifecycle: Option<SpawnLifecycleHandle>,
     ) -> Self {
         let output = OutputHandles {
@@ -281,7 +281,7 @@ impl UnifiedExecProcess {
         guard.to_bytes()
     }
 
-    pub(crate) fn sandbox_type(&self) -> SandboxType {
+    pub(crate) fn sandbox_type(&self) -> Option<SandboxType> {
         self.sandbox_type
     }
 
@@ -309,7 +309,7 @@ impl UnifiedExecProcess {
         text: &str,
     ) -> Result<(), UnifiedExecError> {
         let executor_reported_denial = self.state_rx.borrow().sandbox_denied;
-        let sandbox_type = self.sandbox_type();
+        let sandbox_type = self.sandbox_type().unwrap_or(SandboxType::None);
         if !self.has_exited() || (!executor_reported_denial && sandbox_type == SandboxType::None) {
             return Ok(());
         }
@@ -354,7 +354,7 @@ impl UnifiedExecProcess {
         let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
         let mut managed = Self::new(
             ProcessHandle::Local(Box::new(process_handle)),
-            sandbox_type,
+            Some(sandbox_type),
             Some(spawn_lifecycle),
         );
         managed.output_task = Some(Self::spawn_local_output_task(
@@ -403,7 +403,7 @@ impl UnifiedExecProcess {
         let process_handle = ProcessHandle::ExecServer(Arc::clone(&started.process));
         // Older peers do not report this field. In that case, skip local
         // classification rather than attributing a violation to a guessed backend.
-        let sandbox_type = started.sandbox_type.unwrap_or(SandboxType::None);
+        let sandbox_type = started.sandbox_type;
         let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
         let output_handles = managed.output_handles().clone();
         managed.output_task = Some(Self::spawn_exec_server_output_task(

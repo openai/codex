@@ -5678,6 +5678,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         &mut chat,
         AppServerThreadItem::CommandExecution {
             model_context: None,
+            sandbox_type: None,
             id: "c1".into(),
             command: codex_shell_command::parse_command::shlex_join(&command),
             cwd: cwd.clone().into(),
@@ -5696,6 +5697,7 @@ async fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         &mut chat,
         AppServerThreadItem::CommandExecution {
             model_context: None,
+            sandbox_type: None,
             id: "c1".into(),
             command: codex_shell_command::parse_command::shlex_join(&command),
             cwd: cwd.into(),

@@ -242,6 +242,11 @@ pub struct ModelInvocationContext {
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct CommandExecutionItem {
+    /// Observed process backend for live analytics; None means unknown or not launched.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub sandbox_type: Option<crate::sandbox::SandboxType>,
     #[serde(skip)]
     #[schemars(skip)]
     #[ts(skip)]

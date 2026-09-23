@@ -49,6 +49,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_protocol::protocol::ThreadSource;
+use codex_protocol::sandbox::SandboxType;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -61,12 +62,14 @@ fn sample_command_execution_item_with_actions(
     command_actions: Vec<CommandAction>,
     plugin_id: Option<&str>,
     script_path: Option<&str>,
+    sandbox_type: Option<SandboxType>,
 ) -> ThreadItem {
     let mut item = sample_command_execution_item(status, exit_code, duration_ms);
     let ThreadItem::CommandExecution {
         command_actions: item_command_actions,
         plugin_id: item_plugin_id,
         script_path: item_script_path,
+        sandbox_type: item_sandbox_type,
         ..
     } = &mut item
     else {
@@ -75,6 +78,7 @@ fn sample_command_execution_item_with_actions(
     *item_command_actions = command_actions;
     *item_plugin_id = plugin_id.map(str::to_string);
     *item_script_path = script_path.map(str::to_string);
+    *item_sandbox_type = sandbox_type;
     item
 }
 
@@ -96,6 +100,7 @@ fn command_execution_event_serializes_expected_shape() {
     let event = TrackEventRequest::CommandExecution(CodexCommandExecutionEventRequest {
         event_type: "codex_command_execution_event",
         event_params: CodexCommandExecutionEventParams {
+            sandbox_backend: None,
             model_slug: None,
             reasoning_effort: None,
             base: CodexToolItemEventBase {
@@ -155,6 +160,7 @@ fn command_execution_event_serializes_expected_shape() {
     let mut expected = json!({
         "event_type": "codex_command_execution_event",
         "event_params": {
+            "sandbox_backend": null,
             "model_slug": null,
             "reasoning_effort": null,
             "thread_id": "thread-1",
@@ -291,6 +297,7 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
                         ],
                         Some("sample@openai-curated"),
                         Some("scripts/run.py"),
+                        Some(SandboxType::WindowsMxc),
                     ),
                 },
             ))),
@@ -301,6 +308,7 @@ async fn item_lifecycle_notifications_publish_command_execution_event() {
     let payload = serde_json::to_value(&events).expect("serialize events");
     assert_eq!(payload.as_array().expect("events array").len(), 1);
     assert_eq!(payload[0]["event_params"]["model_slug"], "invoking-model");
+    assert_eq!(payload[0]["event_params"]["sandbox_backend"], "windows_mxc");
     assert_eq!(payload[0]["event_params"]["reasoning_effort"], "max");
     assert_eq!(payload[0]["event_type"], "codex_command_execution_event");
     assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");

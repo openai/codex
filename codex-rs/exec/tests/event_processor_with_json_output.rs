@@ -170,6 +170,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
     let command_item = ThreadItem::CommandExecution {
         model_context: None,
+        sandbox_type: None,
         id: "cmd-1".to_string(),
         command: "ls".to_string(),
         cwd: test_path_buf("/tmp/project").abs().into(),
@@ -213,6 +214,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
         ItemCompletedNotification {
             item: ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
                 cwd: test_path_buf("/tmp/project").abs().into(),
@@ -1415,6 +1417,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
         processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
             item: ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
                 cwd: test_path_buf("/tmp/project").abs().into(),
@@ -1458,6 +1461,7 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: vec![ThreadItem::CommandExecution {
                     model_context: None,
+                    sandbox_type: None,
                     id: "cmd-1".to_string(),
                     command: "ls".to_string(),
                     cwd: test_path_buf("/tmp/project").abs().into(),

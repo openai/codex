@@ -2772,6 +2772,7 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
     match item {
         ThreadItem::CommandExecution {
             id,
+            sandbox_type,
             plugin_id,
             script_path,
             source,
@@ -2806,6 +2807,8 @@ fn tool_item_event(input: ToolItemEventInput<'_>) -> Option<TrackEventRequest> {
                 CodexCommandExecutionEventRequest {
                     event_type: "codex_command_execution_event",
                     event_params: CodexCommandExecutionEventParams {
+                        sandbox_backend: sandbox_type
+                            .map(|sandbox| sandbox.as_metric_tag().to_string()),
                         model_slug: model_context.map(|context| context.model_slug.clone()),
                         reasoning_effort: model_context
                             .and_then(|context| context.reasoning_effort.clone()),

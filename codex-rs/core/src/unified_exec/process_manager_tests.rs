@@ -482,6 +482,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
 
     emit_failed_initial_exec_end_if_unstored(
         /*process_started_alive*/ false,
+        Some(codex_protocol::sandbox::SandboxType::WindowsMxc),
         &context,
         &request,
         #[allow(deprecated)]
@@ -505,6 +506,10 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         panic!("expected CommandExecution item");
     };
     assert_eq!(item.id, "call-unified-denied");
+    assert_eq!(
+        item.sandbox_type,
+        Some(codex_protocol::sandbox::SandboxType::WindowsMxc)
+    );
     assert_eq!(
         item.status,
         codex_protocol::items::CommandExecutionStatus::Failed

@@ -647,6 +647,7 @@ pub(super) fn sample_command_execution_item_with_id(
 ) -> ThreadItem {
     ThreadItem::CommandExecution {
         model_context: None,
+        sandbox_type: None,
         id: id.to_string(),
         plugin_id: None,
         script_path: None,

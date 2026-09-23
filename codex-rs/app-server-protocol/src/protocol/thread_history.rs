@@ -2391,6 +2391,7 @@ mod tests {
         }];
         let command_item = CoreTurnItem::CommandExecution(CoreCommandExecutionItem {
             model_context: None,
+            sandbox_type: None,
             id: "exec-1".to_string(),
             plugin_id: Some("sample@openai-curated".to_string()),
             script_path: Some("scripts/run.py".to_string()),
@@ -2477,6 +2478,7 @@ mod tests {
             build_turns_from_rollout_items(&items[..2])[0].items,
             vec![ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-1".to_string(),
                 plugin_id: Some("sample@openai-curated".to_string()),
                 script_path: Some("scripts/run.py".to_string()),
@@ -2503,6 +2505,7 @@ mod tests {
             turns[0].items,
             vec![ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-1".to_string(),
                 plugin_id: Some("sample@openai-curated".to_string()),
                 script_path: Some("scripts/run.py".to_string()),
@@ -3191,6 +3194,7 @@ mod tests {
             turns[0].items[2],
             ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-1".into(),
                 plugin_id: None,
                 script_path: None,
@@ -3465,6 +3469,7 @@ mod tests {
             turns[0].items[1],
             ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-declined".into(),
                 plugin_id: None,
                 script_path: None,
@@ -3575,6 +3580,7 @@ mod tests {
             turns[0].items[1],
             ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "guardian-exec".into(),
                 plugin_id: Some("sample@openai-curated".into()),
                 script_path: Some("scripts/run.py".into()),
@@ -3649,6 +3655,7 @@ mod tests {
             turns[0].items[1],
             ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "guardian-execve".into(),
                 plugin_id: Some("sample@openai-curated".into()),
                 script_path: Some("scripts/run.py".into()),
@@ -3852,6 +3859,7 @@ mod tests {
             turns[0].items[1],
             ThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-late".into(),
                 plugin_id: None,
                 script_path: None,

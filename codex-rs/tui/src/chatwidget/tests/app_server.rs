@@ -1132,6 +1132,7 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
             started_at_ms: 0,
             item: AppServerThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "cmd-1".to_string(),
                 command: command.clone(),
                 cwd: test_path_buf("/tmp").abs().into(),
@@ -1157,6 +1158,7 @@ async fn live_app_server_command_execution_strips_shell_wrapper() {
             completed_at_ms: 0,
             item: AppServerThreadItem::CommandExecution {
                 model_context: None,
+                sandbox_type: None,
                 id: "cmd-1".to_string(),
                 command,
                 cwd: test_path_buf("/tmp").abs().into(),

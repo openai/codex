@@ -793,6 +793,7 @@ pub(crate) enum WebSearchActionKind {
 
 #[derive(Serialize)]
 pub(crate) struct CodexCommandExecutionEventParams {
+    pub(crate) sandbox_backend: Option<String>,
     pub(crate) model_slug: Option<String>,
     pub(crate) reasoning_effort: Option<String>,
     #[serde(flatten)]

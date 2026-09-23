@@ -3272,6 +3272,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 
     let command_item = TurnItem::CommandExecution(CommandExecutionItem {
         model_context: None,
+        sandbox_type: None,
         id: "exec-1".to_string(),
         plugin_id: Some("sample@openai-curated".to_string()),
         script_path: Some("scripts/run.py".to_string()),
@@ -3305,6 +3306,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItem::from(command_item),
         ThreadItem::CommandExecution {
             model_context: None,
+            sandbox_type: None,
             id: "exec-1".to_string(),
             plugin_id: Some("sample@openai-curated".to_string()),
             script_path: Some("scripts/run.py".to_string()),

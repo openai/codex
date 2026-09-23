@@ -5581,6 +5581,7 @@ mod tests {
             started_at_ms: 10,
             item: TurnItem::CommandExecution(CommandExecutionItem {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-1".into(),
                 plugin_id: Some("sample@openai-curated".into()),
                 script_path: Some("scripts/run.py".into()),
@@ -5608,6 +5609,7 @@ mod tests {
             completed_at_ms: 20,
             item: TurnItem::CommandExecution(CommandExecutionItem {
                 model_context: None,
+                sandbox_type: None,
                 id: "exec-1".into(),
                 plugin_id: Some("sample@openai-curated".into()),
                 script_path: Some("scripts/run.py".into()),

@@ -15,6 +15,7 @@ fn command_item(status: CommandExecutionStatus) -> ThreadItem {
         plugin_id: None,
         script_path: None,
         model_context: None,
+        sandbox_type: None,
         command: "cargo check".to_string(),
         cwd: LegacyAppPathString::from_string("/tmp/project"),
         process_id: None,
