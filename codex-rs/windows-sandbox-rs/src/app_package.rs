@@ -196,13 +196,8 @@ pub(crate) fn registered_runner_alias(
     let package =
         current_package_full_name()?.context("registered Core launch requires an installed app")?;
     let owner = crate::winutil::resolve_sid(&crate::runtime_ownership::current_setup_user()?)?;
-    anyhow::ensure!(
-        record.user_sid
-            == crate::winutil::string_from_sid_bytes(&owner).map_err(anyhow::Error::msg)?
-            && record.codex_home == codex_home.canonicalize()?
-            && record.runtime()?.ready_for_package(&package),
-        "registered Core setup belongs to another owner or is being removed"
-    );
+    let owner = crate::winutil::string_from_sid_bytes(&owner).map_err(anyhow::Error::msg)?;
+    authorize_runner_receipt(&record, &owner, &codex_home.canonicalize()?, &package)?;
     let entry = record
         .runtime()?
         .accounts
@@ -225,6 +220,32 @@ pub(crate) fn registered_runner_alias(
         "registered Core setup contains an invalid alias"
     );
     Ok(path.clone())
+}
+
+fn authorize_runner_receipt(
+    record: &crate::installation_record::InstallationRecord,
+    owner: &str,
+    codex_home: &Path,
+    package: &str,
+) -> Result<()> {
+    ensure!(
+        record.user_sid == owner,
+        "registered Core setup belongs to another owner"
+    );
+    ensure!(
+        record.codex_home == codex_home,
+        "registered Core setup belongs to another Codex home"
+    );
+    let runtime = record.runtime()?;
+    ensure!(
+        runtime.retiring.is_none(),
+        "registered Core setup is being removed"
+    );
+    ensure!(
+        runtime.ready_for_package(package),
+        "registered Core setup is not complete for the installed app; retry sandbox setup"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

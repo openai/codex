@@ -77,13 +77,15 @@ pub(super) fn run(
             retiring: None,
         });
         // Persist the authenticated owner before setup can rotate shared credentials.
-        crate::installation_record::save_runtime(&installation)?;
+        crate::installation_record::save_runtime(&installation)
+            .context("persist registered sandbox owner")?;
         // Expired passwords require full setup to rotate and persist credentials before logon.
         for account in [
             codex_windows_sandbox::OFFLINE_USERNAME,
             codex_windows_sandbox::ONLINE_USERNAME,
         ] {
-            setup_complete &= codex_windows_sandbox::local_user_flags(account)?
+            setup_complete &= codex_windows_sandbox::local_user_flags(account)
+                .with_context(|| format!("inspect registered sandbox account {account}"))?
                 .is_some_and(|flags| flags & (UF_ACCOUNTDISABLE | UF_PASSWORD_EXPIRED) == 0);
         }
         if !setup_complete {
@@ -93,7 +95,8 @@ pub(super) fn run(
                 "registration refresh cannot repair sandbox setup"
             );
             // Setup resolves this name for ACL trustees; it must still name the held token's user.
-            let setup_owner_sid = codex_windows_sandbox::resolve_sid(&identity.account)?;
+            let setup_owner_sid = codex_windows_sandbox::resolve_sid(&identity.account)
+                .context("resolve registered sandbox setup owner")?;
             ensure!(
                 string_from_sid_bytes(&setup_owner_sid).map_err(anyhow::Error::msg)?
                     == identity.user_sid,
@@ -104,14 +107,18 @@ pub(super) fn run(
                 &identity.account,
                 settings,
                 identity.runtime,
-            )?;
+            )
+            .context("provision registered sandbox accounts and permissions")?;
         }
         crate::registered_runtime::provision(
             identity,
             &mut installation,
-            &package.FullName()?,
+            &package
+                .FullName()
+                .context("read registered sandbox package name")?,
             shutdown,
         )
+        .context("prepare registered sandbox runtime")
     })();
     result
         .inspect_err(|error| {

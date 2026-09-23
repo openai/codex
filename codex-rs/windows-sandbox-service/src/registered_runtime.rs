@@ -106,7 +106,8 @@ pub(crate) fn provision(
                 &mut pins,
             )?;
             logon_existing_sandbox_account(&identity.codex_home, account)
-        })?;
+        })
+        .with_context(|| format!("log on managed runtime account {account:?}"))?;
         let expected = record
             .runtime()?
             .accounts
@@ -116,8 +117,10 @@ pub(crate) fn provision(
             token,
             account,
             expected.map(|entry| entry.user_sid.as_str()),
-        )?;
-        let installed = registered_packages(&profile.user_sid, &family)?;
+        )
+        .with_context(|| format!("prepare managed runtime profile for {account:?}"))?;
+        let installed = registered_packages(&profile.user_sid, &family)
+            .with_context(|| format!("query existing runtime packages for {account:?}"))?;
         if expected.is_none() {
             ensure!(
                 installed.is_empty(),
@@ -128,7 +131,8 @@ pub(crate) fn provision(
             profile.token.as_raw_handle() as _,
             &FOLDERID_LocalAppData,
             /*flags*/ 0,
-        )?
+        )
+        .with_context(|| format!("resolve runtime alias location for {account:?}"))?
         .join(r"Microsoft\WindowsApps")
         .join(&family)
         .join(APP_CORE_RUNNER_ALIAS);
@@ -148,7 +152,8 @@ pub(crate) fn provision(
     record.runtime_mut()?.accounts = accounts;
     if !receipt_current {
         record.runtime_mut()?.ready_package = None;
-        crate::installation_record::save_runtime(record)?;
+        crate::installation_record::save_runtime(record)
+            .context("persist managed runtime account registration")?;
     }
     for (mut profile, installed) in profiles {
         if !installed {
