@@ -20,6 +20,7 @@ mod error_metrics;
 mod read_metrics;
 
 use error_metrics::FailureMetric;
+use read_metrics::ReadFailureSource;
 use read_metrics::ReadMetrics;
 
 const COMPRESSED_SUFFIX: &str = ".zst";
@@ -85,7 +86,7 @@ pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineRead
     match result {
         Ok(inner) => Ok(RolloutLineReader { inner, metrics }),
         Err(err) => {
-            metrics.failed("open", &err);
+            metrics.failed("open", ReadFailureSource::Stream, &err);
             Err(err)
         }
     }
@@ -265,17 +266,22 @@ impl RolloutLineReader {
     pub async fn next_line(&mut self) -> io::Result<Option<String>> {
         let started_at = Instant::now();
         self.metrics.reached_eof = false;
+        let mut failure_source = ReadFailureSource::Stream;
         let result = async {
             match &mut self.inner {
                 RolloutLineReaderInner::Plain(lines) => lines.next_line().await,
                 RolloutLineReaderInner::Blocking(slot) => {
                     let Some(mut reader) = slot.take() else {
+                        failure_source = ReadFailureSource::ReaderBusy;
                         return Err(io::Error::other("compressed rollout reader is busy"));
                     };
                     let (line, reader) =
                         tokio::task::spawn_blocking(move || (reader.next().transpose(), reader))
                             .await
-                            .map_err(io::Error::other)?;
+                            .map_err(|err| {
+                                failure_source = ReadFailureSource::TaskJoin;
+                                io::Error::other(err)
+                            })?;
                     *slot = Some(reader);
                     line
                 }
@@ -284,8 +290,11 @@ impl RolloutLineReader {
         .await;
         self.metrics.duration = self.metrics.duration.saturating_add(started_at.elapsed());
         match &result {
-            Ok(line) => self.metrics.reached_eof = line.is_none(),
-            Err(err) => self.metrics.failed("read", err),
+            Ok(line) => {
+                self.metrics.reached_eof = line.is_none();
+                self.metrics.read_any_line |= line.is_some();
+            }
+            Err(err) => self.metrics.failed("read", failure_source, err),
         }
         result
     }
@@ -1331,6 +1340,7 @@ mod reader {
     use std::io::Read;
     use std::path::Path;
 
+    use super::ReadFailureSource;
     use super::ReadMetrics;
     use super::RolloutLineReaderInner;
     use super::path;
@@ -1353,7 +1363,8 @@ mod reader {
                 )
             })
             .await
-            .map_err(io::Error::other)??;
+            .map_err(io::Error::other)
+            .inspect_err(|err| metrics.failed("open", ReadFailureSource::TaskJoin, err))??;
             return Ok(RolloutLineReaderInner::Blocking(Some(reader)));
         }
         metrics.format = "plain";
