@@ -30,6 +30,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows_sys::Win32::Storage::FileSystem::FILE_READ_DATA;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 use windows_sys::Win32::System::IO::IO_STATUS_BLOCK_0;
 use windows_sys::Win32::System::Kernel::OBJ_CASE_INSENSITIVE;
@@ -120,28 +121,7 @@ pub fn open_directory_no_reparse(
     share_access: u32,
     disposition: DirectoryOpenDisposition,
 ) -> Result<OwnedHandle> {
-    validate_local_directory_path(path)?;
-    let source_offset = if matches!(
-        path.components().next(),
-        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
-    ) {
-        4
-    } else {
-        0
-    };
-    // NtCreateFile expects an NT namespace path. Convert only the local-disk
-    // spellings accepted by provisioning, without canonicalizing and following
-    // the reparse points that OBJ_DONT_REPARSE must reject.
-    let source: Vec<u16> = path.as_os_str().encode_wide().collect();
-    let mut nt_path: Vec<u16> = OsStr::new("\\??\\").encode_wide().collect();
-    for unit in source.into_iter().skip(source_offset) {
-        nt_path.push(if unit == b'/' as u16 {
-            b'\\' as u16
-        } else {
-            unit
-        });
-    }
-    nt_path.push(0);
+    let mut nt_path = local_directory_nt_path(path)?;
     open_no_reparse(
         /*root_directory*/ 0,
         &mut nt_path,
@@ -154,6 +134,65 @@ pub fn open_directory_no_reparse(
         FILE_DIRECTORY_FILE,
     )
     .with_context(|| format!("open directory {}", path.display()))
+}
+
+fn local_directory_nt_path(path: &Path) -> Result<Vec<u16>> {
+    validate_local_directory_path(path)?;
+    let source_offset = if matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_))
+    ) {
+        4
+    } else {
+        0
+    };
+    // Windows 10 also rejects the Object Manager drive-letter link under
+    // OBJ_DONT_REPARSE. Resolve that alias only; never canonicalize filesystem
+    // components, which must still be checked by NtCreateFile.
+    let source: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let drive = [source[source_offset], b':' as u16, 0];
+    let mut nt_path = vec![0_u16; 32_768];
+    let length =
+        unsafe { QueryDosDeviceW(drive.as_ptr(), nt_path.as_mut_ptr(), nt_path.len() as u32) };
+    if length == 0 {
+        return Err(std::io::Error::last_os_error()).context("resolve directory drive");
+    }
+    nt_path.truncate(
+        nt_path
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(length as usize),
+    );
+    ensure!(
+        is_disk_volume(&nt_path),
+        "directory drive must resolve directly to a disk volume"
+    );
+    for unit in source.into_iter().skip(source_offset + 2) {
+        nt_path.push(if unit == b'/' as u16 {
+            b'\\' as u16
+        } else {
+            unit
+        });
+    }
+    nt_path.push(0);
+    Ok(nt_path)
+}
+
+fn is_disk_volume(target: &[u16]) -> bool {
+    let Some((prefix, number)) = target.split_at_checked(br"\Device\HarddiskVolume".len()) else {
+        return false;
+    };
+    // Do not pass other devices or volume subpaths to NtCreateFile.
+    prefix
+        .iter()
+        .zip(br"\Device\HarddiskVolume")
+        .all(|(&unit, expected)| {
+            u8::try_from(unit).is_ok_and(|unit| unit.eq_ignore_ascii_case(expected))
+        })
+        && !number.is_empty()
+        && number
+            .iter()
+            .all(|unit| (u16::from(b'0')..=u16::from(b'9')).contains(unit))
 }
 
 /// Keeps a directory nonempty, preventing in-place reparse conversion while the

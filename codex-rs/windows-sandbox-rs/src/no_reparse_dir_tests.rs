@@ -2,17 +2,23 @@ use std::fs;
 use std::os::windows::io::OwnedHandle;
 use std::path::Path;
 use std::process::Command;
+use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE;
+use windows_sys::Win32::Storage::FileSystem::FILE_TRAVERSE;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
 
 use anyhow::Result;
+use pretty_assertions::assert_eq;
 
 use super::DirectoryOpenDisposition;
+use super::is_disk_volume;
+use super::local_directory_nt_path;
 use super::open_directory_no_reparse;
 use super::validate_local_directory_path;
+use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
 
 fn open_for_acl(path: &Path, disposition: DirectoryOpenDisposition) -> Result<OwnedHandle> {
     open_directory_no_reparse(
@@ -52,6 +58,74 @@ fn creates_and_opens_plain_directory_leaf() -> Result<()> {
 
     assert!(directory.is_dir());
     Ok(())
+}
+
+#[test]
+fn opens_drive_root_without_following_filesystem_reparses() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let directory = temporary.path().canonicalize()?;
+    let root = directory
+        .ancestors()
+        .last()
+        .expect("absolute path has a root");
+    // canonicalize gives a verbatim drive path; exercise both supported forms.
+    let ordinary = root
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_owned();
+    let drive: Vec<_> = ordinary.encode_utf16().take(2).chain(Some(0)).collect();
+    let mut device = vec![0; 32_768];
+    if unsafe { QueryDosDeviceW(drive.as_ptr(), device.as_mut_ptr(), device.len() as u32) } == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    device.truncate(
+        device
+            .iter()
+            .position(|unit| *unit == 0)
+            .expect("QueryDosDeviceW returns a NUL-terminated target"),
+    );
+    assert!(is_disk_volume(&device));
+    for path in [root, Path::new(&ordinary)] {
+        for suffix in ["", "no-reparse-test"] {
+            let mut expected = device.clone();
+            expected.extend(format!(r"\{suffix}").encode_utf16());
+            expected.push(0);
+            assert_eq!(local_directory_nt_path(&path.join(suffix))?, expected);
+        }
+        drop(open_directory_no_reparse(
+            path,
+            FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            DirectoryOpenDisposition::OpenExisting,
+        )?);
+    }
+    Ok(())
+}
+
+#[test]
+fn disk_volume_mapping_excludes_other_devices_and_subpaths() {
+    for accepted in [
+        r"\Device\HarddiskVolume0",
+        r"\Device\HarddiskVolume1",
+        r"\device\harddiskvolume123",
+    ] {
+        assert!(is_disk_volume(&accepted.encode_utf16().collect::<Vec<_>>()));
+    }
+    for rejected in [
+        r"\Device\NamedPipe",
+        r"\Device\NamedPipe\pipe",
+        r"\Device\HarddiskVolume",
+        r"\Device\HarddiskVolume1\directory",
+        r"\Device\HarddiskVolume1suffix",
+        r"\Device\HarddiskVolumeShadowCopy1",
+        r"\Device\CdRom0",
+        r"\??\C:\directory",
+    ] {
+        assert!(
+            !is_disk_volume(&rejected.encode_utf16().collect::<Vec<_>>()),
+            "accepted {rejected}"
+        );
+    }
 }
 
 #[test]
