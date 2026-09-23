@@ -128,6 +128,61 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
     insta::assert_snapshot!("startup_draft_full_frames", snapshots.join("\n---\n"));
 }
 
+#[test]
+fn terminal_app_ssh_fallback_renders_inline_startup() {
+    let pump = startup_test_pump(std::iter::empty());
+    let owned_layout = super::layout::OwnedStartupLayout::new(
+        &pump.header,
+        &pump.bottom_pane,
+        StartupDraftSessionAction::New,
+    );
+    let mut frames = Vec::new();
+    for terminal_app_over_ssh in [false, true] {
+        let owned = crate::determine_alt_screen_mode(
+            /*no_alt_screen*/ false,
+            codex_config::types::AltScreenMode::Auto,
+            terminal_app_over_ssh,
+        );
+        let renderable = if owned {
+            crate::render::renderable::RenderableItem::Borrowed(&owned_layout)
+        } else {
+            startup_draft_renderable(
+                &pump.header,
+                &pump.bottom_pane,
+                StartupDraftSessionAction::New,
+            )
+        };
+        let width = 48;
+        let height = if owned {
+            16
+        } else {
+            renderable.desired_height(width)
+        };
+        let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+        let mut buffer = Buffer::empty(area);
+        renderable.render(area, &mut buffer);
+        let frame = (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        frames.push(format!(
+            "terminal_app_over_ssh={terminal_app_over_ssh}, owned={owned}\n{frame}"
+        ));
+    }
+    insta::assert_snapshot!(
+        "terminal_app_ssh_startup",
+        frames
+            .join("\n---\n")
+            .replace(crate::version::CODEX_CLI_VERSION, "<VERSION>")
+    );
+}
+
 #[tokio::test]
 async fn startup_draft_clears_loading_status_when_starting_fresh() {
     let mut snapshots = Vec::new();

@@ -1,0 +1,35 @@
+---
+source: tui/src/startup_draft_tests.rs
+assertion_line: 162
+expression: "frames.join(\"\\n---\\n\").replace(crate::version::CODEX_CLI_VERSION, \"<VERSION>\")"
+---
+terminal_app_over_ssh=false, owned=true
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  ? for shortcuts
+---
+terminal_app_over_ssh=true, owned=false
+╭───────────────────────────────────────╮
+│ >_ OpenAI Codex (v<VERSION>)              │
+│                                       │
+│ model:     loading   /model to change │
+│ directory: loading                    │
+╰───────────────────────────────────────╯
+
+
+› Ask Codex to do anything
+
+  ? for shortcuts

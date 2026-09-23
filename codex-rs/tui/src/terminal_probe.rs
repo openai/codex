@@ -16,6 +16,9 @@ use std::time::Duration;
 #[cfg(unix)]
 mod startup_replay;
 
+#[cfg(unix)]
+mod terminal_identity;
+
 #[cfg(any(windows, test))]
 #[path = "terminal_probe/windows_replay.rs"]
 mod windows_replay;
@@ -38,6 +41,7 @@ mod imp {
     use super::DefaultColors;
     use super::parse_default_colors;
     use super::startup_replay::startup_replay_input;
+    use super::terminal_identity;
     use std::fs::File;
     use std::fs::OpenOptions;
     use std::io;
@@ -61,6 +65,7 @@ mod imp {
         pub(crate) cursor_position: Option<Position>,
         pub(crate) default_colors: Option<DefaultColors>,
         pub(crate) keyboard_enhancement_supported: Option<bool>,
+        pub(crate) terminal_app_over_ssh: Option<bool>,
     }
 
     /// Whether the startup probe should query keyboard enhancement support.
@@ -274,17 +279,32 @@ mod imp {
         keyboard_probe: StartupKeyboardEnhancementProbe,
     ) -> io::Result<StartupProbe> {
         let mut tty = Tty::open()?;
-        match keyboard_probe {
-            StartupKeyboardEnhancementProbe::Query => {
-                tty.write_all(b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\\x1B[?u\x1B[c")?;
-            }
-            StartupKeyboardEnhancementProbe::Skip => {
-                tty.write_all(b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
-            }
+        let query_identity = codex_terminal_detection::terminal_info()
+            .multiplexer
+            .is_none()
+            && (std::env::var_os("SSH_TTY").is_some()
+                || std::env::var_os("SSH_CONNECTION").is_some());
+        let mut query = b"\x1B[6n\x1B]10;?\x1B\\\x1B]11;?\x1B\\".to_vec();
+        if keyboard_probe == StartupKeyboardEnhancementProbe::Query {
+            query.extend_from_slice(b"\x1B[?u");
         }
+        // DA1 must follow the keyboard query: its reply also finishes keyboard detection.
+        if keyboard_probe == StartupKeyboardEnhancementProbe::Query || query_identity {
+            query.extend_from_slice(b"\x1B[c");
+        }
+        if query_identity {
+            query.extend_from_slice(b"\x1B[>c");
+        }
+        tty.write_all(&query)?;
 
         let mut buffer = Vec::new();
-        let result = read_startup_probe(&mut tty, timeout, keyboard_probe, &mut buffer);
+        let result = read_startup_probe(
+            &mut tty,
+            timeout,
+            keyboard_probe,
+            query_identity,
+            &mut buffer,
+        );
         crossterm::event::buffer_input(&startup_replay_input(&buffer))?;
         result
     }
@@ -320,6 +340,7 @@ mod imp {
         tty: &mut Tty,
         timeout: Duration,
         keyboard_probe: StartupKeyboardEnhancementProbe,
+        query_identity: bool,
         buffer: &mut Vec<u8>,
     ) -> io::Result<StartupProbe> {
         let deadline = Instant::now() + timeout;
@@ -327,6 +348,7 @@ mod imp {
             cursor_position: None,
             default_colors: None,
             keyboard_enhancement_supported: None,
+            terminal_app_over_ssh: (!query_identity).then_some(/*t*/ false),
         };
         let mut saw_supported_keyboard = false;
         loop {
@@ -364,6 +386,9 @@ mod imp {
         if probe.default_colors.is_none() {
             probe.default_colors = parse_default_colors(buffer);
         }
+        if probe.terminal_app_over_ssh.is_none() {
+            probe.terminal_app_over_ssh = terminal_identity::is_apple_terminal(buffer);
+        }
         if keyboard_probe == StartupKeyboardEnhancementProbe::Skip
             || probe.keyboard_enhancement_supported.is_some()
         {
@@ -389,6 +414,7 @@ mod imp {
     ) -> bool {
         probe.cursor_position.is_some()
             && probe.default_colors.is_some()
+            && probe.terminal_app_over_ssh.is_some()
             && (keyboard_probe == StartupKeyboardEnhancementProbe::Skip
                 || probe.keyboard_enhancement_supported.is_some())
     }
@@ -633,6 +659,7 @@ mod imp {
                 cursor_position: None,
                 default_colors: None,
                 keyboard_enhancement_supported: None,
+                terminal_app_over_ssh: Some(false),
             };
             let mut saw_supported_keyboard = false;
             update_startup_probe(
@@ -651,12 +678,64 @@ mod imp {
                         bg: (17, 17, 17),
                     }),
                     keyboard_enhancement_supported: Some(true),
+                    terminal_app_over_ssh: Some(false),
                 }
             );
             assert!(startup_probe_complete(
                 &probe,
                 StartupKeyboardEnhancementProbe::Query
             ));
+        }
+
+        #[test]
+        fn startup_probe_waits_for_identity_even_when_keyboard_probe_is_skipped() {
+            let mut probe = StartupProbe {
+                cursor_position: None,
+                default_colors: None,
+                keyboard_enhancement_supported: None,
+                terminal_app_over_ssh: None,
+            };
+            let mut supported_keyboard = false;
+            let input =
+                b"\x1b[1;1R\x1b]10;rgb:eeee/eeee/eeee\x07\x1b]11;rgb:1111/1111/1111\x07\x1b[?1;2c";
+            update_startup_probe(
+                &mut probe,
+                &mut supported_keyboard,
+                input,
+                StartupKeyboardEnhancementProbe::Skip,
+            );
+            assert!(!startup_probe_complete(
+                &probe,
+                StartupKeyboardEnhancementProbe::Skip
+            ));
+            let mut input = input.to_vec();
+            input.extend_from_slice(b"\x1b[>1;95;0c");
+            update_startup_probe(
+                &mut probe,
+                &mut supported_keyboard,
+                &input,
+                StartupKeyboardEnhancementProbe::Skip,
+            );
+            assert_eq!(probe.terminal_app_over_ssh, Some(true));
+            assert!(startup_probe_complete(
+                &probe,
+                StartupKeyboardEnhancementProbe::Skip
+            ));
+        }
+
+        #[test]
+        fn missing_identity_remains_unknown_at_the_deadline() {
+            let mut tty = tty_with_buffered_input(b"\x1b[?1;2c");
+            let mut buffer = Vec::new();
+            let probe = read_startup_probe(
+                &mut tty,
+                Duration::from_millis(/*millis*/ 5),
+                StartupKeyboardEnhancementProbe::Skip,
+                /*query_identity*/ true,
+                &mut buffer,
+            )
+            .expect("finish within probe deadline");
+            assert_eq!(probe.terminal_app_over_ssh, None);
         }
 
         #[test]
@@ -672,6 +751,7 @@ mod imp {
                 &mut tty,
                 Duration::from_secs(/*secs*/ 1),
                 StartupKeyboardEnhancementProbe::Query,
+                /*query_identity*/ false,
                 &mut buffer,
             )
             .expect("read terminal responses after buffered typeahead");
@@ -685,6 +765,7 @@ mod imp {
                         bg: (17, 17, 17),
                     }),
                     keyboard_enhancement_supported: Some(true),
+                    terminal_app_over_ssh: Some(false),
                 }
             );
             let mut expected_replay = vec![b'x'; 2_048];

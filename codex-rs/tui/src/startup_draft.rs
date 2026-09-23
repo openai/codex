@@ -132,6 +132,7 @@ impl StartupDraft {
             initialized_terminal.enhanced_keys_supported,
             initialized_terminal.stderr_guard,
         );
+        tui.terminal_app_over_ssh = initialized_terminal.terminal_app_over_ssh;
         tui.set_alt_screen_enabled(screen.use_alt_screen);
         let mut pump = StartupDraftPump::new(&tui, initial_screen, session_action);
         pump.bottom_pane

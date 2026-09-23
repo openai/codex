@@ -275,8 +275,22 @@ pub(super) async fn run_main_inner(
     let startup_presentation::StartupPresentation {
         bootstrap_config,
         config_cwd,
-        screen,
+        mut screen,
     } = presentation;
+    screen.use_alt_screen = determine_alt_screen_mode(
+        cli.no_alt_screen,
+        bootstrap_config
+            .config_toml
+            .tui
+            .as_ref()
+            .map(|tui| tui.alternate_screen)
+            .unwrap_or_default(),
+        initialized_terminal.terminal_app_over_ssh,
+    );
+    screen.transcript_mode = crate::transcript_mode::TranscriptMode::resolve(
+        screen.transcript_mode.is_owned(),
+        screen.use_alt_screen,
+    );
     let mut startup_draft = startup_draft::StartupDraft::new(
         initialized_terminal,
         terminal_restore_guard,
