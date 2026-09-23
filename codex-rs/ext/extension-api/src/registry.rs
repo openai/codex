@@ -5,6 +5,7 @@ use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionEventSink;
 use crate::McpServerContributor;
+use crate::ModelRequestContributor;
 use crate::NoopExtensionEventSink;
 use crate::SkillInvocationContributor;
 use crate::ThreadLifecycleContributor;
@@ -38,6 +39,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
                 turn_input_contributors: Vec::new(),
                 tool_contributors: Vec::new(),
                 tool_lifecycle_contributors: Vec::new(),
+                model_request_contributors: Vec::new(),
                 turn_item_contributors: Vec::new(),
             },
         }
@@ -122,6 +124,11 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.registry.turn_input_contributors.push(contributor);
     }
 
+    /// Registers a contributor for request-scoped response interception.
+    pub fn model_request_contributor(&mut self, contributor: Arc<dyn ModelRequestContributor>) {
+        self.registry.model_request_contributors.push(contributor);
+    }
+
     /// Registers one native tool contributor.
     pub fn tool_contributor(&mut self, contributor: Arc<dyn ToolContributor>) {
         self.registry.tool_contributors.push(contributor);
@@ -157,6 +164,7 @@ pub struct ExtensionRegistry<C: Sync> {
     turn_input_contributors: Vec<Arc<dyn TurnInputContributor>>,
     tool_contributors: Vec<Arc<dyn ToolContributor>>,
     tool_lifecycle_contributors: Vec<Arc<dyn ToolLifecycleContributor>>,
+    model_request_contributors: Vec<Arc<dyn ModelRequestContributor>>,
     turn_item_contributors: Vec<Arc<dyn TurnItemContributor>>,
     approval_review_contributors: Vec<Arc<dyn ApprovalReviewContributor>>,
 }
@@ -178,6 +186,7 @@ impl<C: Sync> ExtensionRegistry<C> {
                 turn_input_contributors: self.turn_input_contributors.clone(),
                 tool_contributors: self.tool_contributors.clone(),
                 tool_lifecycle_contributors: self.tool_lifecycle_contributors.clone(),
+                model_request_contributors: self.model_request_contributors.clone(),
                 turn_item_contributors: self.turn_item_contributors.clone(),
                 approval_review_contributors: self.approval_review_contributors.clone(),
             },
@@ -265,6 +274,11 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered native tool contributors.
     pub fn tool_contributors(&self) -> &[Arc<dyn ToolContributor>] {
         &self.tool_contributors
+    }
+
+    /// Returns response interceptor contributors in registration order.
+    pub fn model_request_contributors(&self) -> &[Arc<dyn ModelRequestContributor>] {
+        &self.model_request_contributors
     }
 
     /// Returns the registered tool-lifecycle contributors.

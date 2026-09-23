@@ -130,6 +130,7 @@ fn test_model_client_with_thread_id(
         codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
         ),
+        Vec::new(),
     )
 }
 
@@ -1729,6 +1730,7 @@ fn model_client_with_counting_attestation(
         codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
         ),
+        Vec::new(),
     );
     (model_client, attestation_calls)
 }
@@ -1857,4 +1859,70 @@ async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
         None,
     );
     assert_eq!(attestation_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow::Result<()> {
+    struct ReplaceOutput;
+    impl codex_extension_api::ModelResponseInterceptor for ReplaceOutput {
+        fn intercept(
+            self: Box<Self>,
+            stream: codex_extension_api::ModelResponseStream,
+        ) -> codex_extension_api::ModelResponseStream {
+            Box::pin(stream.map(|event| {
+                event.map(|event| match event {
+                    ResponseEvent::OutputItemDone(_) => {
+                        ResponseEvent::OutputItemDone(output_message("1", "transformed"))
+                    }
+                    other => other,
+                })
+            }))
+        }
+    }
+
+    let temp = TempDir::new()?;
+    let attempt = started_inference_attempt(&temp)?;
+    let (tx_event, rx_event) = tokio::sync::mpsc::channel(2);
+    tx_event
+        .send(Ok(ResponseEvent::OutputItemDone(output_message(
+            "1", "original",
+        ))))
+        .await?;
+    tx_event
+        .send(Ok(ResponseEvent::Completed {
+            response_id: "response".into(),
+            token_usage: None,
+            usage_metadata: None,
+            end_turn: None,
+        }))
+        .await?;
+    drop(tx_event);
+    let (mut stream, last_response) = super::map_response_stream(
+        codex_api::ResponseStream {
+            rx_event,
+            upstream_request_id: None,
+        },
+        test_session_telemetry(),
+        attempt,
+        test_model_provider(),
+        vec![Box::new(ReplaceOutput)],
+    );
+    let mut delivered = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let ResponseEvent::OutputItemDone(item) = event? {
+            delivered.push(item);
+        }
+    }
+    assert_eq!(delivered, vec![output_message("1", "transformed")]);
+    assert_eq!(last_response.await?.items_added, delivered);
+    let rollout = replay_bundle(temp.path())?;
+    let payload = rollout
+        .raw_payloads
+        .values()
+        .find(|payload| payload.kind == codex_rollout_trace::RawPayloadKind::InferenceResponse)
+        .expect("response trace payload");
+    let recorded: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(temp.path().join(&payload.path))?)?;
+    assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
+    Ok(())
 }

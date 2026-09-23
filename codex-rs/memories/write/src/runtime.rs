@@ -339,6 +339,7 @@ impl MemoryStartupContext {
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
+            Vec::new(),
         );
 
         let mut client_session = model_client.new_session();

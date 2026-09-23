@@ -847,6 +847,7 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         codex_model_provider::WorkspaceRoutingContext::new(
             "https://chatgpt.com/backend-api".into(),
         ),
+        Vec::new(),
     )
     .new_session()
 }
@@ -6528,6 +6529,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
+            Vec::new(),
         ),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
@@ -8798,6 +8800,7 @@ where
             /*attestation_provider*/ None,
             config.http_client_factory(),
             config.workspace_routing_context(),
+            Vec::new(),
         ),
         executed_tool_calls: executed_tool_calls.clone(),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
