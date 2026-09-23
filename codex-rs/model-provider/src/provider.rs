@@ -1348,10 +1348,11 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
         assert!(!configured_model.additional_speed_tiers.is_empty());
         assert!(!configured_model.service_tiers.is_empty());
 
-        let provider = create_model_provider(
-            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
-            /*auth_manager*/ None,
-        );
+        let mut provider_info =
+            ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None);
+        provider_info.base_url =
+            Some("https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1".to_string());
+        let provider = create_model_provider(provider_info, /*auth_manager*/ None);
         let manager = provider.models_manager(
             test_codex_home(),
             Some(ModelsResponse {

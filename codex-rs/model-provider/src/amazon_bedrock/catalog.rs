@@ -79,6 +79,19 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
     })
 }
 
+pub(super) fn static_gov_model_catalog() -> ModelsResponse {
+    let mut catalog = static_model_catalog();
+    catalog.models.retain(|model| {
+        matches!(
+            model.slug.as_str(),
+            AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID
+                | AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID
+                | AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+        )
+    });
+    catalog
+}
+
 pub(crate) fn normalize_bedrock_catalog(mut catalog: ModelsResponse) -> ModelsResponse {
     for model in &mut catalog.models {
         // Amazon Bedrock currently only supports the implicit "default" tier for GPT models.
