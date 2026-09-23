@@ -284,10 +284,10 @@ impl LocalStdioServerLauncher {
             command.process_mode(ProcessMode::NewGroup);
             // MCP uses only stdio; unrelated orchestrator descriptors must not
             // propagate into the server or commands it launches.
-            // StdioOnly is currently Unix-only. Windows can still inherit unrelated
+            // Descriptor allowlisting is Unix-only. Windows can still inherit unrelated
             // handles and needs a handle allowlist in the shared spawn backend.
             #[cfg(unix)]
-            command.descriptor_policy(DescriptorPolicy::StdioOnly);
+            command.descriptor_policy(DescriptorPolicy::Explicit);
             command
         };
         #[cfg(windows)]

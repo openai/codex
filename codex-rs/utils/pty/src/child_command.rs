@@ -2,8 +2,8 @@
 //!
 //! The wrapped Tokio command is private: callers cannot install callbacks or
 //! change settings that the native backend cannot inspect. Children receive only
-//! explicitly supplied environment variables and default to kill-on-drop. Stdio, descriptor
-//! inheritance, and compatibility fallbacks are configured independently.
+//! explicitly supplied environment variables and default to kill-on-drop. Stdio,
+//! descriptor inheritance, and compatibility fallbacks are configured independently.
 
 use std::ffi::OsStr;
 #[cfg(unix)]
@@ -15,18 +15,29 @@ use std::process::Stdio as TokioStdio;
 use crate::child::Child;
 use crate::child::ChildKind;
 
-/// Relationship between a child and its parent's process group.
+/// Relationship between a child and its parent's session and process group.
+///
+/// These settings apply only on Unix; other platforms use their default behavior.
 #[derive(Clone, Copy)]
 pub enum ProcessMode {
+    /// Keep the parent's session, process group, and controlling terminal.
     Inherit,
+    /// Create a process group led by the child, keeping the parent's session and
+    /// controlling terminal. This allows signaling the child's group separately.
     NewGroup,
+    /// Create a session and process group led by the child, detaching from the
+    /// parent's controlling terminal.
+    ///
+    /// Native spawning is an optimization; compatibility fallbacks may fork.
+    NewSession,
 }
 
-/// Descriptors visible to a Unix child beyond its explicit stdio.
+/// Whether Unix children inherit ambient descriptors or only explicit stdio and
+/// the descriptors selected by `Command::preserve_fds`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorPolicy {
     Inherit,
-    StdioOnly,
+    Explicit,
 }
 
 /// Whether a native launch may use Command's executable-text and PATH fallbacks.
@@ -52,6 +63,7 @@ pub(crate) enum ChildDropPolicy {
 /// An explicit child stdin, including a socket used for bidirectional fd transfer.
 pub enum ChildStdin {
     Piped,
+    Null,
     #[cfg(unix)]
     File(std::os::fd::OwnedFd),
 }
@@ -64,6 +76,10 @@ pub struct Command {
     pub(crate) fallback: SpawnFallback,
     pub(crate) stdin: ChildStdin,
     pub(crate) drop_policy: ChildDropPolicy,
+    #[cfg(unix)]
+    pub(crate) inherited_fds: Vec<std::os::fd::RawFd>,
+    #[cfg(target_os = "linux")]
+    parent_pid: Option<libc::pid_t>,
     #[cfg(unix)]
     pub(crate) arg0: Option<OsString>,
 }
@@ -84,6 +100,10 @@ impl Command {
             fallback: SpawnFallback::Compatible,
             stdin: ChildStdin::Piped,
             drop_policy: ChildDropPolicy::KillAndReap,
+            #[cfg(unix)]
+            inherited_fds: Vec::new(),
+            #[cfg(target_os = "linux")]
+            parent_pid: None,
             #[cfg(unix)]
             arg0: None,
         }
@@ -152,6 +172,32 @@ impl Command {
         self
     }
 
+    /// Preserve live inheritable descriptors at their existing numbers.
+    /// The caller must keep them open until spawning returns. We do not duplicate
+    /// or close them: closing even a duplicate releases the parent's POSIX record
+    /// locks. Closed and CLOEXEC descriptors remain excluded.
+    #[cfg(unix)]
+    pub fn preserve_fds(&mut self, fds: &[std::os::fd::RawFd]) -> &mut Self {
+        self.inherited_fds = fds
+            .iter()
+            .copied()
+            .filter(|fd| {
+                // SAFETY: fcntl reports invalid descriptors without dereferencing memory.
+                let flags = unsafe { libc::fcntl(*fd, libc::F_GETFD) };
+                *fd > libc::STDERR_FILENO && flags >= 0 && flags & libc::FD_CLOEXEC == 0
+            })
+            .collect();
+        self
+    }
+
+    /// Keep the existing Linux pipe behavior when the spawning parent exits.
+    #[cfg(target_os = "linux")]
+    pub fn terminate_on_parent_death(&mut self) -> &mut Self {
+        // SAFETY: getpid has no preconditions.
+        self.parent_pid = Some(unsafe { libc::getpid() });
+        self
+    }
+
     #[cfg(unix)]
     pub fn arg0(&mut self, arg0: impl AsRef<OsStr>) -> &mut Self {
         self.inner.arg0(arg0.as_ref());
@@ -176,8 +222,10 @@ impl Command {
             let command = self.inner.as_std();
             let program = command.get_program();
             if (Path::new(program).is_relative()
-                || self.descriptor_policy == DescriptorPolicy::StdioOnly
-                || self.fallback == SpawnFallback::ReturnError)
+                || self.descriptor_policy == DescriptorPolicy::Explicit
+                || self.fallback == SpawnFallback::ReturnError
+                || matches!(self.process_mode, ProcessMode::NewSession)
+                || !self.inherited_fds.is_empty())
                 && !program.is_empty()
                 && let Some(child) = crate::child::macos::NativeChild::spawn(&self)?
             {
@@ -186,17 +234,37 @@ impl Command {
         }
         self.inner.stdin(match self.stdin {
             ChildStdin::Piped => TokioStdio::piped(),
+            ChildStdin::Null => TokioStdio::null(),
             #[cfg(unix)]
             ChildStdin::File(fd) => TokioStdio::from(fd),
         });
         #[cfg(unix)]
-        if self.descriptor_policy == DescriptorPolicy::StdioOnly {
-            // SAFETY: This preserves the existing Unix descriptor cleanup before exec.
-            unsafe {
-                self.inner.pre_exec(|| {
-                    crate::pty::close_inherited_fds_except(&[]);
-                    Ok(())
-                });
+        {
+            let new_session = matches!(self.process_mode, ProcessMode::NewSession);
+            let explicit_fds = self.descriptor_policy == DescriptorPolicy::Explicit;
+            let targets = self.inherited_fds;
+            #[cfg(target_os = "linux")]
+            let parent_pid = self.parent_pid;
+            #[cfg(not(target_os = "linux"))]
+            let parent_pid: Option<i32> = None;
+            if new_session || explicit_fds || !targets.is_empty() || parent_pid.is_some() {
+                // SAFETY: Keep the existing Unix pre-exec setup in the fallback
+                // backend. The caller keeps the selected descriptors open, and
+                // this callback only changes the child's descriptor table.
+                unsafe {
+                    self.inner.pre_exec(move || {
+                        if new_session {
+                            crate::process_group::detach_from_tty()?;
+                        }
+                        if let Some(parent_pid) = parent_pid {
+                            crate::process_group::set_parent_death_signal(parent_pid)?;
+                        }
+                        if explicit_fds {
+                            crate::pty::close_inherited_fds_except(&targets);
+                        }
+                        Ok(())
+                    });
+                }
             }
         }
         #[cfg(unix)]

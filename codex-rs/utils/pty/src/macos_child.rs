@@ -27,6 +27,10 @@ use crate::child_command::ChildDropPolicy;
 
 use crate::child::reaper;
 
+// Apple's spawn.h defines this extension on our minimum macOS 12, but libc
+// does not expose it. A new session also creates a new process group.
+const POSIX_SPAWN_SETSID: libc::c_int = 0x0400;
+
 // libc does not expose this Apple extension. It is available since macOS 10.15,
 // before Codex's minimum supported macOS version (12).
 unsafe extern "C" {
@@ -96,6 +100,7 @@ impl NativeChild {
                     Some(ChildStdin::from_std(OwnedFd::from(writer).into())?),
                 )
             }
+            crate::ChildStdin::Null => (std::fs::File::open("/dev/null")?.into(), None),
             crate::ChildStdin::File(fd) => (fd.try_clone()?, None),
         };
         let (stdout_read, stdout_write) = io::pipe()?;
@@ -129,8 +134,19 @@ impl NativeChild {
                     target as i32,
                 ))?;
             }
+            for target in &request.inherited_fds {
+                let result =
+                    libc::posix_spawn_file_actions_adddup2(&mut actions.0, *target, *target);
+                // macOS file actions can reject valid high descriptors below
+                // RLIMIT_NOFILE. The existing dup2 fallback supports them.
+                if result == libc::EBADF && request.fallback == crate::SpawnFallback::Compatible {
+                    return Ok(None);
+                }
+                cvt(result)?;
+            }
             let group_flags = match request.process_mode {
                 crate::ProcessMode::Inherit => 0,
+                crate::ProcessMode::NewSession => POSIX_SPAWN_SETSID,
                 crate::ProcessMode::NewGroup => {
                     cvt(libc::posix_spawnattr_setpgroup(
                         &mut attrs.0,
@@ -145,7 +161,7 @@ impl NativeChild {
             cvt(libc::posix_spawnattr_setsigdefault(&mut attrs.0, &defaults))?;
             let descriptor_flags = match request.descriptor_policy {
                 crate::DescriptorPolicy::Inherit => 0,
-                crate::DescriptorPolicy::StdioOnly => libc::POSIX_SPAWN_CLOEXEC_DEFAULT,
+                crate::DescriptorPolicy::Explicit => libc::POSIX_SPAWN_CLOEXEC_DEFAULT,
             };
             cvt(libc::posix_spawnattr_setflags(
                 &mut attrs.0,

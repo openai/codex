@@ -531,7 +531,7 @@ pub(crate) fn spawn_command(
     command.fallback(SpawnFallback::ReturnError);
     // macOS cannot receive passed fds with close-on-exec set atomically.
     #[cfg(target_os = "macos")]
-    command.descriptor_policy(DescriptorPolicy::StdioOnly);
+    command.descriptor_policy(DescriptorPolicy::Explicit);
     command.spawn().map_err(io_error)
 }
 
