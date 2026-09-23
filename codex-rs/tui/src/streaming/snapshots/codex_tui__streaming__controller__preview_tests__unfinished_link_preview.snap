@@ -1,0 +1,8 @@
+---
+source: tui/src/streaming/controller_preview_tests.rs
+assertion_line: 52
+expression: visible_lines(controller.current_tail_lines())
+---
+[
+    Line::from("See [documentation]"),
+]
