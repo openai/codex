@@ -166,20 +166,10 @@ impl<'a> ResolvedModelMessages<'a> {
     }
 
     fn multi_agent_tool(self, tool_name: &str) -> Option<&'a ToolMessage> {
-        let tools = self
-            .catalog_messages
+        self.catalog_messages
             .and_then(|messages| messages.tools.as_ref())
-            .and_then(|tools| tools.multi_agent.as_ref())?;
-        let tool = match tool_name {
-            "spawn_agent" => &tools.spawn_agent,
-            "send_message" => &tools.send_message,
-            "followup_task" => &tools.followup_task,
-            "wait_agent" => &tools.wait_agent,
-            "interrupt_agent" => &tools.interrupt_agent,
-            "list_agents" => &tools.list_agents,
-            _ => return None,
-        };
-        tool.as_ref()
+            .and_then(|tools| tools.multi_agent.as_ref())?
+            .by_name(tool_name)
     }
 
     /// Selects indirect tool guidance; tool rendering owns namespace mapping and normalization.

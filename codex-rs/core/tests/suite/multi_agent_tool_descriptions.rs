@@ -266,3 +266,118 @@ async fn multi_agent_catalog_messages_change_only_selected_tool_fields(
     assert_eq!(actual, expected);
     Ok(())
 }
+
+#[test_case(Exposure::Namespaced; "namespaced")]
+#[test_case(Exposure::CodeMode; "code_mode")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn channel_catalog_descriptions_change_only_selected_tools(exposure: Exposure) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let names = [
+        "create_channel",
+        "get_channels",
+        "list_threads",
+        "search_posts",
+        "read_thread",
+        "read_post",
+        "subscribe",
+        "unsubscribe",
+        "post",
+    ];
+    let all: serde_json::Map<String, Value> = names
+        .into_iter()
+        .map(|name| {
+            (
+                name.into(),
+                json!({"description": format!("Catalog {name}.")}),
+            )
+        })
+        .collect();
+    let messages = [
+        Value::Null,
+        json!({"multi_agent": all}),
+        json!({"multi_agent": {
+            "post": {"description": "Catalog post."},
+            "subscribe": {"description": ""},
+            "read_thread": {"description": null},
+            "read_post": {"parameters": CATALOG_PARAMETERS}
+        }}),
+    ];
+
+    let server = start_mock_server().await;
+    let response = mount_sse_sequence(
+        &server,
+        vec![
+            sse_completed("default"),
+            sse_completed("all"),
+            sse_completed("sparse"),
+        ],
+    )
+    .await;
+    for message in &messages {
+        let message = serde_json::from_value::<Option<ToolMessages>>(message.clone())?;
+        let test = test_codex()
+            .with_model_info_override("gpt-5.2", move |model| {
+                model.multi_agent_version = Some(MultiAgentVersion::V2);
+                model.model_messages.as_mut().expect("model messages").tools = message;
+            })
+            .with_config(move |config| {
+                config.ephemeral = false;
+                config
+                    .features
+                    .enable(Feature::MultiAgentV2)
+                    .expect("enable V2");
+                config
+                    .features
+                    .enable(Feature::AgentMessageBoard)
+                    .expect("enable channels");
+                config.multi_agent_v2.tool_namespace = Some("delegation".into());
+                if matches!(exposure, Exposure::CodeMode) {
+                    config
+                        .features
+                        .enable(Feature::CodeMode)
+                        .expect("enable Code Mode");
+                    config.code_mode.disable_in_process_fallback = true;
+                    config.multi_agent_v2.non_code_mode_only = false;
+                }
+            })
+            .build_with_auto_env(&server)
+            .await?;
+        test.submit_turn("Inspect the available tools.").await?;
+    }
+
+    let requests = response.requests();
+    assert_eq!(requests.len(), messages.len());
+    let default = requests[0].body_json()["tools"].clone();
+    for (request, message) in requests.iter().zip(&messages).skip(1) {
+        let mut expected = default.clone();
+        let channel_tools = expected
+            .as_array_mut()
+            .expect("tools")
+            .iter_mut()
+            .find(|tool| tool["name"] == "delegation")
+            .expect("delegation namespace")["tools"]
+            .as_array_mut()
+            .expect("namespace tools");
+        for name in names {
+            let tool = channel_tools
+                .iter_mut()
+                .find(|tool| tool["name"] == name)
+                .expect(name);
+            let bundled = tool["description"].as_str().expect("bundled description");
+            if let Some(description) = message["multi_agent"][name]["description"].as_str() {
+                let declaration = if matches!(exposure, Exposure::CodeMode) {
+                    let offset = bundled
+                        .find("\n\nexec tool declaration:")
+                        .expect("Code Mode declaration");
+                    &bundled[offset..]
+                } else {
+                    ""
+                };
+                tool["description"] = json!(format!("{description}{declaration}"));
+            }
+        }
+        assert_eq!(request.body_json()["tools"], expected);
+    }
+    Ok(())
+}

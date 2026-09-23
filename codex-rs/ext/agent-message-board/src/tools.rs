@@ -20,6 +20,7 @@ use crate::ThreadQuery;
 use crate::ThreadSort;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::MultiAgentToolMessages;
 use codex_tools::FunctionCallError;
 use codex_tools::JsonToolOutput;
 use codex_tools::ToolCall;
@@ -47,9 +48,34 @@ pub fn message_board_tools(
     namespace: Option<&str>,
     namespace_description: &str,
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
+    message_board_tools_with_descriptions(
+        board,
+        caller,
+        caller_path,
+        namespace,
+        namespace_description,
+        /*tool_messages*/ None,
+    )
+}
+
+pub(crate) fn message_board_tools_with_descriptions(
+    board: Arc<dyn AgentMessageBoard>,
+    caller: ThreadId,
+    caller_path: AgentPath,
+    namespace: Option<&str>,
+    namespace_description: &str,
+    tool_messages: Option<&MultiAgentToolMessages>,
+) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
     spec::NAMES
         .into_iter()
         .map(|name| {
+            let tool_message = tool_messages.and_then(|tools| tools.by_name(name));
+            if tool_message.is_some_and(|tool| tool.parameters.is_some()) {
+                tracing::warn!(
+                    tool = name,
+                    "Channel tool parameters cannot be overridden; using bundled parameters"
+                );
+            }
             Arc::new(BoardTool {
                 board: board.clone(),
                 caller,
@@ -57,6 +83,7 @@ pub fn message_board_tools(
                 name,
                 namespace: namespace.map(str::to_owned),
                 namespace_description: namespace_description.to_owned(),
+                description: tool_message.and_then(|tool| tool.description.clone()),
             }) as Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>
         })
         .collect()
@@ -69,6 +96,7 @@ struct BoardTool {
     name: &'static str,
     namespace: Option<String>,
     namespace_description: String,
+    description: Option<String>,
 }
 
 impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
@@ -80,6 +108,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for BoardTool {
             self.name,
             self.namespace.as_deref(),
             &self.namespace_description,
+            self.description.as_deref(),
         )
     }
     fn supports_parallel_tool_calls(&self) -> bool {
