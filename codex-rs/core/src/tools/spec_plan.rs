@@ -80,6 +80,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_tools::IndirectNamespacePrefixes;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolCall as ExtensionToolCall;
@@ -403,8 +404,14 @@ pub(crate) fn finalize_tool_router(
         append_tool_search_executor(turn_context, &mut registry, tool_search_handler_cache);
     }
 
+    let model_messages = ResolvedModelMessages::from_model(model_info);
+    let indirect_prefixes = IndirectNamespacePrefixes::new(
+        model_messages.indirect_description_prefixes(),
+        registry.mcp_namespaces(),
+    )
+    .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
     let code_mode_tool_names =
-        register_code_mode_executors(turn_context, model_info, &mut registry);
+        register_code_mode_executors(turn_context, model_info, &mut registry, &indirect_prefixes);
     let include_tool_namespaces_info = turn_context
         .config
         .tool_registry
@@ -810,6 +817,7 @@ fn register_code_mode_executors(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
     registry: &mut ToolRegistry,
+    indirect_prefixes: &IndirectNamespacePrefixes<'_>,
 ) -> BTreeMap<String, ToolName> {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
@@ -884,15 +892,18 @@ fn register_code_mode_executors(
         code_mode_nested_tool_specs.push((spec, cached_runtime));
     }
 
-    let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
+    let mut namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
     let mut enabled_tools =
         collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());
     let deferred_tools = collect_code_mode_exec_prompt_tool_definitions(
         deferred_exec_prompt_tool_specs.iter().map(Arc::as_ref),
     );
+    let model_messages = ResolvedModelMessages::from_model(model_info);
+    if tool_mode == ToolMode::CodeModeOnly {
+        indirect_prefixes.apply_exec_prompt(&mut enabled_tools, &mut namespace_descriptions);
+    }
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-    let model_messages = ResolvedModelMessages::from_model(model_info);
     let execute_handler = CodeModeExecuteHandler::new(
         create_code_mode_tool(
             &enabled_tools,

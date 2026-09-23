@@ -12,6 +12,8 @@ use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngine;
 use bm25::SearchEngineBuilder;
+use codex_prompts::ResolvedModelMessages;
+use codex_tools::IndirectNamespacePrefixes;
 use codex_tools::LoadableToolSpec;
 use codex_tools::TOOL_SEARCH_DEFAULT_LIMIT;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
@@ -192,7 +194,11 @@ impl ToolSearchHandler {
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            payload,
+            step_context,
+            ..
+        } = invocation;
 
         let args = match payload {
             ToolPayload::ToolSearch { arguments } => arguments,
@@ -221,7 +227,14 @@ impl ToolSearchHandler {
             return Ok(boxed_tool_output(ToolSearchOutput { tools: Vec::new() }));
         }
 
-        let tools = self.search(query, limit)?;
+        let mut tools = self.search(query, limit)?;
+        let model_messages = ResolvedModelMessages::from_model(&step_context.settings.model_info);
+        IndirectNamespacePrefixes::new(
+            model_messages.indirect_description_prefixes(),
+            step_context.tool_router.mcp_namespaces(),
+        )
+        .map_err(|error| FunctionCallError::Fatal(error.to_string()))?
+        .apply_search(&mut tools);
 
         Ok(boxed_tool_output(ToolSearchOutput { tools }))
     }

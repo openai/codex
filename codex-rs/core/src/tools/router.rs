@@ -210,6 +210,10 @@ impl ToolRouter {
         self.registry.deferred_tool_namespaces()
     }
 
+    pub(crate) fn mcp_namespaces(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.registry.mcp_namespaces()
+    }
+
     #[cfg(test)]
     pub(crate) fn registered_tool_names_for_test(&self) -> Vec<ToolName> {
         self.registry.tool_names_for_test()

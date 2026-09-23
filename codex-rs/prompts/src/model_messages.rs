@@ -5,6 +5,7 @@
 
 use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::ConfirmationPolicies;
+use codex_protocol::openai_models::IndirectDescriptionPrefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ToolMessage;
@@ -179,6 +180,15 @@ impl<'a> ResolvedModelMessages<'a> {
             _ => return None,
         };
         tool.as_ref()
+    }
+
+    /// Selects indirect tool guidance; tool rendering owns namespace mapping and normalization.
+    pub fn indirect_description_prefixes(&self) -> Option<&'a IndirectDescriptionPrefixes> {
+        self.catalog_messages?
+            .tools
+            .as_ref()?
+            .indirect_description_prefixes
+            .as_ref()
     }
 
     /// Selects Code Mode messages; bundled text and runtime composition belong to the tool owner.

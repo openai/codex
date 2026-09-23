@@ -2328,6 +2328,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                         }),
                         ..Default::default()
                     }),
+                    ..Default::default()
                 });
             }
         })

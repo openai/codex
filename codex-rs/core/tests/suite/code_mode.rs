@@ -211,7 +211,10 @@ fn custom_tool_output_body_and_success(
     (output, success)
 }
 
-fn custom_tool_output_last_non_empty_text(req: &ResponsesRequest, call_id: &str) -> Option<String> {
+pub(super) fn custom_tool_output_last_non_empty_text(
+    req: &ResponsesRequest,
+    call_id: &str,
+) -> Option<String> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::String(text)) if !text.trim().is_empty() => Some(text.clone()),
         Some(Value::Array(items)) => items

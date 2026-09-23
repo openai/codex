@@ -575,15 +575,33 @@ pub struct ConfirmationPolicies {
     pub computer_use: Option<String>,
 }
 
-/// Model-owned messages for built-in tools.
+/// Model-owned tool messages and indirect namespace guidance.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ToolMessages {
+    /// Optional guidance for indirectly presented tools; missing or empty adds no prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indirect_description_prefixes: Option<IndirectDescriptionPrefixes>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_user_message_async: Option<ToolMessage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent: Option<MultiAgentToolMessages>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code_mode: Option<CodeModeToolMessages>,
+}
+
+/// Plain-text prefixes for Code Mode documentation, ALL_TOOLS, and loaded tool-search namespaces.
+/// Values are trimmed, and selectors for the same final namespace must agree, including empty values.
+/// Empty values add no prefix; unregistered targets are ignored.
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct IndirectDescriptionPrefixes {
+    /// Exact rendered namespaces, including `functions` for plain tools.
+    /// Overlap with an MCP server prefix is allowed only when the trimmed values match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespaces: Option<std::collections::BTreeMap<String, String>>,
+    /// Configured MCP server names, before callable namespace normalization.
+    /// Each prefix applies to all namespaces exposed by that server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Model-owned messages for a built-in tool.

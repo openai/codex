@@ -430,6 +430,13 @@ impl ToolRegistry {
         self.tools.values_mut()
     }
 
+    /// Returns configured MCP server names and their registered callable namespaces.
+    pub(crate) fn mcp_namespaces(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.tools.iter().filter_map(|(name, tool)| {
+            Some((tool.runtime.mcp_server_name()?, name.namespace.as_deref()?))
+        })
+    }
+
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {
         let mut namespaces = BTreeMap::<String, String>::new();
         for (name, tool) in &self.tools {
