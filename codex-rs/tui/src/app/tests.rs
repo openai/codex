@@ -35,6 +35,8 @@ mod external_writer_fork_tests;
 mod fork_workspace_roots_tests;
 #[path = "tests/fresh_sparkle_tests.rs"]
 mod fresh_sparkle_tests;
+#[path = "tests/home_cleanup_tests.rs"]
+mod home_cleanup_tests;
 #[path = "tests/key_chords.rs"]
 mod key_chords;
 #[path = "tests/local_command_scroll_tests.rs"]
@@ -2671,10 +2673,8 @@ fn attach_live_thread_for_selection_rejects_empty_non_ephemeral_fallback_threads
         .build()?;
 
     runtime.block_on(async {
-        let config = {
-            let app = make_test_app().await;
-            app.chat_widget.config_ref().clone()
-        };
+        let config_owner = make_test_app().await;
+        let config = config_owner.chat_widget.config_ref().clone();
         let mut app_server = crate::start_embedded_app_server_for_picker(&config)
             .await
             .expect("embedded app server");
@@ -5982,7 +5982,8 @@ async fn clear_ui_header_shows_fast_status_for_fast_capable_models() {
 }
 
 async fn make_test_app() -> Box<App> {
-    let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let (mut chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -6079,6 +6080,7 @@ async fn make_test_app() -> Box<App> {
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
         recap: recap::RecapState::default(),
+        _test_codex_home: test_codex_home,
     })
 }
 
@@ -6087,7 +6089,8 @@ pub(super) async fn make_test_app_with_channels() -> (
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
-    let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
+    let (mut chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
+    let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -6185,6 +6188,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
             recap: recap::RecapState::default(),
+            _test_codex_home: test_codex_home,
         }),
         rx,
         op_rx,

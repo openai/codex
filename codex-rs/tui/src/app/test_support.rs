@@ -23,7 +23,8 @@ pub(super) fn select_catalog_tip(app: &mut App, width: u16, expected: &str) {
 }
 
 pub(crate) async fn make_test_app() -> App {
-    let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let (mut chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+    let test_codex_home = chat_widget.test_codex_home.take();
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
@@ -120,6 +121,7 @@ pub(crate) async fn make_test_app() -> App {
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
         recap: recap::RecapState::default(),
+        _test_codex_home: test_codex_home,
     }
 }
 

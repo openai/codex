@@ -3,26 +3,27 @@ use codex_app_server_protocol::ImageGenerationItem;
 use codex_app_server_protocol::PluginAvailability;
 use codex_utils_absolute_path::test_support::PathExt;
 
-pub(super) async fn test_config() -> Config {
+pub(super) async fn test_config() -> (tempfile::TempDir, Config) {
     // Start from the built-in defaults so tests do not inherit host/system config.
     let codex_home = tempfile::Builder::new()
         .prefix("chatwidget-tests-")
         .tempdir()
-        .expect("tempdir")
-        .keep();
-    let mut config =
-        Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), Vec::new())
-            .await
-            .expect("config");
+        .expect("tempdir");
+    let mut config = Config::load_default_with_cli_overrides_for_codex_home(
+        codex_home.path().to_path_buf(),
+        Vec::new(),
+    )
+    .await
+    .expect("config");
     // Keep generic UI snapshots stable when the bundled catalog default changes.
     config.model = Some("gpt-5.6-sol".to_string());
-    config.codex_home = codex_home.abs();
-    config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.as_path().abs());
-    config.log_dir = codex_home.join("log");
+    config.codex_home = codex_home.path().abs();
+    config.sqlite = codex_state::SqliteConfig::new_for_testing(codex_home.path().abs());
+    config.log_dir = codex_home.path().join("log");
     config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
-    config
+    (codex_home, config)
 }
 
 pub(super) fn test_project_path() -> PathBuf {
@@ -217,7 +218,7 @@ pub(super) async fn make_chatwidget_manual_with_auth(
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
-    let mut cfg = test_config().await;
+    let (codex_home, mut cfg) = test_config().await;
     let resolved_model = model_override
         .map(str::to_owned)
         .unwrap_or_else(|| get_model_offline_for_tests(cfg.model.as_deref()));
@@ -249,6 +250,7 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         session_telemetry,
     };
     let mut widget = ChatWidget::new_with_op_target(common, super::CodexOpTarget::Direct(op_tx));
+    widget.test_codex_home = Some(codex_home);
     widget.clock_format = crate::clock_format::ClockFormat::TwentyFourHour;
     widget.windows_sandbox_host = crate::app::WindowsSandboxHost::Local;
     widget.windows_sandbox_config.requirements = Some(None);

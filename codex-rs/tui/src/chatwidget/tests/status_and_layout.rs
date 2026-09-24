@@ -500,7 +500,7 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 async fn configured_pet_load_is_deferred_until_after_construction() {
     let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
-    let mut cfg = test_config().await;
+    let (_codex_home, mut cfg) = test_config().await;
     cfg.tui_pet = Some(crate::pets::DEFAULT_PET_ID.to_string());
     crate::pets::write_test_pack(&cfg.codex_home);
     let resolved_model = get_model_offline_for_tests(cfg.model.as_deref());

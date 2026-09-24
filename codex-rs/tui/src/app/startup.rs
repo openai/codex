@@ -845,6 +845,8 @@ See the Codex keymap documentation for supported actions and examples."
             pending_plugin_enabled_writes: HashMap::new(),
             pending_hook_enabled_writes: HashMap::new(),
             recap: recap::RecapState::default(),
+            #[cfg(test)]
+            _test_codex_home: None,
         };
         if !tui.is_terminal_focused() {
             app.recap.note_focus_lost(Instant::now());

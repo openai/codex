@@ -692,6 +692,9 @@ pub(crate) struct App {
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
     recap: recap::RecapState,
+    // App fixtures keep their home alive across widget replacement; drop it last.
+    #[cfg(test)]
+    _test_codex_home: Option<tempfile::TempDir>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

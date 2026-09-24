@@ -278,6 +278,8 @@ impl ChatWidget {
             last_rendered_user_message_display: None,
             last_rendered_user_message_client_id: None,
             last_non_retry_error: None,
+            #[cfg(test)]
+            test_codex_home: None,
         };
 
         widget.prefetch_rate_limits();

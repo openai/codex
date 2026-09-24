@@ -768,6 +768,9 @@ pub(crate) struct ChatWidget {
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_rendered_user_message_client_id: Option<String>,
     last_non_retry_error: Option<(String, String)>,
+    // Keep fixture storage alive until all other widget fields have been dropped.
+    #[cfg(test)]
+    pub(crate) test_codex_home: Option<tempfile::TempDir>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
