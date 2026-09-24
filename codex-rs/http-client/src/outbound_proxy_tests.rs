@@ -323,15 +323,66 @@ async fn async_resolution_uses_cached_route_before_global_permit() {
         .await
         .expect("global proxy permit should stay open");
 
-    let route = tokio::time::timeout(
-        Duration::from_secs(2),
-        factory.resolve_proxy_route_async(request_url.to_string()),
-    )
+    let route = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            // A concurrent cache writer may cause a miss. Drop that attempt before retrying
+            // so it does not wait for the permit deliberately held by this test.
+            if let Some(route) = futures::FutureExt::now_or_never(
+                factory.resolve_proxy_route_async(request_url.to_string()),
+            ) {
+                break route;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
     .await
     .expect("cached resolution should not wait for the global permit")
     .expect("cached route should resolve");
     drop(permit);
 
+    assert_eq!(route, OutboundProxyRoute::Direct);
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[tokio::test(flavor = "current_thread")]
+async fn async_resolution_yields_while_cache_is_locked() {
+    let request_url = "https://contended-cache.test/request";
+    let permit = ASYNC_SYSTEM_PROXY_RESOLUTION_PERMIT
+        .acquire()
+        .await
+        .expect("global proxy permit should stay open");
+    cache_system_proxy_decision(request_url, SystemProxyDecision::Direct);
+    let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let cache = SYSTEM_PROXY_CACHE.get().expect("initialized proxy cache");
+        let guard = cache.lock().expect("proxy cache should not be poisoned");
+        locked_tx.send(()).expect("test should still be running");
+        // Bound a blocking regression without using elapsed time as the assertion.
+        let released = release_rx.recv_timeout(Duration::from_secs(5));
+        drop(guard);
+        released
+    });
+    locked_rx.await.expect("cache holder should start");
+
+    let factory = HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy);
+    let resolution = factory.resolve_proxy_route_async(request_url.to_string());
+    tokio::pin!(resolution);
+    let yielded = std::future::poll_fn(|cx| {
+        std::task::Poll::Ready(std::future::Future::poll(resolution.as_mut(), cx).is_pending())
+    })
+    .await;
+    let released = release_tx.send(());
+    let holder_result = holder.join().expect("cache holder should finish");
+    drop(permit);
+
+    assert!(yielded, "resolution should yield while the cache is locked");
+    released.expect("resolution must yield before the holder's deadline");
+    holder_result.expect("test should release the cache holder");
+    let route = tokio::time::timeout(Duration::from_secs(2), resolution)
+        .await
+        .expect("resolution should finish after releasing the cache")
+        .expect("cached route should resolve");
     assert_eq!(route, OutboundProxyRoute::Direct);
 }
 
@@ -499,9 +550,15 @@ fn unavailable_system_proxy_decision_is_cached() {
         failure: RouteFailureClass::ProxyResolutionUnavailable,
     };
 
-    cache_system_proxy_decision(request_url, decision.clone());
+    let mut cache = HashMap::new();
+    let cache_key = system_proxy_cache_key(request_url);
+    let now = Instant::now();
+    insert_system_proxy_cache_entry(&mut cache, &cache_key, decision.clone(), now);
 
-    assert_eq!(cached_system_proxy_decision(request_url), Some(decision));
+    assert_eq!(
+        cached_system_proxy_decision_from_cache(&mut cache, &cache_key, now),
+        Some(decision)
+    );
 }
 
 #[derive(Clone)]
