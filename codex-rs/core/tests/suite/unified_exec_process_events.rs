@@ -729,6 +729,28 @@ timeout = 900
             )]),
             NetworkSandboxPolicy::Enabled,
         )
+    } else if foreign_cwd
+        && matches!(
+            scenario,
+            PushedExecScenario::Complete | PushedExecScenario::ElevatedPowerShell
+        )
+    {
+        let mut file_system = PermissionProfile::workspace_write().file_system_sandbox_policy();
+        file_system.entries.extend([
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: "file:///C:/workspace/blocked".parse()?,
+                },
+                FileSystemAccessMode::Deny,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::GlobPattern {
+                    pattern: r"C:\workspace\private\**".into(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ]);
+        PermissionProfile::from_runtime_permissions(&file_system, NetworkSandboxPolicy::Restricted)
     } else if foreign_cwd && !matches!(scenario, PushedExecScenario::UnsandboxedInterceptedPatch) {
         PermissionProfile::workspace_write()
     } else {
@@ -976,6 +998,28 @@ timeout = 900
             "toolCallId": CALL_ID,
         }),
     );
+    if foreign_cwd && !managed_network_configured {
+        let permissions = response_mock.requests()[0]
+            .message_input_texts("developer")
+            .join("\n")
+            .lines()
+            .filter(|line| {
+                line.contains("`sandbox_mode`")
+                    || line.starts_with(" The writable root")
+                    || line.starts_with("- path `")
+                    || line.starts_with("- glob `")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(permissions, @r#"
+            Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted.
+             The writable roots are `C:\workspace`, `D:\other-workspace`.
+            - path `C:\workspace\blocked`
+            - glob `C:\workspace\private\**`
+            "#);
+        }
+    }
     if foreign_cwd {
         let params = &exec_server_result.process_start["params"];
         assert_eq!(params["cwd"], "file:///C:/workspace");

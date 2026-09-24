@@ -1,5 +1,6 @@
 //! Composes selected permission text and prepared runtime facts into a stored fragment body.
-//! Only the profile adapter inspects the host filesystem; composition uses the supplied facts.
+//! Remote paths use executor context; the local adapter retains host filesystem resolution.
+//! Displayed paths share a byte budget and are omitted only at whole-entry boundaries.
 //! Catalog text uses literal substitution; bundled sandbox templates are parsed and cached here.
 
 use crate::ResolvedMessage;
@@ -16,10 +17,12 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess;
 use codex_utils_template::Template;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -34,6 +37,8 @@ const GRANULAR_PROMPTED_CATEGORIES: &str =
     "These approval categories may still prompt the user when needed:";
 const GRANULAR_REJECTED_CATEGORIES: &str =
     "These approval categories are automatically rejected instead of prompting the user:";
+const MAX_PERMISSION_PATH_BYTES: usize = 32 * 1024;
+const OMITTED_PERMISSION_PATHS: &str = "Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials.";
 
 static DANGER_FULL_ACCESS: LazyLock<Template> = LazyLock::new(|| {
     Template::parse(DANGER_FULL_ACCESS_TEMPLATE.trim_end())
@@ -93,6 +98,28 @@ impl PermissionsInstructions {
         context: PermissionsRenderContext<'_>,
         approval_context: ApprovalPromptContext<'_>,
     ) -> Self {
+        let mut remaining_path_bytes =
+            MAX_PERMISSION_PATH_BYTES - OMITTED_PERMISSION_PATHS.len() - 1;
+        let mut paths_omitted = false;
+        let mut bounded_paths = |paths: &[String]| {
+            paths
+                .iter()
+                .filter(|path| {
+                    // Reserve up to ten bytes for each entry's label, quoting, and separator.
+                    if let Some(remaining) = remaining_path_bytes.checked_sub(path.len() + 10) {
+                        remaining_path_bytes = remaining;
+                        true
+                    } else {
+                        paths_omitted = true;
+                        false
+                    }
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let writable_roots = bounded_paths(context.writable_roots);
+        let denied_read_paths = bounded_paths(context.denied_read_paths);
+        let denied_read_globs = bounded_paths(context.denied_read_globs);
         let mut text = String::new();
         let sandbox = sandbox_text(
             context.sandbox_mode,
@@ -113,13 +140,14 @@ impl PermissionsInstructions {
                 context.request_permissions_tool_enabled,
             ),
         );
-        if let Some(writable_roots) = writable_roots_text(context.writable_roots) {
+        if let Some(writable_roots) = writable_roots_text(&writable_roots) {
             append_section(&mut text, &writable_roots);
         }
-        if let Some(denied_reads) =
-            denied_reads_text(context.denied_read_paths, context.denied_read_globs)
-        {
+        if let Some(denied_reads) = denied_reads_text(&denied_read_paths, &denied_read_globs) {
             append_section(&mut text, &denied_reads);
+        }
+        if paths_omitted {
+            append_section(&mut text, OMITTED_PERMISSION_PATHS);
         }
         if !text.ends_with('\n') {
             text.push('\n');
@@ -127,40 +155,85 @@ impl PermissionsInstructions {
         Self { text }
     }
 
-    /// Resolves a permission profile against the host filesystem before rendering instructions.
+    /// Uses executor paths when supplied, otherwise retaining local path resolution.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_permission_profile(
         permission_profile: &PermissionProfile,
         approval_policy: AskForApproval,
         approval_context: ApprovalPromptContext<'_>,
         exec_policy: &Policy,
         cwd: &Path,
+        paths: Option<&FileSystemSandboxPolicyContext<'_>>,
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
     ) -> Self {
         let file_system_policy = permission_profile.file_system_sandbox_policy();
-        let (sandbox_mode, mut writable_roots) = if file_system_policy.has_full_disk_write_access()
-        {
-            (SandboxMode::DangerFullAccess, Vec::new())
+        let full_disk_write = paths.map_or_else(
+            || file_system_policy.has_full_disk_write_access(),
+            |paths| file_system_policy.has_full_disk_write_access_with_context(paths),
+        );
+        let (writable_roots, denied_read_paths, denied_read_globs) = if let Some(paths) = paths {
+            let mut writable_roots = file_system_policy
+                .resolved_entries(paths)
+                .into_iter()
+                .filter(|(path, access)| {
+                    !full_disk_write
+                        && access.can_write()
+                        && file_system_policy.can_write_path(path, paths)
+                })
+                .map(|(path, _)| path)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .map(|path| path.inferred_native_path_string())
+                .collect::<Vec<_>>();
+            writable_roots.sort();
+            let mut denied_read_paths = Vec::new();
+            let mut denied_read_globs = Vec::new();
+            let mut seen = HashSet::new();
+            let mut entry_policy = file_system_policy.clone();
+            // Missing executor facts should omit only the unresolved entry from the text.
+            for entry in &file_system_policy.entries {
+                entry_policy.entries = vec![entry.clone()];
+                denied_read_paths.extend(
+                    entry_policy
+                        .get_unreadable_roots_with_context(paths)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|path| seen.insert(path.clone()))
+                        .map(|path| path.inferred_native_path_string()),
+                );
+                denied_read_globs.extend(
+                    entry_policy
+                        .get_unreadable_globs_with_context(paths)
+                        .unwrap_or_default(),
+                );
+            }
+            denied_read_globs.sort();
+            denied_read_globs.dedup();
+            (writable_roots, denied_read_paths, denied_read_globs)
         } else {
-            let roots = file_system_policy.get_writable_roots_with_cwd(cwd);
-            let mode = if roots.is_empty() {
-                SandboxMode::ReadOnly
-            } else {
-                SandboxMode::WorkspaceWrite
-            };
-            (mode, roots)
+            let mut writable_roots = file_system_policy.get_writable_roots_with_cwd(cwd);
+            writable_roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
+            (
+                writable_roots
+                    .iter()
+                    .map(|root| root.root.to_string_lossy().into_owned())
+                    .collect(),
+                file_system_policy
+                    .get_unreadable_roots_with_cwd(cwd)
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect(),
+                file_system_policy.get_unreadable_globs_with_cwd(cwd),
+            )
         };
-        writable_roots.sort_by(|left, right| left.root.as_path().cmp(right.root.as_path()));
-        let writable_roots = writable_roots
-            .iter()
-            .map(|root| root.root.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        let denied_read_paths = file_system_policy
-            .get_unreadable_roots_with_cwd(cwd)
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        let denied_read_globs = file_system_policy.get_unreadable_globs_with_cwd(cwd);
+        let sandbox_mode = if full_disk_write {
+            SandboxMode::DangerFullAccess
+        } else if writable_roots.is_empty() {
+            SandboxMode::ReadOnly
+        } else {
+            SandboxMode::WorkspaceWrite
+        };
         Self::from_resolved(
             PermissionsRenderContext {
                 sandbox_mode,

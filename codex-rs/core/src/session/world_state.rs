@@ -24,6 +24,7 @@ use crate::context::world_state::WorldState;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
+use codex_file_system::FileSystemSandboxContext;
 use codex_prompts::ApprovalPromptContext;
 use codex_prompts::ResolvedModelMessages;
 use codex_prompts::render_model_instructions;
@@ -166,6 +167,14 @@ impl Session {
             .current_for_prefix_rules(turn_context.allow_prefix_rules());
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
+            let sandbox = environment
+                .filter(|environment| environment.environment.is_remote())
+                .map(|environment| {
+                    environment.sandbox_context(/*additional_permissions*/ None)
+                });
+            let paths = sandbox
+                .as_ref()
+                .map(FileSystemSandboxContext::policy_context);
             let permission_profile =
                 turn_context.permission_profile_for_environments(&step_context.environments);
             #[allow(deprecated)]
@@ -178,6 +187,7 @@ impl Session {
                 ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages),
                 exec_policy.as_ref(),
                 &cwd,
+                paths.as_ref(),
                 turn_context
                     .config
                     .features

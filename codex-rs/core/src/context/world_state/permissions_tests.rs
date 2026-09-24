@@ -237,6 +237,7 @@ fn permissions_state(
         ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages),
         &Policy::empty(),
         Path::new("/workspace"),
+        /*paths*/ None,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     )
@@ -250,6 +251,7 @@ fn permissions_state_with_default_messages(exec_policy: &Policy) -> PermissionsS
         ApprovalPromptContext::new(ApprovalsReviewer::User, model_messages),
         exec_policy,
         Path::new("/workspace"),
+        /*paths*/ None,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     )

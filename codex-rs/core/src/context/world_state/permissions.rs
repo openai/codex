@@ -10,6 +10,7 @@ use codex_execpolicy::Policy;
 use codex_prompts::ApprovalPromptContext;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::permissions::FileSystemSandboxPolicyContext;
 use codex_protocol::protocol::AskForApproval;
 use serde::Deserialize;
 use serde::Serialize;
@@ -34,12 +35,14 @@ pub(crate) enum PermissionsSnapshot {
 }
 
 impl PermissionsState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         permission_profile: &PermissionProfile,
         approval_policy: AskForApproval,
         approval_context: ApprovalPromptContext<'_>,
         exec_policy: &Policy,
         cwd: &Path,
+        paths: Option<&FileSystemSandboxPolicyContext<'_>>,
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
     ) -> Self {
@@ -50,6 +53,7 @@ impl PermissionsState {
                 approval_context,
                 exec_policy,
                 cwd,
+                paths,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
             )

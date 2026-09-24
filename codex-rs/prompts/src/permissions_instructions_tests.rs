@@ -10,6 +10,7 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -33,17 +34,38 @@ fn user_approval_context() -> ApprovalPromptContext<'static> {
 
 #[test]
 fn builds_permissions_from_profile() {
-    let cwd = test_path_buf("/tmp");
+    let cwd = test_path_buf("/workspace");
     let writable_root =
         AbsolutePathBuf::from_absolute_path(cwd.join("repo")).expect("absolute path");
+    let denied_root =
+        AbsolutePathBuf::from_absolute_path(cwd.join("blocked")).expect("absolute path");
+    let denied_glob = cwd
+        .join("blocked")
+        .join("**")
+        .to_string_lossy()
+        .into_owned();
     let permission_profile = PermissionProfile::from_runtime_permissions(
-        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: writable_root.clone().into(),
+        &FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: writable_root.clone().into(),
+                },
+                access: FileSystemAccessMode::Write,
+                missing_path_behavior: None,
             },
-            access: FileSystemAccessMode::Write,
-            missing_path_behavior: None,
-        }]),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Path {
+                    path: denied_root.clone().into(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::GlobPattern {
+                    pattern: denied_glob.clone(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+        ]),
         NetworkSandboxPolicy::Enabled,
     );
 
@@ -53,6 +75,7 @@ fn builds_permissions_from_profile() {
         user_approval_context(),
         &Policy::empty(),
         &cwd,
+        /*paths*/ None,
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
@@ -60,33 +83,50 @@ fn builds_permissions_from_profile() {
     assert!(text.contains("`sandbox_mode` is `workspace-write`"));
     assert!(text.contains("Network access is enabled."));
     assert!(text.contains(writable_root.to_string_lossy().as_ref()));
+    assert!(text.contains("Do not request escalation or additional permissions"));
+    assert!(text.contains(&format!("path `{}`", denied_root.display())));
+    assert!(text.contains(&format!("glob `{denied_glob}`")));
 }
 
 #[test]
-fn builds_permissions_from_profile_with_denied_reads() {
-    let cwd = test_path_buf("/tmp");
-    let denied_root =
-        AbsolutePathBuf::from_absolute_path(cwd.join("blocked")).expect("absolute path");
-    let denied_glob = cwd.join("blocked").join("**");
+fn builds_permissions_from_profile_with_executor_denied_reads() {
+    let paths = FileSystemSandboxPolicyContext {
+        cwd: &"file:///C:/workspace".parse().unwrap(),
+        workspace_roots: &[],
+        user_home_dir: None,
+        temporary_directories: None,
+    };
+    let denied_root = paths.cwd.join("blocked").unwrap();
+    let denied_glob = r"C:\workspace\blocked\**";
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
-                    value: codex_protocol::permissions::FileSystemSpecialPath::Root,
+                    value: FileSystemSpecialPath::Root,
                 },
                 access: FileSystemAccessMode::Read,
                 missing_path_behavior: None,
             },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: denied_root.clone().into(),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
                 },
+                FileSystemAccessMode::Deny,
+            ),
+            FileSystemSandboxEntry::new(
+                FileSystemPath::GlobPattern {
+                    pattern: "~/private/**".into(),
+                },
+                FileSystemAccessMode::Deny,
+            ),
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: denied_root },
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::GlobPattern {
-                    pattern: denied_glob.to_string_lossy().into_owned(),
+                    pattern: denied_glob.into(),
                 },
                 access: FileSystemAccessMode::Deny,
                 missing_path_behavior: None,
@@ -103,15 +143,16 @@ fn builds_permissions_from_profile_with_denied_reads() {
             ResolvedModelMessages::bundled(),
         ),
         &Policy::empty(),
-        &cwd,
+        &test_path_buf("/unused-local-cwd"),
+        Some(&paths),
         /*exec_permission_approvals_enabled*/ false,
         /*request_permissions_tool_enabled*/ false,
     );
     let text = instructions.body();
     assert!(text.contains("## Denied filesystem reads"));
     assert!(text.contains("Do not request escalation or additional permissions"));
-    assert!(text.contains(denied_root.to_string_lossy().as_ref()));
-    assert!(text.contains(&format!("glob `{}`", denied_glob.to_string_lossy())));
+    assert!(text.contains(r"path `C:\workspace\blocked`"));
+    assert!(text.contains(&format!("glob `{denied_glob}`")));
 }
 
 #[test]
@@ -703,4 +744,33 @@ fn preserves_supplied_path_spellings_and_order() {
             ),
         ),
     );
+}
+
+#[test]
+fn bounds_permission_paths_at_whole_entry_boundaries() {
+    let render =
+        |writable_roots: &[String], denied_read_paths: &[String], denied_read_globs: &[String]| {
+            PermissionsInstructions::from_resolved(
+                PermissionsRenderContext {
+                    writable_roots,
+                    denied_read_paths,
+                    denied_read_globs,
+                    ..WORKSPACE_CONTEXT
+                },
+                user_approval_context(),
+            )
+            .body()
+        };
+    // Any two fit, but all three exceed the shared budget. Include multibyte paths.
+    let writable = format!("/writable/{}", "é".repeat(6_000));
+    let denied = format!("/denied/{}", "é".repeat(6_000));
+    let glob = format!("/glob/{}/**", "é".repeat(6_000));
+    let oversized = format!("/oversized/{}", "x".repeat(MAX_PERMISSION_PATH_BYTES));
+    let text = render(
+        &[oversized, writable.clone()],
+        std::slice::from_ref(&denied),
+        &[glob, "/short/**".into()],
+    );
+    let expected = render(&[writable], &[denied], &["/short/**".into()]);
+    assert_eq!(text, format!("{expected}{OMITTED_PERMISSION_PATHS}\n"));
 }

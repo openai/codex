@@ -1827,7 +1827,9 @@ impl FileSystemSandboxPolicy {
             .collect()
     }
 
-    fn resolved_entries(
+    /// Resolves configured roots using executor paths without inspecting the filesystem.
+    /// Glob patterns are excluded; access precedence is evaluated by `resolve_access`.
+    pub fn resolved_entries(
         &self,
         context: &FileSystemSandboxPolicyContext<'_>,
     ) -> Vec<(PathUri, FileSystemAccessMode)> {
