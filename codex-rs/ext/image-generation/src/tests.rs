@@ -2,7 +2,6 @@ use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
-use codex_api::ImageUrl;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
@@ -168,10 +167,9 @@ async fn recent_image_fallback_selects_newest_images_in_chronological_order() {
     );
 }
 
-/// A file-backed image in the requested window must not cause an older inline image to be edited.
 #[tokio::test]
-async fn recent_image_fallback_rejects_file_backed_image_in_requested_window() {
-    let error = request_for_call_args(
+async fn recent_image_fallback_passes_file_backed_image_to_edit_request() {
+    let request = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
             transparent_background: false,
@@ -196,19 +194,28 @@ async fn recent_image_fallback_rejects_file_backed_image_in_requested_window() {
         &[],
     )
     .await
-    .expect_err("a selected file-backed image should fail");
+    .expect("a selected file-backed image should be passed through");
 
     assert_eq!(
-        error.to_string(),
-        "requested the last 1 conversation images, but that window includes a file-backed image \
-         that cannot be used for editing"
+        request,
+        ImageRequest::Edit(ImageEditRequest {
+            images: vec![ImageReference::File {
+                file_id: "newer-file-backed-image".to_string(),
+            }],
+            prompt: "change the lighting".to_string(),
+            background: Some(ImageBackground::Opaque),
+            model: "gpt-image-2".to_string(),
+            n: None,
+            quality: Some(ImageQuality::Auto),
+            size: Some("auto".to_string()),
+        })
     );
 }
 
 /// Tool-output file references must count toward the window instead of exposing an older image.
 #[tokio::test]
-async fn recent_image_fallback_rejects_file_backed_tool_output_in_requested_window() {
-    let error = request_for_call_args(
+async fn recent_image_fallback_passes_file_backed_tool_output_to_edit_request() {
+    let request = request_for_call_args(
         &ImagegenArgs {
             prompt: "change the lighting".to_string(),
             transparent_background: false,
@@ -242,12 +249,21 @@ async fn recent_image_fallback_rejects_file_backed_tool_output_in_requested_wind
         &[],
     )
     .await
-    .expect_err("a selected file-backed tool output should fail");
+    .expect("a selected file-backed tool output should be passed through");
 
     assert_eq!(
-        error.to_string(),
-        "requested the last 1 conversation images, but that window includes a file-backed image \
-         that cannot be used for editing"
+        request,
+        ImageRequest::Edit(ImageEditRequest {
+            images: vec![ImageReference::File {
+                file_id: "newer-file-backed-image".to_string(),
+            }],
+            prompt: "change the lighting".to_string(),
+            background: Some(ImageBackground::Opaque),
+            model: "gpt-image-2".to_string(),
+            n: None,
+            quality: Some(ImageQuality::Auto),
+            size: Some("auto".to_string()),
+        })
     );
 }
 
@@ -432,7 +448,7 @@ fn expected_edit_request(prompt: &str, images: &[&str]) -> ImageEditRequest {
     ImageEditRequest {
         images: images
             .iter()
-            .map(|image| ImageUrl {
+            .map(|image| ImageReference::Inline {
                 image_url: format!("data:image/png;base64,{image}"),
             })
             .collect(),

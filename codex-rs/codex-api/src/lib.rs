@@ -83,7 +83,6 @@ pub use crate::images::ImageEditRequest;
 pub use crate::images::ImageGenerationRequest;
 pub use crate::images::ImageQuality;
 pub use crate::images::ImageResponse;
-pub use crate::images::ImageUrl;
 pub use crate::provider::Provider;
 pub use crate::provider::RetryConfig;
 pub use crate::provider::is_azure_responses_provider;
