@@ -203,11 +203,18 @@ async fn board_post_and_reads_reach_model_context_without_self_notices() -> anyh
     Ok(())
 }
 
+#[test_case::test_case(false; "disk")]
+#[test_case::test_case(true; "in_memory")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn board_is_shared_with_children_survives_resume_and_skips_idle_notices() -> anyhow::Result<()>
-{
+async fn board_is_shared_with_children_and_skips_idle_notices(
+    in_memory: bool,
+) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
-    let mut builder = test_codex().with_config(configure);
+    let mut builder = test_codex().with_config(move |config| {
+        configure(config);
+        config.multi_agent_v2.message_board_in_memory = in_memory;
+        config.ephemeral = in_memory;
+    });
     let root = builder.build_with_auto_env(&server).await?;
     responses::mount_sse_sequence(
         &server,
@@ -302,6 +309,17 @@ async fn board_is_shared_with_children_survives_resume_and_skips_idle_notices() 
         serde_json::from_str(&output).with_context(|| format!("root read result: {output}"))?;
     assert_eq!(result["results"][0]["message_id"], post["message_id"]);
     child.shutdown_and_wait().await?;
+    if in_memory {
+        assert!(
+            !root
+                .config
+                .sqlite_config()
+                .home()
+                .join("agent_message_board_1.sqlite")
+                .exists()
+        );
+        return Ok(());
+    }
     let resumed = test_codex()
         .with_config(configure)
         .restart(&server, &root)

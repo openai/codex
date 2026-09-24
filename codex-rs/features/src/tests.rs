@@ -744,6 +744,7 @@ hide_spawn_agent_metadata = true
 expose_spawn_agent_model_overrides = true
 wait_agent_enabled = false
 disable_direct_message = true
+message_board_in_memory = true
 non_code_mode_only = true
 "#,
     )
@@ -772,6 +773,7 @@ non_code_mode_only = true
             expose_spawn_agent_model_overrides: Some(true),
             wait_agent_enabled: Some(false),
             disable_direct_message: Some(true),
+            message_board_in_memory: Some(true),
             non_code_mode_only: Some(true),
         }))
     );

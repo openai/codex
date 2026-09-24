@@ -21,7 +21,7 @@ use uuid::Uuid;
 // Local and remote implementations must remain usable through the same handle.
 const _: Option<&dyn AgentMessageBoard> = None;
 
-/// Stores discussions and subscriptions for one persistent agent tree.
+/// Stores discussions and subscriptions for one agent tree.
 ///
 /// Every operation validates caller membership. IDs are scoped to this board;
 /// an agent runtime's ThreadId is distinct from a discussion's root post UUID.

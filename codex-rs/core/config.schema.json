@@ -2746,6 +2746,10 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "message_board_in_memory": {
+          "description": "Keep the message board in memory for a training session, including ephemeral sessions.",
+          "type": "boolean"
+        },
         "min_wait_timeout_ms": {
           "format": "int64",
           "maximum": 3600000.0,

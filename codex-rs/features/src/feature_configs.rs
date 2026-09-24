@@ -300,6 +300,9 @@ pub struct MultiAgentV2ConfigToml {
     /// Disable the model's direct-message tools; spawning and automatic child results remain available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_direct_message: Option<bool>,
+    /// Keep the message board in memory for a training session, including ephemeral sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_board_in_memory: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub non_code_mode_only: Option<bool>,
 }

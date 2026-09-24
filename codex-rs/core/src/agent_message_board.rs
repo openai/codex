@@ -12,6 +12,7 @@ use crate::tools::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_agent_message_board_extension::AgentMessageBoard;
+use codex_agent_message_board_extension::InMemoryMessageBoards;
 use codex_agent_message_board_extension::LocalAgentMessageBoard;
 use codex_agent_message_board_extension::MessageBoardHost;
 use codex_agent_message_board_extension::NotificationDelivery;
@@ -29,33 +30,40 @@ use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::Weak;
 
-/// Registers the local board for opted-in, persistent MAv2 runtimes.
-/// Shared session identity and the configured SQLite home survive runtime reloads.
+/// Registers the configured board for opted-in MAv2 runtimes.
+/// Training can share an in-memory board per tree, including ephemeral sessions.
 pub fn install_agent_message_board(
     registry: &mut ExtensionRegistryBuilder<Config>,
     manager: Weak<ThreadManager>,
 ) {
+    let in_memory_boards = Arc::new(InMemoryMessageBoards::default());
     codex_agent_message_board_extension::install(
         registry,
         MULTI_AGENT_V2_NAMESPACE_DESCRIPTION,
         |config: &Config| config.multi_agent_v2.tool_namespace.clone(),
         move |config: &Config, tree, caller| {
+            let in_memory = config.multi_agent_v2.message_board_in_memory;
             // MAv2 supplies tree paths; ephemeral runtimes must not open durable storage.
             if !config.features.enabled(Feature::AgentMessageBoard)
                 || !config.features.enabled(Feature::MultiAgentV2)
-                || config.ephemeral
+                || (config.ephemeral && !in_memory)
             {
                 return Box::pin(async { Ok(None) });
             }
             let sqlite = config.sqlite_config().clone();
+            let in_memory_boards = Arc::clone(&in_memory_boards);
             let host = Arc::new(LocalBoardHost {
                 manager: manager.clone(),
                 tree,
                 caller,
             });
             Box::pin(async move {
-                let board = LocalAgentMessageBoard::open(&sqlite, tree, host).await?;
-                Ok(Some(Arc::new(board) as Arc<dyn AgentMessageBoard>))
+                let board: Arc<dyn AgentMessageBoard> = if in_memory {
+                    Arc::new(in_memory_boards.open(tree, host).await)
+                } else {
+                    Arc::new(LocalAgentMessageBoard::open(&sqlite, tree, host).await?)
+                };
+                Ok(Some(board))
             })
         },
     );

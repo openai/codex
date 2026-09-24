@@ -1,4 +1,9 @@
-//! Exercises real local storage through independent handles and host capabilities.
+//! Exercises message-board backends through their shared trait and host capabilities.
+
+#![expect(
+    clippy::unwrap_used,
+    reason = "shared test helpers assert successful operations"
+)]
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -384,7 +389,91 @@ async fn shared_handles_resume_posts_and_preserve_subscription_rules() {
 }
 
 #[tokio::test]
+async fn in_memory_handles_share_posts_deduplicate_calls_and_release_state() {
+    let root = ThreadId::new();
+    let child = ThreadId::new();
+    let child_path = AgentPath::root().join("worker").unwrap();
+    let host = Arc::new(Host {
+        clock: AtomicI64::default(),
+        agent_path_calls: AtomicUsize::default(),
+        members: [(root, AgentPath::root()), (child, child_path.clone())].into(),
+        active: AtomicBool::new(true),
+        fail_notifications: AtomicBool::new(false),
+        notifications: Mutex::default(),
+    });
+    let boards = InMemoryMessageBoards::default();
+    let (board, shared) = tokio::join!(
+        boards.open(root.into(), host.clone()),
+        boards.open(root.into(), host.clone()),
+    );
+    let request = PostRequest {
+        request_id: "same-call".into(),
+        destination: PostDestination::NewChannel("work".into()),
+        text: "done".into(),
+        agents_to_notify: vec![child_path],
+    };
+    let (first, retry) = tokio::join!(
+        board.post(root, request.clone()),
+        shared.post(root, request)
+    );
+    let metadata = first.unwrap();
+    assert_eq!(retry.unwrap(), metadata);
+    assert_eq!(
+        *host.notifications.lock().unwrap(),
+        vec![(child, metadata.clone())]
+    );
+    let read = ReadPostRequest {
+        message_id: metadata.message_id,
+        offset_chars: 0,
+        limit_chars: NonZeroU32::new(20).unwrap(),
+    };
+    assert_eq!(
+        shared.read_post(child, read.clone()).await.unwrap(),
+        PostContent {
+            metadata,
+            text: "done".into(),
+            n_chars: 4,
+            next_offset_chars: 4
+        }
+    );
+    let other = boards.open(SessionId::new(), host.clone()).await;
+    assert!(other.read_post(root, read.clone()).await.is_err());
+    drop(board);
+    drop(shared);
+    let fresh = boards.open(root.into(), host).await;
+    assert!(fresh.read_post(root, read).await.is_err());
+}
+
+enum Backend {
+    Local,
+    InMemory,
+}
+
+impl Backend {
+    async fn open(
+        self,
+        sqlite: &SqliteConfig,
+        identity: SessionId,
+        host: Arc<dyn MessageBoardHost>,
+    ) -> Arc<dyn AgentMessageBoard> {
+        match self {
+            Self::Local => Arc::new(
+                LocalAgentMessageBoard::open(sqlite, identity, host)
+                    .await
+                    .unwrap(),
+            ),
+            Self::InMemory => Arc::new(InMemoryAgentMessageBoard::new(identity, host)),
+        }
+    }
+}
+
+#[tokio::test]
 async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
+    check_failed_requests_do_not_create_channels_or_notify_inactive_agents(Backend::Local).await;
+    check_failed_requests_do_not_create_channels_or_notify_inactive_agents(Backend::InMemory).await;
+}
+
+async fn check_failed_requests_do_not_create_channels_or_notify_inactive_agents(backend: Backend) {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
@@ -398,9 +487,9 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
         active: AtomicBool::new(false),
         notifications: Mutex::default(),
     });
-    let board = LocalAgentMessageBoard::open(&sqlite, SessionId::from(root), host.clone())
-        .await
-        .unwrap();
+    let board = backend
+        .open(&sqlite, SessionId::from(root), host.clone())
+        .await;
     let mut request = PostRequest {
         request_id: "post".into(),
         destination: PostDestination::NewChannel("work".into()),
@@ -452,6 +541,11 @@ async fn failed_requests_do_not_create_channels_or_notify_inactive_agents() {
 
 #[tokio::test]
 async fn queries_enforce_page_and_preview_caps() {
+    check_queries_enforce_page_and_preview_caps(Backend::Local).await;
+    check_queries_enforce_page_and_preview_caps(Backend::InMemory).await;
+}
+
+async fn check_queries_enforce_page_and_preview_caps(backend: Backend) {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
@@ -463,9 +557,7 @@ async fn queries_enforce_page_and_preview_caps() {
         active: AtomicBool::new(false),
         notifications: Mutex::default(),
     });
-    let board = LocalAgentMessageBoard::open(&sqlite, root.into(), host)
-        .await
-        .unwrap();
+    let board = backend.open(&sqlite, root.into(), host).await;
     board
         .create_channel(
             root,
@@ -543,6 +635,11 @@ async fn queries_enforce_page_and_preview_caps() {
 
 #[tokio::test]
 async fn queries_page_discussions_and_search_unicode() {
+    check_queries_page_discussions_and_search_unicode(Backend::Local).await;
+    check_queries_page_discussions_and_search_unicode(Backend::InMemory).await;
+}
+
+async fn check_queries_page_discussions_and_search_unicode(backend: Backend) {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = SqliteConfig::new_for_testing(dir.path().to_path_buf().try_into().unwrap());
     let root = ThreadId::new();
@@ -554,11 +651,7 @@ async fn queries_page_discussions_and_search_unicode() {
         active: AtomicBool::new(true),
         notifications: Mutex::default(),
     });
-    let board: Arc<dyn AgentMessageBoard> = Arc::new(
-        LocalAgentMessageBoard::open(&sqlite, SessionId::from(root), host)
-            .await
-            .unwrap(),
-    );
+    let board = backend.open(&sqlite, SessionId::from(root), host).await;
     let request = PostRequest {
         request_id: "first".into(),
         destination: PostDestination::NewChannel("work".into()),
@@ -799,6 +892,14 @@ fn board_tool_call(name: &str, args: serde_json::Value) -> codex_tools::ToolCall
 
 #[tokio::test]
 async fn tools_cover_channel_discussions_subscriptions_and_escaped_previews() {
+    check_tools_cover_channel_discussions_subscriptions_and_escaped_previews(Backend::Local).await;
+    check_tools_cover_channel_discussions_subscriptions_and_escaped_previews(Backend::InMemory)
+        .await;
+}
+
+async fn check_tools_cover_channel_discussions_subscriptions_and_escaped_previews(
+    backend: Backend,
+) {
     use codex_tools::ToolName;
     use serde_json::json;
     let dir = tempfile::tempdir().unwrap();
@@ -814,11 +915,7 @@ async fn tools_cover_channel_discussions_subscriptions_and_escaped_previews() {
         active: AtomicBool::new(true),
         notifications: Mutex::default(),
     });
-    let board = Arc::new(
-        LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone())
-            .await
-            .unwrap(),
-    );
+    let board = backend.open(&sqlite, root.into(), host.clone()).await;
     let tools = message_board_tools(
         board,
         root,
@@ -985,6 +1082,15 @@ async fn tools_cover_channel_discussions_subscriptions_and_escaped_previews() {
 
 #[tokio::test]
 async fn tools_validate_arguments_deduplicate_calls_and_bound_unicode_results() {
+    check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_results(Backend::Local)
+        .await;
+    check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_results(Backend::InMemory)
+        .await;
+}
+
+async fn check_tools_validate_arguments_deduplicate_calls_and_bound_unicode_results(
+    backend: Backend,
+) {
     use codex_tools::ToolCallSource;
     use codex_tools::ToolName;
     use codex_utils_output_truncation::TruncationPolicy;
@@ -1003,11 +1109,7 @@ async fn tools_validate_arguments_deduplicate_calls_and_bound_unicode_results() 
         active: AtomicBool::new(true),
         notifications: Mutex::default(),
     });
-    let board = Arc::new(
-        LocalAgentMessageBoard::open(&sqlite, root.into(), host.clone())
-            .await
-            .unwrap(),
-    );
+    let board = backend.open(&sqlite, root.into(), host.clone()).await;
     let tools = message_board_tools(
         board.clone(),
         root,
