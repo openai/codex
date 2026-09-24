@@ -9,7 +9,6 @@ use codex_core::ResponseEvent;
 use codex_core::TurnInputRequest;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
-use codex_core::test_support::EmptyUserInstructionsProvider;
 use codex_core::test_support::with_parent_turn;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
@@ -63,7 +62,6 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::test_codex;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
@@ -637,25 +635,27 @@ async fn responses_websocket_resume_prewarm_reuses_and_repairs_connection() -> a
     .await;
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
-    let instructions = Arc::new(RecordingUserInstructionsProvider::new(Arc::new(
-        EmptyUserInstructionsProvider,
-    )));
     let test = test_codex()
         .with_extensions(Arc::new(extensions.build()))
-        .with_user_instructions_provider(instructions.clone())
         .build_with_websocket_server(&server)
         .await?;
     test.submit_text_turn("hello").await?;
     ThreadIdle::wait(&test.codex).await;
 
-    // A healthy warm resume preserves the response baseline and skips preparation.
-    let instruction_loads = instructions.load_count();
+    // A healthy warm resume preserves the existing response baseline.
     test.codex.prewarm().await;
     test.codex.prewarm().await;
     test.submit_text_turn("continue").await?;
 
     assert_eq!(server.handshakes().len(), 1);
-    assert_eq!(instructions.load_count(), instruction_loads + 1);
+    assert_eq!(
+        server.single_handshake().header(USER_AGENT_HEADER),
+        Some(codex_login::default_client::get_codex_user_agent())
+    );
+    assert_eq!(
+        server.single_handshake().header("x-codex-window-id"),
+        Some(format!("{}:0", test.session_configured.thread_id))
+    );
     let connection = server.single_connection();
     assert_eq!(connection.len(), 3);
     assert_eq!(connection[2].body_json()["previous_response_id"], "resp-1");
