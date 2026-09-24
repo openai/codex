@@ -345,7 +345,7 @@ impl App {
             }
             AppEvent::OpenWarnings => self.chat_widget.open_warnings(&self.transcript_cells),
             AppEvent::CopyWarning(text) => {
-                let result = tui.copy_transcript_selection(&text);
+                let result = tui.copy_transcript_selection(&text, crate::clipboard_copy::CopyFormat::PlainText);
                 self.chat_widget.show_selection_copy_result(result);
             }
             AppEvent::OpenTranscriptExportFilePrompt => {

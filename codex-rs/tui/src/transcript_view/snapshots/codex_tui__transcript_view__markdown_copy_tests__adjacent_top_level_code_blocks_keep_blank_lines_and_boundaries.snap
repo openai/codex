@@ -1,0 +1,25 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+expression: "format!(\"Markdown:\\n{copied}\\n\\nHTML:\\n{}\",\ncrate::clipboard_html::render_markdown(&copied))"
+---
+Markdown:
+Prose
+
+```
+one
+
+inside
+```
+
+```
+two
+```
+
+HTML:
+<p>Prose</p>
+<pre><code>one
+
+inside
+</code></pre>
+<pre><code>two
+</code></pre>

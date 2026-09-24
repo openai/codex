@@ -38,7 +38,7 @@ fn right_click_retains_selection_until_confirmed_and_preserves_reading_position(
             &cells,
             &selected,
             /*clear_selection*/ true,
-            |copied| {
+            |copied, _format| {
                 assert_eq!(copied, selected);
                 result.clone()
             },

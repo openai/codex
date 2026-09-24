@@ -1,0 +1,79 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 139
+expression: "copies.join(\"\\n\")"
+---
+_a **b**_**c**
+Selected: "a bc"
+Markdown: _a_ **_b_&#99;**
+<p><em>a</em> <strong><em>b</em>c</strong></p>
+
+_a **b**_**c**
+Selected: "bc"
+Markdown: **_b_&#99;**
+<p><strong><em>b</em>c</strong></p>
+
+*a **b***[**c**](/repo)
+Selected: "a bc"
+Markdown: _a_ **_b_&#99;**
+<p><em>a</em> <strong><em>b</em>c</strong></p>
+
+_*a*_[_b_](/repo)
+Selected: "ab"
+Markdown: _ab_
+<p><em>ab</em></p>
+
+*[a **b**](https://example.com) c*
+Selected: "a b"
+Markdown: [_a_ **_b_**](<https://example.com>)
+<p><a href="https://example.com"><em>a</em> <strong><em>b</em></strong></a></p>
+
+a*b*c a**b**c
+Selected: "abc abc"
+Markdown: &#97;_b_&#99; a**b**c
+<p>a<em>b</em>c a<strong>b</strong>c</p>
+
+&#97;_b_&#99;
+Selected: "abc"
+Markdown: &#97;_b_&#99;
+<p>a<em>b</em>c</p>
+
+&#97;__b__&#99;
+Selected: "abc"
+Markdown: a**b**c
+<p>a<strong>b</strong>c</p>
+
+&#769;_b_
+Selected: "\u{301}b"
+Markdown: &#769;_b_
+<p>́<em>b</em></p>
+
+&#97;*!*&#98;
+Selected: "a!b"
+Markdown: &#97;_\!_&#98;
+<p>a<em>!</em>b</p>
+
+&#97;*&#12290;*&#98;
+Selected: "a。b"
+Markdown: &#97;_。_&#98;
+<p>a<em>。</em>b</p>
+
+&#97;**_b_**&#99;
+Selected: "abc"
+Markdown: &#97;**_b_**&#99;
+<p>a<strong><em>b</em></strong>c</p>
+
+&#97;**`b`**&#99;
+Selected: "abc"
+Markdown: &#97;**`b`**&#99;
+<p>a<strong><code>b</code></strong>c</p>
+
+_a_[b](/repo)
+Selected: "ab"
+Markdown: _a_&#98;
+<p><em>a</em>b</p>
+
+&#32;&#32;&#32;&#32;**hello**
+Selected: "    hello"
+Markdown: &#32;&#32;&#32;&#32;**hello**
+<p>    <strong>hello</strong></p>

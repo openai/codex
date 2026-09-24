@@ -1,0 +1,10 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 27
+expression: "crate::clipboard_html::render_markdown(text)"
+---
+<ul>
+<li>setting <code>closeRequested_</code>,</li>
+<li>removing the tailer from <code>tailers_</code>,</li>
+<li>clearing its live/discovery state.</li>
+</ul>

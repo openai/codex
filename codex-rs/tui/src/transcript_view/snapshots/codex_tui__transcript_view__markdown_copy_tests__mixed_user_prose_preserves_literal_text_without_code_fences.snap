@@ -1,0 +1,19 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+expression: "copies.join(\"\\n---\\n\")"
+---
+<p>[Image #1]</p>
+<p>    Explain *literal*<br />
+next &lt;tag&gt;</p>
+<p><strong>Answer</strong></p>
+<pre><code>*log* &lt;tag&gt;
+</code></pre>
+
+---
+<p><strong>Answer</strong></p>
+<pre><code>*log* &lt;tag&gt;
+
+</code></pre>
+<p>[Image #1]</p>
+<p>    Explain *literal*<br />
+next &lt;tag&gt;</p>

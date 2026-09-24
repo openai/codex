@@ -292,7 +292,12 @@ impl App {
                 self.render_owned_transcript(tui, size)?;
             }
             if composer_ready
-                && self.handle_composer_copy_event(tui, event, tui::Tui::copy_transcript_selection)
+                && self.handle_composer_copy_event(tui, event, |tui, text| {
+                    tui.copy_transcript_selection(
+                        text,
+                        crate::clipboard_copy::CopyFormat::PlainText,
+                    )
+                })
             {
                 return Ok(true);
             }
@@ -465,7 +470,7 @@ impl App {
                     &self.transcript_cells,
                     &text,
                     !copy_on_select,
-                    |text| tui.copy_transcript_selection(text),
+                    |text, format| tui.copy_transcript_selection(text, format),
                 );
                 self.transcript_view
                     .show_copy_feedback(&result, text.chars().count());

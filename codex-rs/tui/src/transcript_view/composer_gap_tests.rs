@@ -21,7 +21,7 @@ fn pending_copy_feedback_survives_expiry_and_selection_replacement() {
         &cells,
         &selected,
         /*clear_selection*/ true,
-        |_| Ok(CopyStatus::Pending(1)),
+        |_, _format| Ok(CopyStatus::Pending(1)),
     );
     view.show_copy_feedback(&pending, selected.chars().count());
     view.show_copy_feedback(&Ok(CopyStatus::Busy), /*characters*/ 0);

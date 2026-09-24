@@ -450,7 +450,7 @@ impl TranscriptOverlay {
                     &self.cells,
                     &text,
                     !copy_on_select,
-                    |text| tui.copy_transcript_selection(text),
+                    |text, format| tui.copy_transcript_selection(text, format),
                 );
                 if resume_following
                     && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Pending(_)))

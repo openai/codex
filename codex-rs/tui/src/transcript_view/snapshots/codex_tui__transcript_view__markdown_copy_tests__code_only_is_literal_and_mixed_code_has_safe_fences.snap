@@ -1,0 +1,10 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 88
+expression: "crate::clipboard_html::render_markdown(&copy)"
+---
+<p>Prose</p>
+<pre><code>  *literal* &lt;tag&gt;
+```
+</code></pre>
+<p>After</p>

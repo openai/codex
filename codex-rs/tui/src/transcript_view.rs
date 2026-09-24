@@ -593,5 +593,9 @@ impl TranscriptView {
 mod tests;
 
 #[cfg(test)]
+#[path = "transcript_view/markdown_copy_tests.rs"]
+mod markdown_copy_tests;
+
+#[cfg(test)]
 #[path = "transcript_view/copy_on_select_tests.rs"]
 mod copy_on_select_tests;

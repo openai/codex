@@ -1,10 +1,13 @@
 //! A conservative fast path for one open, top-level, language-tagged code fence.
 
+use crate::markdown_copy::CopyLine;
 use crate::render::highlight::MAX_HIGHLIGHT_LINE_BYTES;
 use crate::render::highlight::StreamingCodeHighlighter;
 use crate::render::highlight::syntax_theme_revision;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::LogicalLineSource;
 use ratatui::text::Span;
+use std::sync::Arc;
 
 /// An append-only fence whose original source is identical to pulldown-cmark's code text.
 pub(super) struct OpenCodeFence {
@@ -100,12 +103,19 @@ impl OpenCodeFence {
         let (highlighter, lines) = highlighter.append(committed_source)?;
         self.highlighter = Some(highlighter);
         self.source_len = raw_source.len();
+        let mut copy = CopyLine::default();
+        copy.code = true;
+        let copy = Arc::new(copy);
         let lines = lines
             .into_iter()
             .map(|mut line| {
+                let mut source = LogicalLineSource::from_line(&line);
+                source.copy = Some(Arc::clone(&copy));
                 // The canonical writer installs an empty indent span for top-level fences.
                 line.spans.insert(/*index*/ 0, Span::default());
-                HyperlinkLine::new(line)
+                let mut line = HyperlinkLine::new(line);
+                line.source = Some(source);
+                line
             })
             .collect();
         Some((self, lines))

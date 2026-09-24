@@ -23,6 +23,9 @@ pub(crate) enum LineWrapPolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LogicalLineSource {
     pub(crate) text: Arc<str>,
+    pub(crate) copy: Option<Arc<crate::markdown_copy::CopyLine>>,
+    /// Literal user text remains prose when copied alongside rendered Markdown.
+    pub(crate) copy_as_prose: bool,
     /// Span styles share the text's byte coordinates, including whitespace omitted by wrapping.
     pub(crate) styles: Arc<[(Range<usize>, Style)]>,
     /// Row style, applied beneath explicit span styles just like ratatui's `Line`.
@@ -42,6 +45,8 @@ impl LogicalLineSource {
         let end = text.len();
         Self {
             text: text.into(),
+            copy: None,
+            copy_as_prose: false,
             styles: vec![(0..end, Style::default())].into(),
             line_style: Style::default(),
             span_style: Style::default(),
@@ -100,6 +105,8 @@ impl LogicalLineSource {
         let end = displayed.end.clamp(source_start, source_end);
         Self {
             text: Arc::clone(&self.text),
+            copy: self.copy.clone(),
+            copy_as_prose: self.copy_as_prose,
             styles: Arc::clone(&self.styles),
             line_style: self.line_style,
             span_style: self.span_style,

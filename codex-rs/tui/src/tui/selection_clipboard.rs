@@ -5,8 +5,12 @@ use crate::clipboard_copy::CopyFormat;
 use crate::clipboard_copy::CopyStatus;
 
 impl Tui {
-    pub(crate) fn copy_transcript_selection(&mut self, text: &str) -> Result<CopyStatus, String> {
+    pub(crate) fn copy_transcript_selection(
+        &mut self,
+        text: &str,
+        format: CopyFormat,
+    ) -> Result<CopyStatus, String> {
         self.clipboard
-            .copy(text.into(), CopyFormat::PlainText, self.frame_requester())
+            .copy(text.into(), format, self.frame_requester())
     }
 }

@@ -80,7 +80,7 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
                     &cells,
                     &copied,
                     /*clear_selection*/ false,
-                    |_| Ok(CopyStatus::Pending(1)),
+                    |_, _format| Ok(CopyStatus::Pending(1)),
                 )
                 .unwrap();
                 assert_eq!(

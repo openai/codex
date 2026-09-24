@@ -70,7 +70,10 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
         ("café\nsecond line".into(), CopyFormat::Markdown)
     );
     for _ in 0..100 {
-        assert_eq!(tui.copy_transcript_selection("newer"), Ok(CopyStatus::Busy));
+        assert_eq!(
+            tui.copy_transcript_selection("newer", CopyFormat::PlainText),
+            Ok(CopyStatus::Busy)
+        );
     }
     assert!(tui.clipboard.poll().is_none());
     let mut overlay = Overlay::new_transcript(

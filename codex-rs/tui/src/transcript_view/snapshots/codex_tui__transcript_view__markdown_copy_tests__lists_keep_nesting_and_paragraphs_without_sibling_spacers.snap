@@ -1,0 +1,14 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 76
+expression: "copies[0]"
+---
+3. first item long enough to wrap
+4. second item
+   - nested `code`
+
+     another paragraph
+   - next nested
+5. final item
+
+Outside.

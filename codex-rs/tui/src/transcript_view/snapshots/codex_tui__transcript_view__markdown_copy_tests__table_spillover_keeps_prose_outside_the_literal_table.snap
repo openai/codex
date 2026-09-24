@@ -1,0 +1,24 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 358
+expression: "format!(\"{copied}\\n{}\", crate::clipboard_html::render_markdown(&copied))"
+---
+**Before**
+
+```
+ A      B
+━━━━━  ━━━━━
+ one    two
+```
+HTML block:
+\<div\>Prose after the table.\</div\>
+
+After
+<p><strong>Before</strong></p>
+<pre><code> A      B
+━━━━━  ━━━━━
+ one    two
+</code></pre>
+<p>HTML block:
+&lt;div&gt;Prose after the table.&lt;/div&gt;</p>
+<p>After</p>

@@ -1,0 +1,19 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 379
+expression: "copies.join(\"\\n---\\n\")"
+---
+&#32;&#32;&#32;&#32;suffix
+<p>    suffix</p>
+
+---
+&#9;suffix
+<p>	suffix</p>
+
+---
+&#32;&#32;&#32;&#32;**suffix**
+<p>    <strong>suffix</strong></p>
+
+---
+&#32;&#32;&#32;&#32;suffix
+<p>    suffix</p>

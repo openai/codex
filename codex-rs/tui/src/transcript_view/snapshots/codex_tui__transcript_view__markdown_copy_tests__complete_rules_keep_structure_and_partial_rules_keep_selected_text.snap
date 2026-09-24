@@ -1,0 +1,26 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 348
+expression: "copies.join(\"\\n---\\n\")"
+---
+Before
+
+***
+
+After
+<p>Before</p>
+<hr />
+<p>After</p>
+
+---
+Before
+
+>
+> ***
+
+After
+<p>Before</p>
+<blockquote>
+<hr />
+</blockquote>
+<p>After</p>

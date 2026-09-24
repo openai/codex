@@ -1,0 +1,8 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+assertion_line: 26
+expression: text
+---
+- setting `closeRequested_`,
+- removing the tailer from `tailers_`,
+- clearing its live/discovery state.

@@ -98,7 +98,7 @@ fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
                     &cells,
                     &text,
                     /*clear_selection*/ true,
-                    |text| {
+                    |text, _format| {
                         assert_eq!(text, "selected\tcafé");
                         Err("clipboard unavailable".to_string())
                     },
@@ -118,7 +118,7 @@ fn copy_shortcuts_clear_selection_only_after_confirmed_delivery() {
                     &cells,
                     &text,
                     /*clear_selection*/ true,
-                    |text| {
+                    |text, _format| {
                         assert_eq!(text, "selected\tcafé");
                         Ok(status)
                     },
@@ -169,7 +169,7 @@ fn command_c_ignores_release_and_copies_only_an_active_selection() {
         panic!("Cmd+C must copy the transcript selection");
     };
     assert_eq!(text, "selected café");
-    view.copy_selected_text_with(&cells, &text, /*clear_selection*/ true, |_| {
+    view.copy_selected_text_with(&cells, &text, /*clear_selection*/ true, |_, _format| {
         Ok(crate::clipboard_copy::CopyStatus::Confirmed)
     })
     .unwrap();
@@ -648,7 +648,7 @@ fn pending_copy_only_finishes_the_original_selection() {
             &cells,
             &selected,
             /*clear_selection*/ true,
-            |_| Ok(CopyStatus::Pending(1)),
+            |_, _format| Ok(CopyStatus::Pending(1)),
         )
         .unwrap();
         view.follow_pending_copy();

@@ -359,6 +359,28 @@ fn finalized_agent_cell_replays_visualization_link() {
             .iter()
             .all(|destination| destination.starts_with("file://"))
     );
+    let source = lines
+        .iter()
+        .find(|line| !line.hyperlinks.is_empty())
+        .and_then(|line| line.source.clone())
+        .expect("linked line copy source");
+    let start = source.text.find("file://").expect("visible file URL");
+    let mut selected = Vec::new();
+    crate::markdown_copy::SelectedLine::append(
+        &mut selected,
+        source,
+        start..start + "file://".len(),
+        "",
+    );
+    let (copied, format) = crate::markdown_copy::selection(&selected, "file://");
+    assert_eq!(
+        (copied.as_str(), format),
+        ("file://", crate::clipboard_copy::CopyFormat::Markdown)
+    );
+    assert_eq!(
+        crate::clipboard_html::render_markdown(&copied),
+        "<p>file://</p>\n"
+    );
 }
 
 #[test]

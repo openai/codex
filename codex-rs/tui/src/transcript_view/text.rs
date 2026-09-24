@@ -179,6 +179,29 @@ impl TextLayout {
         }
     }
 
+    pub(super) fn copy_lines(
+        &self,
+        range: Range<usize>,
+        separator: &str,
+        output: &mut Vec<crate::markdown_copy::SelectedLine>,
+    ) {
+        let mut offset = 0;
+        for (index, line) in self.logical.iter().enumerate() {
+            let end = offset + line.origin.range.len();
+            if range.start <= end && range.end >= offset {
+                let selected = line.origin.range.start + range.start.saturating_sub(offset)
+                    ..line.origin.range.start + range.end.min(end) - offset;
+                crate::markdown_copy::SelectedLine::append(
+                    output,
+                    line.origin.clone(),
+                    selected,
+                    if index == 0 { separator } else { "\n" },
+                );
+            }
+            offset = end + 1;
+        }
+    }
+
     pub(super) fn text(&self) -> &str {
         &self.text
     }

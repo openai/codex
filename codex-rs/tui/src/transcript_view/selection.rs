@@ -159,7 +159,10 @@ impl TranscriptView {
         })
     }
 
-    pub(crate) fn selected_text(&mut self, cells: &[Arc<dyn HistoryCell>]) -> Option<String> {
+    fn selected_ranges(
+        &mut self,
+        cells: &[Arc<dyn HistoryCell>],
+    ) -> Option<Vec<(Arc<TextLayout>, std::ops::Range<usize>)>> {
         if !self.has_selection_range() {
             return None;
         }
@@ -176,15 +179,11 @@ impl TranscriptView {
         if start == end {
             return None;
         }
-        let mut text = String::new();
-        let mut previous: Option<Arc<TextLayout>> = None;
+        let mut ranges = Vec::new();
         for index in start.index..=end.index {
             let layout = self.layout(cells, index)?;
             if layout.row_count() == 0 {
                 continue;
-            }
-            if let Some(previous) = &previous {
-                text.push_str(previous.separator_after(&layout));
             }
             let begin = if index == start.index {
                 start.offset
@@ -196,7 +195,19 @@ impl TranscriptView {
             } else {
                 layout.text().len()
             };
-            text.push_str(layout.text().get(begin..finish)?);
+            ranges.push((layout, begin..finish));
+        }
+        Some(ranges)
+    }
+
+    pub(crate) fn selected_text(&mut self, cells: &[Arc<dyn HistoryCell>]) -> Option<String> {
+        let mut text = String::new();
+        let mut previous: Option<Arc<TextLayout>> = None;
+        for (layout, range) in self.selected_ranges(cells)? {
+            if let Some(previous) = &previous {
+                text.push_str(previous.separator_after(&layout));
+            }
+            text.push_str(layout.text().get(range)?);
             previous = Some(layout);
         }
         text.retain(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'));
@@ -210,9 +221,22 @@ impl TranscriptView {
         cells: &[Arc<dyn HistoryCell>],
         text: &str,
         clear_selection: bool,
-        copy: impl FnOnce(&str) -> Result<crate::clipboard_copy::CopyStatus, String>,
+        copy: impl FnOnce(
+            &str,
+            crate::clipboard_copy::CopyFormat,
+        ) -> Result<crate::clipboard_copy::CopyStatus, String>,
     ) -> Result<crate::clipboard_copy::CopyStatus, String> {
-        let result = copy(text);
+        let mut lines = Vec::new();
+        let mut previous: Option<Arc<TextLayout>> = None;
+        for (layout, range) in self.selected_ranges(cells).unwrap_or_default() {
+            let separator = previous
+                .as_ref()
+                .map_or("", |previous| previous.separator_after(&layout));
+            layout.copy_lines(range, separator, &mut lines);
+            previous = Some(layout);
+        }
+        let (text, format) = crate::markdown_copy::selection(&lines, text);
+        let result = copy(&text, format);
         match result {
             Ok(crate::clipboard_copy::CopyStatus::Confirmed) => {
                 if clear_selection {
