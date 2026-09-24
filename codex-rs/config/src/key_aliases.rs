@@ -5,35 +5,49 @@ use toml::map::Map as TomlMap;
 
 #[derive(Debug, Clone, Copy)]
 struct ConfigKeyAlias {
-    table_path: &'static [&'static str],
-    legacy_key: &'static str,
-    canonical_key: &'static str,
+    legacy: &'static [&'static str],
+    canonical: &'static [&'static str],
 }
 
 const CONFIG_KEY_ALIASES: &[ConfigKeyAlias] = &[
     ConfigKeyAlias {
-        table_path: &["memories"],
-        legacy_key: "no_memories_if_mcp_or_web_search",
-        canonical_key: "disable_on_external_context",
+        legacy: &["memories", "no_memories_if_mcp_or_web_search"],
+        canonical: &["memories", "disable_on_external_context"],
     },
     ConfigKeyAlias {
-        table_path: &["agents"],
-        legacy_key: "max_threads",
-        canonical_key: "max_concurrent_threads_per_session",
+        legacy: &["agents", "max_threads"],
+        canonical: &["agents", "max_concurrent_threads_per_session"],
     },
 ];
 
 fn normalize_table_key_aliases(path: &[String], table: &mut TomlMap<String, TomlValue>) {
-    for alias in CONFIG_KEY_ALIASES {
+    'aliases: for alias in CONFIG_KEY_ALIASES {
+        // Destinations stay within the legacy key's containing table.
+        let Some((legacy_key, table_path)) = alias.legacy.split_last() else {
+            continue;
+        };
         if path
             .iter()
             .map(String::as_str)
-            .eq(alias.table_path.iter().copied())
-            && let Some(value) = table.remove(alias.legacy_key)
+            .eq(table_path.iter().copied())
+            && let Some(canonical_path) = alias.canonical.strip_prefix(table_path)
+            && let Some(value) = table.remove(*legacy_key)
         {
-            table
-                .entry(alias.canonical_key.to_string())
-                .or_insert(value);
+            // Insert at the canonical path if absent.
+            let Some((key, parents)) = canonical_path.split_last() else {
+                continue;
+            };
+            let mut destination = &mut *table;
+            for parent in parents {
+                let child = destination
+                    .entry((*parent).to_string())
+                    .or_insert_with(|| TomlValue::Table(TomlMap::new()));
+                let Some(child) = child.as_table_mut() else {
+                    continue 'aliases;
+                };
+                destination = child;
+            }
+            destination.entry((*key).to_string()).or_insert(value);
         }
     }
 }
