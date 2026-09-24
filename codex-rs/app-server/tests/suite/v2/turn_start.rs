@@ -844,8 +844,12 @@ async fn turn_start_additional_context_flows_to_model_input() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(None, TEST_ORIGINATOR)]
 #[tokio::test]
-async fn turn_start_sends_originator_header() -> Result<()> {
+async fn turn_start_sends_originator_header(
+    service_name: Option<&str>,
+    expected_originator: &str,
+) -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -870,6 +874,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
         .start_thread(ThreadStartParams {
             model: Some("mock-model".to_string()),
             thread_source: Some(ThreadSource::User),
+            service_name: service_name.map(str::to_string),
             ..Default::default()
         })
         .await?;
@@ -905,7 +910,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .headers
             .get("originator")
             .expect("originator header missing");
-        assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
+        assert_eq!(originator.to_str()?, expected_originator);
     }
 
     Ok(())
