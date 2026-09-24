@@ -177,7 +177,7 @@ impl DbOutcomeTags {
     }
 }
 
-fn classify_error(err: &anyhow::Error) -> &'static str {
+pub(crate) fn classify_error(err: &anyhow::Error) -> &'static str {
     for cause in err.chain() {
         if let Some(sqlx_err) = cause.downcast_ref::<sqlx::Error>() {
             return classify_sqlx_error(sqlx_err);

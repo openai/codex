@@ -19,7 +19,10 @@ async fn sqlite_sink_filters_noisy_targets_without_dropping_useful_diagnostics()
     )
     .await
     .expect("initialize runtime");
-    let layer = start(runtime.clone());
+    let layer = start(
+        runtime.clone(),
+        Arc::new(super::tests::SharedWriter::default()),
+    );
 
     let guard = tracing_subscriber::registry()
         .with(layer.clone().with_filter(default_filter()))

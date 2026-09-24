@@ -19,6 +19,7 @@ mod runtime;
 mod sqlite;
 mod telemetry;
 
+pub use log_db::LogWriteFailureReporter;
 pub use model::CreatedProject;
 pub use model::LogEntry;
 pub use model::LogQuery;

@@ -21,6 +21,7 @@ use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthEnvTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
+use codex_state::LogWriteFailureReporter;
 use tracing::Event;
 use tracing::Level;
 use tracing::field::Visit;
@@ -194,6 +195,17 @@ pub fn emit_feedback_request_tags_with_auth_env(
 #[derive(Clone)]
 pub struct CodexFeedback {
     inner: Arc<FeedbackInner>,
+}
+
+impl LogWriteFailureReporter for CodexFeedback {
+    fn report_failure(&self, diagnostic: &str) {
+        // Bypass tracing so this diagnostic cannot return to the SQLite writer.
+        self.inner
+            .ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_bytes(diagnostic.as_bytes());
+    }
 }
 
 impl Default for CodexFeedback {
@@ -489,6 +501,16 @@ pub struct FeedbackUploadOptions<'a> {
 }
 
 impl FeedbackSnapshot {
+    /// Refreshes log bytes while preserving the captured metadata and thread identity.
+    pub fn refresh_logs(&mut self, feedback: &CodexFeedback) {
+        self.bytes = feedback
+            .inner
+            .ring
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .snapshot_bytes();
+    }
+
     fn feedback_event(
         &self,
         classification: &str,

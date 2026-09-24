@@ -4,8 +4,8 @@
 //! formats each one into a `LogEntry`, and sends entries to a bounded background
 //! queue. The background task inserts into the dedicated `logs` SQLite database
 //! in batches to keep logging overhead low.
-//! SQLx diagnostics are always excluded so database writes cannot generate more
-//! database writes, even without an external subscriber filter.
+//! SQLx events are excluded so database writes cannot generate more writes.
+//! Flush failures go to the supplied failure reporter without re-entering tracing.
 //!
 //! ## Usage
 //!
@@ -13,8 +13,8 @@
 //! use codex_state::log_db;
 //! use tracing_subscriber::prelude::*;
 //!
-//! # async fn example(state_db: std::sync::Arc<codex_state::StateRuntime>) {
-//! let layer = log_db::start(state_db);
+//! # async fn example(state_db: std::sync::Arc<codex_state::StateRuntime>, reporter: std::sync::Arc<dyn codex_state::LogWriteFailureReporter>) {
+//! let layer = log_db::start(state_db, reporter);
 //! let _ = tracing_subscriber::registry()
 //!     .with(layer)
 //!     .try_init();
@@ -22,7 +22,10 @@
 //! ```
 
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
@@ -124,40 +127,69 @@ where
     fn flush(&self) -> impl Future<Output = ()> + Send + '_;
 }
 
+/// Receives a formatted, redacted diagnostic when a SQLite log batch is lost
+/// this propagatest to telemetry and feedback memory buffer to avoid lost reports
+pub trait LogWriteFailureReporter: Send + Sync {
+    fn report_failure(&self, diagnostic: &str);
+}
+
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogDbCommand>,
+    has_write_failure: Arc<AtomicBool>,
     process_uuid: String,
 }
 
-pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
-    LogDbLayer::start(state_db)
+/// Starts the SQLite log writer with a shared, independent failure reporter.
+pub fn start(
+    state_db: std::sync::Arc<StateRuntime>,
+    failure_reporter: Arc<dyn LogWriteFailureReporter>,
+) -> LogDbLayer {
+    LogDbLayer::start(state_db, failure_reporter)
 }
 
 impl Clone for LogDbLayer {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            has_write_failure: self.has_write_failure.clone(),
             process_uuid: self.process_uuid.clone(),
         }
     }
 }
 
 impl LogDbLayer {
-    pub fn start(state_db: std::sync::Arc<StateRuntime>) -> Self {
-        Self::start_with_config(state_db, LogSinkQueueConfig::default())
+    pub fn start(
+        state_db: std::sync::Arc<StateRuntime>,
+        failure_reporter: Arc<dyn LogWriteFailureReporter>,
+    ) -> Self {
+        Self::start_with_config(state_db, failure_reporter, LogSinkQueueConfig::default())
     }
 
     pub fn start_with_config(
         state_db: std::sync::Arc<StateRuntime>,
+        failure_reporter: Arc<dyn LogWriteFailureReporter>,
         config: LogSinkQueueConfig,
     ) -> Self {
         let config = config.normalized();
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
-        tokio::spawn(run_inserter(state_db, receiver, config));
+        let has_write_failure = Arc::new(AtomicBool::new(false));
+        tokio::spawn(run_inserter(
+            state_db,
+            receiver,
+            config,
+            failure_reporter,
+            has_write_failure.clone(),
+        ));
         Self {
             sender,
+            has_write_failure,
             process_uuid: current_process_log_uuid().to_string(),
         }
+    }
+
+    /// Whether this writer has lost logs, making SQLite incomplete for feedback.
+    pub fn has_write_failure(&self) -> bool {
+        self.has_write_failure.load(Ordering::Relaxed)
     }
 
     pub async fn flush(&self) {
@@ -447,6 +479,8 @@ async fn run_inserter(
     state_db: std::sync::Arc<StateRuntime>,
     mut receiver: mpsc::Receiver<LogDbCommand>,
     config: LogSinkQueueConfig,
+    failure_reporter: Arc<dyn LogWriteFailureReporter>,
+    has_write_failure: Arc<AtomicBool>,
 ) {
     let mut buffer = Vec::with_capacity(config.batch_size);
     let mut ticker = tokio::time::interval(config.flush_interval);
@@ -459,36 +493,56 @@ async fn run_inserter(
                     Some(LogDbCommand::Entry(entry)) => {
                         buffer.push(*entry);
                         if buffer.len() >= config.batch_size {
-                            flush(&state_db, &mut buffer).await;
+                            flush(&state_db, &mut buffer, failure_reporter.as_ref(), &has_write_failure).await;
                         }
                     }
                     Some(LogDbCommand::Flush(reply)) => {
-                        flush(&state_db, &mut buffer).await;
+                        flush(&state_db, &mut buffer, failure_reporter.as_ref(), &has_write_failure).await;
                         let _ = reply.send(());
                     }
                     None => {
-                        flush(&state_db, &mut buffer).await;
+                        flush(&state_db, &mut buffer, failure_reporter.as_ref(), &has_write_failure).await;
                         break;
                     }
                 }
             }
             _ = ticker.tick() => {
-                flush(&state_db, &mut buffer).await;
+                flush(&state_db, &mut buffer, failure_reporter.as_ref(), &has_write_failure).await;
             }
         }
     }
 }
 
-async fn flush(state_db: &StateRuntime, buffer: &mut Vec<LogEntry>) {
+async fn flush(
+    state_db: &StateRuntime,
+    buffer: &mut Vec<LogEntry>,
+    failure_reporter: &dyn LogWriteFailureReporter,
+    has_write_failure: &AtomicBool,
+) {
     if buffer.is_empty() {
         return;
     }
     let entries = buffer.split_off(0);
     let started = Instant::now();
     let result = state_db.insert_logs(entries.as_slice()).await;
+    let duration = started.elapsed();
+    // if log flushing failed it means that likely something is wrong with the logs database,
+    // so store the logs in the memory buffer to avoid them being lost during /feedback
+    // the entries are dropped because the in memory buffer has it's own space-constrainted rules for preserving logs
+    if let Err(error) = &result {
+        let error = crate::telemetry::classify_error(error);
+        let timestamp =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, /*use_z*/ true);
+        let entry_count = entries.len();
+        failure_reporter.report_failure(&format!(
+            "{timestamp} ERROR failed to flush logs to SQLite error={error:?} entries={entry_count}\n"
+        ));
+        has_write_failure.store(true, Ordering::Relaxed);
+    }
+
     crate::telemetry::record_log_write(
         /*telemetry*/ None,
-        started.elapsed(),
+        duration,
         entries.as_slice(),
         &result,
     );
@@ -546,10 +600,15 @@ impl Visit for MessageVisitor {
 mod filter_tests;
 
 #[cfg(test)]
+#[path = "log_db_failure_tests.rs"]
+mod failure_tests;
+
+#[cfg(test)]
 mod tests {
     use std::io;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
 
     use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
@@ -600,19 +659,26 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct SharedWriter {
+    pub(super) struct SharedWriter {
         bytes: Arc<Mutex<Vec<u8>>>,
     }
 
     impl SharedWriter {
-        fn snapshot(&self) -> String {
+        pub(super) fn snapshot(&self) -> String {
             String::from_utf8(self.bytes.lock().expect("writer mutex poisoned").clone())
                 .expect("valid utf-8")
         }
     }
 
-    struct SharedWriterGuard {
+    pub(super) struct SharedWriterGuard {
         bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl LogWriteFailureReporter for SharedWriter {
+        fn report_failure(&self, diagnostic: &str) {
+            std::io::Write::write_all(&mut self.make_writer(), diagnostic.as_bytes())
+                .expect("write diagnostic to test buffer");
+        }
     }
 
     impl<'a> MakeWriter<'a> for SharedWriter {
@@ -649,7 +715,7 @@ mod tests {
         .await
         .expect("initialize runtime");
         let writer = SharedWriter::default();
-        let layer = start(runtime.clone());
+        let layer = start(runtime.clone(), Arc::new(SharedWriter::default()));
 
         let subscriber = tracing_subscriber::registry()
             .with(
@@ -709,7 +775,7 @@ mod tests {
         )
         .await
         .expect("initialize runtime");
-        let layer = start(runtime.clone());
+        let layer = start(runtime.clone(), Arc::new(SharedWriter::default()));
 
         let guard = tracing_subscriber::registry()
             .with(
@@ -745,6 +811,7 @@ mod tests {
         .expect("initialize runtime");
         let layer = LogDbLayer::start_with_config(
             runtime.clone(),
+            Arc::new(SharedWriter::default()),
             LogSinkQueueConfig {
                 queue_capacity: 8,
                 batch_size: 2,
@@ -797,6 +864,7 @@ mod tests {
         .expect("initialize runtime");
         let layer = LogDbLayer::start_with_config(
             runtime.clone(),
+            Arc::new(SharedWriter::default()),
             LogSinkQueueConfig {
                 queue_capacity: 8,
                 batch_size: 128,
@@ -827,6 +895,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(1);
         let layer = LogDbLayer {
             sender,
+            has_write_failure: Arc::new(AtomicBool::new(false)),
             process_uuid: "process-1".to_string(),
         };
 
@@ -847,6 +916,7 @@ mod tests {
         let (sender, mut receiver) = mpsc::channel(1);
         let layer = LogDbLayer {
             sender,
+            has_write_failure: Arc::new(AtomicBool::new(false)),
             process_uuid: "process-1".to_string(),
         };
 

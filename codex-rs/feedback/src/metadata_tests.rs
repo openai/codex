@@ -9,6 +9,32 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[test]
+fn refreshing_logs_preserves_captured_metadata() {
+    let feedback = CodexFeedback::new();
+    let _guard = tracing_subscriber::registry()
+        .with(feedback.metadata_layer())
+        .set_default();
+    let thread_id = ThreadId::new();
+    tracing::info!(target: FEEDBACK_TAGS_TARGET, approval_policy = "on-request");
+    feedback.report_failure("initial log\n");
+    let mut snapshot = feedback.snapshot(Some(thread_id));
+
+    // Another conversation changes the process-wide tags while log collection runs.
+    tracing::info!(target: FEEDBACK_TAGS_TARGET, approval_policy = "never");
+    feedback.report_failure("flush failed\n");
+    snapshot.refresh_logs(&feedback);
+
+    assert_eq!(
+        (snapshot.tags, snapshot.thread_id, snapshot.bytes),
+        (
+            BTreeMap::from([("approval_policy".to_string(), "on-request".to_string())]),
+            thread_id.to_string(),
+            b"initial log\nflush failed\n".to_vec(),
+        )
+    );
+}
+
+#[test]
 fn dynamic_tags_survive_upload_alongside_static_fields() {
     let feedback = CodexFeedback::new();
     let _guard = tracing_subscriber::registry()

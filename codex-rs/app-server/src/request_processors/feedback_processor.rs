@@ -6,6 +6,7 @@ use codex_connectors::ConnectorDirectoryCacheKey;
 use codex_connectors::connector_runtime_cache_path;
 use codex_feedback::CODEX_APP_DIRECTORY_CACHE_ATTACHMENT_FILENAME;
 use codex_feedback::CODEX_APPS_TOOLS_CACHE_ATTACHMENT_FILENAME;
+use codex_feedback::FeedbackSnapshot;
 #[cfg(target_os = "windows")]
 use codex_feedback::WINDOWS_SANDBOX_LOG_ATTACHMENT_FILENAME;
 use codex_feedback::guardian_review_failures;
@@ -124,13 +125,9 @@ impl FeedbackRequestProcessor {
             tracing::info!(target: "feedback_tags", account_id);
         }
         let snapshot = self.feedback.snapshot(conversation_id);
-        let thread_id = snapshot.thread_id.clone();
         let mut extra_attachments = Vec::new();
         let mut feedback_index = None;
-        let (sqlite_feedback_logs, state_db_ctx) = if include_logs {
-            if let Some(log_db) = self.log_db.as_ref() {
-                log_db.flush().await;
-            }
+        let (snapshot, sqlite_feedback_logs, state_db_ctx) = if include_logs {
             let state_db_ctx = self.state_db.clone();
             let feedback_thread_ids = match conversation_id {
                 Some(conversation_id) => match self
@@ -161,38 +158,19 @@ impl FeedbackRequestProcessor {
                 feedback_index = Some(index);
             }
             extra_attachments.extend(failures.attachment);
-            let sqlite_feedback_logs = if let Some(state_db_ctx) = state_db_ctx.as_ref()
-                && !feedback_thread_ids.is_empty()
-            {
-                let thread_id_texts = feedback_thread_ids
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>();
-                let thread_id_refs = thread_id_texts
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>();
-                match state_db_ctx
-                    .query_feedback_logs_for_threads(&thread_id_refs)
-                    .await
-                {
-                    Ok(logs) if logs.is_empty() => None,
-                    Ok(logs) => Some(logs),
-                    Err(err) => {
-                        let thread_ids = thread_id_texts.join(", ");
-                        warn!(
-                            "failed to query feedback logs from sqlite for thread_ids=[{thread_ids}]: {err}"
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            (sqlite_feedback_logs, state_db_ctx)
+            let (snapshot, sqlite_feedback_logs) = collect_feedback_logs(
+                &self.feedback,
+                self.log_db.as_ref(),
+                state_db_ctx.as_ref(),
+                snapshot,
+                &feedback_thread_ids,
+            )
+            .await;
+            (snapshot, sqlite_feedback_logs, state_db_ctx)
         } else {
-            (None, None)
+            (snapshot, None, None)
         };
+        let thread_id = snapshot.thread_id.clone();
 
         let mut attachment_paths = Vec::new();
         let mut seen_attachment_paths = HashSet::new();
@@ -501,6 +479,49 @@ fn windows_sandbox_log_attachment(codex_home: &Path) -> Option<FeedbackAttachmen
 #[cfg(not(target_os = "windows"))]
 fn windows_sandbox_log_attachment(_codex_home: &Path) -> Option<FeedbackAttachmentPath> {
     None
+}
+
+// Refresh logs after SQLite collection without changing the earlier metadata snapshot.
+async fn collect_feedback_logs(
+    feedback: &CodexFeedback,
+    log_db: Option<&LogDbLayer>,
+    state_db: Option<&StateDbHandle>,
+    mut snapshot: FeedbackSnapshot,
+    thread_ids: &[ThreadId],
+) -> (FeedbackSnapshot, Option<Vec<u8>>) {
+    if let Some(log_db) = log_db {
+        log_db.flush().await;
+    }
+    let mut sqlite_logs = None;
+    if let Some(state_db) = state_db
+        && !thread_ids.is_empty()
+    {
+        let thread_ids = thread_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let thread_id_refs = thread_ids.iter().map(String::as_str).collect::<Vec<_>>();
+        match state_db
+            .query_feedback_logs_for_threads(&thread_id_refs)
+            .await
+        {
+            Ok(logs) if logs.is_empty() => {}
+            Ok(logs) => sqlite_logs = Some(logs),
+            Err(err) => {
+                let thread_ids = thread_ids.join(", ");
+                tracing::warn!(
+                    "failed to query feedback logs from sqlite for thread_ids=[{thread_ids}]: {err}"
+                );
+            }
+        }
+    }
+    if log_db.is_some_and(LogDbLayer::has_write_failure) {
+        sqlite_logs = None;
+    }
+
+    // new logs might arrive to the buffer while collecting metadata e.g. if log db flush fails
+    snapshot.refresh_logs(feedback);
+    (snapshot, sqlite_logs)
 }
 
 #[cfg(test)]
@@ -885,3 +906,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "feedback_log_snapshot_tests.rs"]
+mod feedback_log_snapshot_tests;

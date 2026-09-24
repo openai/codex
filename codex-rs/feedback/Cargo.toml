@@ -14,6 +14,7 @@ codex-http-client = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
+codex-state = { workspace = true }
 flate2 = { workspace = true }
 http = { workspace = true }
 httpdate = { workspace = true }
