@@ -60,7 +60,7 @@ async fn cancelled_startup_does_not_record_unselected_review_evidence() {
         .spawn_task(
             turn,
             vec![TurnInput::UserInput {
-                acceptance_order: None,
+                metadata: Default::default(),
                 content,
                 client_id: None,
             }],
@@ -119,7 +119,7 @@ async fn finalization_overflow_marks_the_reviewer_exhausted() {
         .unwrap();
     let context = required_context("required action".to_owned());
     let mut input = vec![TurnInput::UserInput {
-        acceptance_order: None,
+        metadata: Default::default(),
         content: context.clone().into_user_inputs().unwrap(),
         client_id: None,
     }];

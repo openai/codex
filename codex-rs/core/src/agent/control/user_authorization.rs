@@ -85,7 +85,6 @@ impl LocalAgentControl {
             .services
             .thread_extension_data
             .get_or_init(GuardianReviewEvidence::default);
-        let mut latest_user_turn_id = None;
         let retained_context = root_history.retained_context();
         let reconciled = ReconciledRetainedContext::new(
             Some(retained_context),
@@ -98,7 +97,12 @@ impl LocalAgentControl {
                         return None;
                     };
                     let text = message.message();
-                    if is_summary_message(&text) || text.trim_start().starts_with("<user_action>") {
+                    if is_summary_message(&text)
+                        || text.trim_start().starts_with("<user_action>")
+                        || is_contextual_user_fragment(&ContentItem::InputText {
+                            text: text.clone(),
+                        })
+                    {
                         return None;
                     }
                     let order = envelope
@@ -109,6 +113,7 @@ impl LocalAgentControl {
                     Some((
                         order,
                         RetainedUserMessage {
+                            origin: codex_history::UserInputOrigin::from_message(item),
                             turn_id: item.turn_id().unwrap_or_default().to_owned(),
                             message_id: item.id().map(|id| id.as_str().to_owned()),
                             text,
@@ -117,6 +122,7 @@ impl LocalAgentControl {
                     ))
                 }),
         );
+        let mut latest_user_turn_id = reconciled.latest_user_turn_id.clone();
         let mut missing_root_instructions = reconciled.missing_user_messages;
         let mut messages = reconciled
             .ordered_entries()
@@ -154,7 +160,6 @@ impl LocalAgentControl {
                     }
                     (!is_summary_message(&text) && !text.trim_start().starts_with("<user_action>"))
                         .then(|| {
-                            latest_user_turn_id = Some(message.turn_id.clone());
                             (
                                 Some(order),
                                 GuardianRootMessage::User(

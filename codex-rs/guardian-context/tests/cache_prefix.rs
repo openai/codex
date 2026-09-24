@@ -54,6 +54,7 @@ fn changing_attestations_preserves_history_before_the_current_action() {
     let mut retained = RetainedContext::default();
     retained.record_user_message(
         RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: "turn-1".to_owned(),
             message_id: None,
             text: instruction.to_owned(),

@@ -91,6 +91,9 @@ mod indirect_namespace_prefixes;
 #[path = "scenarios_mcp_resource_messages.rs"]
 mod mcp_resource_messages;
 
+#[path = "scenarios_guardian_heartbeat.rs"]
+mod guardian_heartbeat;
+
 #[path = "scenarios_preparation.rs"]
 mod preparation;
 

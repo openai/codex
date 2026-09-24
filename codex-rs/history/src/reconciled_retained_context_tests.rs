@@ -7,6 +7,7 @@ use pretty_assertions::assert_eq;
 
 fn instruction(text: &str) -> RetainedUserMessage {
     RetainedUserMessage {
+        origin: crate::UserInputOrigin::User,
         turn_id: "turn-1".to_owned(),
         message_id: None,
         text: text.to_owned(),
@@ -146,4 +147,91 @@ fn recovery_marks_missing_and_conflicting_orders_incomplete() {
         );
     }
     assert_eq!(retained, checkpoint);
+}
+
+#[test]
+fn heartbeat_versions_survive_retention_restore_and_reconciliation() {
+    let messages = (0..35).map(|index| {
+        let (instructions, origin) = match index {
+            1 => ("Create a worktree.", crate::UserInputOrigin::User),
+            31 => ("Stop monitoring.", crate::UserInputOrigin::Heartbeat),
+            // Identical text from a real user remains a new instruction.
+            33 => ("Monitor only.", crate::UserInputOrigin::User),
+            _ => ("Monitor only.", crate::UserInputOrigin::Heartbeat),
+        };
+        RetainedUserMessage {
+            turn_id: format!("turn-{index}"),
+            message_id: Some(format!("message-{index}")),
+            text: format!("<heartbeat>\n  <automation_id>monitor</automation_id>\n  <current_time_iso>2026-09-23T00:{index:02}:00Z</current_time_iso>\n  <instructions>\n{instructions}\n  </instructions>\n</heartbeat>\n"),
+            complete: true,
+            origin,
+        }
+    }).collect::<Vec<_>>();
+    let mut retained = RetainedContext::default();
+    for (index, message) in messages.iter().enumerate() {
+        if index == 30 {
+            let checkpoint =
+                serde_json::from_str(&serde_json::to_string(&retained).unwrap()).unwrap();
+            retained = RetainedContext::default();
+            retained.restore(Some(&checkpoint), &[]);
+        }
+        retained.record_user_message(
+            message.clone(),
+            RetainedInputSource::Local(Some(index as u64)),
+        );
+    }
+    let expected = [0, 1, 31, 32, 33]
+        .map(|index| {
+            (
+                RetainedContextOrder::Local(index as u64),
+                messages[index].clone(),
+            )
+        })
+        .to_vec();
+    let user_message = |(order, entry): (_, RetainedContextEntry<'_>)| {
+        let RetainedContextEntry::UserMessage(message) = entry else {
+            panic!("unexpected answer")
+        };
+        (order, message.clone())
+    };
+    // Check storage before reconciliation can recover or coalesce anything.
+    assert_eq!(
+        retained
+            .ordered_entries()
+            .map(user_message)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert!(retained.user_messages_complete());
+    for missing in [false, true] {
+        if missing {
+            retained.mark_user_messages_incomplete();
+        }
+        let checkpoint = retained.clone();
+        let reconciled = ReconciledRetainedContext::new(
+            Some(&retained),
+            // Reverse delivery order to exercise sorting across recovered and retained versions.
+            messages.iter().enumerate().rev().map(|(index, message)| {
+                (
+                    Some(index as u64),
+                    RetainedUserMessage {
+                        complete: false,
+                        ..message.clone()
+                    },
+                )
+            }),
+        );
+        assert_eq!(
+            (
+                reconciled
+                    .ordered_entries()
+                    .map(user_message)
+                    .collect::<Vec<_>>(),
+                reconciled.latest_user_turn_id.as_deref(),
+                reconciled.missing_user_messages,
+            ),
+            (expected.clone(), Some("turn-34"), missing),
+        );
+        assert_eq!(retained, checkpoint);
+    }
 }

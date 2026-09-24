@@ -45,6 +45,9 @@ pub struct RetainedUserMessage {
     pub message_id: Option<String>,
     pub text: String,
     pub complete: bool,
+    /// Missing provenance in older checkpoints conservatively remains ordinary input.
+    #[serde(default, skip_serializing_if = "crate::UserInputOrigin::is_user")]
+    pub origin: crate::UserInputOrigin,
 }
 
 /// Local facts use their acceptance counter; copied parent instructions use prefix order.
@@ -335,6 +338,28 @@ impl RetainedContext {
     ) {
         message.bound();
         let inherited = source == RetainedInputSource::Inherited;
+        // An unchanged invocation is not a new instruction. Keep the original
+        // acceptance order; compare only the latest version of this automation,
+        // so A -> B -> A still records three distinct instruction versions.
+        if message.complete
+            && message.origin == crate::UserInputOrigin::Heartbeat
+            && let Some(current) = crate::Heartbeat::parse(&message.text)
+        {
+            for entry in self.user_messages.iter().rev().filter(|entry| {
+                entry.inherited == inherited
+                    && entry.value.origin == crate::UserInputOrigin::Heartbeat
+            }) {
+                let Some(previous) = crate::Heartbeat::parse(&entry.value.text) else {
+                    break;
+                };
+                if previous.automation_id == current.automation_id {
+                    if entry.value.complete && previous.instructions == current.instructions {
+                        return;
+                    }
+                    break;
+                }
+            }
+        }
         // Worker forks omit parent answer records. Adopting their instructions
         // cannot establish whether an omitted answer restricted an inherited grant.
         self.verified_answers_incomplete |= inherited;

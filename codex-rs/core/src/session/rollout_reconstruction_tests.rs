@@ -1752,6 +1752,7 @@ async fn reconstruct_history_legacy_compaction_without_replacement_history_does_
     let mut retained = codex_history::RetainedContext::default();
     retained.record_user_message(
         codex_history::RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: String::new(),
             message_id: None,
             text: "before compact".to_owned(),

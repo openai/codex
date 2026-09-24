@@ -49,6 +49,9 @@ use serde_json::json;
 use test_case::test_case;
 use tokio::sync::Notify;
 
+#[path = "guardian_heartbeat_authorization.rs"]
+mod heartbeat;
+
 const INITIAL_PROMPT: &str =
     "Spawn a worker to inspect the deployment. Do not delete production data.";
 const INITIAL_TASK: &str = "Inspect the reviewed production deployment.";

@@ -24,6 +24,7 @@ fn instructions_preserve_source_order_and_whole_records() {
     });
     context.record_user_message(
         RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: "revocation".to_owned(),
             message_id: Some("msg_revoke".to_owned()),
             text: "Do not publish after all.".to_owned(),
@@ -50,6 +51,7 @@ fn instructions_preserve_source_order_and_whole_records() {
     );
     context.record_user_message(
         RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: "oversized".to_owned(),
             message_id: Some("msg_large".to_owned()),
             text: "Permission is conditional. ".repeat(200),
@@ -72,6 +74,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     let mut context = RetainedContext::default();
     context.record_assistant_message(
         RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: "question".to_owned(),
             message_id: Some("question".to_owned()),
             text: format!(
@@ -84,6 +87,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     );
     context.record_user_message(
         RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: "reply".to_owned(),
             message_id: Some("reply".to_owned()),
             text: "Yes, staging only.".to_owned(),
@@ -133,6 +137,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     }
     context.record_assistant_message(
         RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
             turn_id: "large".to_owned(),
             message_id: Some("large".to_owned()),
             text: "x".repeat(4_000),

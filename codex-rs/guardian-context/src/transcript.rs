@@ -113,9 +113,10 @@ pub fn collect_transcript(
 ) -> Vec<ConversationTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
+    let mut heartbeat_versions = HashMap::new();
 
     for item in history.items() {
-        let (kind, text) = match item {
+        let (kind, mut text) = match item {
             ResponseItem::Message {
                 role,
                 content,
@@ -304,6 +305,27 @@ pub fn collect_transcript(
             continue;
         }
         let original_bytes = text.len();
+        if let Some(heartbeat) = codex_history::Heartbeat::from_message(item) {
+            match heartbeat_versions.get(heartbeat.automation_id) {
+                Some((instructions, number)) if *instructions == heartbeat.instructions => {
+                    text = format!(
+                        "Scheduled automation {} ran at {}. Instructions unchanged from transcript entry [{}]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference.",
+                        heartbeat.automation_id, heartbeat.timestamp, number
+                    );
+                }
+                _ => {
+                    heartbeat_versions.insert(
+                        heartbeat.automation_id,
+                        (heartbeat.instructions, entries.len() + 1),
+                    );
+                }
+            }
+        } else if codex_history::UserInputOrigin::from_message(item)
+            == codex_history::UserInputOrigin::Heartbeat
+        {
+            // Unknown scheduler envelopes may change instructions; do not bridge them.
+            heartbeat_versions.clear();
+        }
         let text = match &kind {
             ConversationTranscriptEntryKind::User | ConversationTranscriptEntryKind::Developer => {
                 text

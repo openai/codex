@@ -17,14 +17,26 @@ use tokio::sync::watch;
 
 static PENDING_MAILBOX_MESSAGES: Gauge = Gauge::new("core.mailbox.pending");
 
+/// Host capture metadata belonging to one input, including steers within another turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserInputMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_order: Option<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "codex_history::UserInputOrigin::is_user"
+    )]
+    pub origin: codex_history::UserInputOrigin,
+}
+
 /// Input consumed by a regular turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TurnInput {
     UserInput {
         content: Vec<UserInput>,
         client_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        acceptance_order: Option<u64>,
+        #[serde(flatten)]
+        metadata: UserInputMetadata,
     },
     FunctionCallOutput(#[serde(with = "turn_input_response_item")] ResponseItemEnvelope),
     // Preserve the existing serialized format while carrying injection API metadata
@@ -485,7 +497,7 @@ mod tests {
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
-                    acceptance_order: None,
+                    metadata: Default::default(),
                     content: vec![UserInput::Text {
                         text: "steer".to_string(),
                         text_elements: Vec::new(),
@@ -518,7 +530,7 @@ mod tests {
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 &turn_state,
                 vec![TurnInput::UserInput {
-                    acceptance_order: None,
+                    metadata: Default::default(),
                     content: vec![UserInput::Text {
                         text: "already pending".to_string(),
                         text_elements: Vec::new(),
