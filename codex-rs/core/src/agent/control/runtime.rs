@@ -70,12 +70,12 @@ impl LocalAgentRuntime {
     }
 }
 
-/// Local construction binds identity after reading history; internal children inherit
-/// an already-bound controller without selecting a backend again.
+/// Local construction binds identity after reading history. Hosts and internal children
+/// provide an already-bound controller without selecting a backend again.
 #[derive(Clone)]
 pub(crate) enum AgentControlInit {
     Local(LocalAgentControl),
-    Inherited {
+    Provided {
         control: Arc<dyn AgentControl>,
         runtime: LocalAgentRuntime,
     },
@@ -91,14 +91,14 @@ impl AgentControlInit {
     pub(crate) fn runtime(&self) -> &LocalAgentRuntime {
         match self {
             Self::Local(control) => &control.runtime,
-            Self::Inherited { runtime, .. } => runtime,
+            Self::Provided { runtime, .. } => runtime,
         }
     }
 
     pub(crate) fn control(&self) -> &dyn AgentControl {
         match self {
             Self::Local(control) => control,
-            Self::Inherited { control, .. } => control.as_ref(),
+            Self::Provided { control, .. } => control.as_ref(),
         }
     }
 }

@@ -114,7 +114,7 @@ pub(crate) async fn run_codex_thread_interactive(
             ThreadSource::Subagent
         }),
         originator: parent_ctx.originator.clone(),
-        agent_control: crate::agent::control::AgentControlInit::Inherited {
+        agent_control: crate::agent::control::AgentControlInit::Provided {
             control: Arc::clone(&parent_session.services.agent_control),
             runtime: parent_session.services.local_agent_runtime.clone(),
         },

@@ -834,17 +834,6 @@ impl Session {
             .parent_thread_id
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
-        if parent_thread_id.is_none() {
-            agent_control
-                .control()
-                .propagate_config_update(AgentConfigUpdate::ServiceTier(
-                    session_configuration
-                        .step_settings
-                        .service_tier
-                        .clone()
-                        .or_else(|| config.service_tier.clone()),
-                ));
-        }
         let is_paginated_subagent = matches!(
             session_configuration.history_mode,
             ThreadHistoryMode::Paginated
@@ -945,10 +934,28 @@ impl Session {
                         .effective_agent_max_threads(MultiAgentVersion::V2)
                         .unwrap_or(usize::MAX),
                 );
+                if parent_thread_id.is_none() {
+                    control.propagate_config_update(AgentConfigUpdate::ServiceTier(
+                        session_configuration
+                            .step_settings
+                            .service_tier
+                            .clone()
+                            .or_else(|| config.service_tier.clone()),
+                    ));
+                }
                 let runtime = control.runtime.clone();
                 (Arc::new(control), runtime)
             }
-            AgentControlInit::Inherited { control, runtime } => (control, runtime),
+            AgentControlInit::Provided { control, runtime } => {
+                let controller_id = control.identity();
+                if controller_id != session_id {
+                    return Err(CodexErr::InvalidRequest(format!(
+                        "agent controller identity {controller_id} does not match session identity {session_id}"
+                    ))
+                    .into());
+                }
+                (control, runtime)
+            }
         };
         let time_provider = crate::current_time::resolve_time_provider(
             config.current_time_reminder.as_ref(),

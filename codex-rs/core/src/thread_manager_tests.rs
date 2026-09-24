@@ -1504,7 +1504,7 @@ async fn spawn_internal_session_preserves_parent_lineage_without_forking_history
             internal_parent: Some(InternalSessionParent {
                 thread_id: parent.thread_id,
                 auth_manager: Arc::clone(&parent.thread.session.services.auth_manager),
-                agent_control: AgentControlInit::Inherited {
+                agent_control: AgentControlInit::Provided {
                     control: Arc::clone(&parent.thread.session.services.agent_control),
                     runtime: parent.thread.session.services.local_agent_runtime.clone(),
                 },
