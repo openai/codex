@@ -2707,8 +2707,15 @@ async fn try_run_sampling_request(
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
-                // todo: remove before stabilizing multi-agent v2
-                if preempt_for_mailbox_mail && sess.input_queue.has_pending_mailbox_items().await {
+                // Hosts can keep the current response intact and deliver mail before the next
+                // model request instead of cutting off its remaining tool calls.
+                if preempt_for_mailbox_mail
+                    && !turn_context
+                        .config
+                        .features
+                        .enabled(Feature::DeferMailboxPreemption)
+                    && sess.input_queue.has_pending_mailbox_items().await
+                {
                     break Ok(SamplingRequestResult {
                         needs_follow_up: true,
                         last_agent_message,

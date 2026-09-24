@@ -205,6 +205,9 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
+    /// Keep sampling through reasoning and commentary boundaries when agent mail arrives.
+    /// Pending mail is delivered at the next normal input boundary instead.
+    DeferMailboxPreemption,
     /// Enable shared discussion tools for an agent tree.
     AgentMessageBoard,
     /// Removed compatibility flag retained as a no-op.
@@ -1315,6 +1318,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::MultiAgentV2,
         key: "multi_agent_v2",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DeferMailboxPreemption,
+        key: "defer_mailbox_preemption",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

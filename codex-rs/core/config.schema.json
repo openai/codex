@@ -789,6 +789,9 @@
             "default_mode_request_user_input": {
               "type": "boolean"
             },
+            "defer_mailbox_preemption": {
+              "type": "boolean"
+            },
             "deferred_executor": {
               "type": "boolean"
             },
@@ -6742,6 +6745,9 @@
           "type": "boolean"
         },
         "default_mode_request_user_input": {
+          "type": "boolean"
+        },
+        "defer_mailbox_preemption": {
           "type": "boolean"
         },
         "deferred_executor": {

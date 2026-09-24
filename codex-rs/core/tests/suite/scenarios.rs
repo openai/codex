@@ -82,6 +82,9 @@ const ONE_PIXEL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ
 #[path = "scenarios_agent_message_board.rs"]
 mod agent_message_board;
 
+#[path = "scenarios_mailbox_preemption_tests.rs"]
+mod mailbox_preemption;
+
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
