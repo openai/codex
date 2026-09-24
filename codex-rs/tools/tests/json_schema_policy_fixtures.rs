@@ -205,8 +205,12 @@ fn convert_fixture_tool(
         Arc::new(input_schema),
     );
 
-    mcp_tool_to_responses_api_tool(&ToolName::namespaced(&fixture.source, name), &tool)
-        .expect("fixture tool should convert to a responses API tool")
+    mcp_tool_to_responses_api_tool(
+        &ToolName::namespaced(&fixture.source, name),
+        &tool,
+        /*schema_max_bytes*/ None,
+    )
+    .expect("fixture tool should convert to a responses API tool")
 }
 
 fn compact_json_len(value: &Value) -> usize {

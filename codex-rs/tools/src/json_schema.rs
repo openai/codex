@@ -9,6 +9,7 @@ pub use types::JsonSchema;
 pub use types::JsonSchemaPrimitiveType;
 pub use types::JsonSchemaType;
 
+use compaction::DEFAULT_COMPACT_TOOL_SCHEMA_BYTES;
 use compaction::compact_large_tool_schema;
 use traversal::DefinitionTraversal;
 use traversal::for_each_schema_child;
@@ -23,8 +24,16 @@ const COMPOSITION_SCHEMA_KEYS: [&str; 3] = ["anyOf", "oneOf", "allOf"];
 
 /// Parse the tool `input_schema` or return an error for invalid schema.
 pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
+    parse_tool_input_schema_with_max_bytes(input_schema, DEFAULT_COMPACT_TOOL_SCHEMA_BYTES)
+}
+
+/// Compact a tool input schema using the supplied threshold.
+pub(crate) fn parse_tool_input_schema_with_max_bytes(
+    input_schema: &JsonValue,
+    max_bytes: usize,
+) -> Result<JsonSchema, serde_json::Error> {
     let mut input_schema = prepare_tool_input_schema(input_schema);
-    compact_large_tool_schema(&mut input_schema);
+    compact_large_tool_schema(&mut input_schema, max_bytes);
     deserialize_tool_input_schema(input_schema)
 }
 

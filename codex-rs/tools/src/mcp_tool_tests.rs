@@ -15,6 +15,34 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
 }
 
 #[test]
+fn mcp_schema_max_bytes_uses_the_utf8_compaction_threshold() {
+    let input_schema = serde_json::json!({
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "parameter guidance é ".repeat(400)}},
+        "required": ["query"],
+        "additionalProperties": false,
+    });
+    let tool = mcp_tool("search", "Search", input_schema.clone());
+    let schema_bytes = serde_json::to_vec(&input_schema)
+        .expect("schema JSON")
+        .len();
+    let compacted = super::parse_mcp_tool_with_schema_max_bytes(&tool, schema_bytes - 1)
+        .expect("argument types fit without descriptions");
+    let expanded = super::parse_mcp_tool_with_schema_max_bytes(&tool, schema_bytes)
+        .expect("parameter description fits");
+    let mut expected_compacted = input_schema.clone();
+    expected_compacted["properties"]["query"] = serde_json::json!({"type": "string"});
+    assert_eq!(
+        serde_json::to_value(compacted.input_schema).expect("schema"),
+        expected_compacted
+    );
+    assert_eq!(
+        serde_json::to_value(expanded.input_schema).expect("schema"),
+        input_schema
+    );
+}
+
+#[test]
 fn parse_mcp_tool_inserts_empty_properties() {
     let tool = mcp_tool(
         "no_props",

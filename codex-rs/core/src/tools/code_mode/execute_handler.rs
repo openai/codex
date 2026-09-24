@@ -48,18 +48,24 @@ impl CodeModeExecuteHandler {
             session,
             turn: Arc::clone(&step_context.turn),
         };
+        let code_mode_input_schema_max_bytes = step_context
+            .turn
+            .config
+            .code_mode
+            .tool_input_schema_max_bytes;
         let mut enabled_tools = Vec::with_capacity(self.nested_tool_specs.len());
         for (spec, cached_runtime) in &self.nested_tool_specs {
-            if let Some(cached_definitions) = cached_runtime
-                .as_ref()
-                .and_then(|runtime| runtime.cached_code_mode_definitions())
-            {
+            if let Some(cached_definitions) = cached_runtime.as_ref().and_then(|runtime| {
+                runtime.cached_code_mode_definitions(code_mode_input_schema_max_bytes)
+            }) {
                 enabled_tools.extend_from_slice(cached_definitions);
                 continue;
             }
 
-            let definitions =
-                codex_tools::collect_code_mode_tool_definitions(std::iter::once(spec.as_ref()));
+            let definitions = codex_tools::collect_code_mode_tool_definitions(
+                std::iter::once(spec.as_ref()),
+                code_mode_input_schema_max_bytes,
+            );
             enabled_tools.extend(definitions.into_iter().map(|mut definition| {
                 definition.input_schema = None;
                 definition.output_schema = None;

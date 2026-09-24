@@ -88,6 +88,7 @@ fn exec_override_preserves_runtime_sections() {
         description: "First tool".to_string(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     }];
     let deferred_tools = [ToolDefinition {
@@ -96,6 +97,7 @@ fn exec_override_preserves_runtime_sections() {
         description: "Deferred tool".to_string(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: Some(json!({
             "type": "object",
             "properties": {

@@ -1,0 +1,43 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Code Mode exposes explicit MCP schema limits in its prompt and runtime tool catalog.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+---
+Scenario: Code Mode exposes explicit MCP schema limits in its prompt and runtime tool catalog.
+
+## Window 1
+Settings:
+  include: ["reasoning.encrypted_content"]
+  instructions: <MODEL_INSTRUCTIONS>
+  model: "gpt-5.4"
+  parallel_tool_calls: true
+  prompt_cache_key: "<PROMPT_CACHE_KEY 1>"
+  reasoning: {"effort":"medium"}
+  store: false
+  stream: true
+  text: {"verbosity":"low"}
+  tool_choice: "auto"
+  tools (4; hash=78e3b4e156c8704f):
+    - custom/exec: Run JavaScript code to orchestrate/compose tool calls - Evaluates the provided JavaScript code in...; hash=6382c54728ef9e96
+    - function/wait: Waits on a yielded `exec` cell and returns new output or completion. - Use `wait` only after `exe...; args=[cell_id, max_tokens, terminate, yield_time_ms]; hash=6692d8f6c55be489
+    - function/request_user_input: Request user input for one to three short questions and wait for the response. This tool is only ...; args=[questions]; hash=64a729b25c424fc6
+    - web_search; hash=e214d4db1bc49e89
+-- request 1 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    inspect the search tool declarations
+-- request 2 (turn) --
+03:custom_tool_call/exec:
+    const results = ["default_schema", "expanded_schema"].map(server => {
+      const description = ALL_TOOLS.find(({name}) => name === `mcp__${server}__search`)?.description ?? "";
+      return [description.includes("budget_description_marker"), description.includes("query: string;")];
+    });
+    const shared = ALL_TOOLS.find(({name}) => name === "mcp__default_schema__shared")?.description ?? "";
+    results.push([shared.includes("code_mode_description_marker"), shared.includes("term: string;")]);
+    text(JSON.stringify(results));
+04:custom_tool_call_output:Script completed
+    Wall time <DURATION> seconds
+    Output:
+     | [[false,true],[true,true],[true,true]]

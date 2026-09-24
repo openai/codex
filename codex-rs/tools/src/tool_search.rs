@@ -99,6 +99,7 @@ fn normalize_search_spec(spec: ToolSpec) -> Option<LoadableToolSpec> {
             ResponsesApiNamespaceTool::Function(tool) => {
                 tool.defer_loading = Some(true);
                 tool.output_schema = None;
+                tool.parameters.mcp_input_schema_max_bytes = None;
             }
             ResponsesApiNamespaceTool::Custom(tool) => {
                 tool.defer_loading = Some(true);

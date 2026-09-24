@@ -339,6 +339,7 @@ text(result.value);
         description: String::new(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     }];
     let actual = execute(&session, callback_request, delegate.clone()).await;
@@ -526,6 +527,7 @@ return;
         description: String::new(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     })
     .collect();
@@ -663,6 +665,7 @@ async fn oversized_delegate_payloads_fail_only_the_tool_call() {
         description: String::new(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     };
 
@@ -833,6 +836,7 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
         description: String::new(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     }];
     let started_a = session_a

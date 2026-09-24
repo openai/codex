@@ -166,6 +166,7 @@ impl From<WireToolDefinition> for ToolDefinition {
             description: value.description,
             kind: value.kind.into(),
             input_schema: value.input_schema,
+            input_schema_max_bytes: None,
             output_schema: value.output_schema,
         }
     }

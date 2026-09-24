@@ -11,18 +11,17 @@ use super::traversal::for_each_schema_child_mut;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
-// Use compact normalized JSON bytes as a cheap local proxy for the 1k-token
-// schema budget.
-const MAX_COMPACT_TOOL_SCHEMA_BYTES: usize = 5_000;
+// Measure compact normalized JSON in UTF-8 bytes.
+pub(crate) const DEFAULT_COMPACT_TOOL_SCHEMA_BYTES: usize = 5_000;
 const MAX_COMPACT_TOOL_SCHEMA_DEPTH: usize = 3;
 
 /// Shrink unusually large tool schemas while preserving the top-level argument
 /// surface. Compaction is best-effort rather than a hard cap: it runs only
 /// after schema sanitization/pruning and applies increasingly lossy passes
 /// while the schema remains over budget.
-pub(super) fn compact_large_tool_schema(value: &mut JsonValue) {
+pub(super) fn compact_large_tool_schema(value: &mut JsonValue, max_bytes: usize) {
     for pass in LARGE_SCHEMA_COMPACTION_PASSES {
-        if compact_schema_fits_budget(value) {
+        if compact_schema_fits_budget(value, max_bytes) {
             break;
         }
         pass(value);
@@ -42,8 +41,8 @@ fn collapse_deep_schema_objects_from_root(value: &mut JsonValue) {
     collapse_deep_schema_objects(value, /*depth*/ 0);
 }
 
-fn compact_schema_fits_budget(value: &JsonValue) -> bool {
-    compact_normalized_schema_len(value) <= MAX_COMPACT_TOOL_SCHEMA_BYTES
+fn compact_schema_fits_budget(value: &JsonValue, max_bytes: usize) -> bool {
+    compact_normalized_schema_len(value) <= max_bytes
 }
 
 fn compact_normalized_schema_len(value: &JsonValue) -> usize {

@@ -35,6 +35,9 @@ pub enum JsonSchemaType {
 /// Generic JSON-Schema subset needed for our tool definitions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct JsonSchema {
+    /// Explicit ordinary MCP server input schema limit; never sent as JSON Schema.
+    #[serde(skip)]
+    pub mcp_input_schema_max_bytes: Option<usize>,
     #[serde(rename = "$ref", skip_serializing_if = "Option::is_none")]
     pub schema_ref: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]

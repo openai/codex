@@ -174,6 +174,7 @@ fn blocking_tool() -> ToolDefinition {
         description: String::new(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     }
 }

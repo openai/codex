@@ -259,6 +259,11 @@ pub struct McpServerConfig {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub supports_parallel_tool_calls: bool,
 
+    /// UTF-8 byte threshold for compacting each ordinary MCP tool input schema. Defaults to 5,000 bytes.
+    /// Code Mode also uses an explicitly configured limit when rendering each tool's input type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_input_schema_max_bytes: Option<NonZeroUsize>,
+
     /// Model-facing surfaces from which this server's tools must be omitted.
     /// `None` leaves lower-priority configuration unchanged; an empty list clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -412,6 +417,12 @@ pub struct RawMcpServerConfig {
     pub startup_readiness: Option<McpStartupReadiness>,
     #[serde(default)]
     pub supports_parallel_tool_calls: Option<bool>,
+    /// UTF-8 byte threshold for compacting each ordinary MCP tool input schema. Defaults to 5,000 bytes.
+    /// Code Mode also uses an explicitly configured limit when rendering each tool's input type.
+    /// Larger limits preserve more parameter descriptions.
+    #[serde(default)]
+    #[schemars(range(min = 1))]
+    pub tool_input_schema_max_bytes: Option<NonZeroUsize>,
     #[serde(default)]
     pub omit_tools_from: Option<Vec<ToolExposureSurface>>,
     #[serde(default)]
@@ -458,6 +469,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             required,
             startup_readiness,
             supports_parallel_tool_calls,
+            tool_input_schema_max_bytes,
             omit_tools_from,
             default_tools_approval_mode,
             enabled_tools,
@@ -578,6 +590,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             required: required.unwrap_or_default(),
             startup_readiness: startup_readiness.unwrap_or_default(),
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
+            tool_input_schema_max_bytes,
             omit_tools_from,
             disabled_reason: None,
             default_tools_approval_mode,

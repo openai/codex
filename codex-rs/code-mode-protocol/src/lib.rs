@@ -20,6 +20,7 @@ pub use description::is_code_mode_nested_tool;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
 pub use description::render_code_mode_sample;
+pub use json_schema_types::DEFAULT_INPUT_SCHEMA_MAX_BYTES;
 pub use json_schema_types::render_json_schema_to_typescript;
 pub use response::DEFAULT_IMAGE_DETAIL;
 pub use response::FunctionCallOutputContentItem;

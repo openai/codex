@@ -67,6 +67,7 @@ fn tool_definition(definition: proto::ToolDefinition) -> Result<ToolDefinition, 
             }
         },
         input_schema: json_field(definition.input_schema_json, "input schema")?,
+        input_schema_max_bytes: None,
         output_schema: json_field(definition.output_schema_json, "output schema")?,
     })
 }

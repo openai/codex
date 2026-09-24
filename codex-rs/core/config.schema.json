@@ -553,6 +553,12 @@
         "experimental_show_cell_overhead": {
           "description": "Show handler duration, code-mode host duration, and harness overhead in each code-mode cell response. Experimental: this option and the response format may change or be removed.",
           "type": "boolean"
+        },
+        "tool_input_schema_max_bytes": {
+          "description": "Maximum UTF-8 bytes per rendered tool input type, with a 16,000-byte minimum and default. For ordinary MCP tools, this is also at least their server's explicitly configured input limit.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -3701,6 +3707,13 @@
         "supports_parallel_tool_calls": {
           "default": null,
           "type": "boolean"
+        },
+        "tool_input_schema_max_bytes": {
+          "default": null,
+          "description": "UTF-8 byte threshold for compacting each ordinary MCP tool input schema. Defaults to 5,000 bytes. Code Mode also uses an explicitly configured limit when rendering each tool's input type. Larger limits preserve more parameter descriptions.",
+          "format": "uint",
+          "minimum": 1.0,
+          "type": "integer"
         },
         "tool_timeout_sec": {
           "default": null,

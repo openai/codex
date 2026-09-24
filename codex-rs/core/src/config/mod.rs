@@ -1156,6 +1156,7 @@ pub struct CodeModeConfig {
     /// in each code-mode cell response.
     /// Experimental: this option and the response format may change or be removed.
     pub experimental_show_cell_overhead: bool,
+    pub tool_input_schema_max_bytes: Option<usize>,
     pub excluded_tool_namespaces: Vec<String>,
     pub direct_only_tool_namespaces: Vec<String>,
     /// Keep code mode fail-closed when the standalone host is unavailable.
@@ -1167,6 +1168,7 @@ impl Default for CodeModeConfig {
         Self {
             default_exec_yield_time_ms: DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS,
             experimental_show_cell_overhead: false,
+            tool_input_schema_max_bytes: None,
             excluded_tool_namespaces: Vec::new(),
             direct_only_tool_namespaces: Vec::new(),
             disable_in_process_fallback: false,
@@ -2724,6 +2726,9 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         experimental_show_cell_overhead: base
             .and_then(|config| config.experimental_show_cell_overhead)
             .unwrap_or_default(),
+        tool_input_schema_max_bytes: base
+            .and_then(|config| config.tool_input_schema_max_bytes)
+            .map(NonZeroUsize::get),
         excluded_tool_namespaces: base
             .and_then(|config| config.excluded_tool_namespaces.as_ref())
             .cloned()

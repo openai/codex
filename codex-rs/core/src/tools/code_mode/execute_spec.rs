@@ -59,6 +59,7 @@ mod tests {
             description: "Update the plan".to_string(),
             kind: codex_code_mode::CodeModeToolKind::Function,
             input_schema: None,
+            input_schema_max_bytes: None,
             output_schema: None,
         }];
 

@@ -222,6 +222,23 @@ fn configure_scenario_catalog(config: &mut Config) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_mcp_schema_limits_preserve_explicit_overrides() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let requests = super::code_mode::mcp_schema_max_bytes_scenario().await?;
+    insta::assert_snapshot!(
+        "code_mode_mcp_schema_limits",
+        context_snapshot::format_request_history_snapshot(
+            "Code Mode exposes explicit MCP schema limits in its prompt and runtime tool catalog.",
+            &requests,
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
+        )
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn astra_asks_an_async_question_and_receives_the_answer_while_working() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

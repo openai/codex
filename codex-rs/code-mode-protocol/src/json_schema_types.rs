@@ -10,14 +10,21 @@ const MAX_LOCAL_REF_EXPANSIONS_PER_PATH: usize = 2;
 // compact schema cannot expand into an arbitrarily large model-visible item.
 const MAX_TOTAL_LOCAL_REF_EXPANSIONS: usize = 32;
 // Bound individual schema rendering before assembling the final declaration.
-const MAX_RENDERED_SCHEMA_BYTES: usize = 16_000;
+pub const DEFAULT_INPUT_SCHEMA_MAX_BYTES: usize = 16_000;
 // Charge intermediate render strings as they are built so repeated local refs
 // cannot allocate unbounded expanded copies before the final schema cap runs.
-const MAX_RENDER_WORK_BYTES: usize = MAX_RENDERED_SCHEMA_BYTES * 4;
+const RENDER_WORK_MULTIPLIER: usize = 4;
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
-    let rendered = JsonSchemaTypeRenderer::new(schema).render(schema);
-    if rendered.len() > MAX_RENDERED_SCHEMA_BYTES {
+    render_json_schema_to_typescript_with_budget(schema, DEFAULT_INPUT_SCHEMA_MAX_BYTES)
+}
+
+pub(crate) fn render_json_schema_to_typescript_with_budget(
+    schema: &JsonValue,
+    max_bytes: usize,
+) -> String {
+    let rendered = JsonSchemaTypeRenderer::new(schema, max_bytes).render(schema);
+    if rendered.len() > max_bytes {
         "unknown".to_string()
     } else {
         rendered
@@ -34,13 +41,13 @@ struct JsonSchemaTypeRenderer<'a> {
 }
 
 impl<'a> JsonSchemaTypeRenderer<'a> {
-    fn new(root: &'a JsonValue) -> Self {
+    fn new(root: &'a JsonValue, max_bytes: usize) -> Self {
         Self {
             root,
             nested_schema_resource_depth: 0,
             active_local_ref_expansions: BTreeMap::new(),
             remaining_local_ref_expansions: MAX_TOTAL_LOCAL_REF_EXPANSIONS,
-            remaining_render_work_bytes: MAX_RENDER_WORK_BYTES,
+            remaining_render_work_bytes: max_bytes.saturating_mul(RENDER_WORK_MULTIPLIER),
             render_work_budget_exhausted: false,
         }
     }

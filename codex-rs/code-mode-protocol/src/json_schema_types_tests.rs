@@ -158,14 +158,14 @@ fn repeated_large_ref_expansions_exhaust_render_work_budget() {
                 "properties": {
                     "value": {
                         "type": "string",
-                        "description": "x".repeat(MAX_RENDERED_SCHEMA_BYTES / 2)
+                        "description": "x".repeat(DEFAULT_INPUT_SCHEMA_MAX_BYTES / 2)
                     }
                 }
             }
         }
     });
 
-    let mut renderer = JsonSchemaTypeRenderer::new(&schema);
+    let mut renderer = JsonSchemaTypeRenderer::new(&schema, DEFAULT_INPUT_SCHEMA_MAX_BYTES);
     assert_eq!(renderer.render(&schema), "unknown");
     assert!(renderer.render_work_budget_exhausted);
 }
@@ -176,19 +176,19 @@ fn oversized_ref_literal_exhausts_render_work_budget() {
         "$ref": "#/$defs/Value",
         "$defs": {
             "Value": {
-                "const": "x".repeat(MAX_RENDER_WORK_BYTES)
+                "const": "x".repeat(DEFAULT_INPUT_SCHEMA_MAX_BYTES * RENDER_WORK_MULTIPLIER)
             }
         }
     });
 
-    let mut renderer = JsonSchemaTypeRenderer::new(&schema);
+    let mut renderer = JsonSchemaTypeRenderer::new(&schema, DEFAULT_INPUT_SCHEMA_MAX_BYTES);
     assert_eq!(renderer.render(&schema), "unknown");
     assert!(renderer.render_work_budget_exhausted);
 }
 
 #[test]
 fn rendered_schema_has_a_hard_size_cap() {
-    let description = "x".repeat(MAX_RENDERED_SCHEMA_BYTES);
+    let description = "x".repeat(DEFAULT_INPUT_SCHEMA_MAX_BYTES);
     let schema = json!({
         "type": "object",
         "properties": {

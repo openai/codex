@@ -2,6 +2,7 @@ use crate::JsonSchema;
 use crate::ToolDefinition;
 use crate::ToolName;
 use crate::ToolOutputSchema;
+use crate::mcp_tool::parse_mcp_tool_with_schema_max_bytes;
 use crate::parse_agent_plugin_mcp_tool;
 use crate::parse_dynamic_tool;
 use crate::parse_mcp_tool;
@@ -120,10 +121,16 @@ pub fn coalesce_loadable_tool_specs(
 pub fn mcp_tool_to_responses_api_tool(
     tool_name: &ToolName,
     tool: &rmcp::model::Tool,
+    schema_max_bytes: Option<usize>,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    Ok(tool_definition_to_responses_api_tool(
-        parse_mcp_tool(tool)?.renamed(tool_name.name.clone()),
-    ))
+    let definition = match schema_max_bytes {
+        Some(max_bytes) => parse_mcp_tool_with_schema_max_bytes(tool, max_bytes)?,
+        None => parse_mcp_tool(tool)?,
+    };
+    let mut tool =
+        tool_definition_to_responses_api_tool(definition.renamed(tool_name.name.clone()));
+    tool.parameters.mcp_input_schema_max_bytes = schema_max_bytes;
+    Ok(tool)
 }
 
 pub fn agent_plugin_mcp_tool_to_responses_api_tool(
