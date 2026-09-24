@@ -68,3 +68,10 @@ pub const THREAD_SKILLS_KEPT_TOTAL_METRIC: &str = "codex.thread.skills.kept_tota
 pub const THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC: &str =
     "codex.thread.skills.description_truncated_chars";
 pub const THREAD_SKILLS_TRUNCATED_METRIC: &str = "codex.thread.skills.truncated";
+// Tools measure the rendered block; kind=snapshot|delta distinguishes full catalogs from updates.
+pub const THREAD_TOOLS_NAMESPACES_TOTAL_METRIC: &str = "codex.thread.tools.namespaces_total";
+pub const THREAD_TOOLS_FRAGMENT_BYTES_METRIC: &str = "codex.thread.tools.fragment_bytes";
+
+/// Byte buckets for context-budget planning, with larger fragments in the overflow bucket.
+pub const CONTEXT_FRAGMENT_BYTES_BUCKETS: &[f64] =
+    &[256., 512., 1_024., 2_048., 4_096., 8_192., 16_384.];

@@ -271,6 +271,9 @@ impl Session {
         world_state.add_section(PluginsInstructionsState::new(
             plugins_usage_instructions_available,
         ));
+        let extension_metrics = super::extension_metrics::from_session_telemetry(
+            step_context.session_telemetry.clone(),
+        );
         if turn_context
             .config
             .features
@@ -278,6 +281,7 @@ impl Session {
         {
             world_state.add_section(ToolsState::new(
                 step_context.tool_router.deferred_tool_namespaces(),
+                Arc::clone(&extension_metrics),
             ));
         }
         let environments = step_context.environments.to_selections();
@@ -286,9 +290,6 @@ impl Session {
             .iter()
             .map(|root| root.selected_root().clone())
             .collect::<Vec<_>>();
-        let extension_metrics = super::extension_metrics::from_session_telemetry(
-            step_context.session_telemetry.clone(),
-        );
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor
                 .contribute_world_state(WorldStateContributionInput {
