@@ -5,6 +5,7 @@ exports_files([
     "llvm_windows_arm64_powl.patch",
     "llvm_windows_mingw_compat.patch",
     "rules_rust_build_script_tools_transition.patch",
+    "rules_rust_compiler_thp.patch",
     "rules_rust_group_build_script_arg_files.patch",
     "rules_rust_windows_execroot_separators.patch",
     "rules_rust_windows_msvc_direct_link_args.patch",

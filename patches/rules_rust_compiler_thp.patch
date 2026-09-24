@@ -1,0 +1,103 @@
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -1203,6 +1203,15 @@
+             expand_directories = False,
+         )
+ 
++    # The process wrapper must decide on the execution worker. Its seccomp
++    # and huge-page policy can differ from the analysis host's configuration.
++    if (
++        tool_file == toolchain.rustc and
++        toolchain.exec_triple.str in ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu") and
++        crate_info.root.short_path.startswith("codex-rs/")
++    ):
++        process_wrapper_flags.add("--try-rustc-thp", "true")
++
+     # Arguments for launching the tool from the process wrapper. Add the tool as
+     # a `File` so Bazel's path mapping can rewrite the location.
+     rustc_path = ctx.actions.args()
+diff --git a/util/process_wrapper/options.rs b/util/process_wrapper/options.rs
+--- a/util/process_wrapper/options.rs
++++ b/util/process_wrapper/options.rs
+@@ -69,6 +69,12 @@
+     let mut rustc_output_format_raw = None;
+     let mut flags = Flags::new();
+     let mut require_explicit_unstable_features = None;
++    let mut try_rustc_thp = None;
++    flags.define_flag(
++        "--try-rustc-thp",
++        "Advise huge pages for a known compatible rustc if this worker permits it.",
++        &mut try_rustc_thp,
++    );
+     flags.define_repeated_flag("--subst", "", &mut subst_mapping_raw);
+     flags.define_flag("--stable-status-file", "", &mut stable_status_file_raw);
+     flags.define_flag("--volatile-status-file", "", &mut volatile_status_file_raw);
+@@ -260,7 +266,7 @@
+ 
+     // Prepare the environment variables, unifying those read from files with the ones
+     // of the current process.
+-    let vars = environment_block(
++    let mut vars = environment_block(
+         environment_file_block,
+         &stable_stamp_mappings,
+         &volatile_stamp_mappings,
+@@ -286,6 +292,10 @@
+         )
+     })?;
+ 
++    if try_rustc_thp.as_deref() == Some("true") && compiler_may_advise(&vars) {
++        vars.insert("MALLOC_CONF".to_owned(), "thp:always".to_owned());
++    }
++
+     Ok(Options {
+         executable: exec_path.to_owned(),
+         child_arguments: args.to_vec(),
+@@ -298,6 +308,47 @@
+         output_file,
+         rustc_output_format,
+     })
++}
++
++// Checking /proc and sysfs needs no optional syscall that a sandbox may
++// reject or trap. Unknown worker policies fail closed to the existing behavior.
++#[cfg(target_os = "linux")]
++fn compiler_may_advise(vars: &HashMap<String, String>) -> bool {
++    if vars.keys().any(|key| {
++        ["MALLOC_", "_RJEM_", "JEMALLOC_", "MIMALLOC_", "TCMALLOC_", "GLIBC_"]
++            .iter()
++            .any(|prefix| key.starts_with(prefix))
++            || matches!(
++                key.as_str(),
++                "LD_PRELOAD" | "LD_AUDIT" | "ASAN_OPTIONS" | "LSAN_OPTIONS"
++                    | "MSAN_OPTIONS" | "TSAN_OPTIONS"
++            )
++    }) {
++        return false;
++    }
++    for path in ["/etc/malloc.conf", "/etc/jemalloc.conf", "/etc/ld.so.preload"] {
++        match std::fs::symlink_metadata(path) {
++            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
++            _ => return false,
++        }
++    }
++    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
++        return false;
++    };
++    let Ok(enabled) = std::fs::read_to_string("/sys/kernel/mm/transparent_hugepage/enabled") else {
++        return false;
++    };
++    let field = |key: &str| {
++        status.lines().filter_map(|line| line.split_once(':'))
++            .find_map(|(name, value)| (name == key).then(|| value.trim()))
++    };
++    field("Seccomp") == Some("0") && field("THP_enabled") == Some("1")
++        && (enabled.contains("[always]") || enabled.contains("[madvise]"))
++}
++
++#[cfg(not(target_os = "linux"))]
++fn compiler_may_advise(_: &HashMap<String, String>) -> bool {
++    false
+ }
+ 
+ fn args_from_file(paths: Vec<String>) -> Result<Vec<String>, OptionError> {

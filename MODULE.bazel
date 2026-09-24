@@ -211,6 +211,7 @@ rules_rust.patch(
         # Group build-script argument files to avoid Windows command-line limits.
         "//patches:rules_rust_group_build_script_arg_files.patch",
         "//patches:rules_rust_windows_execroot_separators.patch",
+        "//patches:rules_rust_compiler_thp.patch",
     ],
     strip = 1,
 )
