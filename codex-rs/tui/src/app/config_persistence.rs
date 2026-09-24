@@ -418,6 +418,11 @@ impl App {
             .tui
             .terminal_resize_reflow_max_rows =
             self.local_settings.tui.terminal_resize_reflow_max_rows;
+        self.chat_widget.local_settings.tui.prompt_suggestions =
+            self.local_settings.tui.prompt_suggestions;
+        if !self.local_settings.tui.prompt_suggestions {
+            self.chat_widget.clear_prompt_suggestion();
+        }
         self.config = config;
         self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())

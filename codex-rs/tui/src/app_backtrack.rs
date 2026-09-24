@@ -122,6 +122,7 @@ impl App {
 
     /// Revert the current thread before the selected prompt.
     pub(crate) fn apply_backtrack_selection(&mut self, selection: BacktrackSelection) {
+        self.chat_widget.clear_prompt_suggestion();
         if self.chat_widget.side_conversation_active() {
             self.reset_backtrack_state();
             self.chat_widget

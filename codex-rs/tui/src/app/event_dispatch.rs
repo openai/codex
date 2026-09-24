@@ -48,6 +48,8 @@ impl App {
                     | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::ResetTranscriptForThreadSwitch
                     | AppEvent::FinishPromptRevert { .. }
+                    | AppEvent::PromptSuggestionStarted { .. }
+                    | AppEvent::PromptSuggestionFinished { .. }
                     | AppEvent::ManagedWorktreeCreated(_)
                     | AppEvent::AgentsOverviewWorktreeCreated(_)
                     | AppEvent::AppendMessageHistoryEntry { .. }
@@ -2632,6 +2634,19 @@ impl App {
             } => {
                 self.suggest_thread_name(app_server, thread_id, request_id)
                     .await;
+            }
+            AppEvent::GeneratePromptSuggestion(request) => {
+                self.generate_prompt_suggestion(app_server, request);
+            }
+            AppEvent::PromptSuggestionStarted { request, result } => {
+                self.on_prompt_suggestion_started(app_server, request, result);
+            }
+            AppEvent::PromptSuggestionFinished { request, temporary_thread_id, text } => {
+                self.temporary_structured_requests.remove(&temporary_thread_id);
+                if text.is_none() {
+                    request.cancellation.cancel();
+                }
+                self.chat_widget.apply_prompt_suggestion(&request, text);
             }
             AppEvent::ThreadTitleStarted {
                 cancellation,

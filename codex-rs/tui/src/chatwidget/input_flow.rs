@@ -23,6 +23,9 @@ impl ChatWidget {
         input_result: InputResult,
         had_modal_or_popup: bool,
     ) {
+        if !matches!(input_result, InputResult::None) {
+            self.clear_prompt_suggestion();
+        }
         let follow_transcript = match &input_result {
             // Opening settings is not a request to leave the current reading anchor.
             // Inline commands still follow so their output (including usage errors) is visible.

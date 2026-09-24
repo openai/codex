@@ -7,10 +7,6 @@ use crate::prompt_suggestions::PromptSuggestion;
 use crate::prompt_suggestions::SuggestionRequest;
 
 impl ChatComposer {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Connected by the next PR in this stack.")
-    )]
     pub(crate) fn set_prompt_suggestion(&mut self, request: SuggestionRequest) {
         self.prompt_suggestion = Some(PromptSuggestion {
             request,
@@ -28,10 +24,6 @@ impl ChatComposer {
         self.prompt_suggestion = None;
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Connected by the next PR in this stack.")
-    )]
     pub(crate) fn apply_prompt_suggestion(
         &mut self,
         request: &SuggestionRequest,
