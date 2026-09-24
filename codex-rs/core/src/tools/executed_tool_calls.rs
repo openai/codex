@@ -25,6 +25,7 @@ use codex_protocol::mcp::McpAttributionSource;
 use codex_protocol::models::ExecutedToolCall;
 use codex_protocol::models::ExecutedToolCallArguments;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ToolResultMetadata;
 use codex_protocol::models::bound_executed_tool_calls_for_prompt;
 use codex_protocol::models::bound_executed_tool_calls_for_prompt_prioritizing_recent;
 use codex_protocol::models::executed_tool_call_metadata_bytes;
@@ -36,6 +37,7 @@ use crate::session::step_context::StepContext;
 use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::metadata_metrics;
 use crate::tools::router::ToolCall;
 use crate::utils::json::serialized_json_bytes;
 
@@ -344,6 +346,7 @@ impl ExecutedToolCalls {
         let retained = self.retained_direct_metadata_bytes.load(Ordering::Relaxed);
         let available = MAX_RETAINED_DIRECT_METADATA_BYTES.saturating_sub(retained);
         let mut bytes = executed_tool_call_metadata_bytes(item);
+        let original_bytes = bytes;
         if bytes > available {
             item.retain_tool_resource_access();
             bytes = executed_tool_call_metadata_bytes(item);
@@ -354,11 +357,23 @@ impl ExecutedToolCalls {
         }
         if bytes > available {
             item.clear_executed_tool_calls();
+            metadata_metrics::record_shedding(
+                "direct_retained",
+                original_bytes,
+                executed_tool_call_metadata_bytes(item),
+                codex_otel::global().as_ref(),
+            );
             return;
         }
         // All Direct attachments share the recorder lock, including cloned handles.
         self.retained_direct_metadata_bytes
             .store(retained + bytes, Ordering::Relaxed);
+        metadata_metrics::record_shedding(
+            "direct_retained",
+            original_bytes,
+            bytes,
+            codex_otel::global().as_ref(),
+        );
     }
 
     /// Remember IDs from response items that bypass local tool dispatch.
@@ -487,7 +502,7 @@ impl ExecutedToolCalls {
         let ToolCallSource::CodeMode { cell_id, .. } = source else {
             return false;
         };
-        let metadata = codex_protocol::models::ToolResultMetadata::new(metadata);
+        let metadata = ToolResultMetadata::new(metadata);
         let has_metadata = metadata.is_some();
         let mut state = self.lock_state();
         let Some(state) = state.as_mut() else {

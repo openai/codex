@@ -2026,7 +2026,7 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
         "openai/resource_access": resource_access,
     });
     let metadata_bytes = serde_json::to_vec(&result_metadata)?.len();
-    assert!(metadata_bytes < 32 * 1024);
+    assert!(metadata_bytes * 32 < 1024 * 1024);
     assert!(metadata_bytes * 33 > 1024 * 1024);
     let apps_server = mount_result_metadata_app(
         &server,
@@ -2105,7 +2105,7 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
         assert_eq!(call["params"]["name"], RESULT_METADATA_TOOL);
         assert_eq!(call["params"]["arguments"], arguments);
     }
-    // The request-metadata helper reapplies the smaller 128 KiB budget, hiding this boundary.
+    // Inspect retained history directly to isolate the Direct admission budget.
     let history = test.codex.conversation_history_snapshot().await;
     assert!(
         history
@@ -2156,7 +2156,9 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
 #[test_case(ToolMode::Direct; "direct")]
 #[test_case(ToolMode::CodeModeOnly; "code_mode")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn result_metadata_budget_preserves_smaller_results(tool_mode: ToolMode) -> Result<()> {
+async fn result_metadata_preserves_results_within_request_budget(
+    tool_mode: ToolMode,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let arguments = [
@@ -2174,7 +2176,6 @@ async fn result_metadata_budget_preserves_smaller_results(tool_mode: ToolMode) -
         "resource_coverage": "complete",
         "resources": [],
     });
-    let resource_only = serde_json::json!({ "openai/resource_access": resource_access });
     let result_metadata = [
         serde_json::json!({
             "payload": "l".repeat(31 * 1024),
@@ -2187,7 +2188,11 @@ async fn result_metadata_budget_preserves_smaller_results(tool_mode: ToolMode) -
         serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
         serde_json::json!({
             "payload": "o".repeat(40 * 1024),
-            "openai/resource_access": resource_access,
+            "openai/resource_access": {
+                "schema_version": 1,
+                "resource_coverage": "complete",
+                "resources": ["r".repeat(40 * 1024)],
+            },
         }),
         serde_json::json!({ "status": "ok" }),
     ];
@@ -2195,10 +2200,9 @@ async fn result_metadata_budget_preserves_smaller_results(tool_mode: ToolMode) -
         .iter()
         .map(|metadata| serde_json::to_vec(metadata).unwrap().len())
         .collect::<Vec<_>>();
-    assert!(metadata_sizes[..6].iter().all(|bytes| *bytes < 32 * 1024));
-    assert!(metadata_sizes[..6].iter().sum::<usize>() > 128 * 1024);
-    assert!(metadata_sizes[6] > 32 * 1024);
-    assert!(metadata_sizes[7] < 32 * 1024);
+    assert!(metadata_sizes.iter().sum::<usize>() > 128 * 1024);
+    assert!(metadata_sizes.iter().sum::<usize>() < 1024 * 1024);
+    assert!(serde_json::to_vec(&result_metadata[6]["openai/resource_access"])?.len() > 32 * 1024);
     for (arguments, metadata) in arguments.iter().zip(&result_metadata) {
         let result = serde_json::json!({
             "content": [{ "type": "text", "text": RESULT_METADATA_PRIVATE_RESULT }],
@@ -2335,7 +2339,7 @@ async fn result_metadata_budget_preserves_smaller_results(tool_mode: ToolMode) -
             .iter()
             .map(codex_protocol::models::executed_tool_call_metadata_bytes)
             .sum::<usize>()
-            <= 128 * 1024
+            <= 2 * 1024 * 1024
     );
     let captured = serde_json::to_value(captured)?;
     for (input, expected_metadata) in [
@@ -2343,16 +2347,7 @@ async fn result_metadata_budget_preserves_smaller_results(tool_mode: ToolMode) -
         (request.input(), None),
         (
             captured.as_array().unwrap().clone(),
-            Some([
-                resource_only.clone(),
-                result_metadata[1].clone(),
-                result_metadata[2].clone(),
-                result_metadata[3].clone(),
-                result_metadata[4].clone(),
-                result_metadata[5].clone(),
-                resource_only.clone(),
-                result_metadata[7].clone(),
-            ]),
+            Some(result_metadata.clone()),
         ),
     ] {
         let mut calls = Vec::new();

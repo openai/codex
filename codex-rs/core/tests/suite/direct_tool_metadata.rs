@@ -1,4 +1,4 @@
-//! Direct-call metadata coverage, including malformed calls and request-budget pruning.
+//! Direct-call metadata coverage, including malformed calls and metadata budgets.
 
 use anyhow::Result;
 use codex_features::Feature;
@@ -203,7 +203,7 @@ async fn direct_call_metadata_during_compaction_respects_provider_support(
 }
 
 #[test_case(false, 0; "metadata disabled")]
-#[test_case(true, 24; "request budget exceeded")]
+#[test_case(true, 24; "above previous request budget")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_function_and_tool_search_mark_complete_attempts(
     metadata_enabled: bool,
@@ -211,7 +211,7 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let request_budget = 128 * 1024;
+    let request_budget = 2 * 1024 * 1024;
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         configure_search_capable_model(config);
@@ -226,13 +226,14 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
     let valid_arguments = json!({"plan": [{"step": "read", "status": "in_progress"}]});
     let malformed_arguments = "{malformed";
     let search_arguments = json!({"query": "nonexistent-completeness-proof-tool", "limit": null});
-    // The bulk calls fit the per-call limit; their combined metadata forces pruning.
+    // These calls exceed the old request budget but stay below Direct's retained-history limit.
     let budget_arguments =
         json!({"plan": [{"step": "x".repeat(7 * 1024), "status": "in_progress"}]});
     let budget_arguments_json = budget_arguments.to_string();
     assert!(budget_arguments_json.len() < 8 * 1024);
     if budget_calls > 0 {
-        assert!(budget_calls * budget_arguments_json.len() > request_budget);
+        assert!(budget_calls * budget_arguments_json.len() > 128 * 1024);
+        assert!(budget_calls * budget_arguments_json.len() < 1024 * 1024);
     }
     let mut events = vec![ev_response_created("resp-1")];
     if budget_calls > 0 {
@@ -322,36 +323,22 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
         );
         assert!(metadata.get("tool_calls_complete").is_none());
     }
-    let mut truncated = 0;
     for index in 0..budget_calls {
         let output = request.function_call_output(&format!("plan-budget-{index}"));
         assert_eq!(output["output"], json!("Plan updated"));
         let metadata = tool_call_metadata(output);
         metadata_bytes += serde_json::to_vec(&metadata)?.len();
-        let calls = metadata["executed_tool_calls"]
-            .as_array()
-            .expect("recorded calls");
-        assert_eq!(calls.len(), 1);
-        if calls[0]["arguments"]
-            .get("_codex_executed_tool_call_truncated")
-            .is_some()
-        {
-            truncated += 1;
-            assert!(metadata.get("tool_calls_complete").is_none());
-        } else {
-            assert_eq!(
-                metadata,
-                json!({
-                    "executed_tool_calls": [{"name": "update_plan", "arguments": budget_arguments}],
-                    "tool_calls_complete": true,
-                })
-            );
-        }
+        assert_eq!(
+            metadata,
+            json!({
+                "executed_tool_calls": [{"name": "update_plan", "arguments": budget_arguments}],
+                "tool_calls_complete": true,
+            })
+        );
     }
     assert!(metadata_bytes <= request_budget);
-    assert!(
-        budget_calls == 0 || truncated > 0,
-        "request must exercise pruning"
-    );
+    if budget_calls > 0 {
+        assert!(metadata_bytes > 128 * 1024);
+    }
     Ok(())
 }

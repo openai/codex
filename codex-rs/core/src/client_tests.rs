@@ -611,8 +611,8 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
 }
 
 #[test]
-fn responses_request_preserves_smaller_result_metadata_under_aggregate_budget() -> anyhow::Result<()>
-{
+fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
+-> anyhow::Result<()> {
     let result_metadata = [
         json!({ "payload": "l".repeat(31 * 1024) }),
         json!({ "payload": "m".repeat(20 * 1024) }),
@@ -643,9 +643,6 @@ fn responses_request_preserves_smaller_result_metadata_under_aggregate_budget() 
         history.push(output);
     }
     let original_history = serde_json::to_value(&history)?;
-    let mut expected_input = original_history.clone();
-    expected_input[1]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"] =
-        json!("omitted_due_to_size_limit");
 
     let mut features = codex_features::Features::default();
     features.enable(codex_features::Feature::ExecutedToolCallMetadata);
@@ -682,7 +679,7 @@ fn responses_request_preserves_smaller_result_metadata_under_aggregate_budget() 
     )?;
     let body = serde_json::to_value(&request)?;
     // Whole-input equality covers bindings, arguments, results, sources and completion too.
-    assert_eq!(body["input"], expected_input);
+    assert_eq!(body["input"], original_history);
     let mut without_metadata = body.clone();
     for item in without_metadata["input"].as_array_mut().unwrap() {
         item.as_object_mut()
@@ -691,7 +688,8 @@ fn responses_request_preserves_smaller_result_metadata_under_aggregate_budget() 
     }
     let metadata_bytes =
         serde_json::to_vec(&body)?.len() - serde_json::to_vec(&without_metadata)?.len();
-    assert!(metadata_bytes <= 128 * 1024);
+    assert!(metadata_bytes > 128 * 1024);
+    assert!(metadata_bytes <= 2 * 1024 * 1024);
     assert_eq!(serde_json::to_value(&history)?, original_history);
     Ok(())
 }

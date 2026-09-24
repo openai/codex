@@ -110,7 +110,7 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
                     String::new(),
                     serde_json::Value::Null,
                 )]);
-                item.set_tool_call_cell_id("cell-\"\\");
+                item.set_tool_call_cell_id(&format!("cell-\"\\{}", "x".repeat(512)));
                 item.mark_tool_calls_complete();
                 item
             })
@@ -199,7 +199,8 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
     let arguments = serde_json::json!({ "payload": "x".repeat(7 * 1024) });
     let argument_bytes = serde_json::to_vec(&arguments)?.len();
     assert!(argument_bytes < MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES);
-    assert!(24 * argument_bytes > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+    let call_count = MAX_EXECUTED_TOOL_CALL_METADATA_BYTES / argument_bytes + 1;
+    assert!(call_count * argument_bytes > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
     let mut items = ["A", "wait-A", "B"].map(|call_id| {
         let mut item = output(call_id);
         item.mark_tool_calls_complete();
@@ -208,7 +209,7 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
     for item in &mut items[..2] {
         item.set_tool_call_cell_id("cell-A");
     }
-    let calls = vec![ExecutedToolCall::new("test_tool".to_string(), arguments); 24];
+    let calls = vec![ExecutedToolCall::new("test_tool".to_string(), arguments); call_count];
     items[0].append_executed_tool_calls(calls.clone());
     items[2].append_executed_tool_calls(vec![ExecutedToolCall::new(
         "test_tool".to_string(),
@@ -230,7 +231,7 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
         assert_eq!(recorded[0].name, "test_tool");
         let truncation = recorded[0].truncation().unwrap();
         assert_eq!(truncation.original_bytes, argument_bytes);
-        assert_eq!(truncation.omitted_calls, Some(23));
+        assert_eq!(truncation.omitted_calls, Some(call_count - 1));
         assert_eq!(
             bounded[1]
                 .executed_tool_call_metadata()
@@ -249,7 +250,7 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
                 .truncation()
                 .unwrap()
                 .omitted_calls,
-            Some(47),
+            Some(2 * call_count - 1),
         );
     }
 
@@ -266,6 +267,22 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
         16
     ]);
     items[1].mark_tool_calls_complete();
+    // Leave room for calls, but not their sources, without exceeding the argument limit.
+    let padding_bytes = MAX_EXECUTED_TOOL_CALL_METADATA_BYTES - metadata_bytes(&items)? - 1024;
+    let calls = items[0]
+        .ensure_tool_call_metadata()
+        .unwrap()
+        .executed_tool_calls
+        .as_mut()
+        .unwrap();
+    let call_count = calls.len();
+    for (index, call) in calls.iter_mut().enumerate() {
+        call.name.push_str(
+            &"x".repeat(
+                padding_bytes / call_count + usize::from(index < padding_bytes % call_count),
+            ),
+        );
+    }
     let expected = items.clone();
     assert!(
         first_executed_tool_call(&mut items[0])
@@ -293,7 +310,7 @@ fn executed_tool_call_prompt_budget_includes_metadata_fields() -> Result<()> {
             .internal_chat_message_metadata_passthrough_mut()
             .unwrap() = metadata;
         let without_marker = item.clone();
-        item.set_tool_call_cell_id("cell-\"\\");
+        item.set_tool_call_cell_id(&format!("cell-\"\\{}", "x".repeat(256)));
         item.mark_tool_calls_complete();
         assert_eq!(
             metadata_bytes(std::slice::from_ref(&item))?,
@@ -501,7 +518,7 @@ fn tool_result_source_snapshots_replace_atomically() -> Result<()> {
 }
 
 #[test]
-fn tool_result_metadata_is_host_only_bounded_and_redacted() -> Result<()> {
+fn tool_result_metadata_is_host_only_and_redacted_without_a_per_result_limit() -> Result<()> {
     let mut call = ExecutedToolCall::new("test_tool".to_string(), serde_json::json!({}));
     let without_metadata = call.clone();
     for metadata in [
@@ -510,9 +527,14 @@ fn tool_result_metadata_is_host_only_bounded_and_redacted() -> Result<()> {
             "other": false,
         }),
         serde_json::json!({
-            "openai/resource_access": { "resources": ["not-for-debug"] },
-            "other": "preserved when the full metadata fits",
+            "openai/resource_access": {
+                "resource_coverage": "complete",
+                "resources": ["not-for-debug", "x".repeat(40 * 1024)],
+            },
+            "other": "preserved along with resource_access",
         }),
+        // Capture preserves the original value even when serialization escapes increase its size.
+        serde_json::json!({ "value": "\0".repeat(32 * 1024) }),
         serde_json::json!({}),
         serde_json::json!(null),
     ] {
@@ -535,74 +557,80 @@ fn tool_result_metadata_is_host_only_bounded_and_redacted() -> Result<()> {
             without_metadata
         );
     }
-
-    let exact_limit = serde_json::json!({
-        "value": "x".repeat(MAX_TOOL_RESULT_METADATA_BYTES - r#"{"value":""}"#.len()),
-    });
-    let capture = ToolResultMetadata::new(&exact_limit);
-    assert!(capture.is_some());
-    call.set_tool_result_metadata(capture);
-    assert_eq!(
-        serde_json::to_value(&call)?["tool_result_metadata"],
-        exact_limit
-    );
-    // JSON escaping counts toward the bound, not just the in-memory string length.
-    let oversized = serde_json::json!({ "value": "\0".repeat(MAX_TOOL_RESULT_METADATA_BYTES / 2) });
-    let capture = ToolResultMetadata::new(&oversized);
-    assert!(capture.is_some());
-    call.set_tool_result_metadata(capture);
-    let wire = serde_json::to_value(&call)?;
-    assert_eq!(
-        wire,
-        serde_json::json!({
-            "name": "test_tool",
-            "arguments": {},
-            "tool_result_metadata": "omitted_due_to_size_limit",
-        })
-    );
-    assert_eq!(
-        serde_json::from_value::<ExecutedToolCall>(wire)?,
-        without_metadata
-    );
-
-    let resource_access = serde_json::json!({
-        "schema_version": 1,
-        "resource_coverage": "incomplete",
-        "resources": [{ "id": "not-for-debug" }],
-        "reasons": ["tool_error"],
-    });
-    let oversized = serde_json::json!({
-        "openai/resource_access": resource_access,
-        "other": "x".repeat(MAX_TOOL_RESULT_METADATA_BYTES),
-    });
-    call.set_tool_result_metadata(ToolResultMetadata::new(&oversized));
-    let wire = serde_json::to_value(&call)?;
-    assert_eq!(
-        wire["tool_result_metadata"],
-        serde_json::json!({ "openai/resource_access": resource_access }),
-    );
-    assert!(!format!("{call:?}").contains("not-for-debug"));
-    assert_eq!(
-        serde_json::from_value::<ExecutedToolCall>(wire)?,
-        without_metadata
-    );
-    // Do not trim resource lists while preserving a provider's coverage claim.
-    let oversized_resources = serde_json::json!({
-        "openai/resource_access": {
-            "resource_coverage": "complete",
-            "resources": ["x".repeat(MAX_TOOL_RESULT_METADATA_BYTES)],
-        },
-    });
-    assert_eq!(
-        ToolResultMetadata::new(&oversized_resources),
-        ToolResultMetadata::omitted_due_to_size_limit(),
-    );
     Ok(())
 }
 
 #[test]
+fn wire_budget_helpers_preserve_resource_evidence_markers_and_small_values() {
+    let resource_only = serde_json::json!({
+        "openai/resource_access": { "resource_coverage": "complete", "resources": [] },
+    });
+    let mut item = output("exec");
+    assert!(!item.has_tool_result_metadata());
+    item.append_executed_tool_calls(
+        [
+            ToolResultMetadata::new(&serde_json::json!({
+                "openai/resource_access": resource_only["openai/resource_access"],
+                "payload": "x".repeat(512),
+            })),
+            ToolResultMetadata::new(&serde_json::json!({
+                "omitted_due_to_size_limit": { "overage_bytes": 1 },
+                "payload": "x".repeat(512),
+            })),
+            ToolResultMetadata::new(&serde_json::json!({})),
+            ToolResultMetadata::new(&serde_json::json!("omitted_due_to_size_limit")),
+            ToolResultMetadata::omitted_due_to_size_limit(/*overage_bytes*/ 123_456),
+            ToolResultMetadata::default(),
+        ]
+        .into_iter()
+        .map(|metadata| {
+            let mut call = ExecutedToolCall::new("test_tool".to_string(), serde_json::json!({}));
+            call.set_tool_result_metadata(metadata);
+            call.set_tool_result_sources(ToolResultSources::parse_failed());
+            call
+        })
+        .collect(),
+    );
+    item.set_tool_call_cell_id("exec");
+    item.mark_tool_calls_complete();
+    assert!(item.has_tool_result_metadata());
+    let mut expected = item.clone();
+    let calls = expected
+        .ensure_tool_call_metadata()
+        .unwrap()
+        .executed_tool_calls
+        .as_mut()
+        .unwrap();
+    calls[0].set_tool_result_metadata(ToolResultMetadata::new(&resource_only));
+    calls[1].set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit(
+        /*overage_bytes*/ 77,
+    ));
+    item.retain_tool_resource_access_or_omit_metadata(/*overage_bytes*/ 77);
+    assert_eq!(item, expected);
+    item.retain_tool_resource_access_or_omit_metadata(/*overage_bytes*/ 1_234);
+    assert_eq!(item, expected);
+
+    first_executed_tool_call(&mut expected)
+        .unwrap()
+        .set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit(
+            /*overage_bytes*/ 1,
+        ));
+    item.omit_tool_result_metadata(/*overage_bytes*/ 1);
+    assert_eq!(item, expected);
+    item.omit_tool_result_metadata(/*overage_bytes*/ 99_999);
+    assert_eq!(item, expected);
+    item.clear_tool_result_metadata();
+    assert!(!item.has_tool_result_metadata());
+}
+
+#[test]
 fn raw_result_metadata_is_shed_before_sources_calls_or_completion() -> Result<()> {
-    let mut call = ExecutedToolCall::new("test_tool".to_string(), serde_json::json!({}));
+    // Keep each result below its capture limit while filling the larger request budget.
+    let name = format!(
+        "test_tool{}",
+        "x".repeat(MAX_EXECUTED_TOOL_CALL_METADATA_BYTES / 8 - 16 * 1024)
+    );
+    let mut call = ExecutedToolCall::new(name, serde_json::json!({}));
     call.set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
         r#type: "test_resource".to_string(),
         id: "R1".to_string(),
@@ -633,17 +661,17 @@ fn raw_result_metadata_is_shed_before_sources_calls_or_completion() -> Result<()
             .unwrap()
             .set_tool_result_metadata(metadata.clone());
     }
+    let original_bytes = items
+        .iter()
+        .map(executed_tool_call_metadata_bytes)
+        .sum::<usize>();
     let mut expected = items.clone();
     first_executed_tool_call(&mut expected[0])
         .unwrap()
-        .set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit());
-    assert!(
-        items
-            .iter()
-            .map(executed_tool_call_metadata_bytes)
-            .sum::<usize>()
-            > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES
-    );
+        .set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit(
+            original_bytes - MAX_EXECUTED_TOOL_CALL_METADATA_BYTES,
+        ));
+    assert!(original_bytes > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
     for bound in [
         bound_executed_tool_calls_for_prompt,
         bound_executed_tool_calls_for_prompt_prioritizing_recent,
@@ -677,7 +705,7 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
                 serde_json::json!({ "value": "é".repeat(10_000) }),
             ],
             1,
-            ToolResultMetadata::omitted_due_to_size_limit(),
+            None,
         ),
         (
             [
@@ -686,7 +714,7 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
                 serde_json::json!({ "value": "\0".repeat(4_500) }),
             ],
             2,
-            ToolResultMetadata::omitted_due_to_size_limit(),
+            None,
         ),
         (
             [
@@ -698,7 +726,7 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
                 }),
             ],
             2,
-            ToolResultMetadata::new(&resource_only),
+            Some(ToolResultMetadata::new(&resource_only)),
         ),
     ] {
         let mut metadata = metadata.to_vec();
@@ -706,6 +734,7 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
             serde_json::json!({ "padding": "x".repeat(17_000) });
             6
         ]);
+        let name_padding = (MAX_EXECUTED_TOOL_CALL_METADATA_BYTES - 128 * 1024) / metadata.len();
         let mut item = output("exec");
         item.append_executed_tool_calls(
             metadata
@@ -713,7 +742,7 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
                 .enumerate()
                 .map(|(index, metadata)| {
                     let mut call = ExecutedToolCall::new(
-                        format!("tool_{index}"),
+                        format!("tool_{index}{}", "x".repeat(name_padding)),
                         serde_json::json!({ "argument": index }),
                     );
                     call.set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
@@ -728,6 +757,11 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
         item.set_tool_call_cell_id("exec");
         item.mark_tool_calls_complete();
         assert!(executed_tool_call_metadata_bytes(&item) > MAX_EXECUTED_TOOL_CALL_METADATA_BYTES);
+        let replacement = replacement.unwrap_or_else(|| {
+            ToolResultMetadata::omitted_due_to_size_limit(
+                executed_tool_call_metadata_bytes(&item) - MAX_EXECUTED_TOOL_CALL_METADATA_BYTES,
+            )
+        });
         let mut expected = item.clone();
         expected
             .ensure_tool_call_metadata()
@@ -762,7 +796,7 @@ fn result_metadata_shedding_removes_only_markers_needed_to_fit() {
         id: "R1".to_string(),
     }]));
     let mut calls = vec![call; 20];
-    let omitted = ToolResultMetadata::omitted_due_to_size_limit();
+    let omitted = ToolResultMetadata::omitted_due_to_size_limit(/*overage_bytes*/ 1);
     let marker_bytes = serde_json::to_vec(&omitted).unwrap().len();
     // A real object tied with a marker must survive even though it is older.
     let equal_sized = ToolResultMetadata::new(&serde_json::json!({
@@ -790,9 +824,10 @@ fn result_metadata_shedding_removes_only_markers_needed_to_fit() {
         .unwrap();
     let call_count = calls.len();
     for (index, call) in calls.iter_mut().enumerate() {
-        call.arguments = ExecutedToolCallArguments::Raw(serde_json::json!("x".repeat(
-            remaining_bytes / call_count + usize::from(index < remaining_bytes % call_count)
-        )));
+        // Pad names so the per-argument limit cannot preempt result-metadata shedding.
+        call.name.push_str(&"x".repeat(
+            remaining_bytes / call_count + usize::from(index < remaining_bytes % call_count),
+        ));
     }
     assert_eq!(
         executed_tool_call_metadata_bytes(&item),
@@ -806,8 +841,9 @@ fn result_metadata_shedding_removes_only_markers_needed_to_fit() {
         .as_mut()
         .unwrap()[1]
         .set_tool_result_metadata(ToolResultMetadata::default());
-    // First downgrade the larger, newer result, then remove the older marker. The
-    // removal order must use the updated sizes rather than the original raw size.
+    let tied_markers = item.clone();
+    // The new marker has a larger overage value and therefore more bytes. Remove
+    // that marker first, while tied smaller markers still precede provider data.
     item.ensure_tool_call_metadata()
         .unwrap()
         .executed_tool_calls
@@ -816,18 +852,29 @@ fn result_metadata_shedding_removes_only_markers_needed_to_fit() {
         .set_tool_result_metadata(ToolResultMetadata::new(&serde_json::json!({
             "large": "x".repeat(4 * 1024),
         })));
-    for bound in [
-        bound_executed_tool_calls_for_prompt,
-        bound_executed_tool_calls_for_prompt_prioritizing_recent,
-    ] {
-        let mut bounded = item.clone();
-        bound(std::slice::from_mut(&mut bounded));
-        assert_eq!(bounded, expected);
-        assert!(
-            executed_tool_call_metadata_bytes(&bounded) <= MAX_EXECUTED_TOOL_CALL_METADATA_BYTES
-        );
-        bound(std::slice::from_mut(&mut bounded));
-        assert_eq!(bounded, expected);
+    let mut larger_marker_expected = item.clone();
+    larger_marker_expected
+        .ensure_tool_call_metadata()
+        .unwrap()
+        .executed_tool_calls
+        .as_mut()
+        .unwrap()[3]
+        .set_tool_result_metadata(ToolResultMetadata::default());
+    for (item, expected) in [(tied_markers, expected), (item, larger_marker_expected)] {
+        for bound in [
+            bound_executed_tool_calls_for_prompt,
+            bound_executed_tool_calls_for_prompt_prioritizing_recent,
+        ] {
+            let mut bounded = item.clone();
+            bound(std::slice::from_mut(&mut bounded));
+            assert_eq!(bounded, expected);
+            assert!(
+                executed_tool_call_metadata_bytes(&bounded)
+                    <= MAX_EXECUTED_TOOL_CALL_METADATA_BYTES
+            );
+            bound(std::slice::from_mut(&mut bounded));
+            assert_eq!(bounded, expected);
+        }
     }
 }
 
@@ -855,10 +902,10 @@ fn result_metadata_markers_do_not_displace_existing_evidence() {
         .unwrap();
     let call_count = calls.len();
     for (index, call) in calls.iter_mut().enumerate() {
-        // Fill the budget exactly, with every argument still below its individual limit.
-        call.arguments = ExecutedToolCallArguments::Raw(serde_json::json!("x".repeat(
-            remaining_bytes / call_count + usize::from(index < remaining_bytes % call_count)
-        )));
+        // Fill the budget exactly without increasing arguments past their individual limit.
+        call.name.push_str(&"x".repeat(
+            remaining_bytes / call_count + usize::from(index < remaining_bytes % call_count),
+        ));
     }
     assert_eq!(
         executed_tool_call_metadata_bytes(&item),

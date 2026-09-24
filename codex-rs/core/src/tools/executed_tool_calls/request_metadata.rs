@@ -48,7 +48,12 @@ impl ExecutedToolCalls {
             return;
         };
         if attached || items.iter().any(has_direct_call_metadata) {
-            bound_executed_tool_calls_for_prompt(items);
+            metadata_metrics::bound_prompt_metadata(
+                items,
+                bound_executed_tool_calls_for_prompt,
+                "request",
+                codex_otel::global().as_ref(),
+            );
         }
     }
 
@@ -292,7 +297,12 @@ impl ExecutedToolCalls {
         if metadata_bytes > MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT {
             match budget_scope {
                 MetadataBudgetScope::AllCalls => {
-                    bound_executed_tool_calls_for_prompt_prioritizing_recent(items);
+                    metadata_metrics::bound_prompt_metadata(
+                        items,
+                        bound_executed_tool_calls_for_prompt_prioritizing_recent,
+                        "retained",
+                        codex_otel::global().as_ref(),
+                    );
                 }
                 MetadataBudgetScope::CodeModeOnly => {
                     // Validate bindings against the complete history above, but do not make
@@ -306,7 +316,12 @@ impl ExecutedToolCalls {
                         })
                         .map(|(index, item)| (index, item.clone()))
                         .unzip();
-                    bound_executed_tool_calls_for_prompt_prioritizing_recent(&mut bounded);
+                    metadata_metrics::bound_prompt_metadata(
+                        &mut bounded,
+                        bound_executed_tool_calls_for_prompt_prioritizing_recent,
+                        "compaction",
+                        codex_otel::global().as_ref(),
+                    );
                     for (index, item) in indices.into_iter().zip(bounded) {
                         items[index] = item;
                     }

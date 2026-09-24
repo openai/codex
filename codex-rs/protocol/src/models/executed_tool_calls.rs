@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 
 use schemars::JsonSchema;
@@ -15,9 +14,7 @@ const MAX_TOOL_RESULT_SOURCES: usize = 32;
 /// Maximum UTF-8 bytes for each source's `type` and `id` separately, not the source list.
 pub const MAX_TOOL_RESULT_SOURCE_FIELD_BYTES: usize = 128;
 /// Maximum serialized warehouse-only attempted-tool metadata in one request.
-const MAX_EXECUTED_TOOL_CALL_METADATA_BYTES: usize = 128 * 1024;
-/// Maximum serialized raw metadata captured from one tool result.
-const MAX_TOOL_RESULT_METADATA_BYTES: usize = 32 * 1024;
+const MAX_EXECUTED_TOOL_CALL_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const RESOURCE_ACCESS_METADATA_KEY: &str = "openai/resource_access";
 const EXECUTED_TOOL_CALL_METADATA_FIELD_BYTES: usize = b"\"executed_tool_calls\":".len();
 const INTERNAL_CHAT_MESSAGE_METADATA_PASSTHROUGH_FIELD_BYTES: usize =
@@ -135,8 +132,6 @@ fn bound_executed_tool_calls_for_prompt_with_priority(
     }
     // Raw result metadata must not displace existing source evidence, calls or completion proof.
     // Shed the largest values first so one large result does not discard unrelated small results.
-    let omitted = ToolResultMetadata::omitted_due_to_size_limit();
-    let omitted_bytes = serde_json::to_vec(&omitted).map_or(usize::MAX, |value| value.len());
     let mut result_metadata = Vec::new();
     for (item_index, item) in items.iter_mut().enumerate() {
         if let Some(metadata) = item
@@ -182,10 +177,13 @@ fn bound_executed_tool_calls_for_prompt_with_priority(
             total_metadata_bytes =
                 total_metadata_bytes.saturating_sub(bytes.saturating_sub(retained_bytes));
             *bytes = retained_bytes;
-        } else if *bytes > omitted_bytes {
-            **metadata = omitted.clone();
-            total_metadata_bytes = total_metadata_bytes.saturating_sub(*bytes - omitted_bytes);
-            *bytes = omitted_bytes;
+        } else {
+            let retained_bytes = metadata.omit_if_smaller(
+                *bytes,
+                total_metadata_bytes - MAX_EXECUTED_TOOL_CALL_METADATA_BYTES,
+            );
+            total_metadata_bytes = total_metadata_bytes.saturating_sub(*bytes - retained_bytes);
+            *bytes = retained_bytes;
         }
     }
     // Resource evidence is optional too; it must not displace the call inventory.
@@ -197,17 +195,18 @@ fn bound_executed_tool_calls_for_prompt_with_priority(
             break;
         }
         // An omission marker can be larger than a small object, including an empty `_meta`.
-        if *bytes > omitted_bytes {
-            **metadata = omitted.clone();
-            total_metadata_bytes = total_metadata_bytes.saturating_sub(*bytes - omitted_bytes);
-            *bytes = omitted_bytes;
-        }
+        let retained_bytes = metadata.omit_if_smaller(
+            *bytes,
+            total_metadata_bytes - MAX_EXECUTED_TOOL_CALL_METADATA_BYTES,
+        );
+        total_metadata_bytes = total_metadata_bytes.saturating_sub(*bytes - retained_bytes);
+        *bytes = retained_bytes;
     }
     // Use the updated sizes: markers should be removed before smaller provider metadata.
     result_metadata.sort_by_key(|(bytes, order, call_index, metadata)| {
         (
             std::cmp::Reverse(*bytes),
-            metadata.0 != omitted.0,
+            !metadata.is_omitted_due_to_size_limit(),
             *order,
             *call_index,
         )
@@ -340,23 +339,9 @@ impl std::fmt::Debug for ToolResultMetadata {
 }
 
 impl ToolResultMetadata {
-    /// Bounds serialization before cloning, retaining resource evidence if the full result is too large.
+    /// Captures the complete result; retention and outgoing-request budgets apply later.
     pub fn new(metadata: &serde_json::Value) -> Self {
-        let mut limit = MetadataSizeLimit(MAX_TOOL_RESULT_METADATA_BYTES);
-        if serde_json::to_writer(&mut limit, metadata).is_ok() {
-            return Self(Some(metadata.clone()));
-        }
-        if let Some(resource_access) = metadata.get(RESOURCE_ACCESS_METADATA_KEY) {
-            let resource_metadata =
-                BTreeMap::from([(RESOURCE_ACCESS_METADATA_KEY, resource_access)]);
-            let mut limit = MetadataSizeLimit(MAX_TOOL_RESULT_METADATA_BYTES);
-            if serde_json::to_writer(&mut limit, &resource_metadata).is_ok() {
-                return Self(Some(serde_json::json!({
-                    (RESOURCE_ACCESS_METADATA_KEY): resource_access,
-                })));
-            }
-        }
-        Self::omitted_due_to_size_limit()
+        Self(Some(metadata.clone()))
     }
 
     /// Leaves generic metadata unchanged when it has no resource-access field.
@@ -371,36 +356,45 @@ impl ToolResultMetadata {
         true
     }
 
-    fn omitted_due_to_size_limit() -> Self {
+    fn omitted_due_to_size_limit(overage_bytes: usize) -> Self {
         // MCP `_meta` is an object; this string is a harness omission status, not provider data.
-        Self(Some(serde_json::Value::String(
-            "omitted_due_to_size_limit".to_string(),
-        )))
+        Self(Some(serde_json::Value::String(format!(
+            "omitted_due_to_size_limit (overage_bytes={overage_bytes})"
+        ))))
+    }
+
+    fn is_omitted_due_to_size_limit(&self) -> bool {
+        let Some(serde_json::Value::String(value)) = self.0.as_ref() else {
+            return false;
+        };
+        value == "omitted_due_to_size_limit"
+            || value
+                .strip_prefix("omitted_due_to_size_limit (overage_bytes=")
+                .and_then(|value| value.strip_suffix(')'))
+                .is_some_and(|value| value.parse::<usize>().is_ok())
+    }
+
+    fn omit_if_smaller(&mut self, original_bytes: usize, overage_bytes: usize) -> usize {
+        if self.is_none() || self.is_omitted_due_to_size_limit() {
+            return original_bytes;
+        }
+        let omitted = Self::omitted_due_to_size_limit(overage_bytes);
+        let omitted_bytes = serde_json::to_vec(&omitted).map_or(usize::MAX, |value| value.len());
+        if omitted_bytes < original_bytes {
+            *self = omitted;
+            omitted_bytes
+        } else {
+            original_bytes
+        }
     }
 
     fn is_none(&self) -> bool {
         self.0.is_none()
     }
 
-    /// Whether the bounded snapshot contains metadata or an omission marker.
+    /// Whether the captured snapshot contains metadata or an omission marker.
     pub fn is_some(&self) -> bool {
         self.0.is_some()
-    }
-}
-
-struct MetadataSizeLimit(usize);
-
-impl std::io::Write for MetadataSizeLimit {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0 = self
-            .0
-            .checked_sub(bytes.len())
-            .ok_or_else(|| std::io::Error::other("tool result metadata exceeds the byte limit"))?;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 
@@ -494,7 +488,7 @@ impl ExecutedToolCall {
         self.tool_result_sources.is_some()
     }
 
-    /// Replaces the entire `_meta` snapshot, including with an omission marker if oversized.
+    /// Replaces the entire captured `_meta` snapshot.
     pub fn set_tool_result_metadata(&mut self, metadata: ToolResultMetadata) {
         self.tool_result_metadata = metadata;
     }
@@ -614,6 +608,17 @@ impl ResponseItem {
         result_metadata(self).eq(result_metadata(other))
     }
 
+    /// Whether an output carries raw result metadata or a harness omission marker.
+    pub fn has_tool_result_metadata(&self) -> bool {
+        self.executed_tool_call_metadata().is_some_and(|metadata| {
+            metadata
+                .executed_tool_calls
+                .iter()
+                .flatten()
+                .any(|call| call.tool_result_metadata.is_some())
+        })
+    }
+
     /// Omits raw tool results without changing existing call, source or completion metadata.
     pub fn clear_tool_result_metadata(&mut self) {
         if let Some(metadata) = self
@@ -622,6 +627,36 @@ impl ResponseItem {
         {
             for call in metadata.executed_tool_calls.iter_mut().flatten() {
                 call.tool_result_metadata = ToolResultMetadata::default();
+            }
+        }
+    }
+
+    /// Marks larger raw results with the full request's overage, preserving existing markers.
+    pub fn omit_tool_result_metadata(&mut self, overage_bytes: usize) {
+        if let Some(metadata) = self
+            .internal_chat_message_metadata_passthrough_mut()
+            .and_then(Option::as_mut)
+        {
+            for call in metadata.executed_tool_calls.iter_mut().flatten() {
+                let result = &mut call.tool_result_metadata;
+                let bytes = serde_json::to_vec(result).map_or(usize::MAX, |value| value.len());
+                result.omit_if_smaller(bytes, overage_bytes);
+            }
+        }
+    }
+
+    /// Preserves complete resource evidence, marking other large results with request overage.
+    pub fn retain_tool_resource_access_or_omit_metadata(&mut self, overage_bytes: usize) {
+        if let Some(metadata) = self
+            .internal_chat_message_metadata_passthrough_mut()
+            .and_then(Option::as_mut)
+        {
+            for call in metadata.executed_tool_calls.iter_mut().flatten() {
+                let result = &mut call.tool_result_metadata;
+                if !result.retain_resource_access() {
+                    let bytes = serde_json::to_vec(result).map_or(usize::MAX, |value| value.len());
+                    result.omit_if_smaller(bytes, overage_bytes);
+                }
             }
         }
     }
