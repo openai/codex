@@ -100,6 +100,7 @@ pub struct SessionTelemetryMetadata {
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
     pub(crate) originator: String,
+    pub(crate) product_sku: Option<&'static str>,
     pub(crate) service_name: Option<String>,
     pub(crate) session_source: String,
     pub(crate) model: String,
@@ -148,6 +149,16 @@ impl SessionTelemetry {
 
     pub fn with_metrics_service_name(mut self, service_name: &str) -> Self {
         self.metadata.service_name = Some(sanitize_metric_tag_value(service_name));
+        self
+    }
+
+    /// Attributes tool telemetry without turning arbitrary configuration into metric labels.
+    pub fn with_product_sku(mut self, product_sku: Option<&str>) -> Self {
+        self.metadata.product_sku = match product_sku {
+            None | Some("") => None,
+            Some("codex") => Some("codex"),
+            Some(_) => Some("other"),
+        };
         self
     }
 
@@ -522,6 +533,7 @@ impl SessionTelemetry {
                 account_id,
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
+                product_sku: None,
                 service_name: None,
                 session_source: session_source.to_string(),
                 model: model.to_owned(),
@@ -1210,10 +1222,13 @@ impl SessionTelemetry {
     ) {
         let flat_tool_name = tool_name.to_string();
         let success_str = if success { "true" } else { "false" };
-        let mut tags = Vec::with_capacity(2 + extra_tags.len());
+        let mut tags = Vec::with_capacity(3 + extra_tags.len());
         tags.push(("tool", flat_tool_name.as_str()));
         tags.push(("success", success_str));
         tags.extend_from_slice(extra_tags);
+        if let Some(product_sku) = self.metadata.product_sku {
+            tags.push(("product_sku", product_sku));
+        }
         self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         let mcp_server = trace_field_value(extra_trace_fields, "mcp_server").unwrap_or("");

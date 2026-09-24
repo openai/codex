@@ -59,6 +59,7 @@ pub(crate) fn emit_tool_result(
             tool_name = %tool_name.name,
             tool_namespace = %tool_namespace,
             call_id = %call_id,
+            product_sku = telemetry.metadata.product_sku,
             duration_ms = %duration.as_millis(),
             success = %success,
             output_truncated = preview.truncated,
