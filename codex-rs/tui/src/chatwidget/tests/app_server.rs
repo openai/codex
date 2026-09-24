@@ -2013,3 +2013,28 @@ async fn permission_discovery_invalidates_on_thread_settings_and_uses_updated_cw
     };
     assert_eq!(thread_cwd, Some(test_path_buf("/tmp/thread-settings")));
 }
+
+#[tokio::test]
+async fn sqlite_log_write_warning_is_visible_in_warnings() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.warning_display_state.startup_complete = true;
+    chat.handle_server_notification(
+        ServerNotification::Warning(WarningNotification {
+            thread_id: None,
+            message: "Codex couldn't save diagnostic logs to its local database. Use /feedback with logs included before closing Codex, or run `codex doctor` for diagnostics.".to_string(),
+        }),
+        /*replay_kind*/ None,
+    );
+    let cells: Vec<Arc<dyn HistoryCell>> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => Some(Arc::from(cell)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cells.len(), 1);
+    chat.open_warnings(&cells);
+    insta::assert_snapshot!(
+        "sqlite_log_write_warning",
+        super::helpers::render_bottom_popup(&chat, /*width*/ 80)
+    );
+}

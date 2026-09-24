@@ -750,6 +750,14 @@ impl OutgoingMessageSender {
             .await;
     }
 
+    pub(crate) fn try_send_server_notification(&self, notification: ServerNotification) {
+        if let Err(error) = self.sender.try_send(OutgoingEnvelope::Broadcast {
+            message: timestamped_server_notification(notification),
+        }) {
+            warn!("failed to queue server notification to clients: {error}");
+        }
+    }
+
     pub(crate) async fn send_server_notification_to_connections(
         &self,
         connection_ids: &[ConnectionId],

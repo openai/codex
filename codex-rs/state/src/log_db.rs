@@ -24,6 +24,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -136,6 +137,7 @@ pub trait LogWriteFailureReporter: Send + Sync {
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogDbCommand>,
     has_write_failure: Arc<AtomicBool>,
+    failure_reporter: Arc<RwLock<Arc<dyn LogWriteFailureReporter>>>,
     process_uuid: String,
 }
 
@@ -152,6 +154,7 @@ impl Clone for LogDbLayer {
         Self {
             sender: self.sender.clone(),
             has_write_failure: self.has_write_failure.clone(),
+            failure_reporter: self.failure_reporter.clone(),
             process_uuid: self.process_uuid.clone(),
         }
     }
@@ -173,18 +176,28 @@ impl LogDbLayer {
         let config = config.normalized();
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
         let has_write_failure = Arc::new(AtomicBool::new(false));
+        let failure_reporter = Arc::new(RwLock::new(failure_reporter));
         tokio::spawn(run_inserter(
             state_db,
             receiver,
             config,
-            failure_reporter,
+            failure_reporter.clone(),
             has_write_failure.clone(),
         ));
         Self {
             sender,
             has_write_failure,
+            failure_reporter,
             process_uuid: current_process_log_uuid().to_string(),
         }
+    }
+
+    /// Replaces the startup reporter once the client notification destination is available.
+    pub fn set_failure_reporter(&self, reporter: Arc<dyn LogWriteFailureReporter>) {
+        *self
+            .failure_reporter
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = reporter;
     }
 
     /// Whether this writer has lost logs, making SQLite incomplete for feedback.
@@ -479,7 +492,7 @@ async fn run_inserter(
     state_db: std::sync::Arc<StateRuntime>,
     mut receiver: mpsc::Receiver<LogDbCommand>,
     config: LogSinkQueueConfig,
-    failure_reporter: Arc<dyn LogWriteFailureReporter>,
+    failure_reporter: Arc<RwLock<Arc<dyn LogWriteFailureReporter>>>,
     has_write_failure: Arc<AtomicBool>,
 ) {
     let mut buffer = Vec::with_capacity(config.batch_size);
@@ -516,7 +529,7 @@ async fn run_inserter(
 async fn flush(
     state_db: &StateRuntime,
     buffer: &mut Vec<LogEntry>,
-    failure_reporter: &dyn LogWriteFailureReporter,
+    failure_reporter: &RwLock<Arc<dyn LogWriteFailureReporter>>,
     has_write_failure: &AtomicBool,
 ) {
     if buffer.is_empty() {
@@ -534,10 +547,10 @@ async fn flush(
         let timestamp =
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, /*use_z*/ true);
         let entry_count = entries.len();
-        failure_reporter.report_failure(&format!(
+        has_write_failure.store(true, Ordering::Relaxed);
+        failure_reporter.read().unwrap_or_else(std::sync::PoisonError::into_inner).report_failure(&format!(
             "{timestamp} ERROR failed to flush logs to SQLite error={error:?} entries={entry_count}\n"
         ));
-        has_write_failure.store(true, Ordering::Relaxed);
     }
 
     crate::telemetry::record_log_write(
@@ -896,6 +909,7 @@ mod tests {
         let layer = LogDbLayer {
             sender,
             has_write_failure: Arc::new(AtomicBool::new(false)),
+            failure_reporter: Arc::new(RwLock::new(Arc::new(SharedWriter::default()))),
             process_uuid: "process-1".to_string(),
         };
 
@@ -917,6 +931,7 @@ mod tests {
         let layer = LogDbLayer {
             sender,
             has_write_failure: Arc::new(AtomicBool::new(false)),
+            failure_reporter: Arc::new(RwLock::new(Arc::new(SharedWriter::default()))),
             process_uuid: "process-1".to_string(),
         };
 

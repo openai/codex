@@ -218,6 +218,20 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
         app_server
             .send_notification(ClientNotification::Initialized)
             .await?;
+        // The periodic writer must notify the user before they choose to submit feedback.
+        if phase == Phase::WriteFailure {
+            let notification = timeout(
+                Duration::from_secs(/*secs*/ 20),
+                app_server.read_stream_until_notification_message("warning"),
+            )
+            .await??;
+            let warning: codex_app_server_protocol::WarningNotification =
+                serde_json::from_value(notification.params.unwrap())?;
+            assert_eq!(warning, codex_app_server_protocol::WarningNotification {
+                thread_id: None,
+                message: "Codex couldn't save diagnostic logs to its local database. Use /feedback with logs included before closing Codex, or run `codex doctor` for diagnostics.".to_string(),
+            });
+        }
         let request = app_server
             .send_raw_request(
                 "feedback/upload",
@@ -256,6 +270,12 @@ async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()
         }
         let logs = &attachments["codex-logs.log"];
         if phase == Phase::Corrupt {
+            assert!(
+                !app_server
+                    .pending_notification_methods()
+                    .iter()
+                    .any(|method| method == "warning")
+            );
             assert!(logs.contains("failed to flush logs to SQLite error=\"corrupt\""));
             assert!(logs.contains("failed to query feedback logs from sqlite"));
         } else {

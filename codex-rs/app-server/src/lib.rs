@@ -120,6 +120,7 @@ mod fuzzy_file_search;
 mod gateway_oauth_notifications;
 mod image_url;
 pub mod in_process;
+mod log_write_warning;
 mod mcp_refresh;
 mod message_processor;
 mod model_catalog;
@@ -691,6 +692,12 @@ pub async fn run_main_with_transport_options(
         });
     }
 
+    let analytics_events_client =
+        analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+    let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
+        outgoing_tx,
+        analytics_events_client.clone(),
+    ));
     let feedback = CodexFeedback::new();
 
     // Install a simple subscriber so `tracing` output is visible. Users can
@@ -710,11 +717,16 @@ pub async fn run_main_with_transport_options(
             .boxed(),
     };
 
+    let log_write_warning = log_write_warning::LogWriteWarningReporter::new(
+        feedback.clone(),
+        &outgoing_message_sender,
+        &config,
+    );
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
     let log_db = state_db
         .clone()
-        .map(|state_db| log_db::start(state_db, std::sync::Arc::new(feedback.clone())));
+        .map(|state_db| log_db::start(state_db, log_write_warning.clone()));
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(log_db::default_filter()));
@@ -947,12 +959,6 @@ pub async fn run_main_with_transport_options(
     let recovery_file = daemon_recovery_file_path(&config.codex_home);
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            analytics_events_client.clone(),
-        ));
         let initialize_notification_sender = outgoing_message_sender.clone();
         let outbound_control_tx = outbound_control_tx;
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {

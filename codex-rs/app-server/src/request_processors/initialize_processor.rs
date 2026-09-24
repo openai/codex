@@ -31,6 +31,7 @@ pub(crate) struct InitializeRequestProcessor {
 }
 
 impl InitializeRequestProcessor {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         gateway_login_control: Arc<codex_login::GatewayLoginControl>,
         outgoing: Arc<OutgoingMessageSender>,
