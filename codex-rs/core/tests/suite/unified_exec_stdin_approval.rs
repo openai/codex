@@ -49,7 +49,6 @@ fn tool_response(id: &str, tool: &str, args: Value) -> String {
 async fn harness(builder: TestCodexBuilder) -> Result<TestCodexHarness> {
     TestCodexHarness::with_auto_env_builder(builder.with_config(|config| {
         for feature in [
-            Feature::WriteStdinApproval,
             Feature::ExecPermissionApprovals,
             Feature::RequestPermissionsTool,
         ] {

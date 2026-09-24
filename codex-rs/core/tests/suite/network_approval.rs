@@ -19,6 +19,7 @@ use codex_history::RolloutItem;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_protocol::approvals::ExecApprovalKind;
+use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
@@ -790,6 +791,15 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
             ),
             ev_completed("resp-cross-turn-network-stdin"),
         ]),
+        // Strict review approves terminal input before the process can request network access.
+        sse(vec![
+            ev_response_created("resp-cross-turn-stdin-guardian"),
+            ev_assistant_message(
+                "msg-cross-turn-stdin-guardian",
+                r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"Continue the existing terminal."}"#,
+            ),
+            ev_completed("resp-cross-turn-stdin-guardian"),
+        ]),
         sse(vec![
             ev_response_created("resp-network-guardian-environment"),
             ev_function_call(
@@ -920,6 +930,7 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
             event,
             EventMsg::GuardianAssessment(assessment)
                 if assessment.status == GuardianAssessmentStatus::Approved
+                    && matches!(assessment.action, GuardianAssessmentAction::NetworkAccess { .. })
         ) || matches!(
             event,
             EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
@@ -954,7 +965,7 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
         .iter()
         .filter(|request| request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian")
         .collect::<Vec<_>>();
-    assert_eq!(reviews.len(), 2);
+    assert_eq!(reviews.len(), 3);
     for review in &reviews {
         assert_eq!(review.body_json()["model"], "guardian-parent-b");
         assert_eq!(review.body_json()["reasoning"]["effort"], "medium");
@@ -975,7 +986,7 @@ async fn background_network_approval_uses_current_review_settings_and_original_e
     )?;
     // Strict review does not change this field's policy-routing meaning.
     assert_eq!(metadata["auto_review_enabled"], false);
-    let pwd_output = reviews[1]
+    let pwd_output = reviews[2]
         .function_call_output_text("guardian-pwd")
         .context("Guardian pwd output")?;
     let original_cwd = test
