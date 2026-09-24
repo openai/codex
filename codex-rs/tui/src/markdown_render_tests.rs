@@ -751,15 +751,16 @@ fn inline_code_and_file_paths_follow_syntax_theme() {
         crate::terminal_palette::with_test_default_colors(colors, || {
             let styles = MarkdownStyles::for_theme(&theme);
             let code_style = styles.code;
+            let parser = pulldown_cmark::Parser::new(markdown).into_offset_iter();
             let mut writer = super::Writer::new(
                 markdown,
-                pulldown_cmark::Parser::new(markdown).into_offset_iter(),
                 /*wrap_width*/ Some(24),
                 /*cwd*/ None,
                 &|_| false,
             );
             writer.styles = styles;
-            writer.run();
+            let mut parser = parser;
+            writer.run(&mut parser);
             let lines = crate::terminal_hyperlinks::visible_lines(writer.text);
             let paths = lines
                 .iter()

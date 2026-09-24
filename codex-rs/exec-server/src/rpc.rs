@@ -653,6 +653,23 @@ impl RpcClient {
                 return Err(RpcCallError::Json(err));
             }
         };
+        let response = self
+            .send_request_and_wait(method, request_id, params, response_rx, call_timeout)
+            .await?;
+        serde_json::from_value(response).map_err(RpcCallError::Json)
+    }
+
+    // Sending and waiting are independent of P and T, so share this future
+    // across typed calls. Register and serialize in call_inner in that order:
+    // a disconnected client must still take precedence over a serialization error.
+    async fn send_request_and_wait(
+        &self,
+        method: &str,
+        request_id: RequestId,
+        params: Value,
+        response_rx: oneshot::Receiver<RpcCompletion>,
+        call_timeout: RpcCallTimeout,
+    ) -> Result<Value, RpcCallError> {
         if self
             .write_tx
             .send(JSONRPCMessage::Request(JSONRPCRequest {
@@ -695,8 +712,7 @@ impl RpcClient {
         };
         let completion = response.map_err(|_| RpcCallError::Closed)?;
         completion.record_receipt(method);
-        let response = completion.result?;
-        serde_json::from_value(response).map_err(RpcCallError::Json)
+        completion.result
     }
 
     #[cfg(test)]

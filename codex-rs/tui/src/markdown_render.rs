@@ -377,8 +377,10 @@ pub(crate) fn render_markdown_lines_with_width_cwd_and_hidden_link_destinations(
         input,
         math.events(Parser::new_ext(&math.markdown, options).into_offset_iter()),
     ));
-    let mut w = Writer::new(input, parser, width, cwd, is_hidden_link_destination);
-    w.run();
+    let mut w = Writer::new(input, width, cwd, is_hidden_link_destination);
+    // Drop the consumed parser before the rendering state, including on unwind.
+    let mut parser = parser;
+    w.run(&mut parser);
     w.text
 }
 
@@ -406,12 +408,10 @@ fn should_render_link_destination(dest_url: &str) -> bool {
 /// and an optional `TableState` for accumulating table events.  The
 /// `wrap_width` field enables width-aware line wrapping and table column
 /// allocation; when `None`, lines keep their intrinsic width.
-struct Writer<'a, 'policy, I>
-where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
-{
+/// Layout state is independent of the parser so rendering routines are compiled
+/// once; event traversal remains statically dispatched over each iterator.
+struct Writer<'a, 'policy> {
     input: &'a str,
-    iter: I,
     text: Vec<HyperlinkLine>,
     styles: MarkdownStyles,
     inline_styles: Vec<Style>,
@@ -443,20 +443,15 @@ where
     table_state: Option<TableState>,
 }
 
-impl<'a, 'policy, I> Writer<'a, 'policy, I>
-where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
-{
+impl<'a, 'policy> Writer<'a, 'policy> {
     fn new(
         input: &'a str,
-        iter: I,
         wrap_width: Option<usize>,
         cwd: Option<&Path>,
         is_hidden_link_destination: &'policy dyn Fn(&str) -> bool,
     ) -> Self {
         Self {
             input,
-            iter,
             text: Vec::new(),
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
@@ -489,17 +484,23 @@ where
         }
     }
 
-    fn run(&mut self) {
-        while let Some((ev, range)) = self.iter.next() {
-            self.handle_event(ev, range);
+    fn run<I>(&mut self, iter: &mut I)
+    where
+        I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    {
+        while let Some((ev, range)) = iter.next() {
+            self.handle_event(ev, range, iter);
         }
         self.flush_current_line();
     }
 
-    fn handle_event(&mut self, event: Event<'a>, range: Range<usize>) {
+    fn handle_event<I>(&mut self, event: Event<'a>, range: Range<usize>, iter: &mut I)
+    where
+        I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    {
         self.prepare_for_event(&event);
         match event {
-            Event::Start(tag) => self.start_tag(tag, range),
+            Event::Start(tag) => self.start_tag(tag, range, iter),
             Event::End(tag) => self.end_tag(tag, range),
             Event::Text(text) => {
                 if self.in_code_block {
@@ -551,7 +552,10 @@ where
         self.push_line(Line::default());
     }
 
-    fn start_tag(&mut self, tag: Tag<'a>, range: Range<usize>) {
+    fn start_tag<I>(&mut self, tag: Tag<'a>, range: Range<usize>, iter: &mut I)
+    where
+        I: Iterator<Item = (Event<'a>, Range<usize>)>,
+    {
         match tag {
             Tag::Paragraph => self.start_paragraph(),
             Tag::Heading { level, .. } => self.start_heading(level),
@@ -571,7 +575,7 @@ where
             Tag::List(start) => self.start_list(start),
             Tag::Item => {
                 self.start_item();
-                if let Some((next, next_range)) = self.iter.next() {
+                if let Some((next, next_range)) = iter.next() {
                     // Recover markers consumed without an event before block content or empty items.
                     let content_start = if matches!(next, Event::End(TagEnd::Item)) {
                         range.end
@@ -599,7 +603,7 @@ where
                             self.push_line(Line::default());
                         }
                     }
-                    self.handle_event(next, next_range);
+                    self.handle_event(next, next_range, iter);
                 }
             }
             Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
@@ -2494,7 +2498,6 @@ mod tests {
 
         let writer = W::new(
             "",
-            std::iter::empty(),
             /*wrap_width*/ Some(80),
             /*cwd*/ None,
             &never_hide_link_destination,
@@ -2520,7 +2523,7 @@ mod tests {
     // ---------------------------------------------------------------
     // Type alias for calling private associated functions on Writer.
     // ---------------------------------------------------------------
-    type W<'a> = Writer<'a, 'a, std::iter::Empty<(Event<'a>, Range<usize>)>>;
+    type W<'a> = Writer<'a, 'a>;
 
     /// Build a single-line `TableCell` from plain text.
     fn make_cell(text: &str) -> TableCell {

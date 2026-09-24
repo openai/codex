@@ -2,14 +2,9 @@
 //! Keep the hanging indent aligned with the task text, including in loose lists.
 
 use super::Writer;
-use pulldown_cmark::Event;
 use ratatui::text::Span;
-use std::ops::Range;
 
-impl<'a, 'policy, I> Writer<'a, 'policy, I>
-where
-    I: Iterator<Item = (Event<'a>, Range<usize>)>,
-{
+impl Writer<'_, '_> {
     pub(super) fn task_list_marker(&mut self, checked: bool) {
         let Some(context) = self
             .indent_stack

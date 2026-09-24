@@ -65,14 +65,16 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         first_is_html: false,
         mutable_fence_start: None,
     };
-    let mut writer = Writer::new(input, parser, width, cwd, is_hidden_link_destination);
+    let mut writer = Writer::new(input, width, cwd, is_hidden_link_destination);
+    // Drop the consumed parser before the rendering state, including on unwind.
+    let mut parser = parser;
     writer.list_spacing = list_spacing;
-    writer.run();
+    writer.run(&mut parser);
     StreamingMarkdownRender {
         lines: writer.text,
         pending_math_start: math.pending_start,
-        last_top_level_block_start: (writer.iter.block_count > 1)
-            .then_some(writer.iter.last_start)
+        last_top_level_block_start: (parser.block_count > 1)
+            .then_some(parser.last_start)
             .filter(|start| math.pending_start.is_none_or(|pending| *start <= pending))
             .filter(|start| {
                 !math
@@ -81,8 +83,8 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
                     .any(|range| range.start < *start && *start < range.end)
             }),
         has_reference_link_definition,
-        first_top_level_block_is_html: writer.iter.first_is_html,
-        mutable_fence_start: writer.iter.mutable_fence_start,
+        first_top_level_block_is_html: parser.first_is_html,
+        mutable_fence_start: parser.mutable_fence_start,
     }
 }
 
