@@ -979,10 +979,10 @@ impl NetworkProxy {
                 config.mitm = false;
             }
         }
-        config.allow_local_binding = Some(local_binding_policy.resolve(&config));
         if let Some(policy) = environment_policy {
             policy.apply_to(&mut config);
         }
+        config.allow_local_binding = Some(local_binding_policy.resolve(&config));
         anyhow::ensure!(
             environment_policy.is_none() || config.enabled,
             "environment network policy requires an enabled executor proxy"

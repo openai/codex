@@ -16,7 +16,8 @@ pub struct EnvironmentNetworkPolicy {
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_upstream_proxy: bool,
     pub dangerously_allow_all_unix_sockets: bool,
-    pub allow_local_binding: bool,
+    /// Omission inherits local-binding policy; an explicit false remains a restriction.
+    pub allow_local_binding: Option<bool>,
     pub managed_allowed_domains_only: bool,
 }
 
@@ -30,7 +31,7 @@ impl EnvironmentNetworkPolicy {
             dangerously_allow_all_unix_sockets: config
                 .dangerously_allow_all_unix_sockets
                 .unwrap_or(false),
-            allow_local_binding: config.allow_local_binding(),
+            allow_local_binding: config.allow_local_binding,
             managed_allowed_domains_only,
         }
     }
@@ -82,11 +83,15 @@ impl EnvironmentNetworkPolicy {
             }
         }
 
-        // Enable permissions only when both controller and owner allow them.
+        // Socket and upstream-proxy permissions require both controller and owner grants.
         config.unix_sockets = (!effective_sockets.entries.is_empty()).then_some(effective_sockets);
         config.dangerously_allow_all_unix_sockets =
             Some(inherited_permits_all && owner_permits_all);
         config.allow_upstream_proxy &= self.allow_upstream_proxy;
-        config.allow_local_binding = Some(config.allow_local_binding() && self.allow_local_binding);
+        // Either explicit denial wins; defer unresolved defaults to the executor.
+        config.allow_local_binding = match (config.allow_local_binding, self.allow_local_binding) {
+            (Some(controller), Some(owner)) => Some(controller && owner),
+            (controller, owner) => controller.or(owner),
+        };
     }
 }

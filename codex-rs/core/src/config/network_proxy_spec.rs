@@ -276,15 +276,15 @@ impl NetworkProxySpec {
                     enabled: true,
                     // Without a controller, the owner supplies the entire permission ceiling.
                     dangerously_allow_all_unix_sockets: Some(true),
-                    allow_local_binding: Some(true),
+                    allow_local_binding: Some(policy.allow_local_binding.unwrap_or(false)),
                     ..NetworkProxyConfig::default()
                 },
                 /*requirements*/ None,
                 permission_profile,
             )?,
         };
-        spec.config.allow_local_binding = Some(local_binding_policy.resolve(&spec.config));
         policy.apply_to(&mut spec.config);
+        spec.config.allow_local_binding = Some(local_binding_policy.resolve(&spec.config));
         let protected_denials = spec.config.denied_domains().unwrap_or_default();
 
         // A fixed controller allowlist remains a ceiling; an expandable one is only a baseline.

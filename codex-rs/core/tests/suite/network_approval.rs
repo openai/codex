@@ -2462,8 +2462,17 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
     skip_if_no_remote_env!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut scenarios = vec![("ROOTED", managed_network_unified_exec_test(&server).await?)];
-    for (scenario, configured_controller) in [("ROOTLESS", false), ("USER_ROOTED", true)] {
+    let mut scenarios = vec![(
+        "ROOTED",
+        managed_network_unified_exec_test(&server).await?,
+        Some(true),
+    )];
+    for (scenario, configured_controller, allow_local_binding) in [
+        ("ROOTLESS", false, None),
+        ("USER_ROOTED", true, Some(true)),
+        ("USER_UNSET", true, None),
+        ("USER_DENIED", true, Some(false)),
+    ] {
         let mut builder = test_codex().with_config(move |config| {
             for feature in [Feature::UnifiedExec, Feature::ExecPermissionApprovals] {
                 config
@@ -2485,7 +2494,7 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 NetworkProxySpec::from_config_and_constraints(
                     NetworkProxyConfig {
                         enabled: true,
-                        allow_local_binding: Some(true),
+                        allow_local_binding,
                         ..NetworkProxyConfig::default()
                     },
                     /*requirements*/ None,
@@ -2500,10 +2509,10 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             test.session_configured.network_proxy.is_some(),
             configured_controller
         );
-        scenarios.push((scenario, test));
+        scenarios.push((scenario, test, allow_local_binding));
     }
 
-    for (scenario, test) in scenarios {
+    for (scenario, test, controller_local_binding) in scenarios {
         let mut remote = test.executor_environment().selection().clone();
         let remote_private_path = remote.cwd.join("secondary-environment-private")?;
         let permissions = test.config.permissions.permission_profile();
@@ -2539,7 +2548,31 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             ("REVIEWED", "owner-only.invalid", "HTTP/1.1 502"),
             ("OFFLINE", "owner-only.invalid", "ROOTLESS_OWNER_OFFLINE"),
             ("GRANTED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
+            (
+                "LOCAL_GRANTED",
+                "127.0.0.?",
+                if controller_local_binding == Some(false) {
+                    "HTTP/1.1 403"
+                } else {
+                    "HTTP/1.1 502"
+                },
+            ),
+            ("LOCAL_DENIED", "127.0.0.?", "HTTP/1.1 403"),
+            (
+                "LOCAL_OMITTED",
+                "127.0.0.?",
+                if controller_local_binding == Some(true) {
+                    "HTTP/1.1 502"
+                } else {
+                    "HTTP/1.1 403"
+                },
+            ),
         ] {
+            let local_binding_probe =
+                matches!(suffix, "LOCAL_GRANTED" | "LOCAL_DENIED" | "LOCAL_OMITTED");
+            if matches!(scenario, "USER_UNSET" | "USER_DENIED") && !local_binding_probe {
+                continue;
+            }
             let escalated = matches!(
                 suffix,
                 "ESCALATED" | "ESCALATION_DENIED" | "ESCALATED_DENY_READ"
@@ -2550,7 +2583,11 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             }
             let marker = format!("{scenario}_OWNER_{suffix}");
             let mut proxy_config = NetworkProxyConfig {
-                allow_local_binding: Some(true),
+                allow_local_binding: match suffix {
+                    "LOCAL_DENIED" => Some(false),
+                    "LOCAL_OMITTED" => None,
+                    _ => Some(true),
+                },
                 ..NetworkProxyConfig::default()
             };
             proxy_config.set_allowed_domains(vec![allowed_domain.to_string()]);
@@ -2623,6 +2660,12 @@ PYTHON"#;
                     "{read_probe}\n{}",
                     remote_network_proxy_request_command(&marker)
                 )
+            } else if local_binding_probe {
+                // A wildcard allowlist does not explicitly authorize private destinations.
+                // Port zero has no listener: 502 proves the request passed policy enforcement,
+                // while 403 proves the controller/owner composition denied the loopback target.
+                remote_network_proxy_request_command(&marker)
+                    .replace(NETWORK_TEST_HOST, "127.0.0.1:0")
             } else if escalated {
                 // Direct sockets and an unproxied environment exercise the actual remote launch.
                 format!(
