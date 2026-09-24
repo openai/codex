@@ -261,7 +261,7 @@ impl LocalSecretsBackend {
         let loaded = self
             .keyring_store
             .load(keyring_service(), &account)
-            .map_err(|err| anyhow::anyhow!(err.message()))
+            .map_err(std::io::Error::from)
             .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
         match loaded {
             Some(existing) => Ok(SecretString::from(existing)),
@@ -272,7 +272,7 @@ impl LocalSecretsBackend {
                 let generated = generate_passphrase()?;
                 self.keyring_store
                     .save(keyring_service(), &account, generated.expose_secret())
-                    .map_err(|err| anyhow::anyhow!(err.message()))
+                    .map_err(std::io::Error::from)
                     .context("failed to persist secrets key in keyring")?;
                 Ok(generated)
             }

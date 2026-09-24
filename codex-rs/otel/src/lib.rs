@@ -1,3 +1,4 @@
+pub mod auth_storage;
 pub(crate) mod config;
 mod events;
 pub(crate) mod metrics;
