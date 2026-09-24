@@ -234,6 +234,17 @@ trust_level = "trusted"
         codex_config::types::AuthCredentialsStoreMode::File,
     )?;
     let program = codex_utils_cargo_bin::cargo_bin("codex")?;
+    // Keep cold Rosetta translation outside the timed startup assertions.
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    anyhow::ensure!(
+        Command::new(&program)
+            .env("CODEX_HOME", &home)
+            .arg("--version")
+            .output()?
+            .status
+            .success(),
+        "failed to prepare CLI test executable"
+    );
     let mut env: HashMap<String, String> = std::env::vars().collect();
     env.insert("CODEX_HOME".into(), home.display().to_string());
     env.insert("CODEX_SQLITE_HOME".into(), home.display().to_string());
@@ -266,6 +277,10 @@ trust_level = "trusted"
         let bin = home.join("packages/app-server-daemon/current/bin");
         fs::create_dir_all(&bin)?;
         let managed = bin.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        // Hard links change the executable's ctime and invalidate Rosetta's translation cache.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(program.canonicalize()?, &managed)?;
+        #[cfg(not(unix))]
         fs::hard_link(&program, &managed).or_else(|_| fs::copy(&program, &managed).map(|_| ()))?;
         fs::create_dir(home.join("app-server-daemon"))?;
         fs::write(

@@ -73,6 +73,17 @@ async fn daemon_startup(command: &str) -> Result<()> {
     let home = tempfile::Builder::new().tempdir_in("/tmp")?;
     #[cfg(not(unix))]
     let home = tempfile::tempdir()?;
+    // Keep cold Rosetta translation outside the timed startup assertions.
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    anyhow::ensure!(
+        Command::new(&codex)
+            .env("CODEX_HOME", home.path())
+            .arg("--version")
+            .output()?
+            .status
+            .success(),
+        "failed to prepare CLI test executable"
+    );
     fs::write(
         home.path().join("config.toml"),
         format!(
@@ -124,6 +135,10 @@ async fn daemon_startup(command: &str) -> Result<()> {
             .path()
             .join("packages/app-server-daemon/current/bin/codex");
         fs::create_dir_all(home.path().join("packages/app-server-daemon/current/bin"))?;
+        // Hard links change the executable's ctime and invalidate Rosetta's translation cache.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&codex, &managed)?;
+        #[cfg(not(unix))]
         fs::hard_link(&codex, &managed).or_else(|_| fs::copy(&codex, &managed).map(|_| ()))?;
         fs::create_dir(home.path().join("app-server-daemon"))?;
         fs::write(

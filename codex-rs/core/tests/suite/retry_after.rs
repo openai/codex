@@ -1103,7 +1103,10 @@ async fn sse_failure_without_retry_after_exhausts_stream_retries(code: &str) -> 
 
     submit_user_input(&test, "exhaust the headerless rate-limited stream").await?;
     let retry = telemetry.next_retry().await;
-    assert!((FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY).contains(&retry.delay));
+    assert!(
+        (FIRST_RETRY_MIN_DELAY..FIRST_RETRY_MAX_DELAY).contains(&retry.delay),
+        "{retry:?}",
+    );
     assert_eq!(
         retry,
         RetryTelemetryEvent {

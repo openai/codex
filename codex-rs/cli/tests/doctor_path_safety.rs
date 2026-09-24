@@ -34,22 +34,38 @@ struct Fixture {
 impl Fixture {
     fn new() -> Result<Self> {
         let root = TempDir::new()?;
+        let home = root.path().join("home");
+        std::fs::create_dir(&home)?;
         // Cargo-built paths deliberately ignore npm provenance. Launch outside
         // target/ so this fixture also exercises the packaged-install checks.
         let program = root
             .path()
             .join(format!("codex{}", std::env::consts::EXE_SUFFIX));
         let source = codex_utils_cargo_bin::cargo_bin("codex")?;
+        // Hard-link setup and teardown invalidate other tests' Rosetta translations.
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            std::fs::copy(&source, &program)?;
+            // Translate the fixture before the timed diagnostic command.
+            anyhow::ensure!(
+                std::process::Command::new(&program)
+                    .env("CODEX_HOME", &home)
+                    .arg("--version")
+                    .output()?
+                    .status
+                    .success(),
+                "failed to prepare diagnostic test executable"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         if std::fs::hard_link(&source, &program).is_err() {
             std::fs::copy(&source, &program)?;
         }
         let workspace = root.path().join("workspace");
         let bin = workspace.join("node_modules/.bin");
-        let home = root.path().join("home");
         let marker = root.path().join("helper-ran");
         std::fs::create_dir_all(&bin)?;
         std::fs::create_dir_all(workspace.join(".git"))?;
-        std::fs::create_dir(&home)?;
         std::fs::write(
             home.join("config.toml"),
             r#"

@@ -37,6 +37,22 @@ impl TestDaemon {
             .join(&release_name)
             .join("bin/codex");
         std::fs::create_dir_all(managed.parent().context("managed bin parent")?)?;
+        // Preserve the installed path without invalidating the shared CLI's Rosetta cache.
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        {
+            std::fs::copy(&codex_source, &managed)?;
+            // Translate the fixture before timed daemon capability and readiness checks.
+            ensure!(
+                Command::new(&managed)
+                    .env("CODEX_HOME", home.path())
+                    .arg("--version")
+                    .output()?
+                    .status
+                    .success(),
+                "failed to prepare managed test executable"
+            );
+        }
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         std::fs::hard_link(&codex_source, &managed)
             .or_else(|_| std::fs::copy(&codex_source, managed).map(|_| ()))?;
         std::fs::write(standalone.join("auto-update-version"), &release_name)?;

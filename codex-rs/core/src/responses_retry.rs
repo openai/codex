@@ -132,10 +132,10 @@ pub(crate) async fn handle_response_stream_error(
             )
             .await;
         }
-        let retry_at = retry_after
-            .map(RetryAfter::deadline)
-            .unwrap_or_else(|| Instant::now() + delay);
-        let delay = retry_at.saturating_duration_since(Instant::now());
+        // Use one clock sample so local backoff telemetry retains the selected delay.
+        let now = Instant::now();
+        let retry_at = retry_after.map(RetryAfter::deadline).unwrap_or(now + delay);
+        let delay = retry_at.saturating_duration_since(now);
         codex_client::record_retry!(retry_count, delay, operation);
         tokio::time::sleep_until(retry_at).await;
         return Ok(());
