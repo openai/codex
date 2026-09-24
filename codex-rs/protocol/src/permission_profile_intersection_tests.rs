@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -14,6 +15,7 @@ use crate::permissions::FileSystemAccessMode::Write;
 use crate::permissions::FileSystemPath;
 use crate::permissions::FileSystemSandboxEntry;
 use crate::permissions::FileSystemSandboxPolicy;
+use crate::permissions::FileSystemSandboxPolicyContext;
 use crate::permissions::FileSystemSpecialPath;
 use crate::permissions::FileSystemSpecialPath::Minimal;
 use crate::permissions::FileSystemSpecialPath::Tmpdir;
@@ -115,11 +117,22 @@ fn effective_workspace_intersection_preserves_network_metadata_and_temp() {
     let result = intersection(&authority, &requested, &project);
     let policy = result.file_system_sandbox_policy();
 
+    // Keep :tmpdir independent of the workspace fixtures, which themselves live
+    // under the host's temporary directory.
+    let scratch = TempDir::new().expect("temporary directory grant");
+    let scratch_root = canonical(&scratch);
+    let cwd = PathUri::from_abs_path(&root);
+    let temporary_directories = [PathUri::from_abs_path(&scratch_root)];
+    let context = FileSystemSandboxPolicyContext {
+        cwd: &cwd,
+        workspace_roots: std::slice::from_ref(&cwd),
+        user_home_dir: None,
+        temporary_directories: Some(&temporary_directories),
+    };
     assert_eq!(
-        [&root, &project]
-            .map(|path| policy
-                .resolve_access_for_local_path_with_cwd(path.as_path(), root.as_path())),
-        [Read, Write]
+        [&root, &project, &scratch_root]
+            .map(|path| policy.resolve_access(&PathUri::from_abs_path(path), &context)),
+        [Read, Write, Write]
     );
     assert_eq!(result.network_sandbox_policy(), Restricted);
     assert!(policy.entries.contains(&special(Tmpdir, Write)));

@@ -423,30 +423,7 @@ fn nested_symlink_component(path: &Path) -> Option<&Path> {
 fn normalize_top_level_alias_for_sandbox(
     path: AbsolutePathBuf,
 ) -> Result<AbsolutePathBuf, SeatbeltPreparationError> {
-    let Some(top_level) = path.as_path().ancestors().find(|ancestor| {
-        ancestor.parent().is_some() && ancestor.parent().and_then(Path::parent).is_none()
-    }) else {
-        return Ok(path);
-    };
-    if !std::fs::symlink_metadata(top_level).is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
-        return Ok(path);
-    }
-
-    let canonical_top_level = top_level.canonicalize().map_err(|err| {
-        SeatbeltPreparationError::FileSystem(format!(
-            "failed to normalize top-level alias {} for Seatbelt: {err}",
-            top_level.display()
-        ))
-    })?;
-    let suffix = path.as_path().strip_prefix(top_level).map_err(|err| {
-        SeatbeltPreparationError::FileSystem(format!(
-            "failed to preserve path {} after normalizing {}: {err}",
-            path.display(),
-            top_level.display()
-        ))
-    })?;
-    AbsolutePathBuf::from_absolute_path(canonical_top_level.join(suffix)).map_err(|err| {
+    path.normalize_system_aliases().map_err(|err| {
         SeatbeltPreparationError::FileSystem(format!(
             "failed to normalize top-level alias for path {}: {err}",
             path.display()

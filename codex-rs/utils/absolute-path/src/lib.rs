@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 mod absolutize;
+mod system_aliases;
 
 /// A path that is guaranteed to be absolute and normalized (though it is not
 /// guaranteed to be canonicalized or exist on the filesystem).

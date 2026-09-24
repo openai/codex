@@ -22,6 +22,31 @@ fn local_context(cwd: &PathUri) -> FileSystemSandboxPolicyContext<'_> {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn local_system_aliases_do_not_change_remote_patch_permissions() -> std::io::Result<()> {
+    let directory = tempfile::tempdir_in("/tmp")?;
+    let cwd = PathUri::from_host_native_path(directory.path())?;
+    let target =
+        PathUri::from_host_native_path(directory.path().canonicalize()?.join("missing/file"))?;
+    let action = ApplyPatchAction::new_add_for_test(&target, String::new());
+    let permissions = PermissionProfile::workspace_write();
+    let policy = permissions.file_system_sandbox_policy();
+    assert_eq!(
+        assess_patch_safety(
+            &action,
+            AskForApproval::OnRequest,
+            &permissions,
+            &PatchSandboxRoute::ExecutorManaged
+                .prepare_matching(&policy, &local_context(&cwd))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
+        SafetyCheck::AskUser,
+    );
+    Ok(())
+}
+
 #[test]
 fn windows_patch_matching_is_uri_native() {
     let cwd = PathUri::parse("file:///C:/workspace").expect("Windows cwd");
@@ -37,18 +62,25 @@ fn windows_patch_matching_is_uri_native() {
         String::new(),
     );
 
-    assert!(!is_write_patch_constrained_to_writable_paths(
-        &outside, &policy, &context,
-    ));
+    assert!(
+        !is_write_patch_constrained_to_writable_paths(
+            &outside,
+            &PatchSandboxRoute::ExecutorManaged
+                .prepare_matching(&policy, &context)
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
     assert_eq!(
         assess_patch_safety(
             &inside,
             AskForApproval::Never,
             &permission_profile,
-            &policy,
-            &context,
-            PatchSandboxRoute::ExecutorManaged,
-        ),
+            &PatchSandboxRoute::ExecutorManaged
+                .prepare_matching(&policy, &context)
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AutoApprove,
     );
 }
@@ -85,10 +117,11 @@ fn full_disk_write_uses_executor_path_convention() {
                     &policy,
                     NetworkSandboxPolicy::Restricted
                 ),
-                &policy,
-                &context,
-                PatchSandboxRoute::ExecutorManaged,
-            ),
+                &PatchSandboxRoute::ExecutorManaged
+                    .prepare_matching(&policy, &context)
+                    .expect("prepare patch matching"),
+            )
+            .expect("assess patch safety"),
             if full_disk_write {
                 SafetyCheck::AutoApprove
             } else {
@@ -141,17 +174,25 @@ fn test_writable_roots_constraint() {
         /*exclude_slash_tmp*/ true,
     );
 
-    assert!(is_write_patch_constrained_to_writable_paths(
-        &add_inside,
-        &workspace_only_file_system_policy,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        is_write_patch_constrained_to_writable_paths(
+            &add_inside,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&workspace_only_file_system_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
 
-    assert!(!is_write_patch_constrained_to_writable_paths(
-        &add_outside,
-        &workspace_only_file_system_policy,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        !is_write_patch_constrained_to_writable_paths(
+            &add_outside,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&workspace_only_file_system_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
 
     // With the parent dir explicitly added as a writable root, the
     // outside write should be permitted.
@@ -160,11 +201,15 @@ fn test_writable_roots_constraint() {
         /*exclude_tmpdir_env_var*/ true,
         /*exclude_slash_tmp*/ true,
     );
-    assert!(is_write_patch_constrained_to_writable_paths(
-        &add_outside,
-        &file_system_policy_with_parent,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        is_write_patch_constrained_to_writable_paths(
+            &add_outside,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_policy_with_parent, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
 }
 
 #[test]
@@ -188,10 +233,11 @@ fn external_sandbox_auto_approves_in_on_request() {
             &add_inside,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AutoApprove
     );
 }
@@ -218,10 +264,11 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
             &add_outside,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AskUser,
     );
     assert_eq!(
@@ -235,10 +282,11 @@ fn granular_with_all_flags_true_matches_on_request_for_out_of_root_patch() {
                 mcp_elicitations: true,
             }),
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AskUser,
     );
 }
@@ -271,10 +319,11 @@ fn granular_sandbox_approval_false_rejects_out_of_root_patch() {
                 mcp_elicitations: true,
             }),
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::Reject {
             reason: PATCH_REJECTED_OUTSIDE_PROJECT_REASON.to_string(),
         },
@@ -292,20 +341,25 @@ fn read_only_policy_rejects_patch_with_read_only_reason() {
     let permission_profile = PermissionProfile::read_only();
     let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
 
-    assert!(!is_write_patch_constrained_to_writable_paths(
-        &action,
-        &file_system_sandbox_policy,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        !is_write_patch_constrained_to_writable_paths(
+            &action,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
     assert_eq!(
         assess_patch_safety(
             &action,
             AskForApproval::Never,
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::Reject {
             reason: PATCH_REJECTED_READ_ONLY_REASON.to_string(),
         },
@@ -342,20 +396,25 @@ fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
         },
     ]);
 
-    assert!(!is_write_patch_constrained_to_writable_paths(
-        &action,
-        &file_system_sandbox_policy,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        !is_write_patch_constrained_to_writable_paths(
+            &action,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
     assert_eq!(
         assess_patch_safety(
             &action,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AskUser,
     );
 }
@@ -392,20 +451,25 @@ fn explicit_read_only_subpaths_prevent_auto_approval_for_external_sandbox() {
         },
     ]);
 
-    assert!(!is_write_patch_constrained_to_writable_paths(
-        &action,
-        &file_system_sandbox_policy,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        !is_write_patch_constrained_to_writable_paths(
+            &action,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
     assert_eq!(
         assess_patch_safety(
             &action,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AskUser,
     );
 }
@@ -435,20 +499,25 @@ fn missing_project_dot_codex_config_requires_approval() {
             missing_path_behavior: None,
         });
 
-    assert!(!is_write_patch_constrained_to_writable_paths(
-        &action,
-        &file_system_sandbox_policy,
-        &local_context(&cwd_uri),
-    ));
+    assert!(
+        !is_write_patch_constrained_to_writable_paths(
+            &action,
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("check writable paths")
+    );
     assert_eq!(
         assess_patch_safety(
             &action,
             AskForApproval::OnRequest,
             &permission_profile,
-            &file_system_sandbox_policy,
-            &local_context(&cwd_uri),
-            PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled),
-        ),
+            &PatchSandboxRoute::Platform(WindowsSandboxLevel::Disabled)
+                .prepare_matching(&file_system_sandbox_policy, &local_context(&cwd_uri))
+                .expect("prepare patch matching"),
+        )
+        .expect("assess patch safety"),
         SafetyCheck::AskUser,
     );
 }
