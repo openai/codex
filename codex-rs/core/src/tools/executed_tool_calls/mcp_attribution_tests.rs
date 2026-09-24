@@ -44,6 +44,7 @@ fn records_the_first_turn_for_each_unique_source() {
         recorder.snapshot(),
         McpAttribution {
             status: McpAttributionStatus::Complete,
+            error_reason: None,
             sources: vec![source("search", "turn_1"), source("fetch", "turn_2")],
         }
     );
@@ -53,10 +54,12 @@ fn records_the_first_turn_for_each_unique_source() {
 fn restores_cumulative_item_and_compaction_checkpoints() {
     let initial = McpAttribution {
         status: McpAttributionStatus::Complete,
+        error_reason: None,
         sources: vec![source("search", "turn_1")],
     };
     let cumulative = McpAttribution {
         status: McpAttributionStatus::Complete,
+        error_reason: None,
         sources: vec![source("search", "turn_1"), source("fetch", "turn_2")],
     };
     let history = InitialHistory::Forked(vec![
@@ -89,6 +92,7 @@ fn legacy_or_conflicting_history_is_not_complete() {
         McpAttributionRecorder::new(&legacy).snapshot(),
         McpAttribution {
             status: McpAttributionStatus::AttributionError,
+            error_reason: Some(McpAttributionErrorReason::HistoryMissingCheckpoint),
             sources: Vec::new(),
         }
     );
@@ -98,6 +102,7 @@ fn legacy_or_conflicting_history_is_not_complete() {
             .map(|turn_id| {
                 RolloutItem::ResponseItem(envelope(Some(McpAttribution {
                     status: McpAttributionStatus::Complete,
+                    error_reason: None,
                     sources: vec![source("search", turn_id)],
                 })))
             })
@@ -107,9 +112,114 @@ fn legacy_or_conflicting_history_is_not_complete() {
         McpAttributionRecorder::new(&history).snapshot(),
         McpAttribution {
             status: McpAttributionStatus::AttributionError,
+            error_reason: Some(McpAttributionErrorReason::CheckpointSourceConflict),
             sources: vec![source("search", "turn_1")],
         }
     );
+}
+
+#[test]
+fn first_error_reason_survives_checkpoints_and_later_sources() {
+    let recorder = McpAttributionRecorder::default();
+    recorder.record(source("", "turn_1"));
+    recorder.record(source("search", "turn_2"));
+    let (snapshot, _) = recorder
+        .checkpoint(/*force*/ true)
+        .expect("error checkpoint");
+    let checkpoint = envelope(Some(snapshot));
+    let mut compacted: CompactedItem =
+        serde_json::from_value(serde_json::json!({"message": "summary"}))
+            .expect("compaction checkpoint");
+    compacted.replacement_history = Some(vec![checkpoint.clone()]);
+    for item in [
+        RolloutItem::ResponseItem(checkpoint),
+        RolloutItem::Compacted(compacted),
+    ] {
+        let restored = McpAttributionRecorder::new(&InitialHistory::Forked(vec![item]));
+        restored.record(source("", "turn_3"));
+
+        assert_eq!(
+            restored.snapshot(),
+            McpAttribution {
+                status: McpAttributionStatus::AttributionError,
+                error_reason: Some(McpAttributionErrorReason::SourceInvalid),
+                sources: vec![source("search", "turn_2")],
+            },
+        );
+    }
+}
+
+#[test]
+fn poisoned_recorder_reports_a_bounded_reason() {
+    let recorder = McpAttributionRecorder::default();
+    let poisoned = recorder.clone();
+    assert!(
+        std::thread::spawn(move || {
+            let _state = poisoned.0.lock().expect("unpoisoned recorder");
+            panic!("poison recorder");
+        })
+        .join()
+        .is_err()
+    );
+    assert_eq!(
+        recorder.snapshot(),
+        McpAttribution {
+            status: McpAttributionStatus::AttributionError,
+            error_reason: Some(McpAttributionErrorReason::RecorderPoisoned),
+            sources: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn restored_diagnostics_do_not_change_attribution_state() {
+    let checkpoint = envelope(Some(McpAttribution {
+        status: McpAttributionStatus::Complete,
+        error_reason: Some(McpAttributionErrorReason::SourceInvalid),
+        sources: vec![source("search", "turn_1")],
+    }));
+    assert_eq!(
+        McpAttributionRecorder::new(&InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+            checkpoint
+        ),]))
+        .snapshot(),
+        McpAttribution {
+            status: McpAttributionStatus::Complete,
+            error_reason: None,
+            sources: vec![source("search", "turn_1")],
+        }
+    );
+
+    for (attribution, expected_reason) in [
+        (
+            McpAttribution {
+                status: McpAttributionStatus::AttributionError,
+                error_reason: None,
+                sources: Vec::new(),
+            },
+            McpAttributionErrorReason::RestoredErrorUnknown,
+        ),
+        (
+            McpAttribution {
+                status: McpAttributionStatus::Complete,
+                error_reason: None,
+                sources: Vec::new(),
+            },
+            McpAttributionErrorReason::CheckpointInvalid,
+        ),
+    ] {
+        assert_eq!(
+            McpAttributionRecorder::new(&InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                envelope(Some(attribution))
+            ),]))
+            .snapshot(),
+            McpAttribution {
+                status: McpAttributionStatus::AttributionError,
+                error_reason: Some(expected_reason),
+                sources: Vec::new(),
+            }
+        );
+    }
 }
 
 #[test]

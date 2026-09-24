@@ -5,6 +5,7 @@
 //! `schemars`) so they can be embedded in Codex's own protocol structures.
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use std::collections::HashMap;
 use ts_rs::TS;
@@ -70,6 +71,27 @@ pub enum McpAttributionStatus {
     AttributionError,
 }
 
+/// Bounded diagnostics for an attribution error, never a policy decision.
+///
+/// Recorder reasons identify the first observed error and survive checkpoints.
+/// Payload reasons describe a request-serialization fallback and are not checkpointed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum McpAttributionErrorReason {
+    HistoryMissingCheckpoint,
+    CheckpointInvalid,
+    CheckpointSourceConflict,
+    SourceInvalid,
+    RecorderPoisoned,
+    /// An earlier error checkpoint did not retain its cause.
+    RestoredErrorUnknown,
+    PayloadTooLarge,
+    SerializationFailed,
+    #[serde(other)]
+    Unknown,
+}
+
 /// One source and the first runtime turn in which Codex recorded it.
 ///
 /// Server and tool names are retained when no stable identifier is available;
@@ -92,8 +114,25 @@ pub struct McpAttributionSource {
 #[serde(deny_unknown_fields)]
 pub struct McpAttribution {
     pub status: McpAttributionStatus,
+    /// First observed attribution error, absent for non-error states.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_mcp_attribution_error_reason"
+    )]
+    pub error_reason: Option<McpAttributionErrorReason>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<McpAttributionSource>,
+}
+
+fn deserialize_mcp_attribution_error_reason<'de, D>(
+    deserializer: D,
+) -> Result<Option<McpAttributionErrorReason>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 /// Bounded app-resource provenance retained across a compaction checkpoint.

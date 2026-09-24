@@ -501,6 +501,7 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
     let without_raw_metadata = output_with_tool_result_metadata(ToolResultMetadata::default());
     let attribution = McpAttribution {
         status: McpAttributionStatus::Complete,
+        error_reason: None,
         sources: vec![McpAttributionSource {
             connector_id: Some("connector_example".to_string()),
             plugin_id: Some("example@openai-bundled".to_string()),
@@ -587,6 +588,36 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
             assert_eq!(prompt.input, vec![output.clone()]);
         }
     }
+    responses_metadata.mcp_attribution = Some(McpAttribution {
+        status: McpAttributionStatus::AttributionError,
+        error_reason: Some(
+            codex_protocol::mcp::McpAttributionErrorReason::HistoryMissingCheckpoint,
+        ),
+        sources: attribution.sources.clone(),
+    });
+    let request = client.build_responses_request(
+        &prompt,
+        &test_model_info(),
+        /*effort*/ None,
+        codex_protocol::config_types::ReasoningSummary::None,
+        /*service_tier*/ None,
+        &responses_metadata,
+        /*include_internal*/ true,
+    )?;
+    assert_eq!(
+        request
+            .client_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY))
+            .map(|value| serde_json::from_str::<serde_json::Value>(value))
+            .transpose()?,
+        Some(json!({
+            "status": "attribution_error",
+            "sources": attribution.sources,
+            "error_reason": "history_missing_checkpoint",
+        })),
+    );
+
     let mut oversized_attribution = attribution;
     oversized_attribution.sources[0].tool_name = "a".repeat(MAX_MCP_ATTRIBUTION_BYTES);
     responses_metadata.mcp_attribution = Some(oversized_attribution);
@@ -605,7 +636,7 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
                 .get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)
                 .map(String::as_str)
         }),
-        Some(r#"{"status":"attribution_error"}"#),
+        Some(r#"{"status":"attribution_error","error_reason":"payload_too_large"}"#),
     );
     Ok(())
 }

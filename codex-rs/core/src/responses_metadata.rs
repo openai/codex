@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -359,7 +360,15 @@ impl CodexResponsesMetadata {
         }
         if include_internal && let Some(attribution) = &self.mcp_attribution {
             let serialized = to_json_string_bounded(attribution, MAX_MCP_ATTRIBUTION_BYTES)
-                .unwrap_or_else(|_| r#"{"status":"attribution_error"}"#.to_string());
+                .unwrap_or_else(|error| {
+                    if error.io_error_kind() == Some(ErrorKind::WriteZero) {
+                        r#"{"status":"attribution_error","error_reason":"payload_too_large"}"#
+                            .to_string()
+                    } else {
+                        r#"{"status":"attribution_error","error_reason":"serialization_failed"}"#
+                            .to_string()
+                    }
+                });
             client_metadata.insert(MCP_ATTRIBUTION_CLIENT_METADATA_KEY.to_string(), serialized);
         }
         client_metadata

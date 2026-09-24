@@ -124,6 +124,7 @@ where
     Ok(Some(serde_json::from_value(value).unwrap_or_else(|_| {
         McpAttribution {
             status: McpAttributionStatus::AttributionError,
+            error_reason: None,
             sources: Vec::new(),
         }
     })))
