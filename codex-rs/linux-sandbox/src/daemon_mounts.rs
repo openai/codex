@@ -1,8 +1,10 @@
 //! Find host mount aliases that need the privileged socket directory mask.
 //! Mount roots describe filesystem identity; canonical paths alone miss bind mounts.
+//! Btrfs subvolume device numbers can differ from the containing mount's device.
 
 use rustix::fs::AtFlags;
 use rustix::fs::StatxFlags;
+use rustix::fs::fstatfs;
 use rustix::fs::statx;
 use std::collections::BTreeSet;
 use std::fs;
@@ -13,12 +15,24 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SocketFilesystem {
+    Btrfs,
+    Other,
+}
+
 pub(crate) fn daemon_socket_mask_paths(
     directory: &Path,
     masked_root: Option<&Path>,
 ) -> io::Result<BTreeSet<PathBuf>> {
     let directory_file = fs::File::open(directory)?;
     let device = directory_file.metadata()?.dev();
+    let filesystem =
+        if fstatfs(&directory_file).is_ok_and(|stat| stat.f_type == libc::BTRFS_SUPER_MAGIC) {
+            SocketFilesystem::Btrfs
+        } else {
+            SocketFilesystem::Other
+        };
     let mount_id = fs::read_to_string(format!("/proc/self/fdinfo/{}", directory_file.as_raw_fd()))
         .ok()
         .and_then(|fdinfo| {
@@ -39,6 +53,7 @@ pub(crate) fn daemon_socket_mask_paths(
     check_mounts(
         directory,
         &format!("{}:{}", libc::major(device), libc::minor(device)),
+        filesystem,
         mount_id.as_deref(),
         &fs::read("/proc/self/mountinfo")?,
         masked_root,
@@ -48,6 +63,7 @@ pub(crate) fn daemon_socket_mask_paths(
 fn check_mounts(
     directory: &Path,
     device: &str,
+    filesystem: SocketFilesystem,
     mount_id: Option<&str>,
     mountinfo: &[u8],
     masked_root: Option<&Path>,
@@ -58,30 +74,66 @@ fn check_mounts(
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
     {
-        let fields: Vec<_> = line.split(|byte| *byte == b' ').take(5).collect();
-        let [id, parent, mount_device, root, destination] = fields.as_slice() else {
+        let mut fields = line.split(|byte| *byte == b' ');
+        let prefix: Vec<_> = fields.by_ref().take(5).collect();
+        let [id, parent, mount_device, root, destination] = prefix.as_slice() else {
             return Err(invalid());
         };
         let destination = mount_path(destination)?;
-        // Only roots on the socket filesystem can identify aliases. Other
-        // filesystems can use non-path roots such as nsfs `mnt:[inode]`, but
-        // their destinations still matter for ancestry and nested-mount checks.
-        let root = (*mount_device == device.as_bytes())
-            .then(|| mount_path(root))
-            .transpose()?;
-        mounts.push((*id, *parent, *mount_device, root, destination));
+        let mount_filesystem = fields
+            .skip_while(|field| *field != b"-")
+            .nth(1)
+            .ok_or_else(invalid)?;
+        mounts.push((
+            *id,
+            *parent,
+            *mount_device,
+            *root,
+            destination,
+            mount_filesystem,
+        ));
     }
-    let (location, containing_mount) = if let Some(mount_id) = mount_id {
+    let selected_index = mount_id
+        .map(|mount_id| {
+            let mut matching = mounts
+                .iter()
+                .enumerate()
+                .filter(|(_, (id, ..))| *id == mount_id.as_bytes());
+            let (index, (_, _, mount_device, _, _, mount_filesystem)) =
+                matching.next().ok_or_else(invalid)?;
+            if matching.next().is_some()
+                || (*mount_device != device.as_bytes()
+                    && (filesystem != SocketFilesystem::Btrfs || *mount_filesystem != b"btrfs"))
+            {
+                return Err(invalid());
+            }
+            Ok(index)
+        })
+        .transpose()?;
+    // Btrfs reports a per-subvolume st_dev, while mountinfo uses the superblock
+    // device. Only the verified descriptor's mount ID can authorize that mismatch.
+    // Retain both device identities when looking for aliases.
+    let mount_device = selected_index
+        .map(|index| mounts[index].2)
+        .unwrap_or(device.as_bytes());
+    let mounts = mounts
+        .into_iter()
+        .map(|(id, parent, candidate_device, root, destination, _)| {
+            // Only roots on the socket filesystem can identify aliases. Other
+            // filesystems can use non-path roots such as nsfs `mnt:[inode]`, but
+            // their destinations still matter for ancestry and nested-mount checks.
+            let root = (candidate_device == device.as_bytes() || candidate_device == mount_device)
+                .then(|| mount_path(root))
+                .transpose()?;
+            Ok((id, parent, candidate_device, root, destination))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let (location, containing_mount) = if let Some((mount_id, index)) = mount_id.zip(selected_index)
+    {
         // fdinfo/statx identifies the opened mount, which may have been covered
         // by another mount before we read mountinfo.
-        let selected = mounts
-            .iter()
-            .find(|(id, ..)| *id == mount_id.as_bytes())
-            .ok_or_else(invalid)?;
-        let (_, _, mount_device, root, destination) = selected;
-        if *mount_device != device.as_bytes() {
-            return Err(invalid());
-        }
+        let selected = &mounts[index];
+        let (_, _, _, root, destination) = selected;
         let root = root.as_ref().ok_or_else(invalid)?;
         let relative = directory.strip_prefix(destination).map_err(|_| invalid())?;
         let mut current = Some(selected);

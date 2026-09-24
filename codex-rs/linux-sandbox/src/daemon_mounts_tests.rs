@@ -10,8 +10,89 @@ fn check_mounts(
     mountinfo: &[u8],
 ) -> io::Result<BTreeSet<PathBuf>> {
     super::check_mounts(
-        directory, device, mount_id, mountinfo, /*masked_root*/ None,
+        directory,
+        device,
+        SocketFilesystem::Other,
+        mount_id,
+        mountinfo,
+        /*masked_root*/ None,
     )
+}
+
+fn check_btrfs_mounts(mount_id: &str, mountinfo: &[u8]) -> io::Result<BTreeSet<PathBuf>> {
+    super::check_mounts(
+        Path::new("/tmp/codex-daemon-1000"),
+        "0:2",
+        SocketFilesystem::Btrfs,
+        Some(mount_id),
+        mountinfo,
+        /*masked_root*/ None,
+    )
+}
+
+#[test]
+fn btrfs_bind_mount_masks_aliases_for_both_device_numbers() {
+    let mounts = b"1 0 0:1 / / rw - btrfs disk rw\n\
+                   2 1 0:1 /var/lib/system-tmp /tmp rw shared:1 - btrfs disk rw\n\
+                   3 1 0:1 /var/lib/system-tmp /mount-device-alias rw - btrfs disk rw\n\
+                   4 1 0:2 /var/lib/system-tmp /stat-device-alias rw - btrfs disk rw\n\
+                   5 1 0:3 mnt:[1234] /run/example.mnt rw - nsfs nsfs rw\n";
+    assert_eq!(
+        check_btrfs_mounts("2", mounts).unwrap(),
+        BTreeSet::from([
+            PathBuf::from("/tmp/codex-daemon-1000"),
+            PathBuf::from("/var/lib/system-tmp/codex-daemon-1000"),
+            PathBuf::from("/mount-device-alias/codex-daemon-1000"),
+            PathBuf::from("/stat-device-alias/codex-daemon-1000"),
+        ]),
+    );
+}
+
+#[test_case(SocketFilesystem::Other, "btrfs", Some("1"); "unverified descriptor filesystem")]
+#[test_case(SocketFilesystem::Btrfs, "ext4", Some("1"); "inconsistent mount filesystem")]
+#[test_case(SocketFilesystem::Btrfs, "btrfs", None; "unavailable mount id")]
+#[test_case(SocketFilesystem::Btrfs, "btrfs", Some("missing"); "missing mount id")]
+fn device_mismatch_requires_verified_btrfs_mount(
+    filesystem: SocketFilesystem,
+    mount_filesystem: &str,
+    mount_id: Option<&str>,
+) {
+    let mounts = format!("1 0 0:1 / / rw - {mount_filesystem} disk rw\n");
+    assert_eq!(
+        super::check_mounts(
+            Path::new("/tmp/codex-daemon-1000"),
+            "0:2",
+            filesystem,
+            mount_id,
+            mounts.as_bytes(),
+            /*masked_root*/ None,
+        )
+        .map_err(|error| error.kind()),
+        Err(io::ErrorKind::Other),
+    );
+}
+
+#[test_case("0:1", "/@/tmp/codex-daemon-1000", "/alias"; "mount device directory alias")]
+#[test_case("0:2", "/@/tmp/codex-daemon-1000/rpc.sock", "/alias.sock"; "stat device socket alias")]
+fn btrfs_device_mismatch_still_rejects_unsafe_mounts(device: &str, root: &str, destination: &str) {
+    let mounts = format!(
+        "1 0 0:1 /@ / rw - btrfs disk rw\n\
+         2 1 {device} {root} {destination} rw - btrfs disk rw\n"
+    );
+    assert_eq!(
+        check_btrfs_mounts("1", mounts.as_bytes()).map_err(|error| error.kind()),
+        Err(io::ErrorKind::PermissionDenied),
+    );
+}
+
+#[test]
+fn btrfs_device_mismatch_rejects_duplicate_mount_id() {
+    let mounts = b"1 0 0:1 /@ / rw - btrfs disk rw\n\
+                   1 0 0:1 /@ / rw - btrfs disk rw\n";
+    assert_eq!(
+        check_btrfs_mounts("1", mounts).map_err(|error| error.kind()),
+        Err(io::ErrorKind::Other),
+    );
 }
 
 #[test_case("/tmp", "/host-tmp", true; "ancestor alias")]
@@ -213,11 +294,27 @@ fn masked_wslg_alias_does_not_skip_other_socket_masks() {
             ])
         );
         assert_eq!(
-            super::check_mounts(directory, "0:1", mount_id, mounts.as_bytes(), mask).unwrap(),
+            super::check_mounts(
+                directory,
+                "0:1",
+                SocketFilesystem::Other,
+                mount_id,
+                mounts.as_bytes(),
+                mask
+            )
+            .unwrap(),
             BTreeSet::from([directory.to_path_buf()])
         );
         assert_eq!(
-            super::check_mounts(directory, "0:1", mount_id, exposed.as_bytes(), mask).unwrap(),
+            super::check_mounts(
+                directory,
+                "0:1",
+                SocketFilesystem::Other,
+                mount_id,
+                exposed.as_bytes(),
+                mask
+            )
+            .unwrap(),
             BTreeSet::from([
                 directory.to_path_buf(),
                 PathBuf::from("/host-tmp/codex-daemon-1000"),
