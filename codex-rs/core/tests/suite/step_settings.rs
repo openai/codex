@@ -491,6 +491,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                     model: Some(model.to_string()),
                     ..Default::default()
                 },
+                reply: None,
             })
             .await?;
         test.submit_text_turn("review previous diagnostics").await?;
@@ -601,6 +602,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
                         model: Some(model.to_string()),
                         ..Default::default()
                     },
+                    reply: None,
                 })
                 .await?;
             thread
@@ -781,6 +783,7 @@ async fn settings_updates_preserve_turn_identity_and_target(target: SettingsTarg
                         service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
                         ..Default::default()
                     },
+                    reply: None,
                 })
                 .await?;
         }
@@ -1979,6 +1982,7 @@ async fn sparse_updates_preserve_divergent_active_and_future_models() -> Result<
                 service_tier: Some(Some(ServiceTier::Fast.request_value().to_string())),
                 ..Default::default()
             },
+            reply: None,
         })
         .await?;
     apply_turn_settings(

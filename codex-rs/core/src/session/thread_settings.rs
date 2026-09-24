@@ -6,15 +6,12 @@ use super::session::SessionSettingsUpdate;
 use super::step_settings::StepSettingsUpdate;
 use crate::config::ConstraintResult;
 use codex_history::RolloutItem;
-use codex_protocol::protocol::CodexErrorInfo;
-use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_thread_store::ThreadStoreResult;
-use std::sync::Arc;
 use tokio::sync::SemaphorePermit;
 
 impl Session {
@@ -31,34 +28,16 @@ impl Session {
     }
 }
 
-/// Applies standalone thread settings and reports invalid overrides through the
-/// normal event stream.
+/// Applies standalone thread settings. The caller holds the persistence permit through notification.
 pub(super) async fn update(
-    session: &Arc<Session>,
-    submission_id: String,
+    session: &Session,
     overrides: ThreadSettingsOverrides,
-) {
+) -> ConstraintResult<ThreadSettingsSnapshot> {
     let updates = prepare_update(overrides);
-    let _settings_guard = acquire_persistence_lock(session).await;
-    match session.update_settings(updates).await {
-        Ok(commit) => {
-            // Standalone settings changes supersede a pending automatic continuation.
-            session.state.lock().await.last_started_turn_id = None;
-            emit_applied(session, submission_id, commit.snapshot).await;
-        }
-        Err(error) => {
-            session
-                .send_event_raw(Event {
-                    id: submission_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        misalignment: None,
-                        message: format!("invalid thread settings override: {error}"),
-                        codex_error_info: Some(CodexErrorInfo::BadRequest),
-                    }),
-                })
-                .await;
-        }
-    }
+    let commit = session.update_settings(updates).await?;
+    // Standalone settings changes supersede a pending automatic continuation.
+    session.state.lock().await.last_started_turn_id = None;
+    Ok(commit.snapshot)
 }
 
 /// Converts protocol overrides into the internal settings update shape.

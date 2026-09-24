@@ -145,6 +145,7 @@ text({descriptions, echo: report.structuredContent.echo, agent: agents.agents[0]
                 model: Some("prefixes-cleared".to_string()),
                 ..Default::default()
             },
+            reply: None,
         })
         .await?;
     test.submit_text_turn("Find echo again, call it, and list the agents.")

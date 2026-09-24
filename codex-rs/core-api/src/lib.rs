@@ -130,6 +130,7 @@ pub use codex_protocol::protocol::EventMsg;
 pub use codex_protocol::protocol::Op;
 pub use codex_protocol::protocol::SessionConfiguredEvent;
 pub use codex_protocol::protocol::SessionSource;
+pub use codex_protocol::protocol::ThreadSettingsOverrides;
 pub use codex_protocol::protocol::TurnEnvironmentSelection;
 pub use codex_protocol::protocol::W3cTraceContext;
 pub use codex_protocol::user_input::UserInput;

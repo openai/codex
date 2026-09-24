@@ -129,6 +129,7 @@ async fn queued_mail_and_cancelled_eviction_keep_worker_ownership() -> Result<()
                 model: Some(COMMITTED_MODEL.to_string()),
                 ..Default::default()
             },
+            reply: None,
         })
         .await?;
     timeout(Duration::from_secs(10), entered_rx).await??;

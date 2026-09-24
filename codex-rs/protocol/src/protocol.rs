@@ -647,6 +647,9 @@ pub enum Op {
     ThreadSettings {
         /// Sparse thread-settings overrides to apply.
         thread_settings: ThreadSettingsOverrides,
+        /// When present, report validation errors here instead of emitting an error event.
+        /// Successful updates still emit `ThreadSettingsApplied` for all callers.
+        reply: Option<oneshot::Sender<CodexResult<()>>>,
     },
 
     /// Update only the named running turn, without changing future settings.
