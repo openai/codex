@@ -67,7 +67,7 @@ pub(super) struct Sparkle {
     command_input: RefCell<String>,
     phase: Cell<Phase>,
     fresh: bool,
-    terminal_focused: bool,
+    pub(super) terminal_focused: bool,
 }
 
 impl Default for Sparkle {

@@ -71,6 +71,7 @@ impl LocalSettings {
                 show_tooltips: config.show_tooltips,
                 show_server_version_notice: config.tui_show_server_version_notice,
                 auto_recap: config.tui_auto_recap,
+                prompt_suggestions: config.tui_prompt_suggestions,
                 disable_paste_burst: Some(config.disable_paste_burst),
                 vim_mode_default: config.tui_vim_mode_default,
                 question_esc_back: config.tui_question_esc_back,

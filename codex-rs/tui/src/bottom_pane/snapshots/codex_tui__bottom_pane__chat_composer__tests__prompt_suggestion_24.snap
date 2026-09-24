@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 5274
+expression: terminal.backend()
+---
+"                        "
+"› Add a regression test "
+"  for the timeout       "
+"                        "
+"                        "
+"                        "
+"                        "
+"                        "
+"     100% context left  "

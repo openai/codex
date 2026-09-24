@@ -183,6 +183,11 @@ mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
+#[expect(
+    dead_code,
+    reason = "The next PR in this stack connects suggestion generation."
+)]
+mod prompt_suggestions;
 pub(crate) mod public_widgets;
 mod render;
 mod resize_reflow_cap;

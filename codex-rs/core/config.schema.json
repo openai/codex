@@ -4550,6 +4550,11 @@
           "default": "composer",
           "description": "Where the terminal pet should anchor vertically.\n\nDefaults to `composer`, which follows the current TUI composer viewport."
         },
+        "prompt_suggestions": {
+          "default": false,
+          "description": "Suggest a next message after successful turns. Defaults to `false`.",
+          "type": "boolean"
+        },
         "question_esc_back": {
           "default": true,
           "description": "Escape returns from async questions to the composer, preserving the answer draft.",

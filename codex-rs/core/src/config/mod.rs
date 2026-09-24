@@ -773,6 +773,9 @@ pub struct Config {
     /// Generate automatic TUI recaps. Manual `/recap` remains available when disabled.
     pub tui_auto_recap: bool,
 
+    /// Generate suggested next messages in the TUI composer.
+    pub tui_prompt_suggestions: bool,
+
     /// Persisted startup availability NUX state for model tooltips.
     pub model_availability_nux: ModelAvailabilityNuxConfig,
 
@@ -4458,6 +4461,7 @@ impl Config {
                 .map(|t| t.show_server_version_notice)
                 .unwrap_or(true),
             tui_auto_recap: cfg.tui.as_ref().map(|t| t.auto_recap).unwrap_or(/*default*/ true),
+            tui_prompt_suggestions: cfg.tui.as_ref().is_some_and(|t| t.prompt_suggestions),
             model_availability_nux: cfg
                 .tui
                 .as_ref()
