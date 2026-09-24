@@ -643,6 +643,11 @@ async fn interactive_oauth_rejects_untrusted_authorization_metadata() -> anyhow:
             .await;
 
         for oauth_client_id in [None, Some("preregistered-client")] {
+            let oauth_config =
+                oauth_client_id.map(|client_id| codex_config::McpServerOAuthConfig {
+                    client_id: Some(client_id.to_string()),
+                    ..Default::default()
+                });
             let error = perform_oauth_login_return_url(
                 "untrusted-oauth-metadata",
                 &resource_url,
@@ -651,7 +656,7 @@ async fn interactive_oauth_rejects_untrusted_authorization_metadata() -> anyhow:
                 /*http_headers*/ None,
                 /*env_http_headers*/ None,
                 /*scopes*/ &[],
-                oauth_client_id,
+                oauth_config.as_ref(),
                 McpOAuthClientRegistration::Dcr,
                 /*oauth_resource*/ None,
                 Some(/*timeout_secs*/ 5),

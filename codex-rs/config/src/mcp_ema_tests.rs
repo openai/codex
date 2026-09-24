@@ -295,6 +295,7 @@ fn ema_rejects_alternate_credentials_and_executor_custody() {
         "http_headers.Accept='application/json'",
         "env_http_headers.X-Key='TOKEN'",
         "http_headers_helper='get-headers'",
+        "oauth={client_id='client', client_secret='secret'}",
         "environment_id='remote'",
     ] {
         let server: McpServerConfig = toml::from_str(&format!(

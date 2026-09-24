@@ -38,6 +38,7 @@ async fn mutations_require_and_retain_the_transaction_guard() -> Result<()> {
             initial.clone(),
             ResolvedOAuthCredentialStore::File,
             MockKeyringStore::default(),
+            /*oauth_config*/ None,
         );
         let guard = store.acquire_transaction_guard().await?;
         let credentials = store.load().await?.unwrap();
@@ -104,7 +105,12 @@ async fn save_publishes_only_persisted_credentials() -> Result<()> {
             .0
             .set_access_token(AccessToken::new("fallback-token".into()));
         save_oauth_tokens_to_file(&fallback)?;
-        let store = OAuthCredentialStore::new(initial.clone(), authority, keyring.clone());
+        let store = OAuthCredentialStore::new(
+            initial.clone(),
+            authority,
+            keyring.clone(),
+            /*oauth_config*/ None,
+        );
         let _guard = store.acquire_transaction_guard().await?;
         let mut credentials = store.load().await?.expect("stored credentials");
         let token_response = credentials
@@ -163,6 +169,7 @@ async fn pinned_read_failure_does_not_adopt_fallback_credentials() -> Result<()>
         initial.clone(),
         ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
         keyring,
+        /*oauth_config*/ None,
     );
     let cached = store.load().await?.expect("cached credentials");
     assert_eq!(
@@ -189,6 +196,7 @@ async fn replacement_or_removal_does_not_acknowledge_a_new_runtime_snapshot() ->
         initial.clone(),
         ResolvedOAuthCredentialStore::File,
         MockKeyringStore::default(),
+        /*oauth_config*/ None,
     );
     let original_snapshot = store.stored_credentials().await;
     for (client_id, issuer) in [
@@ -232,6 +240,7 @@ async fn storage_roundtrip_preserves_absolute_and_unknown_expiry() -> Result<()>
         initial.clone(),
         ResolvedOAuthCredentialStore::File,
         MockKeyringStore::default(),
+        /*oauth_config*/ None,
     );
     let future_received_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let future_deadline = (future_received_at + 120) * 1000;

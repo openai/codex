@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_core::config::load_global_mcp_servers;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -37,46 +38,66 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new() -> Result<Self> {
+    async fn new(client_secret: Option<&'static str>) -> Result<Self> {
         let server = MockServer::start().await;
         let home = TempDir::new()?;
         let issuer = format!("{}/mcp", server.uri());
+        let saved_client_secret = client_secret
+            .map(|secret| format!("client_secret = \"{secret}\"\n"))
+            .unwrap_or_default();
         std::fs::write(
             home.path().join("config.toml"),
             format!(
                 "mcp_oauth_credentials_store = \"file\"\n\
              [mcp_servers.manual]\nurl = \"{issuer}\"\nscopes = [\"mcp.read\"]\n\
-             [mcp_servers.manual.oauth]\nclient_id = \"registered-client\"\n"
+             [mcp_servers.manual.oauth]\nclient_id = \"registered-client\"\n\
+             {saved_client_secret}"
             ),
         )?;
+        let fixture = Self {
+            server,
+            home,
+            issuer,
+        };
+        fixture.mount_oauth(client_secret).await;
+        Ok(fixture)
+    }
+
+    async fn mount_oauth(&self, client_secret: Option<&'static str>) {
         Mock::given(method("GET"))
             .and(path("/.well-known/oauth-authorization-server/mcp"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "issuer": issuer,
-                "authorization_endpoint": format!("{}/authorize", server.uri()),
-                "token_endpoint": format!("{}/token", server.uri()),
+                "issuer": self.issuer,
+                "authorization_endpoint": format!("{}/authorize", self.server.uri()),
+                "token_endpoint": format!("{}/token", self.server.uri()),
                 "response_types_supported": ["code"],
                 "code_challenge_methods_supported": ["S256"],
                 "scopes_supported": ["mcp.read"],
                 "authorization_response_iss_parameter_supported": true,
+                "token_endpoint_auth_methods_supported": [if client_secret.is_some() {
+                    "client_secret_post"
+                } else {
+                    "none"
+                }],
             })))
-            .mount(&server)
+            .mount(&self.server)
             .await;
         Mock::given(method("POST"))
             .and(path("/token"))
+            .and(move |request: &wiremock::Request| {
+                let body: BTreeMap<_, _> = url::form_urlencoded::parse(&request.body)
+                    .into_owned()
+                    .collect();
+                body.get("client_secret").map(String::as_str) == client_secret
+            })
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "access_token": "mock-access-token",
                 "token_type": "Bearer",
                 "refresh_token": "mock-refresh-token",
                 "scope": "mcp.read",
             })))
-            .mount(&server)
+            .mount(&self.server)
             .await;
-        Ok(Self {
-            server,
-            home,
-            issuer,
-        })
     }
 
     async fn start(&self) -> Result<Login> {
@@ -93,7 +114,20 @@ impl Fixture {
             .spawn()?;
         let mut stdout = BufReader::new(child.stdout.take().context("missing stdout")?);
         let mut transcript = String::new();
-        let authorization_url = read_authorization_url(&mut stdout, &mut transcript).await?;
+        let authorization_url = match read_authorization_url(&mut stdout, &mut transcript).await {
+            Ok(authorization_url) => authorization_url,
+            Err(error) => {
+                let mut stderr = String::new();
+                if let Some(stderr_pipe) = child.stderr.take() {
+                    let _ = timeout(
+                        Duration::from_secs(1),
+                        stderr_pipe.take(/*limit*/ 4096).read_to_string(&mut stderr),
+                    )
+                    .await;
+                }
+                return Err(error.context(format!("MCP login stderr: {stderr}")));
+            }
+        };
         Ok(Login {
             child,
             stdout,
@@ -158,7 +192,85 @@ impl Login {
 
 #[tokio::test]
 async fn no_browser_exchanges_pasted_callback_and_saves_credentials() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let fixture = Fixture::new(/*client_secret*/ None).await?;
+    assert_no_browser_exchanges_pasted_callback_and_saves_credentials(
+        fixture, /*client_secret*/ None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn no_browser_exchanges_pasted_callback_with_client_secret() -> Result<()> {
+    let fixture = Fixture::new(Some("headless-client-secret")).await?;
+    assert_no_browser_exchanges_pasted_callback_and_saves_credentials(
+        fixture,
+        Some("headless-client-secret"),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn add_persists_client_secret_for_subsequent_login_without_disclosure() -> Result<()> {
+    const CLIENT_SECRET: &str = "cli-client-secret";
+    let fixture = Fixture::new(Some(CLIENT_SECRET)).await?;
+    std::fs::write(
+        fixture.home.path().join("config.toml"),
+        "mcp_oauth_credentials_store = \"file\"\n",
+    )?;
+    // Stop automatic login before browser launch, then retry with valid metadata.
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": fixture.issuer,
+            "authorization_endpoint": "not-a-valid-authorization-url",
+            "token_endpoint": format!("{}/token", fixture.server.uri()),
+            "authorization_response_iss_parameter_supported": true,
+        })))
+        .with_priority(/*priority*/ 1)
+        .mount(&fixture.server)
+        .await;
+    let output = timeout(
+        TEST_TIMEOUT,
+        Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+            .kill_on_drop(true)
+            .current_dir(fixture.home.path())
+            .env("CODEX_HOME", fixture.home.path())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .args([
+                "mcp",
+                "add",
+                "manual",
+                "--url",
+                &fixture.issuer,
+                "--oauth-client-id",
+                "registered-client",
+                "--oauth-client-secret",
+                CLIENT_SECRET,
+            ])
+            .output(),
+    )
+    .await??;
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stdout.contains("Detected OAuth support. Starting OAuth flow"));
+    assert!(!stdout.contains(CLIENT_SECRET));
+    assert!(!stderr.contains(CLIENT_SECRET));
+    let servers = load_global_mcp_servers(fixture.home.path()).await?;
+    assert_eq!(servers["manual"].oauth_client_secret(), Some(CLIENT_SECRET));
+    // Reset removes the priority override without relying on wiremock's scoped indices.
+    fixture.server.reset().await;
+    fixture.mount_oauth(Some(CLIENT_SECRET)).await;
+
+    assert_no_browser_exchanges_pasted_callback_and_saves_credentials(fixture, Some(CLIENT_SECRET))
+        .await
+}
+
+async fn assert_no_browser_exchanges_pasted_callback_and_saves_credentials(
+    fixture: Fixture,
+    client_secret: Option<&'static str>,
+) -> Result<()> {
     let mut login = fixture.start().await?;
     let authorization_url = login.authorization_url.to_string();
     let params: BTreeMap<_, _> = login.authorization_url.query_pairs().into_owned().collect();
@@ -176,15 +288,23 @@ async fn no_browser_exchanges_pasted_callback_and_saves_credentials() -> Result<
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    insta::assert_snapshot!(String::from_utf8(output.stdout)?.replace(&authorization_url, "[AUTHORIZATION_URL]"), @r"
-    Authorize the MCP server by opening this URL in your browser:
-    [AUTHORIZATION_URL]
+    let stdout = String::from_utf8(output.stdout)?;
+    let stderr = String::from_utf8(output.stderr)?;
+    if let Some(client_secret) = client_secret {
+        assert!(!stdout.contains(client_secret));
+        assert!(!stderr.contains(client_secret));
+    }
+    insta::allow_duplicates! {
+        insta::assert_snapshot!(stdout.replace(&authorization_url, "[AUTHORIZATION_URL]"), @r"
+        Authorize the MCP server by opening this URL in your browser:
+        [AUTHORIZATION_URL]
 
-    After signing in, copy the full URL from your browser's address bar.
-    If the callback page cannot load, paste that URL here anyway.
-    Successfully logged in to MCP server 'manual'.
-    ");
-    assert!(String::from_utf8(output.stderr)?.contains("Callback URL (input hidden): "));
+        After signing in, copy the full URL from your browser's address bar.
+        If the callback page cannot load, paste that URL here anyway.
+        Successfully logged in to MCP server 'manual'.
+        ");
+    }
+    assert!(stderr.contains("Callback URL (input hidden): "));
     let requests = fixture
         .server
         .received_requests()
@@ -204,16 +324,17 @@ async fn no_browser_exchanges_pasted_callback_and_saves_credentials() -> Result<
     assert!((43..=128).contains(&verifier.len()));
     assert_eq!(params["code_challenge_method"], "S256");
     assert!(!params["code_challenge"].is_empty());
-    assert_eq!(
-        exchange,
-        BTreeMap::from([
-            ("client_id".to_string(), "registered-client".to_string()),
-            ("code".to_string(), "mock-code".to_string()),
-            ("grant_type".to_string(), "authorization_code".to_string()),
-            ("redirect_uri".to_string(), params["redirect_uri"].clone()),
-            ("resource".to_string(), fixture.issuer.clone()),
-        ])
-    );
+    let mut expected_exchange = BTreeMap::from([
+        ("client_id".to_string(), "registered-client".to_string()),
+        ("code".to_string(), "mock-code".to_string()),
+        ("grant_type".to_string(), "authorization_code".to_string()),
+        ("redirect_uri".to_string(), params["redirect_uri"].clone()),
+        ("resource".to_string(), fixture.issuer.clone()),
+    ]);
+    if let Some(client_secret) = client_secret {
+        expected_exchange.insert("client_secret".to_string(), client_secret.to_string());
+    }
+    assert_eq!(exchange, expected_exchange);
     let credentials: BTreeMap<String, Value> = serde_json::from_slice(&std::fs::read(
         fixture.home.path().join(".credentials.json"),
     )?)?;
@@ -236,7 +357,7 @@ async fn no_browser_rejects_invalid_callbacks_without_exchanging_tokens() -> Res
         ("iss", Some("https://secret-issuer-marker.example")),
         ("eof", None),
     ] {
-        let fixture = Fixture::new().await?;
+        let fixture = Fixture::new(/*client_secret*/ None).await?;
         let mut login = fixture.start().await?;
         let mut callback = login.callback(&fixture.issuer)?;
         let mut pairs: BTreeMap<_, _> = callback.query_pairs().into_owned().collect();
@@ -285,7 +406,7 @@ async fn no_browser_rejects_invalid_callbacks_without_exchanging_tokens() -> Res
 
 #[tokio::test]
 async fn no_browser_accepts_http_callback_while_terminal_input_remains_open() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let fixture = Fixture::new(/*client_secret*/ None).await?;
     let mut login = fixture.start().await?;
     let callback = login.callback(&fixture.issuer)?;
     let stdin = login.child.stdin.take().context("missing stdin")?;
@@ -317,7 +438,7 @@ async fn no_browser_accepts_http_callback_while_terminal_input_remains_open() ->
 
 #[tokio::test]
 async fn no_browser_retries_rejected_discovered_scopes_with_pasteback() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let fixture = Fixture::new(/*client_secret*/ None).await?;
     let config_path = fixture.home.path().join("config.toml");
     let config = std::fs::read_to_string(&config_path)?;
     std::fs::write(config_path, config.replace("scopes = [\"mcp.read\"]\n", ""))?;
@@ -383,7 +504,7 @@ async fn no_browser_retries_rejected_discovered_scopes_with_pasteback() -> Resul
 #[tokio::test]
 async fn no_browser_sigint_cancels_token_exchange_after_pasted_or_http_callback() -> Result<()> {
     for callback_delivery in ["paste", "http"] {
-        let fixture = Fixture::new().await?;
+        let fixture = Fixture::new(/*client_secret*/ None).await?;
         let request_started = std::sync::Arc::new(tokio::sync::Notify::new());
         let notify = std::sync::Arc::clone(&request_started);
         Mock::given(method("POST"))

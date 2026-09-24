@@ -224,7 +224,7 @@ impl McpRequestProcessor {
             http_headers,
             env_http_headers,
             &resolved_scopes.scopes,
-            server.oauth_client_id(),
+            server.oauth.as_ref(),
             client_registration,
             server.oauth_resource.as_deref(),
             timeout_secs,

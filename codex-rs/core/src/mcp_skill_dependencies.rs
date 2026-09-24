@@ -189,7 +189,7 @@ async fn maybe_install_mcp_dependencies(
             server_config.scopes.clone(),
             oauth_config.discovered_scopes.clone(),
         );
-        let oauth_client_id = server_config.oauth_client_id();
+        let oauth_client_config = server_config.oauth.as_ref();
         let oauth_credential_name = server_config.oauth_credential_name(&name);
         let callback_port = server_config.oauth_callback_port(config.mcp_oauth_callback_port);
         let first_attempt = perform_oauth_login(
@@ -200,7 +200,7 @@ async fn maybe_install_mcp_dependencies(
             oauth_config.http_headers.clone(),
             oauth_config.env_http_headers.clone(),
             &resolved_scopes.scopes,
-            oauth_client_id,
+            oauth_client_config,
             McpOAuthClientRegistration::Auto,
             server_config.oauth_resource.as_deref(),
             callback_port,
@@ -220,7 +220,7 @@ async fn maybe_install_mcp_dependencies(
                     oauth_config.http_headers,
                     oauth_config.env_http_headers,
                     &[],
-                    oauth_client_id,
+                    oauth_client_config,
                     McpOAuthClientRegistration::Auto,
                     server_config.oauth_resource.as_deref(),
                     callback_port,

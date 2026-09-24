@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_config::McpServerOAuthConfig;
 use codex_exec_server::HttpClient;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::AuthorizationSession;
@@ -36,6 +37,7 @@ use crate::oauth_callback::callback_id_from_server_url;
 use crate::oauth_callback::callback_mode;
 use crate::oauth_callback::resolve_mcp_oauth_callback_url;
 use crate::oauth_callback::validate_callback_redirect;
+use crate::oauth_client_credentials::OAuthClientCredentials;
 use crate::oauth_client_registration::McpOAuthClientRegistration;
 use crate::oauth_client_registration::PreparedOAuthLogin;
 use crate::oauth_client_registration::start_authorization as start_client_registration;
@@ -111,7 +113,7 @@ pub async fn perform_oauth_login(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
-    oauth_client_id: Option<&str>,
+    oauth_config: Option<&McpServerOAuthConfig>,
     client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
@@ -127,7 +129,7 @@ pub async fn perform_oauth_login(
         http_headers,
         env_http_headers,
         scopes,
-        oauth_client_id,
+        oauth_config,
         client_registration,
         oauth_resource,
         callback_port,
@@ -149,7 +151,7 @@ pub async fn perform_oauth_login_silent(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
-    oauth_client_id: Option<&str>,
+    oauth_config: Option<&McpServerOAuthConfig>,
     client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
@@ -166,7 +168,7 @@ pub async fn perform_oauth_login_silent(
         http_headers,
         env_http_headers,
         scopes,
-        oauth_client_id,
+        oauth_config,
         client_registration,
         oauth_resource,
         callback_port,
@@ -188,7 +190,7 @@ async fn perform_oauth_login_with_browser_output(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
-    oauth_client_id: Option<&str>,
+    oauth_config: Option<&McpServerOAuthConfig>,
     client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
@@ -211,7 +213,7 @@ async fn perform_oauth_login_with_browser_output(
         keyring_backend_kind,
         http_context,
         scopes,
-        oauth_client_id,
+        oauth_config,
         OAuthLoginPurpose::Mcp,
         client_registration,
         oauth_resource,
@@ -235,7 +237,7 @@ pub async fn perform_oauth_login_return_url(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
-    oauth_client_id: Option<&str>,
+    oauth_config: Option<&McpServerOAuthConfig>,
     client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     timeout_secs: Option<i64>,
@@ -258,7 +260,7 @@ pub async fn perform_oauth_login_return_url(
         keyring_backend_kind,
         http_context,
         scopes,
-        oauth_client_id,
+        oauth_config,
         OAuthLoginPurpose::Mcp,
         client_registration,
         oauth_resource,
@@ -538,7 +540,7 @@ impl OauthLoginFlow {
         keyring_backend_kind: AuthKeyringBackendKind,
         http_context: OAuthHttpContext,
         scopes: &[String],
-        oauth_client_id: Option<&str>,
+        oauth_config: Option<&McpServerOAuthConfig>,
         purpose: OAuthLoginPurpose,
         client_registration: McpOAuthClientRegistration,
         oauth_resource: Option<&str>,
@@ -550,6 +552,8 @@ impl OauthLoginFlow {
     ) -> Result<Self> {
         const DEFAULT_OAUTH_TIMEOUT_SECS: i64 = 300;
 
+        let credentials = OAuthClientCredentials::resolve(oauth_config)?;
+        let oauth_client_id = credentials.client_id.as_deref();
         let callback_port = resolve_callback_port(callback_port)?;
         let is_enterprise_idp = matches!(purpose, OAuthLoginPurpose::EnterpriseIdp);
         let (enterprise_bind_ip, callback_port) = if is_enterprise_idp {
@@ -564,7 +568,6 @@ impl OauthLoginFlow {
             (None, callback_port)
         };
         let callback_id = callback_id_from_server_url(server_url)?;
-        let oauth_client_id = oauth_client_id.filter(|client_id| !client_id.trim().is_empty());
         let configured_callback = if oauth_client_id.is_some() {
             callback_url
                 .map(|callback_url| {
@@ -682,6 +685,7 @@ impl OauthLoginFlow {
                 &redirect_uri,
                 &callback_id,
                 oauth_client_id,
+                credentials.client_secret.as_ref(),
                 purpose,
             )
             .await?
@@ -839,6 +843,7 @@ async fn resolve_authorization_manager(
     Ok((auth_manager, metadata))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_authorization(
     mut auth_manager: AuthorizationManager,
     metadata: AuthorizationMetadata,
@@ -846,14 +851,18 @@ async fn start_authorization(
     redirect_uri: &str,
     callback_id: &str,
     oauth_client_id: &str,
+    client_secret: Option<&oauth2::ClientSecret>,
     purpose: OAuthLoginPurpose,
 ) -> Result<PreparedOAuthLogin> {
     let strict_enterprise_idp = matches!(purpose, OAuthLoginPurpose::EnterpriseIdp);
     let authorization_server_issuer = metadata.issuer.clone();
     validate_callback_redirect(redirect_uri, callback_id, callback_mode(&metadata)?)?;
     auth_manager.set_metadata(metadata);
-    let client_config = OAuthClientConfig::new(oauth_client_id, redirect_uri)
+    let mut client_config = OAuthClientConfig::new(oauth_client_id, redirect_uri)
         .with_scopes(scopes.iter().map(|scope| (*scope).to_string()).collect());
+    if let Some(secret) = client_secret {
+        client_config = client_config.with_client_secret(secret.secret());
+    }
     auth_manager.configure_client(client_config)?;
     let auth_url = auth_manager.get_authorization_url(scopes).await?;
     let auth_url = if strict_enterprise_idp {
@@ -904,6 +913,7 @@ mod tests {
     use axum::Router;
     use axum::routing::get;
     use axum::routing::post;
+    use codex_config::McpServerOAuthConfig;
     use codex_config::types::AuthKeyringBackendKind;
     use codex_config::types::OAuthCredentialsStoreMode;
     use codex_exec_server::ExecServerError;
@@ -1081,7 +1091,10 @@ mod tests {
                 redirect_mode: StreamableHttpRedirectMode::Legacy,
             },
             &[],
-            Some("test-client"),
+            Some(&McpServerOAuthConfig {
+                client_id: Some("test-client".to_string()),
+                ..Default::default()
+            }),
             OAuthLoginPurpose::Mcp,
             McpOAuthClientRegistration::Auto,
             /*oauth_resource*/ None,
@@ -1145,6 +1158,7 @@ mod tests {
                 redirect_uri,
                 "configured-client",
                 "eci-prd-pub-codex-123",
+                /*client_secret*/ None,
                 OAuthLoginPurpose::Mcp,
             )
             .await
@@ -1254,6 +1268,7 @@ mod tests {
                 redirect_uri,
                 "test-callback",
                 "test-client",
+                /*client_secret*/ None,
                 OAuthLoginPurpose::Mcp,
             )
             .await
@@ -1311,7 +1326,7 @@ mod tests {
             /*http_headers*/ None,
             /*env_http_headers*/ None,
             &[],
-            /*oauth_client_id*/ None,
+            /*oauth_config*/ None,
             McpOAuthClientRegistration::Auto,
             /*oauth_resource*/ None,
             /*callback_port*/ None,
@@ -1336,7 +1351,7 @@ mod tests {
             /*http_headers*/ None,
             /*env_http_headers*/ None,
             &[],
-            /*oauth_client_id*/ None,
+            /*oauth_config*/ None,
             McpOAuthClientRegistration::Auto,
             /*oauth_resource*/ None,
             /*callback_port*/ None,

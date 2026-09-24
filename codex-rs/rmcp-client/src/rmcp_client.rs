@@ -16,6 +16,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
+use codex_config::McpServerOAuthConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::McpServerEnvVar;
 use codex_exec_server::HttpClient;
@@ -88,6 +89,7 @@ use crate::oauth::StoredOAuthTokens;
 use crate::oauth::install_tokens_in_manager;
 use crate::oauth::resolve_oauth_tokens_from_store_policy;
 use crate::oauth::validate_refresh_token_issuer;
+use crate::oauth_client_credentials::OAuthClientCredentials;
 use crate::oauth_http_client::OAuthHttpClientAdapter;
 use crate::oauth_refresh_mode::McpOAuthRefreshMode;
 use crate::protocol_mode::McpProtocolMode;
@@ -162,6 +164,7 @@ enum TransportRecipe {
         bearer_token: Option<StreamableHttpBearerToken>,
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
+        oauth_config: Option<Arc<McpServerOAuthConfig>>,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         pinned_credential_store: Arc<OnceLock<ResolvedOAuthCredentialStore>>,
@@ -567,6 +570,7 @@ impl RmcpClient {
             bearer_token.map(StreamableHttpBearerToken::Resolved),
             http_headers,
             env_http_headers,
+            /*oauth_config*/ None,
             store_mode,
             keyring_backend_kind,
             http_client,
@@ -585,6 +589,7 @@ impl RmcpClient {
         bearer_token: Option<StreamableHttpBearerToken>,
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
+        oauth_config: Option<McpServerOAuthConfig>,
         store_mode: OAuthCredentialsStoreMode,
         keyring_backend_kind: AuthKeyringBackendKind,
         http_client: Arc<dyn HttpClient>,
@@ -599,6 +604,7 @@ impl RmcpClient {
             bearer_token,
             http_headers,
             env_http_headers,
+            oauth_config: oauth_config.map(Arc::new),
             store_mode,
             keyring_backend_kind,
             pinned_credential_store: Arc::new(OnceLock::new()),
@@ -1103,6 +1109,7 @@ impl RmcpClient {
                 bearer_token,
                 http_headers,
                 env_http_headers,
+                oauth_config,
                 store_mode,
                 keyring_backend_kind,
                 pinned_credential_store,
@@ -1134,6 +1141,7 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
+                    OAuthClientCredentials::resolve(oauth_config.as_deref())?;
                     let oauth_server_name = server_name.clone();
                     let oauth_url = url.clone();
                     let oauth_store_mode = *store_mode;
@@ -1198,6 +1206,7 @@ impl RmcpClient {
                         *redirect_mode,
                         *oauth_refresh_mode,
                         Arc::clone(initialize_deadline),
+                        oauth_config.as_deref(),
                     )
                     .await
                     {
@@ -1596,7 +1605,10 @@ async fn create_oauth_transport_and_runtime(
     redirect_mode: StreamableHttpRedirectMode,
     oauth_refresh_mode: McpOAuthRefreshMode,
     initialize_deadline: Arc<StdMutex<Option<Instant>>>,
+    oauth_config: Option<&McpServerOAuthConfig>,
 ) -> Result<PendingTransport> {
+    OAuthClientCredentials::resolve(oauth_config)?
+        .validate_stored_client_id(&initial_tokens.client_id)?;
     let oauth_http_client = Arc::new(OAuthHttpClientAdapter::new_with_redirect_mode(
         http_client.clone(),
         default_headers.clone(),
@@ -1625,13 +1637,14 @@ async fn create_oauth_transport_and_runtime(
         runtime_tokens.token_response.0.set_refresh_token(None);
         runtime_tokens.issuer = None;
     }
-    install_tokens_in_manager(&mut manager, &runtime_tokens).await?;
+    install_tokens_in_manager(&mut manager, &runtime_tokens, oauth_config).await?;
     let coordinated_store = match oauth_refresh_mode {
         McpOAuthRefreshMode::Coordinated if !use_stored_access_token_only => {
             let store = OAuthCredentialStore::new(
                 initial_tokens.clone(),
                 credential_store,
                 DefaultKeyringStore,
+                oauth_config.cloned(),
             );
             manager.set_credential_store(store.clone());
             Some(store)
@@ -1675,6 +1688,7 @@ async fn create_oauth_transport_and_runtime(
             auth_manager,
             credential_store,
             Some(initial_tokens),
+            oauth_config.cloned(),
         )),
     };
 

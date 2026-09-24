@@ -2531,6 +2531,7 @@ dependencies = [
  "codex-utils-path",
  "codex-utils-path-uri",
  "codex-utils-pty",
+ "codex-utils-redacted-string",
  "codex-websocket-auth",
  "codex-windows-sandbox",
  "crossterm",

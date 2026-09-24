@@ -216,7 +216,10 @@ pub async fn perform_enterprise_oauth_login_return_url(
             redirect_mode: request.redirect_mode,
         },
         &["openid".to_string(), "offline_access".to_string()],
-        Some(request.client_id),
+        Some(&codex_config::McpServerOAuthConfig {
+            client_id: Some(request.client_id.to_string()),
+            ..Default::default()
+        }),
         OAuthLoginPurpose::EnterpriseIdp,
         McpOAuthClientRegistration::Auto,
         /*oauth_resource*/ None,

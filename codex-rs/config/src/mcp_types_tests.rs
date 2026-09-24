@@ -382,6 +382,84 @@ fn deserialize_streamable_http_server_config_with_oauth_client_id() {
 }
 
 #[test]
+fn oauth_client_secret_round_trips_without_debug_disclosure() {
+    let cfg: McpServerConfig = toml::from_str(
+        r#"
+            url = "https://example.com/mcp"
+
+            [oauth]
+            client_id = "confidential-client"
+            client_secret = "test-client-secret"
+        "#,
+    )
+    .expect("should deserialize an OAuth client secret");
+    assert_eq!(
+        cfg.oauth,
+        Some(McpServerOAuthConfig {
+            client_id: Some("confidential-client".to_string()),
+            client_secret: Some("test-client-secret".into()),
+            ..Default::default()
+        })
+    );
+    assert_eq!(cfg.oauth_client_secret(), Some("test-client-secret"));
+
+    let serialized = serde_json::to_value(&cfg).expect("serialize server as JSON");
+    assert_eq!(
+        serialized["oauth"],
+        serde_json::json!({
+            "client_id": "confidential-client",
+            "client_secret": "test-client-secret"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<McpServerConfig>(serialized).expect("deserialize JSON"),
+        cfg
+    );
+    assert_eq!(
+        toml::from_str::<McpServerConfig>(&toml::to_string(&cfg).expect("serialize TOML"))
+            .expect("deserialize TOML"),
+        cfg
+    );
+
+    let debug = format!("{cfg:?}");
+    assert!(!debug.contains("test-client-secret"));
+    assert!(debug.contains("client_secret: Some(<redacted>)"));
+}
+
+#[test]
+fn oauth_client_secret_requires_nonempty_secret_and_client_id() {
+    for (oauth, expected) in [
+        (
+            serde_json::json!({"client_id": "client", "client_secret": ""}),
+            "oauth.client_secret must not be empty",
+        ),
+        (
+            serde_json::json!({"client_id": "client", "client_secret": " \t"}),
+            "oauth.client_secret must not be empty",
+        ),
+        (
+            serde_json::json!({"client_secret": "test-client-secret"}),
+            "oauth.client_secret requires oauth.client_id",
+        ),
+        (
+            serde_json::json!({"client_id": "", "client_secret": "test-client-secret"}),
+            "oauth.client_secret requires oauth.client_id",
+        ),
+        (
+            serde_json::json!({"client_id": " \t", "client_secret": "test-client-secret"}),
+            "oauth.client_secret requires oauth.client_id",
+        ),
+    ] {
+        let err = serde_json::from_value::<McpServerConfig>(serde_json::json!({
+            "url": "https://example.com/mcp",
+            "oauth": oauth
+        }))
+        .expect_err("should reject invalid OAuth client credentials");
+        assert_eq!(err.to_string(), expected);
+    }
+}
+
+#[test]
 fn oauth_callback_port_prefers_server_port_over_global_port() {
     let cfg: McpServerConfig = toml::from_str(
         r#"

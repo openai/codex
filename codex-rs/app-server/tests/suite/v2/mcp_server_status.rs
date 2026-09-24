@@ -72,10 +72,11 @@ use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[test_case(false, None, None, None, true; "legacy callback")]
+#[test_case(false, None, None, None, None, true; "legacy callback")]
 #[test_case(
     false,
     Some("http://127.0.0.1/callback/registered"),
+    None,
     None,
     None,
     true;
@@ -86,6 +87,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
     Some("http://127.0.0.1/callback/registered"),
     Some("http://127.0.0.1/global/callback"),
     None,
+    None,
     true;
     "ordinary configured callback falls back to global"
 )]
@@ -94,6 +96,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
     Some("http://127.0.0.1/callback/registered"),
     Some("http://127.0.0.1/global/callback"),
     Some("https://unexpected.example"),
+    None,
     false;
     "legacy callback fallback rejects mismatched issuer"
 )]
@@ -102,6 +105,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
     Some("http://127.0.0.1/callback"),
     None,
     Some("matching"),
+    None,
     true;
     "matching issuer"
 )]
@@ -110,6 +114,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
     Some("http://127.0.0.1/callback"),
     None,
     Some("https://unexpected.example"),
+    None,
     false;
     "mismatched issuer"
 )]
@@ -118,8 +123,27 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
     Some("http://127.0.0.1/callback"),
     None,
     None,
+    None,
     false;
     "missing issuer"
+)]
+#[test_case(
+    false,
+    None,
+    None,
+    None,
+    Some("test-client-secret"),
+    true;
+    "client secret with legacy callback"
+)]
+#[test_case(
+    true,
+    Some("http://127.0.0.1/callback"),
+    None,
+    Some("matching"),
+    Some("test-client-secret"),
+    true;
+    "client secret with matching issuer"
 )]
 #[tokio::test]
 async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
@@ -127,6 +151,7 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
     configured_callback: Option<&str>,
     global_callback: Option<&str>,
     callback_issuer: Option<&str>,
+    client_secret: Option<&'static str>,
     expected_success: bool,
 ) -> Result<()> {
     let oauth = MockServer::start().await;
@@ -139,12 +164,24 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
             "authorization_endpoint": format!("{}/oauth/authorize", oauth.uri()),
             "token_endpoint": format!("{}/oauth/token", oauth.uri()),
             "authorization_response_iss_parameter_supported": issuer_supported,
+            "token_endpoint_auth_methods_supported": [if client_secret.is_some() {
+                "client_secret_post"
+            } else {
+                "none"
+            }],
         })))
         .mount(&oauth)
         .await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(header("x-gateway", "gateway-token"))
+        .and(move |request: &wiremock::Request| {
+            let body: BTreeMap<_, _> = url::form_urlencoded::parse(&request.body)
+                .into_owned()
+                .collect();
+            body.get("client_secret").map(String::as_str) == client_secret
+                && body.get("client_id").map(String::as_str) == Some("test-client")
+        })
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "access_token": "oauth-token",
             "token_type": "Bearer",
@@ -162,6 +199,9 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
     let saved_callback = configured_callback
         .map(|callback| format!("callback_url = \"{callback}\"\n"))
         .unwrap_or_default();
+    let saved_client_secret = client_secret
+        .map(|secret| format!("client_secret = \"{secret}\"\n"))
+        .unwrap_or_default();
     let global_callback_config = global_callback
         .map(|callback| format!("mcp_oauth_callback_url = \"{callback}\"\n"))
         .unwrap_or_default();
@@ -175,6 +215,7 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
              http_headers_helper = {}\n\
              [mcp_servers.gateway.oauth]\n\
              client_id = \"test-client\"\n\
+             {saved_client_secret}\
              {saved_callback}",
             oauth.uri(),
             toml::Value::String(helper_command.to_string()),
@@ -195,6 +236,7 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
     let authorization_url = Url::parse(&response.authorization_url)?;
     let query: BTreeMap<_, _> = authorization_url.query_pairs().into_owned().collect();
+    assert!(!query.contains_key("client_secret"));
     let mut callback_url = Url::parse(&query["redirect_uri"])?;
     let expected_callback = if issuer_supported {
         configured_callback
@@ -242,6 +284,11 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
         ),
         ("gateway", None, expected_success, !expected_success)
     );
+    if let Some(client_secret) = client_secret {
+        assert!(!response.authorization_url.contains(client_secret));
+        let credentials = std::fs::read_to_string(codex_home.path().join(".credentials.json"))?;
+        assert!(!credentials.contains(client_secret));
+    }
     oauth.verify().await;
     Ok(())
 }

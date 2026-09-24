@@ -14,6 +14,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
+use codex_config::McpServerOAuthConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
@@ -49,7 +50,7 @@ pub(crate) async fn perform_oauth_login_retry_without_scopes(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     resolved_scopes: &ResolvedMcpOAuthScopes,
-    oauth_client_id: Option<&str>,
+    oauth_config: Option<&McpServerOAuthConfig>,
     client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
@@ -78,7 +79,7 @@ pub(crate) async fn perform_oauth_login_retry_without_scopes(
                         http_headers.clone(),
                         env_http_headers.clone(),
                         scopes,
-                        oauth_client_id,
+                        oauth_config,
                         client_registration,
                         oauth_resource,
                         callback_port,
@@ -98,7 +99,7 @@ pub(crate) async fn perform_oauth_login_retry_without_scopes(
                         http_headers.clone(),
                         env_http_headers.clone(),
                         scopes,
-                        oauth_client_id,
+                        oauth_config,
                         client_registration,
                         oauth_resource,
                         callback_port,

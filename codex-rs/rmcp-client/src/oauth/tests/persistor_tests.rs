@@ -181,6 +181,7 @@ async fn coordinated_401_refresh_rereads_and_persists_before_retry() -> Result<(
         initial.clone(),
         ResolvedOAuthCredentialStore::File,
         DefaultKeyringStore,
+        /*oauth_config*/ None,
     ));
     let client = AuthClient::new(
         StreamableHttpClientAdapter::new(
@@ -397,6 +398,7 @@ async fn resolved_keyring_read_error_preserves_in_memory_credentials() -> Result
         Arc::clone(&manager),
         ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
         Some(initial.clone()),
+        /*oauth_config*/ None,
     );
 
     let error = persistor
@@ -875,6 +877,7 @@ async fn coordinated_manager_for(
         tokens.clone(),
         ResolvedOAuthCredentialStore::File,
         DefaultKeyringStore,
+        /*oauth_config*/ None,
     );
     manager.set_credential_store(store.clone());
     Ok((Arc::new(TokioMutex::new(manager)), store))
@@ -887,6 +890,7 @@ async fn persistor_for(tokens: &StoredOAuthTokens) -> Result<OAuthPersistor> {
         Arc::new(TokioMutex::new(authorization_manager_for(tokens).await?)),
         ResolvedOAuthCredentialStore::File,
         Some(tokens.clone()),
+        /*oauth_config*/ None,
     ))
 }
 

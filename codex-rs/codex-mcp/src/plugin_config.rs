@@ -280,6 +280,12 @@ fn normalize_plugin_mcp_server_value(
             oauth.entry("client_id".to_string()).or_insert(client_id);
         }
 
+        if let Some(client_secret) = oauth.remove("clientSecret") {
+            oauth
+                .entry("client_secret".to_string())
+                .or_insert(client_secret);
+        }
+
         if !oauth.is_empty() {
             object.insert("oauth".to_string(), JsonValue::Object(oauth));
         }

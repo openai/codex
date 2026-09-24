@@ -348,6 +348,40 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
 }
 
 #[tokio::test]
+async fn add_rejects_blank_client_credentials_before_saving() -> Result<()> {
+    let mut errors = Vec::new();
+    for (client_id, client_secret) in [("registered-client", "   "), ("   ", "cli-secret-marker")] {
+        let codex_home = TempDir::new()?;
+        let output = codex_command(codex_home.path())?
+            .args([
+                "mcp",
+                "add",
+                "private",
+                "--url",
+                "http://127.0.0.1:9/mcp",
+                "--oauth-client-id",
+                client_id,
+                "--oauth-client-secret",
+                client_secret,
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(!stderr.contains("cli-secret-marker"));
+        assert!(!String::from_utf8(output.stdout)?.contains("cli-secret-marker"));
+        assert!(load_global_mcp_servers(codex_home.path()).await?.is_empty());
+        errors.push(stderr.trim().to_string());
+    }
+    insta::assert_snapshot!(errors.join("\n"), @r"
+    Error: --oauth-client-secret must not be empty
+    Error: --oauth-client-secret requires a nonempty --oauth-client-id
+    ");
+    Ok(())
+}
+
+#[tokio::test]
 async fn add_streamable_http_with_custom_env_var() -> Result<()> {
     let codex_home = TempDir::new()?;
 

@@ -10,6 +10,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_protocol::config_types::ToolExposureSurface;
 use codex_utils_path_uri::LegacyAppPathString;
+use codex_utils_redacted_string::RedactedString;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -164,6 +165,10 @@ pub struct McpServerOAuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
 
+    /// OAuth client secret used for token exchange with a pre-registered client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<RedactedString>,
+
     /// Registered callback URL associated with this OAuth client.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_url: Option<String>,
@@ -315,6 +320,13 @@ impl McpServerConfig {
         self.oauth
             .as_ref()
             .and_then(|oauth| oauth.client_id.as_deref())
+    }
+
+    pub fn oauth_client_secret(&self) -> Option<&str> {
+        self.oauth
+            .as_ref()
+            .and_then(|oauth| oauth.client_secret.as_ref())
+            .map(|secret| secret.as_str())
     }
 
     pub fn oauth_callback_port(&self, global_callback_port: Option<u16>) -> Option<u16> {
@@ -512,6 +524,20 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
         let environment_id =
             environment_id.unwrap_or_else(|| DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string());
         let auth = auth.unwrap_or_default();
+        if let Some(oauth) = &oauth
+            && let Some(client_secret) = &oauth.client_secret
+        {
+            if client_secret.trim().is_empty() {
+                return Err("oauth.client_secret must not be empty".to_string());
+            }
+            if oauth
+                .client_id
+                .as_deref()
+                .is_none_or(|client_id| client_id.trim().is_empty())
+            {
+                return Err("oauth.client_secret requires oauth.client_id".to_string());
+            }
+        }
         if !matches!(auth, McpServerAuth::EmaAuth)
             && oauth
                 .as_ref()

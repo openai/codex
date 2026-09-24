@@ -18,6 +18,7 @@ use std::sync::Weak;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_config::McpServerOAuthConfig;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use futures::future::BoxFuture;
@@ -31,6 +32,7 @@ use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
 use tracing::warn;
 
+use crate::oauth_client_credentials::OAuthClientCredentials;
 use crate::oauth_http_client::PROACTIVE_REFRESH_TIMEOUT;
 
 use super::RefreshCredentialLock;
@@ -56,6 +58,7 @@ struct OAuthCredentialStoreInner<K> {
     issuer: Option<String>,
     store: ResolvedOAuthCredentialStore,
     keyring: K,
+    oauth_config: Option<McpServerOAuthConfig>,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
     refresh_guard: Mutex<Weak<RefreshCredentialLock>>,
 }
@@ -65,6 +68,7 @@ impl<K: KeyringStore + Clone + 'static> OAuthCredentialStore<K> {
         tokens: StoredOAuthTokens,
         store: ResolvedOAuthCredentialStore,
         keyring: K,
+        oauth_config: Option<McpServerOAuthConfig>,
     ) -> Self {
         Self {
             inner: Arc::new(OAuthCredentialStoreInner {
@@ -74,6 +78,7 @@ impl<K: KeyringStore + Clone + 'static> OAuthCredentialStore<K> {
                 issuer: tokens.bound_issuer().map(str::to_owned),
                 store,
                 keyring,
+                oauth_config,
                 last_credentials: Mutex::new(Some(tokens)),
                 refresh_guard: Mutex::new(Weak::new()),
             }),
@@ -97,6 +102,11 @@ impl<K: KeyringStore + Clone + 'static> OAuthCredentialStore<K> {
         validate_refresh_token_issuer(&metadata, &tokens)?;
         manager.set_metadata(metadata);
         manager.configure_client_id(&tokens.client_id)?;
+        OAuthClientCredentials::resolve(self.inner.oauth_config.as_ref())?.configure_for_refresh(
+            manager,
+            &self.inner.url,
+            &tokens.client_id,
+        )?;
         // Reuse the guard for RMCP's exchange and save after the locked freshness check.
         manager.set_credential_store(Self {
             inner: Arc::clone(&self.inner),

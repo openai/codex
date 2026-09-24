@@ -14,6 +14,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_config::McpServerOAuthConfig;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
@@ -35,7 +36,7 @@ pub async fn perform_oauth_login_with_callback_input<F>(
     http_headers: Option<HashMap<String, String>>,
     env_http_headers: Option<HashMap<String, String>>,
     scopes: &[String],
-    oauth_client_id: Option<&str>,
+    oauth_config: Option<&McpServerOAuthConfig>,
     client_registration: McpOAuthClientRegistration,
     oauth_resource: Option<&str>,
     callback_port: Option<u16>,
@@ -59,7 +60,7 @@ where
             redirect_mode: StreamableHttpRedirectMode::Legacy,
         },
         scopes,
-        oauth_client_id,
+        oauth_config,
         OAuthLoginPurpose::Mcp,
         client_registration,
         oauth_resource,

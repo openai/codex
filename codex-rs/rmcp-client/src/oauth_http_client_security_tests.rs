@@ -388,6 +388,12 @@ async fn oauth_registration_redirects_never_forward_resource_only_headers() -> R
 async fn same_origin_redirects_preserve_timeout_and_response_body_limits() -> Result<()> {
     for oversized_redirect_body in [false, true] {
         let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/warmup"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
         let resource_url = format!("{}/mcp", server.uri());
         let redirect = ResponseTemplate::new(307).insert_header("location", "/register/");
         let redirect = if oversized_redirect_body {
@@ -423,6 +429,17 @@ async fn same_origin_redirects_preserve_timeout_and_response_body_limits() -> Re
             )?,
             &resource_url,
         );
+        // Measure redirect handling after lazy native HTTP client initialization.
+        adapter
+            .execute_request(
+                oauth2::http::Request::builder()
+                    .uri(format!("{}/warmup", server.uri()))
+                    .body(Vec::new())?,
+                OAuthHttpRedirectPolicy::Stop,
+                /*timeout*/ None,
+            )
+            .await
+            .expect("HTTP client warmup should succeed");
         let error = adapter
             .execute_request(
                 oauth2::http::Request::builder()
