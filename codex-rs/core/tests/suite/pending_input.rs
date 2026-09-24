@@ -670,7 +670,7 @@ async fn any_new_input_interrupts_sleep() {
         response_completed_chunks("resp-3"),
     ])
     .await;
-    let codex = test_codex()
+    let test = test_codex()
         .with_model("gpt-5.4")
         .with_config(|config| {
             config
@@ -684,8 +684,8 @@ async fn any_new_input_interrupts_sleep() {
         })
         .build_with_streaming_server(&server)
         .await
-        .expect("build Codex test session")
-        .codex;
+        .expect("build Codex test session");
+    let codex = test.codex.clone();
 
     submit_user_input(&codex, INITIAL_PROMPT).await;
     wait_for_sleep_item_started(&codex, FIRST_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
@@ -694,7 +694,8 @@ async fn any_new_input_interrupts_sleep() {
     wait_for_sleep_item_completed(&codex, FIRST_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
     wait_for_sleep_item_started(&codex, SECOND_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
 
-    submit_queue_only_agent_mail(&codex, "new mailbox input").await;
+    // The list-voices barrier can consume the sleep completion that we need to observe next.
+    enqueue_queue_only_agent_mail(&codex, "new mailbox input").await;
     wait_for_sleep_item_completed(&codex, SECOND_SLEEP_CALL_ID, SLEEP_DURATION_MS).await;
     wait_for_turn_complete(&codex).await;
 
