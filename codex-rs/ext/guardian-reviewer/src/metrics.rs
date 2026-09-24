@@ -179,6 +179,7 @@ fn failure_reason_tag(reason: Option<GuardianReviewFailureReason>) -> &'static s
     match reason {
         Some(GuardianReviewFailureReason::Timeout) => "timeout",
         Some(GuardianReviewFailureReason::Cancelled) => "cancelled",
+        Some(GuardianReviewFailureReason::StaleAuthorization) => "stale_authorization",
         Some(GuardianReviewFailureReason::PromptBuildError) => "prompt_build_error",
         Some(GuardianReviewFailureReason::SessionError) => "session_error",
         Some(GuardianReviewFailureReason::ParseError) => "parse_error",

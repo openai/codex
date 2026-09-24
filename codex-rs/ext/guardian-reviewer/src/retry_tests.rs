@@ -37,7 +37,7 @@ fn guardian_review_error_reason_distinguishes_error_kinds() {
 }
 
 #[test]
-fn guardian_review_retry_only_retries_transient_session_and_parse_errors() {
+fn guardian_review_retry_only_retries_recoverable_errors() {
     let assessment = GuardianAssessment {
         risk_level: GuardianRiskLevel::High,
         user_authorization: GuardianUserAuthorization::Unknown,
@@ -71,6 +71,10 @@ fn guardian_review_retry_only_retries_transient_session_and_parse_errors() {
         .collect::<Vec<_>>();
     outcomes.extend([
         (GuardianReviewOutcome::Completed(assessment), false),
+        (
+            GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
+            true,
+        ),
         (
             GuardianReviewOutcome::Error(GuardianReviewError::InputBudgetExceeded),
             false,
@@ -152,4 +156,63 @@ async fn guardian_review_retry_wait_honors_deadline() {
     .await;
 
     assert!(matches!(error, Some(GuardianReviewError::Timeout)));
+}
+
+#[tokio::test]
+async fn stale_authorization_uses_the_shared_attempt_budget() {
+    let mut attempts = 0;
+    let (outcome, analytics, _) = run_with_retry(
+        GuardianReviewSessionLimits {
+            max_attempts: 3,
+            deadline: Instant::now() + Duration::from_secs(/*secs*/ 90),
+        },
+        /*external_cancel*/ None,
+        |_deadline| {
+            attempts += 1;
+            async {
+                (
+                    GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
+                    GuardianReviewAnalyticsResult::without_session(),
+                    None::<()>,
+                )
+            }
+        },
+    )
+    .await;
+    assert!(matches!(
+        outcome,
+        GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization)
+    ));
+    assert_eq!((attempts, analytics.attempt_count), (3, 3));
+}
+
+#[tokio::test]
+async fn stale_authorization_does_not_extend_the_deadline() {
+    let deadline = Instant::now() + Duration::from_secs(/*secs*/ 1);
+    let mut attempts = 0;
+    let (outcome, analytics, _) = run_with_retry(
+        GuardianReviewSessionLimits {
+            max_attempts: 3,
+            deadline,
+        },
+        /*external_cancel*/ None,
+        |attempt_deadline| {
+            attempts += 1;
+            assert_eq!(attempt_deadline, deadline);
+            async move {
+                tokio::time::sleep_until(deadline).await;
+                (
+                    GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
+                    GuardianReviewAnalyticsResult::without_session(),
+                    None::<()>,
+                )
+            }
+        },
+    )
+    .await;
+    assert!(matches!(
+        outcome,
+        GuardianReviewOutcome::Error(GuardianReviewError::Timeout)
+    ));
+    assert_eq!((attempts, analytics.attempt_count), (1, 1));
 }

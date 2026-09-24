@@ -47,10 +47,10 @@ enum PendingReviewChange {
     Compaction,
 }
 
-#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Aborted; "new user instruction")]
-#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Aborted; "verified answer")]
-#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::Legacy, GuardianAssessmentStatus::Aborted; "migration user instruction")]
-#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::Legacy, GuardianAssessmentStatus::Aborted; "migration verified answer")]
+#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Denied; "new user instruction")]
+#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Denied; "verified answer")]
+#[test_case(PendingReviewChange::UserInstruction, GuardianContextMode::Legacy, GuardianAssessmentStatus::Denied; "migration user instruction")]
+#[test_case(PendingReviewChange::VerifiedAnswer, GuardianContextMode::Legacy, GuardianAssessmentStatus::Denied; "migration verified answer")]
 #[test_case(PendingReviewChange::Compaction, GuardianContextMode::Legacy, GuardianAssessmentStatus::Aborted; "compaction promotes policy")]
 #[test_case(PendingReviewChange::Compaction, GuardianContextMode::ThreadOwned, GuardianAssessmentStatus::Approved; "ordinary compaction preserves review")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -133,6 +133,16 @@ async fn guardian_revalidates_owning_session_before_allow(
                     responses::sse(vec![responses::ev_completed("user-change")])
                 }
             },
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: responses::sse(vec![
+                responses::ev_assistant_message(
+                    "refreshed-review",
+                    r#"{"risk_level":"low","user_authorization":"low","outcome":"deny","rationale":"The user now says not to run the command."}"#,
+                ),
+                responses::ev_completed("refreshed-review"),
+            ]),
         }],
     ]).await;
     let base_url = format!("{}/v1", streaming_server.uri());
@@ -274,6 +284,16 @@ async fn guardian_revalidates_owning_session_before_allow(
         }
     };
     assert_eq!(status, expected_status);
+    if expected_status == GuardianAssessmentStatus::Denied {
+        let requests = streaming_server.requests().await;
+        let refreshed: Value =
+            serde_json::from_slice(requests.last().expect("fresh Guardian request"))?;
+        assert_eq!(
+            refreshed.pointer("/client_metadata/x-openai-subagent"),
+            Some(&json!("guardian"))
+        );
+        assert!(refreshed.to_string().contains("Do not run the command."));
+    }
     test.codex.shutdown_and_wait().await?;
     streaming_server.shutdown().await;
     Ok(())

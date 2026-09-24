@@ -3553,6 +3553,14 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
                     ev_completed("resp-guardian-4"),
                 ]),
             }],
+            vec![StreamingSseChunk {
+                gate: None,
+                body: sse(vec![
+                    ev_response_created("resp-guardian-5"),
+                    ev_assistant_message("msg-guardian-5", &second_assessment),
+                    ev_completed("resp-guardian-5"),
+                ]),
+            }],
         ])
         .await;
 
@@ -3636,6 +3644,7 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
             tty: false,
         };
 
+        let second_action = super::approval_request::format_guardian_action_pretty(&second_request)?;
         let session_for_second = Arc::clone(&session);
         let turn_for_second = Arc::clone(&turn);
         let mut second_review = tokio::spawn(async move {
@@ -3760,8 +3769,14 @@ async fn guardian_ephemeral_retry_preserves_parallel_trunk_and_fork_history() ->
         gate_tx
             .send(())
             .expect("second guardian review gate should still be open");
-        // The later user input revokes the in-flight trunk review's authorization version.
-        assert_eq!(second_review.await?, ReviewDecision::Abort);
+        // The later user input requires a fresh review of the same pending action.
+        assert_eq!(second_review.await?, ReviewDecision::Approved);
+        let requests = server.requests().await;
+        assert_eq!(requests.len(), 5);
+        let refreshed_request_body = serde_json::from_slice::<serde_json::Value>(&requests[4])?;
+        let refreshed_user_message = last_user_message_text_from_body(&refreshed_request_body);
+        assert!(refreshed_user_message.contains("Now inspect whether pushing is safe."));
+        assert!(refreshed_user_message.contains(&second_action));
         let feedback = codex_feedback::guardian_review_failures(&[session.thread_id()])
             .attachment
             .expect("failed ephemeral review survives cleanup and subsequent allowed reviews");

@@ -317,6 +317,7 @@ impl LocalAgentControl {
             .unwrap_or_default();
         Some(GuardianRootSnapshot {
             root_thread_id,
+            history_reset_version: root_history.reset_version,
             authorization_version,
             messages,
             trusted_skill_paths,

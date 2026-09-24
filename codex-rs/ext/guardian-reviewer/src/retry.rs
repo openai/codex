@@ -18,14 +18,25 @@ pub struct GuardianReviewSessionLimits {
 }
 
 /// Retries only recoverable review failures within one shared deadline.
-pub async fn run_with_retry<F, Attempt>(
+/// Returns the final attempt's evidence without carrying it into subsequent attempts.
+pub async fn run_with_retry<Evidence, F, Attempt>(
     limits: GuardianReviewSessionLimits,
     external_cancel: Option<&CancellationToken>,
     mut run_attempt: F,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult)
+) -> (
+    GuardianReviewOutcome,
+    GuardianReviewAnalyticsResult,
+    Option<Evidence>,
+)
 where
     F: FnMut(Instant) -> Attempt,
-    Attempt: Future<Output = (GuardianReviewOutcome, GuardianReviewAnalyticsResult)>,
+    Attempt: Future<
+        Output = (
+            GuardianReviewOutcome,
+            GuardianReviewAnalyticsResult,
+            Option<Evidence>,
+        ),
+    >,
 {
     let GuardianReviewSessionLimits {
         max_attempts,
@@ -34,10 +45,10 @@ where
     assert!(max_attempts > 0, "guardian review must run at least once");
     let mut attempt_count = 1;
     loop {
-        let (outcome, mut analytics_result) = run_attempt(deadline).await;
+        let (outcome, mut analytics_result, evidence) = run_attempt(deadline).await;
         analytics_result.attempt_count = attempt_count;
         if attempt_count >= max_attempts || !should_retry_guardian_review(&outcome) {
-            return (outcome, analytics_result);
+            return (outcome, analytics_result, evidence);
         }
         let retry_at = match &outcome {
             GuardianReviewOutcome::Error(GuardianReviewError::Session { retry_at, .. }) => {
@@ -48,7 +59,7 @@ where
         if let Some(error) =
             wait_before_guardian_retry(attempt_count, retry_at, deadline, external_cancel).await
         {
-            return (GuardianReviewOutcome::Error(error), analytics_result);
+            return (GuardianReviewOutcome::Error(error), analytics_result, None);
         }
         attempt_count += 1;
     }
@@ -82,7 +93,9 @@ async fn wait_before_guardian_retry(
 
 fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
     match outcome {
-        GuardianReviewOutcome::Error(GuardianReviewError::Parse { .. }) => true,
+        GuardianReviewOutcome::Error(
+            GuardianReviewError::Parse { .. } | GuardianReviewError::StaleAuthorization,
+        ) => true,
         GuardianReviewOutcome::Error(GuardianReviewError::Session {
             error_info: Some(error),
             ..

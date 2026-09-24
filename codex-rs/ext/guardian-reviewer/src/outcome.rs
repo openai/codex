@@ -27,6 +27,8 @@ pub enum GuardianReviewError {
     },
     Timeout,
     Cancelled,
+    /// The action is still pending, but its authorization evidence changed during review.
+    StaleAuthorization,
 }
 
 impl GuardianReviewError {
@@ -68,6 +70,7 @@ impl GuardianReviewError {
             Self::Parse { .. } => GuardianReviewFailureReason::ParseError,
             Self::Timeout => GuardianReviewFailureReason::Timeout,
             Self::Cancelled => GuardianReviewFailureReason::Cancelled,
+            Self::StaleAuthorization => GuardianReviewFailureReason::StaleAuthorization,
         }
     }
 }

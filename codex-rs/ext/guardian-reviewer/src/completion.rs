@@ -108,12 +108,16 @@ pub fn complete_review(
                         assessment_outcome: None,
                     };
                 }
-                GuardianReviewError::InputBudgetExceeded
+                GuardianReviewError::StaleAuthorization
+                | GuardianReviewError::InputBudgetExceeded
                 | GuardianReviewError::PromptBuild { .. }
                 | GuardianReviewError::Session { .. }
                 | GuardianReviewError::Parse { .. } => {
                     let message = match &error {
                         GuardianReviewError::InputBudgetExceeded => INPUT_BUDGET_MESSAGE,
+                        GuardianReviewError::StaleAuthorization => {
+                            "authorization changed before approval could be applied"
+                        }
                         GuardianReviewError::PromptBuild { message }
                         | GuardianReviewError::Session { message, .. }
                         | GuardianReviewError::Parse { message } => message,

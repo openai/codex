@@ -418,7 +418,16 @@ async fn parent_response(
         if review_number == 0 {
             state.allow_guardian_review.notified().await;
         }
-        let assessment = match state.review_outcome {
+        let review_outcome = if state.late_root_restriction && review_number > 0 {
+            assert!(
+                request.to_string().contains(ROOT_RESTRICTION),
+                "the refreshed review must see the root revocation"
+            );
+            ReviewOutcome::Deny
+        } else {
+            state.review_outcome
+        };
+        let assessment = match review_outcome {
             ReviewOutcome::Allow => json!({
                 "risk_level": "low", "user_authorization": "high", "outcome": "allow",
                 "rationale": "The requested command is safe.",
@@ -513,11 +522,10 @@ async fn parent_response(
                 })
                 .expect("first tool result after root revocation");
             assert!(
-                output.to_string().contains("user cancelled MCP tool call")
-                    || output
-                        .to_string()
-                        .contains("Tool execution was cancelled by Guardian."),
-                "a stale sync allow must not execute the first tool: {output}"
+                output
+                    .to_string()
+                    .contains("Tool execution was declined by Guardian."),
+                "the refreshed review must deny the first tool after revocation: {output}"
             );
         }
         if request["model"] == REQUIRED_MODEL && request_number == 3 {
@@ -703,7 +711,8 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             3
         } else {
             1
-        };
+        }
+        + usize::from(late_root_restriction);
     let responses_state = Arc::new(MockResponsesState {
         luna_score,
         invalid_classification: matches!(risk, GuardianRisk::InvalidResponse),
@@ -1282,10 +1291,16 @@ async fn guardian_v2_routes_scoped_tool_approvals(
                 );
             }
         } else if late_root_restriction {
-            assert!(
-                reviews.is_empty(),
-                "the first review predates root revocation"
+            assert_eq!(reviews.len(), 1);
+            let decision = reviews[0]
+                .lines()
+                .find_map(|line| line.strip_prefix("Decision: "))
+                .expect("refreshed review should include a decision");
+            assert_eq!(
+                serde_json::from_str::<Value>(decision)?,
+                json!({"status": "denied", "risk_level": "high", "user_authorization": "unknown"}),
             );
+            assert!(reviews[0].contains("guardian-0"));
         } else if matches!(review_outcome, ReviewOutcome::Malformed) {
             assert!(
                 reviews.is_empty(),

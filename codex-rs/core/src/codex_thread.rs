@@ -175,6 +175,8 @@ pub struct GuardianAuthorizationVersion {
 pub struct GuardianRootSnapshot {
     /// Authoritative root from which this evidence was captured.
     pub root_thread_id: ThreadId,
+    /// Distinguishes a history reset from additional authorization in the same history.
+    pub(crate) history_reset_version: u64,
     pub authorization_version: GuardianAuthorizationVersion,
     pub messages: Vec<GuardianRootMessage>,
     pub trusted_skill_paths: Vec<String>,

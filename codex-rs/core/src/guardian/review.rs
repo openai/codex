@@ -270,16 +270,22 @@ async fn run_guardian_review_session_with_retry_before_deadline(
     limits: GuardianReviewSessionLimits,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
     let context = context.into();
-    codex_guardian_reviewer::run_with_retry(limits, external_cancel.as_ref(), |deadline| {
-        run_guardian_review_session_before_deadline(
-            Arc::clone(&session),
-            context.clone(),
-            request.clone(),
-            request.guardian_scope(),
-            reasons.clone(),
-            external_cancel.clone(),
-            deadline,
-        )
-    })
-    .await
+    let (outcome, analytics, _) =
+        codex_guardian_reviewer::run_with_retry(limits, external_cancel.as_ref(), |deadline| {
+            let attempt = run_guardian_review_session_before_deadline(
+                Arc::clone(&session),
+                context.clone(),
+                request.clone(),
+                request.guardian_scope(),
+                reasons.clone(),
+                external_cancel.clone(),
+                deadline,
+            );
+            async move {
+                let (outcome, analytics) = attempt.await;
+                (outcome, analytics, None::<()>)
+            }
+        })
+        .await;
+    (outcome, analytics)
 }
