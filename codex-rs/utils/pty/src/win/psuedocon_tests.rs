@@ -24,7 +24,7 @@ async fn output_closes_after_client_exit_while_session_is_retained() -> anyhow::
         &env,
         /*arg0*/ &None,
         crate::TerminalSize::default(),
-        &[],
+        crate::ChildFds::Inherited(&[]),
     )
     .await?;
     let mut output = spawned.stdout_rx;
@@ -65,7 +65,7 @@ async fn output_remains_open_for_surviving_console_child() -> anyhow::Result<()>
         &env,
         /*arg0*/ &None,
         crate::TerminalSize::default(),
-        &[],
+        crate::ChildFds::Inherited(&[]),
     )
     .await?;
     let mut output = spawned.stdout_rx;
@@ -116,7 +116,7 @@ async fn output_closes_after_termination_while_session_is_retained() -> anyhow::
         &env,
         /*arg0*/ &None,
         crate::TerminalSize::default(),
-        &[],
+        crate::ChildFds::Inherited(&[]),
     )
     .await?;
     let mut output = spawned.stdout_rx;

@@ -511,7 +511,7 @@ async fn interactive_tmux_startup_does_not_execute_workspace_helpers() -> Result
             rows: 40,
             cols: 120,
         },
-        &[],
+        codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let session = spawned.session;

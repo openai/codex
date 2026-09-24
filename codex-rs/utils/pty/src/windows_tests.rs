@@ -98,7 +98,7 @@ async fn assert_terminate_kills_descendant(
             env,
             /*arg0*/ &None,
             TerminalSize::default(),
-            &[],
+            crate::ChildFds::Inherited(&[]),
         )
         .await?
     };
@@ -154,7 +154,7 @@ async fn assert_normal_exit_preserves_descendant(
             env,
             /*arg0*/ &None,
             TerminalSize::default(),
-            &[],
+            crate::ChildFds::Inherited(&[]),
         )
         .await?
     };
@@ -335,7 +335,7 @@ async fn conpty_delivers_input_to_foreground_children() -> anyhow::Result<()> {
             &env,
             /*arg0*/ &None,
             TerminalSize::default(),
-            &[],
+            crate::ChildFds::Inherited(&[]),
         )
         .await?;
         let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);
@@ -388,7 +388,7 @@ async fn conpty_ctrl_c_interrupts_powershell_foreground_child() -> anyhow::Resul
         &env,
         /*arg0*/ &None,
         TerminalSize::default(),
-        &[],
+        crate::ChildFds::Inherited(&[]),
     )
     .await?;
     let (session, mut output_rx, exit_rx) = combine_spawned_output(spawned);

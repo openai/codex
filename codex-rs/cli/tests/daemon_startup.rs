@@ -196,7 +196,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
                 rows: 40,
                 cols: 120,
             },
-            &[],
+            codex_utils_pty::ChildFds::Inherited(&[]),
         )
         .await?;
         let exit = spawned.exit_rx;

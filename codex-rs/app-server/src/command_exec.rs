@@ -275,7 +275,7 @@ impl CommandExecManager {
                 &env,
                 &arg0,
                 size.unwrap_or_default(),
-                &[],
+                codex_utils_pty::ChildFds::Inherited(&[]),
             )
             .await
         } else if stream_stdin {

@@ -155,7 +155,7 @@ async fn spawn_process_with_stdin_mode(
     command
         .process_mode(ProcessMode::NewSession)
         .descriptor_policy(DescriptorPolicy::Explicit)
-        .preserve_fds(inherited_fds);
+        .inherit_fds(inherited_fds);
     #[cfg(target_os = "linux")]
     command.terminate_on_parent_death();
     #[cfg(not(unix))]

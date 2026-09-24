@@ -79,7 +79,7 @@ async fn direct_terminal_queries_are_answered() -> anyhow::Result<()> {
         windows_sandbox: None,
         tty: true,
         stdin_open: true,
-        inherited_fds: &[],
+        inherited_fds: codex_utils_pty::ChildFds::Inherited(&[]),
     })
     .await?;
     let SpawnedProcess {

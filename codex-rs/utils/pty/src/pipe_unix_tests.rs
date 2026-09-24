@@ -110,7 +110,7 @@ async fn descriptor_capture_pressure_falls_back_to_direct_spawn() -> anyhow::Res
                     &HashMap::new(),
                     &None,
                     crate::TerminalSize::default(),
-                    &targets,
+                    crate::ChildFds::Inherited(&targets),
                 )
                 .await?
             }

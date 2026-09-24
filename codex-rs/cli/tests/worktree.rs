@@ -89,7 +89,7 @@ async fn rejected_start(
             rows: 40,
             cols: 120,
         },
-        &[],
+        codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let mut stdout = spawned.stdout_rx;
@@ -424,7 +424,7 @@ trust_level = "trusted"
                 rows: 40,
                 cols: 120,
             },
-            &[],
+            codex_utils_pty::ChildFds::Inherited(&[]),
         )
         .await?;
         let session = spawned.session;

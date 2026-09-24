@@ -108,7 +108,7 @@ async fn run_probe(
         env,
         /*arg0*/ &None,
         TerminalSize::default(),
-        &[],
+        codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let mut output = Vec::new();

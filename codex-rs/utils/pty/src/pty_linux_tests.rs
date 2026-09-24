@@ -56,7 +56,7 @@ async fn portable_fallback_releases_native_pty_descriptors() -> anyhow::Result<(
         &HashMap::from([("SHELL".to_owned(), "/bin/sh".to_owned())]),
         &None,
         crate::TerminalSize::default(),
-        &[],
+        crate::ChildFds::Inherited(&[]),
     )
     .await?;
     drop(occupied);

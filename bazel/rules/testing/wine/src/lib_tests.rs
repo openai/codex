@@ -367,7 +367,7 @@ async fn pinned_powershell_runs_under_wine_with_a_pty() -> Result<()> {
         &env,
         /*arg0*/ &None,
         TerminalSize::default(),
-        /*inherited_fds*/ &[],
+        codex_utils_pty::ChildFds::Inherited(&[]),
     )
     .await?;
     let command_result = timeout(Duration::from_secs(30), async {

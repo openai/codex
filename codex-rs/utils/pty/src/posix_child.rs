@@ -185,6 +185,9 @@ impl NativeChild {
                 ))?;
             }
             for target in &request.inherited_fds {
+                #[cfg(target_os = "macos")]
+                let result = posix_spawn_file_actions_addinherit_np(&mut actions.0, *target);
+                #[cfg(target_os = "linux")]
                 let result =
                     libc::posix_spawn_file_actions_adddup2(&mut actions.0, *target, *target);
                 // macOS file actions can reject valid high descriptors below
@@ -438,6 +441,14 @@ fn cvt_errno(result: libc::c_int) -> io::Result<()> {
 }
 
 struct FileActions(libc::posix_spawn_file_actions_t);
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn posix_spawn_file_actions_addinherit_np(
+        actions: *mut libc::posix_spawn_file_actions_t,
+        fd: libc::c_int,
+    ) -> libc::c_int;
+}
 struct Attributes(libc::posix_spawnattr_t);
 
 impl Drop for FileActions {

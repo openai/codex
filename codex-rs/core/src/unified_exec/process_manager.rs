@@ -1424,7 +1424,7 @@ impl UnifiedExecProcessManager {
             windows_sandbox,
             tty,
             stdin_open: tty,
-            inherited_fds: &inherited_fds,
+            inherited_fds: codex_utils_pty::ChildFds::Inherited(&inherited_fds),
         })
         .await;
         spawn_lifecycle.after_spawn();

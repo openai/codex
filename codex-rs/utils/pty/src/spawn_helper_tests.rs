@@ -581,7 +581,7 @@ async fn pty_helper_establishes_a_controlling_terminal_without_forking() -> anyh
         &std::env::vars().collect(),
         /*arg0*/ &None,
         crate::TerminalSize::default(),
-        &[],
+        crate::ChildFds::Inherited(&[]),
     )
     .await?;
     let mut output = Vec::new();
@@ -606,7 +606,7 @@ async fn pty_helper_preserves_portable_signal_exit_status() -> anyhow::Result<()
             &env,
             /*arg0*/ &None,
             crate::TerminalSize::default(),
-            &[],
+            crate::ChildFds::Inherited(&[]),
         )
         .await?;
         assert_eq!(spawned.exit_rx.await?, 1);

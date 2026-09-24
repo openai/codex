@@ -41,6 +41,23 @@ use crate::process::TerminalSize;
 #[cfg(unix)]
 use crate::process::exit_code_from_status;
 
+/// Extra descriptors accompanying a process launch.
+#[derive(Clone, Copy)]
+pub enum ChildFds<'a> {
+    /// Existing escalation sockets, with the legacy PTY I/O and status behavior.
+    Inherited(&'a [i32]),
+    /// Launch attachments, including CLOEXEC files, with ordinary PTY behavior.
+    Attached(&'a [i32]),
+}
+
+impl<'a> ChildFds<'a> {
+    pub fn as_slice(self) -> &'a [i32] {
+        match self {
+            Self::Inherited(fds) | Self::Attached(fds) => fds,
+        }
+    }
+}
+
 /// Returns true when ConPTY support is available (Windows only).
 #[cfg(windows)]
 pub fn conpty_supported() -> bool {
@@ -134,7 +151,7 @@ pub async fn spawn_process(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     size: TerminalSize,
-    inherited_fds: &[i32],
+    inherited_fds: ChildFds<'_>,
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for PTY spawn");
@@ -145,7 +162,7 @@ pub async fn spawn_process(
 
     #[cfg(target_os = "linux")]
     if crate::spawn_helper::is_available()
-        && inherited_fds.is_empty()
+        && inherited_fds.as_slice().is_empty()
         && Path::new(program).is_absolute()
         && arg0.is_none()
         && cwd.is_dir()
@@ -156,7 +173,7 @@ pub async fn spawn_process(
             .await;
     }
     #[cfg(unix)]
-    if !inherited_fds.is_empty() {
+    if !inherited_fds.as_slice().is_empty() {
         return spawn_process_preserving_fds(program, args, cwd, env, arg0, size, inherited_fds)
             .await;
     }
@@ -309,24 +326,31 @@ async fn spawn_process_preserving_fds(
     env: &HashMap<String, String>,
     arg0: &Option<String>,
     size: TerminalSize,
-    inherited_fds: &[RawFd],
+    descriptors: ChildFds<'_>,
 ) -> Result<SpawnedProcess> {
     let (master, slave) = open_unix_pty(size)?;
     let io = crate::unix_io::PtyIo::new(master.as_raw_fd())?;
-    let uses_portable_status = inherited_fds.is_empty();
-    let stdin_close_behavior = if inherited_fds.is_empty() {
+    let uses_portable_status = match descriptors {
+        ChildFds::Inherited(fds) => fds.is_empty(),
+        ChildFds::Attached(_) => true,
+    };
+    let inherited_fds = descriptors.as_slice();
+    let stdin_close_behavior = if uses_portable_status {
         crate::unix_io::StdinCloseBehavior::SendEof
     } else {
         crate::unix_io::StdinCloseBehavior::NoEof
     };
+    let default_shell = (uses_portable_status && !env.contains_key("SHELL")).then(|| {
+        let mut builder = CommandBuilder::new(program);
+        builder.env_clear();
+        builder.get_shell()
+    });
     #[cfg(target_os = "linux")]
     let mut child = {
         let mut command = crate::Command::new(program);
-        if inherited_fds.is_empty() && !env.contains_key("SHELL") {
+        if let Some(shell) = &default_shell {
             // portable-pty supplies the login shell when SHELL is absent.
-            let mut builder = CommandBuilder::new(program);
-            builder.env_clear();
-            command.env("SHELL", builder.get_shell());
+            command.env("SHELL", shell);
         }
         command
             .args(args)
@@ -334,7 +358,7 @@ async fn spawn_process_preserving_fds(
             .envs(env)
             .drop_policy(crate::child_command::ChildDropPolicy::ReapOnly)
             .descriptor_policy(crate::DescriptorPolicy::Explicit)
-            .preserve_fds(inherited_fds)
+            .inherit_fds(inherited_fds)
             .stdin(crate::ChildStdin::File(slave.try_clone()?.into()));
         if let Some(arg0) = arg0 {
             command.arg0(arg0);
@@ -368,6 +392,9 @@ async fn spawn_process_preserving_fds(
             command.arg0(arg0);
         }
         command.current_dir(cwd).env_clear().args(args).envs(env);
+        if let Some(shell) = &default_shell {
+            command.env("SHELL", shell);
+        }
         let inherited_fds = inherited_fds.to_vec();
         // The child sees the same terminal on stdin, stdout, and stderr.
         unsafe {
@@ -378,6 +405,7 @@ async fn spawn_process_preserving_fds(
                 .pre_exec(move || {
                     configure_child_terminal()?;
                     close_inherited_fds_except(&inherited_fds);
+                    make_fds_inheritable(&inherited_fds)?;
                     Ok(())
                 });
         }
@@ -489,6 +517,20 @@ fn set_cloexec(fd: RawFd) -> std::io::Result<()> {
     let result = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
     if result == -1 {
         return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Called only in the child: never make attachments inheritable in the parent.
+#[cfg(unix)]
+pub(crate) fn make_fds_inheritable(fds: &[RawFd]) -> std::io::Result<()> {
+    for &fd in fds {
+        // SAFETY: fcntl only changes the current process's descriptor flags.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1
+        {
+            return Err(std::io::Error::last_os_error());
+        }
     }
     Ok(())
 }
