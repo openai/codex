@@ -531,6 +531,168 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
 }
 
 #[test]
+fn global_literal_basename_denies_survive_directory_moves() {
+    for name in [".env", "credentials", "secret+file.txt"] {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let workspace = root.join("workspace");
+        let destination = root.join("destination");
+        for path in [
+            workspace.join("staging/chunks"),
+            workspace.join("protected"),
+            workspace.join("late"),
+            workspace.join("private"),
+            workspace.join("directory").join(name),
+            destination.clone(),
+        ] {
+            fs::create_dir_all(path).expect("create fixture directory");
+        }
+        fs::write(workspace.join("staging/chunks/output.js"), "output").expect("build output");
+        fs::write(workspace.join("protected").join(name), "secret").expect("protected file");
+        fs::write(workspace.join("private/config.json"), "config").expect("scoped file");
+        fs::write(
+            workspace.join("directory").join(name).join("child"),
+            "secret",
+        )
+        .expect("protected directory child");
+        std::os::unix::fs::symlink(
+            workspace.join("protected").join(name),
+            workspace.join("alias"),
+        )
+        .expect("protected file alias");
+        let mut policy = restricted_write_policy(&[&workspace, &destination]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: format!("/**/{name}"),
+            },
+            FileSystemAccessMode::Deny,
+        ));
+        policy.entries.push(FileSystemSandboxEntry::new(
+            AbsolutePathBuf::from_absolute_path(workspace.join("private/config.json"))
+                .expect("absolute scoped path")
+                .into(),
+            FileSystemAccessMode::Deny,
+        ));
+        let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+            command: vec![
+                "/bin/sh".to_string(),
+                "-euc".to_string(),
+                r#"
+workspace=$1 destination=$2 name=$3
+denied() {
+    if "$@" > /dev/null 2>&1; then
+        echo "unexpectedly allowed: $*" >&2
+        exit 1
+    fi
+}
+/bin/mkdir "$workspace/empty"
+/bin/rmdir "$workspace/empty"
+/bin/mv "$workspace/staging" "$workspace/output"
+/bin/rm -r "$workspace/output"
+denied /bin/cat "$workspace/protected/$name"
+denied /bin/cat "$workspace/alias"
+denied /bin/cat "$workspace/directory/$name/child"
+denied /bin/mv "$workspace/directory/$name" "$workspace/exposed-directory"
+denied /bin/mv "$workspace/protected/$name" "$workspace/exposed"
+denied /bin/rm "$workspace/protected/$name"
+denied /usr/bin/touch "$workspace/$name"
+denied /bin/mv "$workspace/private" "$workspace/public"
+/bin/mv "$workspace/protected" "$workspace/renamed"
+denied /bin/cat "$workspace/renamed/$name"
+/bin/mv "$workspace/renamed" "$destination/moved"
+denied /bin/cat "$destination/moved/$name"
+denied /usr/bin/touch "$destination/moved/$name"
+/bin/mv "$workspace/late" "$destination/late"
+denied /bin/cat "$destination/late/$name"
+denied /bin/mv "$workspace" "$destination/workspace"
+"#
+                .to_string(),
+                "sh".to_string(),
+                workspace.display().to_string(),
+                destination.display().to_string(),
+                name.to_string(),
+            ],
+            file_system_sandbox_policy: &policy,
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            sandbox_policy_cwd: &workspace,
+            enforce_managed_network: false,
+            managed_network: None,
+            environment_id: None,
+            network: None,
+            extra_allow_unix_sockets: &[],
+        })
+        .expect("generate full Seatbelt policy");
+        // The generated policy must also protect matches absent during preparation.
+        fs::write(workspace.join("late").join(name), "late secret").expect("late protected file");
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(args)
+            .output()
+            .expect("execute generated policy");
+        assert!(output.status.success(), "{name}: {output:?}");
+        for (path, contents) in [
+            (destination.join("moved").join(name), "secret"),
+            (destination.join("late").join(name), "late secret"),
+            (workspace.join("private/config.json"), "config"),
+        ] {
+            assert_eq!(fs::read_to_string(path).expect("preserved file"), contents);
+        }
+    }
+}
+
+#[test]
+fn scoped_or_nonliteral_basename_denies_still_block_directory_moves() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let workspace = temp_dir.path().canonicalize().expect("canonical temp dir");
+    fs::create_dir(workspace.join("source")).expect("source directory");
+    fs::write(workspace.join("source/.env"), "secret").expect("protected file");
+    for pattern in [
+        "**/.env".to_string(),
+        format!("{}/**/.env", workspace.display()),
+        format!("{}/*/.env", workspace.display()),
+        "/**/source/.env".to_string(),
+        "/**/*.env".to_string(),
+        "/**/{.env,credentials}".to_string(),
+    ] {
+        let mut policy = restricted_write_policy(&[&workspace]);
+        policy.entries.push(FileSystemSandboxEntry::new(
+            FileSystemPath::GlobPattern {
+                pattern: pattern.clone(),
+            },
+            FileSystemAccessMode::Deny,
+        ));
+        let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+            command: vec![
+                "/bin/mv".to_string(),
+                workspace.join("source").display().to_string(),
+                workspace.join("target").display().to_string(),
+            ],
+            file_system_sandbox_policy: &policy,
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+            sandbox_policy_cwd: &workspace,
+            enforce_managed_network: false,
+            managed_network: None,
+            environment_id: None,
+            network: None,
+            extra_allow_unix_sockets: &[],
+        })
+        .expect("generate full Seatbelt policy");
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(args)
+            .output()
+            .expect("execute generated policy");
+        assert!(!output.status.success(), "{pattern}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Operation not permitted"),
+            "{pattern}: {output:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.join("source/.env")).expect("preserved file"),
+            "secret"
+        );
+    }
+}
+
+#[test]
 fn nested_protected_paths_cannot_be_bypassed_by_renaming_ancestors() {
     #[derive(Clone, Copy, Debug)]
     enum Protection {
