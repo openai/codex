@@ -203,7 +203,7 @@ impl NativeChild {
                     ))?;
                     libc::POSIX_SPAWN_SETPGROUP
                 }
-                crate::ProcessMode::NewSession => POSIX_SPAWN_SETSID,
+                crate::ProcessMode::NewSession => POSIX_SPAWN_SETSID as _,
             };
             let mut defaults = std::mem::zeroed();
             cvt_errno(libc::sigemptyset(&mut defaults))?;
