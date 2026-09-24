@@ -9,8 +9,8 @@ use super::utf8_boundary;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::NoopSpawnLifecycle;
+use crate::unified_exec::process::OutputBuffers;
 use crate::unified_exec::process::UnifiedExecProcess;
 use codex_protocol::items::CommandExecutionStatus;
 use codex_protocol::items::TurnItem;
@@ -28,7 +28,7 @@ struct StreamingOutputHarness {
     process: Arc<UnifiedExecProcess>,
     stdout_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     exit_tx: tokio::sync::oneshot::Sender<i32>,
-    transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
+    output_buffer: Arc<tokio::sync::Mutex<OutputBuffers>>,
     context: UnifiedExecContext,
     rx_event: async_channel::Receiver<Event>,
 }
@@ -59,13 +59,13 @@ async fn streaming_output_harness() -> anyhow::Result<StreamingOutputHarness> {
         tokio_util::sync::CancellationToken::new(),
         "streaming-output-test".to_string(),
     );
-    let transcript = process.transcript();
+    let output_buffer = Arc::clone(&process.output_handles().output_buffer);
 
     Ok(StreamingOutputHarness {
         process,
         stdout_tx,
         exit_tx,
-        transcript,
+        output_buffer,
         context,
         rx_event,
     })
@@ -81,7 +81,7 @@ async fn completed_output_preserves_bytes_before_subscription(
         process,
         stdout_tx,
         exit_tx,
-        transcript,
+        output_buffer,
         context,
         rx_event,
     } = streaming_output_harness().await?;
@@ -110,7 +110,7 @@ async fn completed_output_preserves_bytes_before_subscription(
         cwd,
         /*process_id*/ 123,
         /*plugin_attribution*/ None,
-        transcript,
+        output_buffer,
         Instant::now(),
         /*network_denial_monitor*/ None,
         /*plugin_metrics_sidecar*/ None,
@@ -147,7 +147,7 @@ async fn streaming_output_preserves_multibyte_characters_across_chunks() -> anyh
         process,
         stdout_tx,
         exit_tx,
-        transcript,
+        output_buffer,
         rx_event,
         context,
     } = streaming_output_harness().await?;
@@ -177,7 +177,11 @@ async fn streaming_output_preserves_multibyte_characters_across_chunks() -> anyh
         }
     );
     assert_eq!(
-        transcript.lock().await.to_bytes_with_omission_marker(),
+        output_buffer
+            .lock()
+            .await
+            .transcript
+            .to_bytes_with_omission_marker(),
         "é".as_bytes()
     );
     assert!(rx_event.try_recv().is_err());
@@ -191,7 +195,7 @@ async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyho
         process,
         stdout_tx,
         exit_tx,
-        transcript,
+        output_buffer,
         context,
         ..
     } = streaming_output_harness().await?;
@@ -219,7 +223,11 @@ async fn streaming_output_finishes_on_close_without_waiting_for_grace() -> anyho
         "output close should finish before the grace fallback: {elapsed:?}"
     );
     assert_eq!(
-        transcript.lock().await.to_bytes_with_omission_marker(),
+        output_buffer
+            .lock()
+            .await
+            .transcript
+            .to_bytes_with_omission_marker(),
         b"LATE-OUTPUT-MARKER\xc3"
     );
 
@@ -232,7 +240,7 @@ async fn streaming_output_keeps_grace_as_fallback_without_close() -> anyhow::Res
         process,
         stdout_tx,
         exit_tx,
-        transcript,
+        output_buffer,
         rx_event,
         context,
     } = streaming_output_harness().await?;
@@ -255,7 +263,11 @@ async fn streaming_output_keeps_grace_as_fallback_without_close() -> anyhow::Res
         "missing output close should use the grace fallback: {elapsed:?}"
     );
     assert_eq!(
-        transcript.lock().await.to_bytes_with_omission_marker(),
+        output_buffer
+            .lock()
+            .await
+            .transcript
+            .to_bytes_with_omission_marker(),
         vec![0xc3]
     );
     let event = rx_event.try_recv().expect("receive final output delta");
@@ -281,7 +293,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         process,
         stdout_tx,
         exit_tx,
-        transcript,
+        output_buffer,
         mut context,
         rx_event,
     } = streaming_output_harness().await?;
@@ -314,7 +326,7 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         cwd,
         /*process_id*/ 123,
         /*plugin_attribution*/ None,
-        transcript,
+        output_buffer,
         Instant::now(),
         Some(network_denial_monitor),
         /*plugin_metrics_sidecar*/ None,
