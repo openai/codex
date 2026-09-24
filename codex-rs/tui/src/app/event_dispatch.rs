@@ -102,6 +102,21 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
+        // Keep the picker check and model update in one event without recursively polling this
+        // large dispatcher on the TUI thread's stack.
+        let (event, sparkle_model) = match event {
+            AppEvent::AstraSelectedFromModelPicker {
+                thread_id,
+                model,
+                action,
+            } => {
+                let should_offer = self.chat_widget.current_model() != model
+                    && self.chat_widget.sparkle_thread_for_picker_action(&model) == Some(thread_id);
+                let next_event = action.into_app_event(model.clone());
+                (next_event, should_offer.then_some(model))
+            }
+            event => (event, None),
+        };
         match event {
             AppEvent::OpenDaemonMenu => self.open_daemon_menu(),
             AppEvent::ConfirmDaemonUpdate(source) => self.confirm_daemon_update(source),
@@ -1904,22 +1919,7 @@ impl App {
                         .await;
                 }
             }
-            AppEvent::AstraSelectedFromModelPicker { thread_id, model, action } => {
-                // Check and apply in the same event so a queued backend update cannot turn a
-                // no-op picker confirmation into a sparkle.
-                let should_offer = self.chat_widget.current_model() != model
-                    && self.chat_widget.sparkle_thread_for_picker_action(&model) == Some(thread_id);
-                let control = Box::pin(self.handle_event(
-                    tui,
-                    app_server,
-                    action.into_app_event(model.clone()),
-                ))
-                .await?;
-                if should_offer {
-                    self.chat_widget.on_sparkle_model_selected_from_picker(&model);
-                }
-                return Ok(control);
-            }
+            AppEvent::AstraSelectedFromModelPicker { .. } => unreachable!("picker event unwrapped"),
             AppEvent::BackgroundVoiceError { thread_id, message } => {
                 if self.chat_widget.thread_id() == Some(thread_id) {
                     self.chat_widget.add_error_message(message);
@@ -3171,6 +3171,10 @@ impl App {
                     self.insert_history_cell(tui, Box::new(cell));
                 }
             }
+        }
+        if let Some(model) = sparkle_model {
+            self.chat_widget
+                .on_sparkle_model_selected_from_picker(&model);
         }
         Ok(AppRunControl::Continue)
     }

@@ -571,6 +571,78 @@ async fn astra_picker_confirms_the_model_at_application_after_an_automatic_updat
     Ok(())
 }
 
+#[test]
+fn astra_picker_xhigh_applies_on_a_bounded_stack() -> Result<()> {
+    const STACK_SIZE: usize = 4 * 1024 * 1024;
+    const SERVER_STACK_SIZE: usize = 8 * 1024 * 1024;
+    const WORKER_THREADS: usize = 1;
+
+    std::thread::Builder::new()
+        .name("astra-picker".into())
+        .stack_size(STACK_SIZE)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(WORKER_THREADS)
+                .thread_stack_size(SERVER_STACK_SIZE)
+                .enable_all()
+                .build()?;
+            runtime.block_on(Box::pin(async {
+                let (mut app, mut events, _ops) = Box::pin(make_test_app_with_channels()).await;
+                app.config.model = Some("gpt-5.5".into());
+                let mut server = Box::pin(start_config_write_test_app_server(&app)).await?;
+                let mut tui = crate::tui::test_support::make_test_tui()?;
+                let thread = server.start_thread(&app.config).await?;
+                Box::pin(app.replace_chat_widget_with_app_server_thread(
+                    &mut tui,
+                    thread,
+                    ThreadAttachPresentation::Fresh,
+                    /*initial_user_message*/ None,
+                ))
+                .await?;
+
+                let mut preset = crate::test_support::TEST_MODEL_PRESETS[0].clone();
+                preset.model = "gpt-6-astra".into();
+                preset.default_reasoning_effort = ReasoningEffortConfig::XHigh;
+                preset.supported_reasoning_efforts = vec![
+                    ReasoningEffortPreset {
+                        effort: ReasoningEffortConfig::XHigh,
+                        description: "Extra High".into(),
+                    },
+                    ReasoningEffortPreset {
+                        effort: ReasoningEffortConfig::Low,
+                        description: "Low".into(),
+                    },
+                ];
+                app.chat_widget.open_reasoning_popup(preset);
+                app.chat_widget.handle_key_event(KeyCode::Enter.into());
+                let mut confirmed = false;
+                while let Ok(event) = events.try_recv() {
+                    confirmed |= matches!(event, AppEvent::AstraSelectedFromModelPicker { .. });
+                    if matches!(
+                        &event,
+                        AppEvent::AstraSelectedFromModelPicker { .. }
+                            | AppEvent::UpdateReasoningEffort(_)
+                            | AppEvent::PersistModelSelection { .. }
+                    ) {
+                        Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+                    }
+                }
+                assert!(confirmed);
+                assert_eq!(
+                    (
+                        app.chat_widget.current_model(),
+                        app.chat_widget.current_reasoning_effort(),
+                    ),
+                    ("gpt-6-astra", Some(ReasoningEffortConfig::XHigh)),
+                );
+                server.shutdown().await?;
+                Ok(())
+            }))
+        })?
+        .join()
+        .expect("Astra picker thread panicked")
+}
+
 #[tokio::test]
 async fn session_only_astra_picker_shows_stars_only_on_an_untouched_task() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
