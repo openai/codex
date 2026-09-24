@@ -192,19 +192,30 @@ impl WindowsSandboxRequestProcessor {
                         let service_setup_request = setup_request.clone();
                         let service_setup_start = Instant::now();
                         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                            let Ok(permissions) = codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                            if matches!(
                                 &service_setup_request.permission_profile,
-                                &service_setup_request.workspace_roots,
-                            ) else {
-                                anyhow::ensure!(!codex_windows_sandbox::registered_core_requested(),
-                                    "registered Core requires a service-compatible sandbox policy");
-                                // The existing setup path can still succeed for completed
-                                // provisioning without resolving the current profile.
-                                return Ok(());
-                            };
-                            permissions.validate_elevated_filesystem_policy(
-                                &service_setup_request.command_cwd,
-                            )?;
+                                codex_protocol::models::PermissionProfile::Disabled
+                            ) {
+                                // Only registered Core needs service provisioning for full access;
+                                // legacy setup keeps using the shared setup path below.
+                                if !codex_windows_sandbox::registered_core_requested() {
+                                    return Ok(());
+                                }
+                            } else {
+                                let Ok(permissions) = codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                                    &service_setup_request.permission_profile,
+                                    &service_setup_request.workspace_roots,
+                                ) else {
+                                    anyhow::ensure!(!codex_windows_sandbox::registered_core_requested(),
+                                        "registered Core requires a service-compatible sandbox policy");
+                                    // The existing setup path can still succeed for completed
+                                    // provisioning without resolving the current profile.
+                                    return Ok(());
+                                };
+                                permissions.validate_elevated_filesystem_policy(
+                                    &service_setup_request.command_cwd,
+                                )?;
+                            }
                             // The shared setup path below handles helper fallback and
                             // refreshes workspace ACLs after provisioning.
                             codex_windows_sandbox::provision_windows_sandbox_via_service(

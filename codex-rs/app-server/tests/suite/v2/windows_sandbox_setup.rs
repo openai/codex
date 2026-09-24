@@ -112,6 +112,106 @@ async fn windows_sandbox_setup_start_emits_completion_notification() -> Result<(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+#[test_case::test_case(
+    "sandbox_mode = 'danger-full-access'",
+    true,
+    "app runtime provisioning service is unavailable; refusing helper fallback";
+    "full access reaches the service"
+)]
+#[test_case::test_case(
+    "sandbox_mode = 'workspace-write'",
+    true,
+    "app runtime provisioning service is unavailable; refusing helper fallback";
+    "supported restricted permissions reach the service"
+)]
+#[test_case::test_case(
+    "default_permissions = 'workspace'\n[permissions.workspace.filesystem]\n':workspace_roots' = 'write'",
+    true,
+    "elevated Windows sandbox requires effective `:root` read access";
+    "unsupported restricted permissions fail before the service"
+)]
+#[test_case::test_case(
+    "sandbox_mode = 'danger-full-access'\n[features]\nwindows_sandbox_service = true",
+    false,
+    "only managed permission profiles can be enforced by the Windows sandbox";
+    "legacy full access skips the service and reaches shared setup"
+)]
+#[tokio::test]
+async fn setup_validates_permissions_before_provisioning(
+    config: &str,
+    registered_core: bool,
+    expected_error: &str,
+) -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_path = codex_home.path().join("config.toml");
+    std::fs::write(&config_path, config)?;
+    // Registered tests use a nonexistent service; an invalid hint detects any legacy service call.
+    let service_family = if registered_core {
+        format!(
+            "CodexSetupTest{}_0000000000000",
+            uuid::Uuid::now_v7().simple()
+        )
+    } else {
+        "invalid-service-family".into()
+    };
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .without_managed_config()
+        .with_env_overrides(&[
+            (
+                "CODEX_WINDOWS_REGISTERED_CORE",
+                Some(if registered_core { "1" } else { "0" }),
+            ),
+            (
+                "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY",
+                Some(&service_family),
+            ),
+            (
+                codex_protocol::shell_environment::OPENAI_FEDERATION_RULE_ID_ENV_VAR,
+                None,
+            ),
+            (
+                codex_protocol::shell_environment::OPENAI_IDENTITY_TOKEN_FILE_ENV_VAR,
+                None,
+            ),
+        ])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+
+    let request_id = mcp
+        .send_windows_sandbox_setup_start_request(WindowsSandboxSetupStartParams {
+            mode: WindowsSandboxSetupMode::Elevated,
+            cwd: None,
+        })
+        .await?;
+    let response: WindowsSandboxSetupStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(response, WindowsSandboxSetupStartResponse { started: true });
+
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("windowsSandbox/setupCompleted"),
+    )
+    .await??;
+    let completion: WindowsSandboxSetupCompletedNotification = serde_json::from_value(
+        notification
+            .params
+            .context("missing setup completion params")?,
+    )?;
+    assert_eq!(
+        completion,
+        WindowsSandboxSetupCompletedNotification {
+            mode: WindowsSandboxSetupMode::Elevated,
+            success: false,
+            error: Some(expected_error.into()),
+        }
+    );
+    assert_eq!(std::fs::read_to_string(config_path)?, config);
+    Ok(())
+}
+
 #[tokio::test]
 async fn windows_sandbox_setup_start_rejects_relative_cwd() -> Result<()> {
     let codex_home = TempDir::new()?;
