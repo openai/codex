@@ -11,6 +11,64 @@ use core_test_support::test_codex::environment_config_for_selection;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn current_turn_environment_selections_follow_active_updates() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![paused_response("first", "pause"), sse_completed("second")],
+    )
+    .await;
+    let test = step_settings_test().build_with_auto_env(&server).await?;
+    let thread = &test.codex;
+    let turn_id = start_paused_turn(thread).await?.turn_id;
+    let initial = thread
+        .active_turn_environment_selections()
+        .await
+        .expect("running turn");
+    assert_eq!(initial.len(), 1);
+    assert_eq!(
+        thread.current_turn_environment_selections(&turn_id).await,
+        Some(initial.clone())
+    );
+    assert_eq!(
+        thread
+            .current_turn_environment_selections("other-turn")
+            .await,
+        None
+    );
+
+    for environments in [vec![], initial.clone()] {
+        apply_turn_settings(
+            thread,
+            &turn_id,
+            TurnSettingsUpdate {
+                environments: Some(environments.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert_eq!(
+            thread.current_turn_environment_selections(&turn_id).await,
+            Some(environments)
+        );
+        assert_eq!(
+            thread.active_turn_environment_selections().await,
+            Some(initial.clone())
+        );
+    }
+
+    answer_paused_turn(thread, &turn_id).await?;
+    wait_for_event(thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert_eq!(
+        thread.current_turn_environment_selections(&turn_id).await,
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_update_preserves_active_environment_and_next_turn_uses_new_selection() -> Result<()>
 {
     skip_if_no_network!(Ok(()));
