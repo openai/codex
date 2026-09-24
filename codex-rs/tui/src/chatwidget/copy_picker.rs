@@ -69,7 +69,7 @@ impl ChatWidget {
             );
         }
         if choices.is_empty() {
-            self.copy_last_agent_markdown();
+            self.prepare_last_response_copy();
             return;
         }
 

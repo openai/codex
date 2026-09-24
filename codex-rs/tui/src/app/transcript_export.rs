@@ -31,6 +31,7 @@ use crate::thread_transcript::thread_items_to_transcript_cells;
 impl App {
     pub(super) async fn export_transcript(
         &mut self,
+        tui: &mut crate::tui::Tui,
         app_server: &mut AppServerSession,
         destination: TranscriptExportDestination,
     ) -> Result<(), String> {
@@ -54,7 +55,8 @@ impl App {
         let markdown = render_markdown_transcript(&cells)?;
         match destination {
             TranscriptExportDestination::Clipboard => {
-                self.chat_widget.copy_transcript_to_clipboard(&markdown);
+                let result = tui.copy_transcript_selection(&markdown);
+                self.chat_widget.show_copy_result("conversation", result);
             }
             TranscriptExportDestination::File(path) => {
                 let cwd = if self.app_server_target.uses_remote_workspace() {

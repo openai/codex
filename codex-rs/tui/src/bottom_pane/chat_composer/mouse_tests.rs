@@ -155,4 +155,27 @@ fn right_click_copy_uses_the_refreshed_editor_bounds() {
         Some((5, Ok(CopyStatus::Unconfirmed)))
     );
     assert_eq!(composer.current_text(), "hello world");
+    let event = TuiEvent::Mouse(MouseEvent { row, ..click });
+    composer.copy_selection(&event, |_| Ok(CopyStatus::Pending(1)));
+    // A fresh pointer selection must not be cleared by the older copy.
+    for (kind, column) in [
+        (Down(Left), x - 11),
+        (MouseEventKind::Drag(Left), x - 6),
+        (Up(Left), x - 6),
+    ] {
+        mouse(&mut composer, shifted_area, kind, column, row);
+    }
+    let selection = composer.draft.textarea.mouse_selection_range();
+    assert_eq!(
+        composer.finish_copy(&(1, Ok(CopyStatus::Confirmed)), /*current*/ true),
+        None
+    );
+    assert_eq!(composer.draft.textarea.mouse_selection_range(), selection);
+    let key = TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    composer.copy_selection(&key, |_| Ok(CopyStatus::Pending(2)));
+    assert_eq!(
+        composer.finish_copy(&(2, Ok(CopyStatus::Confirmed)), /*current*/ true),
+        Some(5)
+    );
+    assert_eq!(composer.draft.textarea.mouse_selection_range(), None);
 }

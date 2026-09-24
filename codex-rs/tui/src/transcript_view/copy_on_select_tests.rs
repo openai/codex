@@ -1,6 +1,7 @@
 //! Automatic copies retain completed mouse selections.
 
 use super::*;
+use crate::clipboard_copy::CopyStatus;
 use crate::history_cell::AgentMarkdownCell;
 use crate::transcript_view::tests::cell;
 use crate::transcript_view::tests::render;
@@ -49,7 +50,7 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
         assert_eq!(view.selected_text(&cells).as_deref(), Some("selected"));
         assert!(view.handle_mouse(release, &cells).is_none());
         assert!(!view.tick_selection(&cells));
-        if copied.is_some() {
+        if let Some(copied) = copied {
             let buffer = render(&mut view, &cells, /*width*/ 20, /*height*/ 1);
             let highlight = (0..20)
                 .map(|column| {
@@ -70,6 +71,30 @@ fn copy_on_select_waits_for_release_and_retains_selection() {
                 ^^^^^^^^············
                 "
             );
+            for result in [
+                Ok(CopyStatus::Confirmed),
+                Ok(CopyStatus::Unconfirmed),
+                Err("clipboard unavailable".to_owned()),
+            ] {
+                view.copy_selected_text_with(
+                    &cells,
+                    &copied,
+                    /*clear_selection*/ false,
+                    |_| Ok(CopyStatus::Pending(1)),
+                )
+                .unwrap();
+                assert_eq!(
+                    view.finish_copy(&cells, &(1, result.clone()), /*current*/ true),
+                    Some(false)
+                );
+                assert_eq!(view.selected_text(&cells).as_deref(), Some(copied.as_str()));
+                assert_eq!(
+                    view.copy_feedback
+                        .as_ref()
+                        .map(|feedback| (feedback.result, feedback.characters)),
+                    Some((result.map_err(|_| ()), copied.chars().count()))
+                );
+            }
         }
     }
 }

@@ -648,8 +648,8 @@ pub struct Tui {
     // Keep the alternate screen alive when an overlay closes.
     owned_screen: bool,
     overlay_input: OverlayInput,
-    // Selection copies survive closing a transcript overlay or startup session picker.
-    selection_clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    // Copies and native ownership survive closing an overlay or startup picker.
+    pub(crate) clipboard: crate::clipboard_copy::worker::ClipboardWorker,
     // Keeps unmanaged process stderr writes out of the inline viewport.
     _stderr_guard: terminal_stderr::TerminalStderrGuard,
 }
@@ -718,7 +718,7 @@ impl Tui {
             alt_screen_enabled: true,
             owned_screen: false,
             overlay_input: OverlayInput::Default,
-            selection_clipboard_lease: None,
+            clipboard: Default::default(),
             _stderr_guard: stderr_guard,
         }
     }

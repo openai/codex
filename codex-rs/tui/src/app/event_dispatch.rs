@@ -41,6 +41,7 @@ impl App {
                 AppEvent::OpenDaemonMenu
                     | AppEvent::OpenWarnings
                     | AppEvent::CopyWarning(_)
+                    | AppEvent::CopySelection { .. }
                     | AppEvent::ConfirmDaemonUpdate(_)
                     | AppEvent::RunDaemonUpdate(_)
                     | AppEvent::InsertHistoryCell(_)
@@ -344,13 +345,14 @@ impl App {
             }
             AppEvent::OpenWarnings => self.chat_widget.open_warnings(&self.transcript_cells),
             AppEvent::CopyWarning(text) => {
-                let _ = self.chat_widget.copy_transcript_selection(&text);
+                let result = tui.copy_transcript_selection(&text);
+                self.chat_widget.show_selection_copy_result(result);
             }
             AppEvent::OpenTranscriptExportFilePrompt => {
                 self.chat_widget.show_transcript_export_file_prompt();
             }
             AppEvent::ExportTranscript { destination } => {
-                if let Err(error) = self.export_transcript(app_server, destination).await {
+                if let Err(error) = self.export_transcript(tui, app_server, destination).await {
                     self.chat_widget
                         .add_error_message(format!("Export failed: {error}"));
                 }
@@ -361,7 +363,8 @@ impl App {
                 }
             }
             AppEvent::CopySelection { text, label, format } => {
-                self.chat_widget.copy_selection(text, label, format);
+                let result = tui.clipboard.copy(text, format, tui.frame_requester());
+                self.chat_widget.show_copy_result(&label, result);
             }
             AppEvent::ClearUi { name } => {
                 if self.reject_pending_permission_root_switch() {

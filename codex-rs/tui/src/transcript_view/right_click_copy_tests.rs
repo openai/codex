@@ -34,10 +34,15 @@ fn right_click_retains_selection_until_confirmed_and_preserves_reading_position(
             panic!("right-click must request a copy without following new output");
         };
         assert_eq!(selected, "selected text\n");
-        let copied = view.copy_selected_text_with(&cells, &selected, |copied| {
-            assert_eq!(copied, selected);
-            result.clone()
-        });
+        let copied = view.copy_selected_text_with(
+            &cells,
+            &selected,
+            /*clear_selection*/ true,
+            |copied| {
+                assert_eq!(copied, selected);
+                result.clone()
+            },
+        );
         assert_eq!(copied, result);
         assert_eq!(
             (view.selected_text(&cells), view.position),

@@ -10,7 +10,7 @@
 //!
 //! On Linux, X11 and some Wayland compositors require the process that wrote the
 //! clipboard to keep its handle open. `ClipboardLease` wraps the `arboard::Clipboard`
-//! so callers can store it for the lifetime of the TUI. On other platforms the lease
+//! so the copy worker can retain it for the lifetime of the TUI. On other platforms the lease
 //! is always `None`.
 //!
 //! Empty selections fail without modifying a clipboard.
@@ -20,6 +20,7 @@
 //! Image paste lives in `clipboard_paste`.
 
 mod tmux;
+pub(crate) mod worker;
 
 use base64::Engine;
 use std::io::Write;
@@ -28,10 +29,6 @@ use tmux::copy as tmux_clipboard_copy;
 /// Maximum raw bytes sent through tmux or directly encoded into OSC 52.
 /// Large payloads are rejected before encoding to avoid overwhelming the terminal.
 const OSC52_MAX_RAW_BYTES: usize = 100_000;
-#[cfg(target_os = "macos")]
-static STDERR_SUPPRESSION_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> =
-    std::sync::OnceLock::new();
-
 /// Whether copied text should also have a rendered HTML representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CopyFormat {
@@ -60,11 +57,13 @@ impl CopyOutcome {
     }
 }
 
-/// Whether a clipboard backend confirmed the write or only sent a request.
+/// Submission progress or the delivery status reported by a clipboard backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CopyStatus {
     Confirmed,
     Unconfirmed,
+    Pending(u64),
+    Busy,
 }
 
 impl CopyStatus {
@@ -72,6 +71,8 @@ impl CopyStatus {
         match self {
             Self::Confirmed => format!("Copied {label} to clipboard"),
             Self::Unconfirmed => "Copy unconfirmed; /export saves chat".to_string(),
+            Self::Pending(_) => format!("Copying {label}…"),
+            Self::Busy => "Copy already in progress".to_string(),
         }
     }
 }
@@ -87,7 +88,24 @@ impl CopyStatus {
 /// existing native lease unless the backend supplies a replacement.
 ///
 /// OSC 52 is supported by kitty, WezTerm, iTerm2, Ghostty, and others.
-pub(crate) fn copy_to_clipboard(text: &str, format: CopyFormat) -> Result<CopyOutcome, String> {
+fn copy_to_clipboard(
+    text: &str,
+    format: CopyFormat,
+    begin_delivery: impl Fn() -> Result<(), String>,
+    osc52: impl Fn(&str) -> Result<(), String>,
+) -> Result<CopyOutcome, String> {
+    #[cfg(not(target_os = "android"))]
+    let native_copy = {
+        let clipboard = arboard::Clipboard::new();
+        move |text: &str, html: Option<&str>| arboard_copy(clipboard, text, html)
+    };
+    #[cfg(target_os = "android")]
+    let native_copy = |_text: &str, _html: Option<&str>| {
+        Err("native clipboard unavailable on Android".to_string())
+    };
+    // Decide before propagating setup success or failure: either result could otherwise
+    // start a native write or fallback long after the user abandoned this request.
+    begin_delivery()?;
     copy_to_clipboard_with(
         text,
         format,
@@ -97,8 +115,8 @@ pub(crate) fn copy_to_clipboard(text: &str, format: CopyFormat) -> Result<CopyOu
             tmux_session: is_tmux_session(),
         },
         tmux_clipboard_copy,
-        osc52_copy,
-        arboard_copy,
+        osc52,
+        native_copy,
         wsl_clipboard_copy,
     )
 }
@@ -148,7 +166,7 @@ fn copy_to_clipboard_with(
     environment: CopyEnvironment,
     tmux_copy_fn: impl Fn(&str) -> Result<(), String>,
     osc52_copy_fn: impl Fn(&str) -> Result<(), String>,
-    arboard_copy_fn: impl Fn(&str, Option<&str>) -> Result<Option<ClipboardLease>, String>,
+    arboard_copy_fn: impl FnOnce(&str, Option<&str>) -> Result<Option<ClipboardLease>, String>,
     wsl_copy_fn: impl Fn(&str) -> Result<(), String>,
 ) -> Result<CopyOutcome, String> {
     if text.is_empty() {
@@ -223,22 +241,14 @@ fn is_wsl_session() -> bool {
     false
 }
 
-/// Run arboard with stderr suppressed.
-///
-/// On macOS, `arboard::Clipboard::new()` initializes `NSPasteboard` which
-/// triggers `os_log` / `NSLog` output on stderr. Because the TUI owns the
-/// terminal, that stray output corrupts the display. We temporarily redirect
-/// fd 2 to `/dev/null` around the call to keep the screen clean.
+/// Write to the native clipboard. The TUI owns any process-wide stderr redirection.
 #[cfg(not(target_os = "android"))]
-fn arboard_copy(text: &str, html: Option<&str>) -> Result<Option<ClipboardLease>, String> {
-    #[cfg(target_os = "macos")]
-    let _stderr_lock = STDERR_SUPPRESSION_MUTEX
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .map_err(|_| "stderr suppression lock poisoned".to_string())?;
-    let _guard = SuppressStderr::new();
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+fn arboard_copy(
+    clipboard: Result<arboard::Clipboard, arboard::Error>,
+    text: &str,
+    html: Option<&str>,
+) -> Result<Option<ClipboardLease>, String> {
+    let mut clipboard = clipboard.map_err(|e| format!("clipboard unavailable: {e}"))?;
     match html {
         Some(html) => clipboard
             .set_html(html, Some(text))
@@ -255,11 +265,6 @@ fn arboard_copy(text: &str, html: Option<&str>) -> Result<Option<ClipboardLease>
     {
         Ok(None)
     }
-}
-
-#[cfg(target_os = "android")]
-fn arboard_copy(_text: &str, _html: Option<&str>) -> Result<Option<ClipboardLease>, String> {
-    Err("native clipboard unavailable on Android".to_string())
 }
 
 /// Copy text into the Windows clipboard from a WSL process.
@@ -316,63 +321,6 @@ fn wsl_clipboard_copy(text: &str) -> Result<(), String> {
 #[cfg(not(target_os = "linux"))]
 fn wsl_clipboard_copy(_text: &str) -> Result<(), String> {
     Err("WSL clipboard fallback unavailable on this platform".to_string())
-}
-
-/// RAII guard that redirects stderr (fd 2) to `/dev/null` on creation and
-/// restores the original fd on drop.
-#[cfg(target_os = "macos")]
-struct SuppressStderr {
-    saved_fd: Option<libc::c_int>,
-}
-
-#[cfg(target_os = "macos")]
-impl SuppressStderr {
-    fn new() -> Self {
-        unsafe {
-            // Save the current stderr fd.
-            let saved = libc::dup(2);
-            if saved < 0 {
-                return Self { saved_fd: None };
-            }
-            // Open /dev/null and point fd 2 at it.
-            let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-            if devnull < 0 {
-                libc::close(saved);
-                return Self { saved_fd: None };
-            }
-            if libc::dup2(devnull, 2) < 0 {
-                libc::close(saved);
-                libc::close(devnull);
-                return Self { saved_fd: None };
-            }
-            libc::close(devnull);
-            Self {
-                saved_fd: Some(saved),
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for SuppressStderr {
-    fn drop(&mut self) {
-        if let Some(saved) = self.saved_fd {
-            unsafe {
-                libc::dup2(saved, 2);
-                libc::close(saved);
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-struct SuppressStderr;
-
-#[cfg(not(target_os = "macos"))]
-impl SuppressStderr {
-    fn new() -> Self {
-        Self
-    }
 }
 
 /// Write text to the clipboard via the OSC 52 terminal escape sequence.

@@ -186,7 +186,7 @@ fn paused_header_reservation_survives_copy_until_scroll_or_resize() {
         );
         let selected = view.selected_text(&cells).expect("selected word");
         assert_eq!(selected, "done");
-        view.copy_selected_text_with(&cells, &selected, |_| {
+        view.copy_selected_text_with(&cells, &selected, /*clear_selection*/ true, |_| {
             Ok(crate::clipboard_copy::CopyStatus::Confirmed)
         })
         .expect("confirmed copy");

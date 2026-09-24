@@ -233,6 +233,7 @@ mod misalignment_policy;
 mod model_defaults;
 mod new_session;
 pub(crate) use new_session::has_launch_setting;
+mod clipboard;
 mod native_history;
 mod owned_transcript;
 mod pending_interactive_replay;
@@ -862,6 +863,7 @@ impl App {
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        self.finish_clipboard(tui);
         if matches!(&event, TuiEvent::Key(_))
             && self.handle_composer_copy_event(tui, &event, tui::Tui::copy_transcript_selection)
         {

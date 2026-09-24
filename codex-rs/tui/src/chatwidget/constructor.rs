@@ -171,7 +171,7 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             pending_stream_consolidations: 0,
-            clipboard_lease: None,
+            pending_clipboard: None,
             copy_last_response_binding,
             running_commands: HashMap::new(),
             collab_agent_metadata: HashMap::new(),

@@ -1,0 +1,6 @@
+---
+source: tui/src/clipboard_copy/worker_tests.rs
+assertion_line: 82
+expression: "feedback.join(\"\\n\")"
+---
+• Copy already in progress; try image paste after it finishes

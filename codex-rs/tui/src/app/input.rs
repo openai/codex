@@ -586,7 +586,8 @@ impl App {
             } else if self.should_reject_side_backtrack_esc(key_event) {
                 self.reject_side_backtrack_esc();
             } else {
-                self.chat_widget.handle_key_event(key_event);
+                let action = self.chat_widget.handle_key_event(key_event);
+                self.handle_clipboard_key_action(tui, action);
             }
             return;
         }
@@ -620,7 +621,8 @@ impl App {
                         self.reset_backtrack_state();
                     }
                 }
-                self.chat_widget.handle_key_event(key_event);
+                let action = self.chat_widget.handle_key_event(key_event);
+                self.handle_clipboard_key_action(tui, action);
             }
             _ => {
                 self.chat_widget.handle_key_event(key_event);

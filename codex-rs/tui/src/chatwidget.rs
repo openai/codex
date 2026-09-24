@@ -301,10 +301,12 @@ mod pets;
 mod session_flow;
 mod session_header;
 use self::session_header::SessionHeader;
+mod clipboard;
 mod copy_picker;
 mod hook_lifecycle;
 mod hooks;
 mod interaction;
+pub(crate) use interaction::KeyEventAction;
 mod skills;
 mod slash_dispatch;
 mod worktree_picker;
@@ -585,8 +587,8 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
     pending_stream_consolidations: usize,
-    /// Holds the platform clipboard lease so copied text remains available while supported.
-    clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
+    /// Copy feedback is discarded with its originating conversation.
+    pending_clipboard: Option<clipboard::PendingCopy>,
     copy_last_response_binding: Vec<KeyBinding>,
     running_commands: HashMap<String, RunningCommand>,
     collab_agent_metadata: HashMap<ThreadId, AgentMetadata>,

@@ -1831,10 +1831,7 @@ async fn slash_copy_picker_copies_status_fields_and_preserves_source_after_copyi
             next_copy_selection(&mut rx),
             (value.to_string(), label.to_string())
         );
-        chat.copy_selection_with(value, label, |text| {
-            assert_eq!(text, value);
-            Ok(crate::clipboard_copy::CopyOutcome::Copied(None))
-        });
+        chat.show_copy_result(label, Ok(crate::clipboard_copy::CopyStatus::Confirmed));
         drain_insert_history(&mut rx);
         assert!(chat.bottom_pane.no_modal_or_popup_active());
     }
@@ -2353,9 +2350,15 @@ async fn slash_keymap_invalid_args_show_usage() {
 #[tokio::test]
 async fn copy_shortcut_can_be_remapped() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+        assert_matches!(
+            chat.handle_key_event(KeyEvent::new(KeyCode::Char('v'), modifiers)),
+            crate::chatwidget::KeyEventAction::PasteImage
+        );
+    }
     let mut keymap_config = chat.config_ref().tui_keymap.clone();
     keymap_config.global.copy = Some(codex_config::types::KeybindingsSpec::One(
-        codex_config::types::KeybindingSpec("ctrl-x".to_string()),
+        codex_config::types::KeybindingSpec("alt-v".to_string()),
     ));
     let runtime_keymap =
         crate::keymap::RuntimeKeymap::from_config(&keymap_config).expect("valid copy remap");
@@ -2367,7 +2370,10 @@ async fn copy_shortcut_can_be_remapped() {
         "old copy shortcut should no longer copy"
     );
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+    assert_matches!(
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT)),
+        crate::chatwidget::KeyEventAction::None
+    );
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one info message");
     let rendered = lines_to_single_string(&cells[0]);
@@ -2378,79 +2384,35 @@ async fn copy_shortcut_can_be_remapped() {
 }
 
 #[tokio::test]
-async fn slash_copy_preserves_native_lease_after_terminal_copy_or_failure() {
+async fn copy_shortcut_submits_markdown_and_reports_completion_once() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.transcript.last_agent_markdown = Some("copy me".to_string());
-
-    chat.copy_last_agent_markdown_with(|markdown| {
-        assert_eq!(markdown, "copy me");
-        Ok(crate::clipboard_copy::CopyOutcome::Copied(Some(
-            crate::clipboard_copy::ClipboardLease::test(),
-        )))
-    });
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
-    assert!(chat.clipboard_lease.is_some());
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one success message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains("Copied last message to clipboard"),
-        "expected success message, got {rendered:?}"
+    assert_matches!(
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL)),
+        crate::chatwidget::KeyEventAction::CopyLastResponse(text) if &*text == "copy me"
     );
-
-    chat.copy_last_agent_markdown_with(|_| Ok(crate::clipboard_copy::CopyOutcome::Requested));
     assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
-    assert!(chat.clipboard_lease.is_some());
-    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    insta::assert_snapshot!("unconfirmed_copy", rendered);
-
-    chat.copy_last_agent_markdown_with(|markdown| {
-        assert_eq!(markdown, "copy me");
-        Err("blocked".into())
-    });
-
-    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
-    assert!(chat.clipboard_lease.is_some());
-    let cells = drain_insert_history(&mut rx);
-    assert_eq!(cells.len(), 1, "expected one failure message");
-    let rendered = lines_to_single_string(&cells[0]);
-    assert!(
-        rendered.contains("Copy failed: blocked"),
-        "expected failure message, got {rendered:?}"
+    assert!(rx.try_recv().is_err());
+    chat.show_copy_result(
+        "last message",
+        Ok(crate::clipboard_copy::CopyStatus::Pending(1)),
     );
-
-    chat.copy_selection_with("print('ok')\n", "python code", |content| {
-        assert_eq!(content, "print('ok')\n");
-        Ok(crate::clipboard_copy::CopyOutcome::Copied(Some(
-            crate::clipboard_copy::ClipboardLease::test(),
-        )))
-    });
-    assert!(chat.clipboard_lease.is_some());
-    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    assert!(rendered.contains("Copied python code to clipboard"));
-
-    chat.copy_selection_with("terminal copy", "code", |_| {
-        Ok(crate::clipboard_copy::CopyOutcome::Copied(None))
-    });
-    assert!(chat.clipboard_lease.is_some());
-    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    assert!(rendered.contains("Copied code to clipboard"));
-
-    chat.copy_selection_with("print('blocked')\n", "python code", |content| {
-        assert_eq!(content, "print('blocked')\n");
-        Err("blocked selection".to_string())
-    });
-    assert!(chat.clipboard_lease.is_some());
-    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    assert!(rendered.contains("Copy failed: blocked selection"));
-
-    chat.copy_selection_with("print('ok')\n", "python code", |_| {
-        Ok(crate::clipboard_copy::CopyOutcome::Requested)
-    });
-    assert!(chat.clipboard_lease.is_some());
-    let rendered = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
-    assert!(rendered.contains("Copy unconfirmed; /export saves chat"));
+    let pending = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
+    insta::assert_snapshot!("pending_copy", pending);
+    let completion = (1, Ok(crate::clipboard_copy::CopyStatus::Confirmed));
+    chat.finish_clipboard(&completion, /*composer_visible*/ true);
+    let result = lines_to_single_string(&drain_insert_history(&mut rx)[0]);
+    assert!(result.contains("Copied last message to clipboard"));
+    chat.finish_clipboard(&completion, /*composer_visible*/ true);
+    assert!(drain_insert_history(&mut rx).is_empty());
+    chat.show_copy_result(
+        "last message",
+        Ok(crate::clipboard_copy::CopyStatus::Unconfirmed),
+    );
+    insta::assert_snapshot!(
+        "unconfirmed_copy",
+        lines_to_single_string(&drain_insert_history(&mut rx)[0])
+    );
 }
 
 #[tokio::test]
@@ -3637,27 +3599,16 @@ async fn transcript_copy_feedback_stays_in_the_footer_without_history_or_interru
     let (mut chat, mut events, mut operations) =
         make_chatwidget_manual(/*model_override*/ None).await;
     let _ = drain_insert_history(&mut events);
-    let result = chat.copy_transcript_selection_with("selected café\nsecond line", |text| {
-        assert_eq!(text, "selected café\nsecond line");
-        Ok(crate::clipboard_copy::CopyOutcome::Copied(Some(
-            crate::clipboard_copy::ClipboardLease::test(),
-        )))
-    });
-    assert_eq!(result, Ok(crate::clipboard_copy::CopyStatus::Confirmed));
+    chat.show_selection_copy_result(Ok(crate::clipboard_copy::CopyStatus::Confirmed));
     assert_eq!(drain_insert_history(&mut events).len(), 0);
     assert!(operations.try_recv().is_err());
-    assert!(chat.clipboard_lease.is_some());
     insta::assert_snapshot!(
         "transcript_copy_success",
         render_bottom_popup(&chat, /*width*/ 80)
     );
-    let result = chat.copy_transcript_selection_with("selected café", |_text| {
-        Ok(crate::clipboard_copy::CopyOutcome::Requested)
-    });
-    assert_eq!(result, Ok(crate::clipboard_copy::CopyStatus::Unconfirmed));
+    chat.show_selection_copy_result(Ok(crate::clipboard_copy::CopyStatus::Unconfirmed));
     assert_eq!(drain_insert_history(&mut events).len(), 0);
     assert!(operations.try_recv().is_err());
-    assert!(chat.clipboard_lease.is_some());
     insta::assert_snapshot!(
         "transcript_copy_unconfirmed",
         render_bottom_popup(&chat, /*width*/ 80)
@@ -3669,13 +3620,9 @@ async fn transcript_copy_feedback_stays_in_the_footer_without_history_or_interru
     chat.open_warnings(&[Arc::new(history_cell::new_warning_event(
         "selected café".into(),
     ))]);
-    let result = chat.copy_transcript_selection_with("selected café", |_text| {
-        Err("clipboard unavailable".to_string())
-    });
-    assert_eq!(result, Err("clipboard unavailable".to_string()));
+    chat.show_selection_copy_result(Err("clipboard unavailable".to_string()));
     assert_eq!(drain_insert_history(&mut events).len(), 0);
     assert!(operations.try_recv().is_err());
-    assert!(chat.clipboard_lease.is_some());
     insta::assert_snapshot!(
         "transcript_copy_failure",
         render_bottom_popup(&chat, /*width*/ 80)

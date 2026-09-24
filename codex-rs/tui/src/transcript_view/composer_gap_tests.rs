@@ -11,9 +11,82 @@ use crossterm::event::MouseEventKind;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn pending_copy_feedback_survives_expiry_and_selection_replacement() {
+    let cells = vec![cell("selected text")];
+    let mut view = TranscriptView::default();
+    render(&mut view, &cells, /*width*/ 60, /*height*/ 3);
+    view.begin_selection(&cells, /*column*/ 0, /*row*/ 0, /*clicks*/ 3);
+    let selected = view.selected_text(&cells).unwrap();
+    let pending = view.copy_selected_text_with(
+        &cells,
+        &selected,
+        /*clear_selection*/ true,
+        |_| Ok(CopyStatus::Pending(1)),
+    );
+    view.show_copy_feedback(&pending, selected.chars().count());
+    view.show_copy_feedback(&Ok(CopyStatus::Busy), /*characters*/ 0);
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 60, /*height*/ 1,
+    );
+    let mut buffer = Buffer::empty(area);
+    let later = Instant::now() + Duration::from_secs(/*secs*/ 10);
+    assert!(view.composer_gap_has_content(area.width, /*hint*/ None, later));
+    assert_eq!(
+        view.render_composer_gap(Some(area), /*hint*/ None, &mut buffer, later),
+        None
+    );
+    let pending_frame = text(&buffer);
+    assert_eq!(
+        view.finish_copy(
+            &cells,
+            &(1, Err("setup timed out".into())),
+            /*current*/ true
+        ),
+        Some(false)
+    );
+    assert_eq!(view.selected_text(&cells), Some(selected));
+    buffer.reset();
+    view.render_composer_gap(Some(area), /*hint*/ None, &mut buffer, Instant::now());
+    insta::assert_snapshot!(format!(
+        "Pending after ten seconds\n{pending_frame}\nSetup failed\n{}",
+        text(&buffer)
+    ));
+
+    // Feedback still completes if the selection owner disappears, including composer copies.
+    view.show_copy_feedback(&Ok(CopyStatus::Pending(2)), /*characters*/ 3);
+    view.end_selection(&cells);
+    assert_eq!(
+        view.finish_copy(
+            &cells,
+            &(2, Ok(CopyStatus::Confirmed)),
+            /*current*/ false
+        ),
+        None
+    );
+    assert_eq!(
+        view.copy_feedback.as_ref().unwrap().result,
+        Ok(CopyStatus::Confirmed)
+    );
+    view.show_copy_feedback(&Ok(CopyStatus::Pending(3)), /*characters*/ 4);
+    view.finish_copy(&cells, &(2, Err("stale".into())), /*current*/ true);
+    assert_eq!(
+        view.copy_feedback.as_ref().unwrap().result,
+        Ok(CopyStatus::Pending(3))
+    );
+    view.finish_copy(
+        &cells,
+        &(4, Ok(CopyStatus::Confirmed)),
+        /*current*/ true,
+    );
+    assert!(view.copy_feedback.is_none());
+}
+
+#[test]
 fn copy_feedback_is_right_aligned_and_does_not_claim_terminal_delivery() {
     let mut snapshots = Vec::new();
     for result in [
+        Ok(CopyStatus::Pending(1)),
+        Ok(CopyStatus::Busy),
         Ok(CopyStatus::Confirmed),
         Ok(CopyStatus::Unconfirmed),
         Err("unavailable".to_owned()),
@@ -24,14 +97,15 @@ fn copy_feedback_is_right_aligned_and_does_not_claim_terminal_delivery() {
             assert!(view.composer_gap_has_content(width, /*hint*/ None, Instant::now()));
             let area = Rect::new(/*x*/ 0, /*y*/ 0, width, /*height*/ 1);
             let mut buffer = Buffer::empty(area);
-            assert!(
+            assert_eq!(
                 view.render_composer_gap(
                     Some(area),
                     /*hint*/ None,
                     &mut buffer,
                     Instant::now()
                 )
-                .is_some()
+                .is_some(),
+                !matches!(result, Ok(CopyStatus::Pending(_)))
             );
             assert_eq!(buffer[(width - 1, 0)].symbol(), " ");
             snapshots.push(format!("{result:?}, {width} columns\n{}", text(&buffer)));
@@ -59,7 +133,7 @@ fn feedback_releases_navigation_targets_and_expiry_restores_them() {
     view.render_composer_gap(Some(area), /*hint*/ None, &mut buffer, Instant::now());
     assert!(!text(&buffer).contains("Back to bottom"));
     assert!(!view.is_following());
-    view.copy_feedback.as_mut().unwrap().expires_at = Instant::now();
+    view.copy_feedback.as_mut().unwrap().expires_at = Some(Instant::now());
     buffer.reset();
     assert_eq!(
         view.render_composer_gap(Some(area), /*hint*/ None, &mut buffer, Instant::now()),
@@ -159,7 +233,7 @@ fn tip_links_follow_alignment_and_release_stale_targets() {
     view.show_copy_feedback(&Ok(CopyStatus::Confirmed), /*characters*/ 3);
     view.render_composer_gap(Some(area), Some(&tip), &mut buffer, Instant::now());
     assert!(view.handle_mouse(click, &[]).is_none());
-    view.copy_feedback.as_mut().unwrap().expires_at = Instant::now();
+    view.copy_feedback.as_mut().unwrap().expires_at = Some(Instant::now());
     view.render_composer_gap(Some(area), Some(&tip), &mut buffer, Instant::now());
     assert!(matches!(
         view.handle_mouse(click, &[]),

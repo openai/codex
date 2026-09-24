@@ -130,7 +130,7 @@ fn copying_selection_at_bottom_does_not_show_back_to_bottom() {
     view.begin_selection(&cells, /*column*/ 0, /*row*/ 2, /*clicks*/ 2);
     view.end_drag();
     let selected = view.selected_text(&cells).expect("selected word");
-    view.copy_selected_text_with(&cells, &selected, |text| {
+    view.copy_selected_text_with(&cells, &selected, /*clear_selection*/ true, |text| {
         assert_eq!(text, "needle");
         Ok(crate::clipboard_copy::CopyStatus::Confirmed)
     })
@@ -221,7 +221,7 @@ fn copying_live_selection_retains_the_displayed_revision() {
     view.sync_live_tail(/*width*/ 40, /*key*/ None, |_| {
         Some(vec![HyperlinkLine::from("changed live text")])
     });
-    view.copy_selected_text_with(&cells, &selected, |_| {
+    view.copy_selected_text_with(&cells, &selected, /*clear_selection*/ true, |_| {
         Ok(crate::clipboard_copy::CopyStatus::Confirmed)
     })
     .unwrap();

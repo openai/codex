@@ -1,0 +1,9 @@
+---
+source: tui/src/transcript_view/composer_gap_tests.rs
+assertion_line: 33
+expression: "format!(\"Pending after ten seconds\\n{pending_frame}\\nSetup failed\\n{}\",\ntext(&buffer))"
+---
+Pending after ten seconds
+                                          Copying 13 chars…
+Setup failed
+                                    Copy failed · try again

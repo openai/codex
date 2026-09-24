@@ -1745,6 +1745,15 @@ impl BottomPane {
         self.composer.end_mouse_drag();
     }
 
+    pub(crate) fn finish_composer_copy(
+        &mut self,
+        completion: &(u64, crate::clipboard_copy::worker::CopyResult),
+        visible: bool,
+    ) -> Option<usize> {
+        let current = visible && !self.has_active_view();
+        self.composer.finish_copy(completion, current)
+    }
+
     pub(crate) fn copy_composer_selection(
         &mut self,
         event: &crate::tui::TuiEvent,

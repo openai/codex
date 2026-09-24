@@ -461,24 +461,18 @@ impl App {
             ViewAction::Copy(text)
             | ViewAction::CopyOnSelect(text)
             | ViewAction::CopyAndFollow(text) => {
-                let result = if copy_on_select {
-                    tui.copy_transcript_selection(&text)
-                } else {
-                    self.transcript_view.copy_selected_text_with(
-                        &self.transcript_cells,
-                        &text,
-                        |text| tui.copy_transcript_selection(text),
-                    )
-                };
+                let result = self.transcript_view.copy_selected_text_with(
+                    &self.transcript_cells,
+                    &text,
+                    !copy_on_select,
+                    |text| tui.copy_transcript_selection(text),
+                );
                 self.transcript_view
                     .show_copy_feedback(&result, text.chars().count());
                 if resume_following
-                    && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Confirmed))
+                    && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Pending(_)))
                 {
-                    if self.backtrack.overlay_preview_active {
-                        self.close_transcript_overlay(tui);
-                    }
-                    self.transcript_view.jump_to_latest();
+                    self.transcript_view.follow_pending_copy();
                 }
             }
             ViewAction::OpenLink(url) => self.open_url_in_browser(url),

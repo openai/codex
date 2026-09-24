@@ -586,6 +586,7 @@ async fn run_session_picker_with_loader(
     loop {
         tokio::select! {
             Some(ev) = tui_events.next() => {
+                alt.tui.clipboard.poll();
                 let screen_size = alt.tui.screen_size_for_event(&ev)?;
                 let ev = if let TuiEvent::Key(key) = ev {
                     let Some(key) = state.route_key_chord(key) else {

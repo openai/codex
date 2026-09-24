@@ -442,7 +442,7 @@ pub(crate) enum AppEvent {
         destination: TranscriptExportDestination,
     },
 
-    /// Copy a picker selection while retaining its clipboard lease in the chat widget.
+    /// Copy text through the session clipboard worker.
     CopySelection {
         text: Arc<str>,
         label: String,
