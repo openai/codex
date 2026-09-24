@@ -59,6 +59,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpAttribution;
+use codex_protocol::mcp::McpAttributionErrorReason;
 use codex_protocol::mcp::McpAttributionSource;
 use codex_protocol::mcp::McpAttributionStatus;
 use codex_protocol::mcp::OPENAI_FORM_EXTENSION_ID;
@@ -3159,8 +3160,12 @@ async fn spawn_agent_full_fork_legacy_compaction_rebuilds_child_instructions_onc
     }
 }
 
+#[test_case::test_case(false; "complete")]
+#[test_case::test_case(true; "error_reason")]
 #[tokio::test]
-async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() {
+async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests(
+    record_invalid_source: bool,
+) {
     let harness = AgentControlHarness::new().await;
     let (source_thread_id, source_thread) = harness.start_thread().await;
     let turn_context = source_thread.session.new_default_turn().await;
@@ -3184,6 +3189,16 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() 
         .services
         .executed_tool_calls
         .record_mcp_source(source.clone());
+    if record_invalid_source {
+        source_thread
+            .session
+            .services
+            .executed_tool_calls
+            .record_mcp_source(McpAttributionSource {
+                tool_name: String::new(),
+                ..source.clone()
+            });
+    }
     source_thread
         .session
         .record_conversation_items(
@@ -3232,7 +3247,12 @@ async fn resume_and_cold_fork_restore_mcp_attribution_in_constructed_requests() 
         .await
         .expect("resume source thread");
     let expected = McpAttribution {
-        status: McpAttributionStatus::Complete,
+        status: if record_invalid_source {
+            McpAttributionStatus::AttributionError
+        } else {
+            McpAttributionStatus::Complete
+        },
+        error_reason: record_invalid_source.then_some(McpAttributionErrorReason::SourceInvalid),
         sources: vec![source],
     };
     assert_eq!(
@@ -3475,6 +3495,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         mcp_attribution_in_constructed_request(&child_thread).await,
         McpAttribution {
             status: McpAttributionStatus::Complete,
+            error_reason: None,
             sources: vec![source],
         }
     );

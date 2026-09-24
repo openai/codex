@@ -7,6 +7,7 @@ use std::sync::MutexGuard;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
 use codex_protocol::mcp::McpAttribution;
+use codex_protocol::mcp::McpAttributionErrorReason;
 use codex_protocol::mcp::McpAttributionSource;
 use codex_protocol::mcp::McpAttributionStatus;
 
@@ -56,25 +57,24 @@ impl McpAttributionRecorder {
         for item in history.get_rollout_items() {
             match item {
                 RolloutItem::ResponseItem(envelope) => {
-                    if let Some(checkpoint) = envelope
-                        .metadata
-                        .as_ref()
-                        .and_then(|metadata| metadata.mcp_attribution.as_ref())
+                    if let Some(metadata) = envelope.metadata.as_ref()
+                        && let Some(checkpoint) = metadata.mcp_attribution.as_ref()
                     {
                         found_checkpoint = true;
                         state.merge_checkpoint(checkpoint);
                     }
                 }
                 RolloutItem::Compacted(compacted) => {
-                    for checkpoint in compacted
+                    for metadata in compacted
                         .replacement_history
                         .iter()
                         .flatten()
                         .filter_map(|envelope| envelope.metadata.as_ref())
-                        .filter_map(|metadata| metadata.mcp_attribution.as_ref())
                     {
-                        found_checkpoint = true;
-                        state.merge_checkpoint(checkpoint);
+                        if let Some(checkpoint) = metadata.mcp_attribution.as_ref() {
+                            found_checkpoint = true;
+                            state.merge_checkpoint(checkpoint);
+                        }
                     }
                 }
                 _ => {}
@@ -82,7 +82,7 @@ impl McpAttributionRecorder {
         }
         if !found_checkpoint {
             // Pre-attribution history cannot establish that earlier context was MCP-free.
-            state.mark_error();
+            state.mark_error(McpAttributionErrorReason::HistoryMissingCheckpoint);
         }
         Self(Arc::new(Mutex::new(state)))
     }
@@ -90,7 +90,7 @@ impl McpAttributionRecorder {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.0.lock().unwrap_or_else(|poisoned| {
             let mut state = poisoned.into_inner();
-            state.mark_error();
+            state.mark_error(McpAttributionErrorReason::RecorderPoisoned);
             state
         })
     }
@@ -116,20 +116,27 @@ impl McpAttributionRecorder {
 }
 
 impl State {
-    fn mark_error(&mut self) {
+    fn mark_error(&mut self, reason: McpAttributionErrorReason) {
         if self.attribution.status != McpAttributionStatus::AttributionError {
             self.attribution.status = McpAttributionStatus::AttributionError;
+            self.attribution.error_reason = Some(reason);
             self.revision += 1;
         }
     }
 
     fn merge_checkpoint(&mut self, checkpoint: &McpAttribution) {
-        if checkpoint.status == McpAttributionStatus::AttributionError
-            || (checkpoint.status == McpAttributionStatus::None && !checkpoint.sources.is_empty())
+        if checkpoint.status == McpAttributionStatus::AttributionError {
+            self.mark_error(
+                checkpoint
+                    .error_reason
+                    .unwrap_or(McpAttributionErrorReason::RestoredErrorUnknown),
+            );
+        } else if (checkpoint.status == McpAttributionStatus::None
+            && !checkpoint.sources.is_empty())
             || (checkpoint.status == McpAttributionStatus::Complete
                 && checkpoint.sources.is_empty())
         {
-            self.mark_error();
+            self.mark_error(McpAttributionErrorReason::CheckpointInvalid);
         }
         for source in &checkpoint.sources {
             self.record(source.clone(), /*restoring*/ true);
@@ -145,7 +152,7 @@ impl State {
             .find(|existing| SourceIdentity::from(*existing) == identity)
         {
             if restoring && existing.first_turn_id != source.first_turn_id {
-                self.mark_error();
+                self.mark_error(McpAttributionErrorReason::CheckpointSourceConflict);
             }
             return;
         }
@@ -153,7 +160,11 @@ impl State {
             || source.tool_name.is_empty()
             || source.first_turn_id.is_empty()
         {
-            self.mark_error();
+            self.mark_error(if restoring {
+                McpAttributionErrorReason::CheckpointInvalid
+            } else {
+                McpAttributionErrorReason::SourceInvalid
+            });
             return;
         }
         if self.attribution.status == McpAttributionStatus::None {

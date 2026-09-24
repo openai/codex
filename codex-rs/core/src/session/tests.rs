@@ -5632,6 +5632,7 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
         .record_mcp_source(source.clone());
     let expected = McpAttribution {
         status: McpAttributionStatus::Complete,
+        error_reason: None,
         sources: vec![source],
     };
     session
@@ -6288,6 +6289,7 @@ async fn response_metadata_builders_capture_fresh_mcp_attribution() {
         .await;
     let expected = Some(McpAttribution {
         status: McpAttributionStatus::Complete,
+        error_reason: None,
         sources: vec![source],
     });
     assert_eq!(before.mcp_attribution, Some(McpAttribution::default()));
