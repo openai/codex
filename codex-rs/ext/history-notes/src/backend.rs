@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use codex_api::ReqwestTransport;
 use codex_client::HttpTransport;
 use codex_client::RequestBody;
-use codex_login::default_client::create_client;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
+use codex_login::default_client::create_transport_for_routes_async;
 use codex_model_provider::SharedModelProvider;
 use codex_utils_output_truncation::TruncationPolicy;
 use http::HeaderValue;
@@ -19,11 +20,18 @@ const OPERATION_ERROR_PREFIX: &str = "Unable to perform operation:";
 #[derive(Clone)]
 pub(crate) struct HistoryNotesBackend {
     provider: SharedModelProvider,
+    http_client_factory: HttpClientFactory,
 }
 
 impl HistoryNotesBackend {
-    pub(crate) fn new(provider: SharedModelProvider) -> Self {
-        Self { provider }
+    pub(crate) fn new(
+        provider: SharedModelProvider,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
+        Self {
+            provider,
+            http_client_factory,
+        }
     }
 
     pub(crate) async fn call(
@@ -82,7 +90,13 @@ impl HistoryNotesBackend {
         let request = auth.apply_auth(request).await.map_err(|_| {
             format!("{OPERATION_ERROR_PREFIX} Could not apply backend authentication.")
         })?;
-        let response = ReqwestTransport::from_http_client(create_client())
+        let transport = create_transport_for_routes_async(
+            self.http_client_factory.clone(),
+            ClientRouteClass::Api,
+        )
+        .await
+        .map_err(|_| format!("{OPERATION_ERROR_PREFIX} The backend request failed."))?;
+        let response = transport
             .execute(request)
             .await
             .map_err(|_| format!("{OPERATION_ERROR_PREFIX} The backend request failed."))?;

@@ -5,8 +5,10 @@ use codex_api::ImageResponse;
 use codex_api::ImagesClient;
 use codex_api::ReqwestTransport;
 use codex_api::map_api_error;
+use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientFactory;
 use codex_login::default_client::add_originator_header;
-use codex_login::default_client::create_client;
+use codex_login::default_client::create_transport_for_routes_async;
 use codex_model_provider::SharedModelProvider;
 use codex_protocol::error::CodexErr;
 use http::HeaderMap;
@@ -55,14 +57,20 @@ impl ImageBackendError {
 #[derive(Clone)]
 pub(crate) struct CodexImagesBackend {
     provider: SharedModelProvider,
+    http_client_factory: HttpClientFactory,
     originator: Option<String>,
 }
 
 impl CodexImagesBackend {
     /// Creates a backend that sends image requests through the active model provider.
-    pub(crate) fn new(provider: SharedModelProvider, originator: Option<String>) -> Self {
+    pub(crate) fn new(
+        provider: SharedModelProvider,
+        http_client_factory: HttpClientFactory,
+        originator: Option<String>,
+    ) -> Self {
         Self {
             provider,
+            http_client_factory,
             originator,
         }
     }
@@ -79,11 +87,13 @@ impl CodexImagesBackend {
             .api_auth()
             .await
             .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
-        Ok(ImagesClient::new(
-            ReqwestTransport::from_http_client(create_client()),
-            provider,
-            auth,
-        ))
+        let transport = create_transport_for_routes_async(
+            self.http_client_factory.clone(),
+            ClientRouteClass::Api,
+        )
+        .await
+        .map_err(|err| ImageBackendError::from_message(err.to_string()))?;
+        Ok(ImagesClient::new(transport, provider, auth))
     }
 
     /// Sends a standalone image generation request through the configured Images client.

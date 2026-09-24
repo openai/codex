@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -8,6 +9,8 @@ use codex_core::config::Constrained;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
+use codex_http_client::DestinationPolicy;
+use codex_http_client::NetworkPolicyController;
 use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -67,11 +70,14 @@ fn image_generation_extensions(
     Arc::new(extension_builder.build())
 }
 
+#[test_case(false; "file_access")]
+#[test_case(true; "application_network")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
+async fn extension_tool_respects_restrictions(deny_network: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
+    let responses_url = format!("{}/v1/responses", server.uri()).parse()?;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let extensions = image_generation_extensions(&auth, |config| Some(config.codex_home.clone()));
     let mut builder = test_codex()
@@ -81,12 +87,21 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
             model_info.use_responses_lite = true;
             model_info.input_modalities = vec![InputModality::Text, InputModality::Image];
         })
-        .with_config(|config| {
+        .with_config(move |config| {
             assert!(config.web_search_mode.set(WebSearchMode::Live).is_ok());
+            if deny_network {
+                let controller = NetworkPolicyController::default();
+                let policy = controller
+                    .policy()
+                    .restrict_to_endpoints(BTreeSet::from([responses_url]));
+                assert!(controller.publish(policy.revision(), DestinationPolicy::Unrestricted));
+                config.application_network_policy = policy;
+                config.respect_system_proxy = false;
+            }
         });
     let test = builder.build(&server).await?;
     let denied_path = test.config.cwd.join("denied.png");
-    std::fs::write(&denied_path, b"not readable")?;
+    std::fs::write(&denied_path, TINY_PNG_BYTES)?;
 
     let call_id = "image-edit-denied";
     let response_mock = responses::mount_sse_sequence(
@@ -116,15 +131,17 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
     .await;
 
     let mut file_system_sandbox_policy = FileSystemSandboxPolicy::default();
-    file_system_sandbox_policy
-        .entries
-        .push(FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: denied_path.clone().into(),
-            },
-            access: FileSystemAccessMode::Deny,
-            missing_path_behavior: None,
-        });
+    if !deny_network {
+        file_system_sandbox_policy
+            .entries
+            .push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_path.clone().into(),
+                },
+                access: FileSystemAccessMode::Deny,
+                missing_path_behavior: None,
+            });
+    }
     let permission_profile = PermissionProfile::from_runtime_permissions(
         &file_system_sandbox_policy,
         NetworkSandboxPolicy::Restricted,
@@ -140,13 +157,29 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .context("extension error text should be present")?;
-    assert!(
-        output.starts_with(&format!(
-            "unable to read referenced image at `{}`:",
-            denied_path.display()
-        )),
-        "unexpected extension error: {output}"
-    );
+    if deny_network {
+        assert!(
+            output.contains("destination denied by application network policy"),
+            "{output}"
+        );
+        let requests = server
+            .received_requests()
+            .await
+            .context("image request history should be recorded")?;
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request.url.path().starts_with("/v1/images/"))
+        );
+    } else {
+        assert!(
+            output.starts_with(&format!(
+                "unable to read referenced image at `{}`:",
+                denied_path.display()
+            )),
+            "unexpected extension error: {output}"
+        );
+    }
 
     Ok(())
 }

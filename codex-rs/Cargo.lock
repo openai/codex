@@ -3560,11 +3560,11 @@ name = "codex-history-notes-extension"
 version = "0.0.0"
 dependencies = [
  "codex-analytics",
- "codex-api",
  "codex-client",
  "codex-config",
  "codex-core",
  "codex-extension-api",
+ "codex-http-client",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
@@ -3665,6 +3665,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-extension-items",
+ "codex-http-client",
  "codex-login",
  "codex-model-provider",
  "codex-model-provider-info",
