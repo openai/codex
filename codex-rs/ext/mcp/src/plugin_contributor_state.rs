@@ -1,6 +1,7 @@
 //! Thread-owned cloud catalog and legacy selected-root cache, guarded by a short-lived mutex.
 
 use codex_core_plugins::PluginCatalog;
+use codex_extension_api::SelectedPluginContribution;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpResourceClientAuthKey;
@@ -109,14 +110,5 @@ impl PluginContributorState {
 
 pub(crate) struct CachedSelectedRoot {
     pub(crate) root: SelectedCapabilityRoot,
-    pub(crate) metadata: Option<SelectedPluginMetadata>,
-}
-
-/// Frozen declarations retain the logical environment ID across executor reconnections.
-#[derive(Clone)]
-pub(crate) struct SelectedPluginMetadata {
-    pub(crate) plugin_id: String,
-    pub(crate) plugin_display_name: String,
-    pub(crate) servers: Vec<(String, codex_config::McpServerConfig)>,
-    pub(crate) connector_ids: Vec<String>,
+    pub(crate) metadata: Option<SelectedPluginContribution>,
 }

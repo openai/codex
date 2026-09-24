@@ -5,6 +5,7 @@ use codex_protocol::protocol::SessionSource;
 
 use crate::ExtensionData;
 use crate::ExtensionDataInit;
+use crate::ExtensionFuture;
 
 /// Input supplied while resolving MCP server contributions.
 ///
@@ -127,7 +128,7 @@ impl<'a, C> McpServerContributionContext<'a, C> {
     }
 }
 
-/// Validated plugin identities projected for the current set of selected roots.
+/// Selected plugin identities and executor roots whose skills must be hidden.
 #[derive(Clone, Debug, Default)]
 pub struct SelectedPluginSnapshot {
     pub plugins: Vec<SelectedPluginIdentity>,
@@ -135,11 +136,29 @@ pub struct SelectedPluginSnapshot {
     pub disabled_plugin_roots: Vec<String>,
 }
 
-/// The configured identity of a plugin resolved from one selected root.
+/// The configured identity of a selected plugin and, when present, the root owning its skills.
 #[derive(Clone, Debug)]
 pub struct SelectedPluginIdentity {
+    /// Hosted plugins have no executor root and cannot own skills from an executor folder.
+    pub selected_root_id: Option<String>,
+    pub plugin_id: String,
+}
+
+/// An executor plugin and its deferred MCP data. Callers that only need the identity can drop
+/// `mcp` without loading server or connector configuration. A plugin still owns its skills when
+/// it has no MCP data.
+pub struct SelectedPlugin<'a> {
     pub selected_root_id: String,
     pub plugin_id: String,
+    pub mcp: ExtensionFuture<'a, SelectedPluginContribution>,
+}
+
+/// MCP data attributed by the host to the plugin that declared it.
+#[derive(Clone)]
+pub struct SelectedPluginContribution {
+    pub plugin_display_name: String,
+    pub connector_ids: Vec<String>,
+    pub servers: Vec<(String, McpServerConfig)>,
 }
 
 /// One extension-owned overlay for the runtime MCP server configuration.
@@ -164,17 +183,9 @@ pub enum McpServerContribution {
         /// Overrides the HTTP protocol mode, or uses the hosted Apps default when absent.
         protocol_mode: Option<crate::McpProtocolMode>,
     },
-    /// Registers a server declared by a plugin selected for this thread.
-    SelectedPlugin {
-        name: String,
-        plugin_id: String,
-        plugin_display_name: String,
-        selection_order: usize,
-        config: Box<McpServerConfig>,
-    },
-    /// Records a plugin selected for this thread and any connector IDs it declares.
-    SelectedPluginPackage {
-        selected_root_id: String,
+    /// Attributes Apps connectors to an account-hosted plugin. Plugins from executor folders must
+    /// use `McpServerContributor::selected_plugins`, even if they only provide Apps connectors.
+    HostedPluginConnectors {
         plugin_id: String,
         plugin_display_name: String,
         connector_ids: Vec<String>,

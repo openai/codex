@@ -1,17 +1,18 @@
 use codex_connectors::parse_plugin_app_config;
+use codex_core_plugins::manifest::UriPluginManifest;
 use codex_core_plugins::manifest::parse_plugin_manifest_uri;
 use codex_exec_server::CapabilityRootDiscovery;
+use codex_exec_server::DiscoveredPluginFiles;
+use codex_extension_api::SelectedPluginContribution;
 use codex_mcp::parse_executor_plugin_mcp_config;
 use codex_plugin::manifest::PluginManifestMcpServers;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
-use super::SelectedPluginMetadata;
-
-pub(super) fn metadata_from_discovery(
+pub(super) fn manifest_from_discovery<'a>(
     selected_root: &SelectedCapabilityRoot,
-    discovery: &CapabilityRootDiscovery,
-) -> Option<SelectedPluginMetadata> {
+    discovery: &'a CapabilityRootDiscovery,
+) -> Option<(UriPluginManifest, &'a DiscoveredPluginFiles)> {
     for warning in &discovery.warnings {
         tracing::warn!(
             selected_root = selected_root.id,
@@ -28,12 +29,12 @@ pub(super) fn metadata_from_discovery(
         return None;
     }
     let plugin_files = discovery.plugin.as_ref()?;
-    let manifest = match parse_plugin_manifest_uri(
+    match parse_plugin_manifest_uri(
         &discovery.path,
         &plugin_files.manifest.path,
         &plugin_files.manifest.contents,
     ) {
-        Ok(manifest) => manifest,
+        Ok(manifest) => Some((manifest, plugin_files)),
         Err(error) => {
             tracing::warn!(
                 selected_root = selected_root.id,
@@ -41,9 +42,17 @@ pub(super) fn metadata_from_discovery(
                 %error,
                 "failed to parse exec-server-discovered plugin manifest"
             );
-            return None;
+            None
         }
-    };
+    }
+}
+
+pub(super) fn metadata_from_discovery(
+    selected_root: &SelectedCapabilityRoot,
+    discovery: &CapabilityRootDiscovery,
+    plugin_files: &DiscoveredPluginFiles,
+    manifest: UriPluginManifest,
+) -> SelectedPluginContribution {
     let CapabilityRootLocation::Environment { environment_id, .. } = &selected_root.location;
     let servers = match manifest.paths.mcp_servers.as_ref() {
         Some(PluginManifestMcpServers::Object(contents)) => {
@@ -117,12 +126,11 @@ pub(super) fn metadata_from_discovery(
         .map(|declaration| declaration.connector_id.0)
         .collect();
 
-    Some(SelectedPluginMetadata {
-        plugin_id: selected_root.id.clone(),
+    SelectedPluginContribution {
         plugin_display_name: manifest.display_name().to_string(),
         servers,
         connector_ids,
-    })
+    }
 }
 
 fn parse_mcp_servers(

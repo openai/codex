@@ -75,7 +75,7 @@ pub(crate) fn attribute_executor_plugins(
         if let Some(plugin) = snapshot
             .plugins
             .iter()
-            .find(|plugin| plugin.selected_root_id == skill.authority.id)
+            .find(|plugin| plugin.selected_root_id.as_ref() == Some(&skill.authority.id))
         {
             skill.plugin_id = Some(plugin.plugin_id.clone());
             skill.analytics_scope = Some(SkillScope::User);

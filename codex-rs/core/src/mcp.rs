@@ -13,6 +13,7 @@ use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
+use codex_extension_api::SelectedPlugin;
 use codex_extension_api::SelectedPluginIdentity;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_features::Feature;
@@ -189,7 +190,6 @@ impl McpManager {
         disabled_plugin_ids: &[String],
     ) -> McpRuntimeProjection {
         let config = context.config();
-        let mut selected_plugin_available = false;
         let mut selected_plugin_connector_sources = Vec::new();
         let mut selected_plugin_registrations = Vec::new();
         let mut selected_plugins = Vec::new();
@@ -198,7 +198,57 @@ impl McpManager {
         // A contributor can emit multiple ordered actions, so order each action globally rather
         // than enumerating contributors.
         let mut contribution_order = 0;
+        let mut plugin_selection_order = 0;
         for contributor in self.extensions.mcp_server_contributors() {
+            // Finish executor plugins before asking for hosted contributions, which may change
+            // accounts while an executor is still loading.
+            for SelectedPlugin {
+                selected_root_id,
+                plugin_id,
+                mcp,
+            } in contributor.selected_plugins(context).await
+            {
+                let selection_order = plugin_selection_order;
+                plugin_selection_order += 1;
+                let disabled = disabled_plugin_ids.contains(&plugin_id);
+                if !config.features.enabled(Feature::Plugins) || disabled {
+                    disabled_plugin_roots.push(selected_root_id);
+                } else {
+                    selected_plugins.push(SelectedPluginIdentity {
+                        selected_root_id: Some(selected_root_id),
+                        plugin_id: plugin_id.clone(),
+                    });
+                }
+                let contribution = mcp.await;
+                if !disabled {
+                    for (name, server) in contribution.servers {
+                        selected_plugin_registrations.push(
+                            McpServerRegistration::from_selected_plugin(
+                                name,
+                                McpPluginAttribution::new(
+                                    plugin_id.clone(),
+                                    contribution.plugin_display_name.clone(),
+                                ),
+                                selection_order,
+                                server,
+                            ),
+                        );
+                    }
+                }
+                // Disabled plugins still tell Apps which connectors to hide.
+                if config.features.enabled(Feature::Plugins)
+                    && !contribution.connector_ids.is_empty()
+                {
+                    selected_plugin_connector_sources.push(
+                        PluginConnectorSource::from_connector_ids(
+                            plugin_id,
+                            contribution.plugin_display_name,
+                            contribution.connector_ids.into_iter().map(AppConnectorId),
+                        ),
+                    );
+                }
+            }
+
             for contribution in contributor.contribute(context).await {
                 match contribution {
                     McpServerContribution::Set { name, config } => {
@@ -240,50 +290,27 @@ impl McpManager {
                         }
                         overlays.push(OrderedMcpOverlay::Set(Box::new(registration)));
                     }
-                    McpServerContribution::SelectedPlugin { ref plugin_id, .. }
-                        if disabled_plugin_ids.contains(plugin_id) => {}
-                    McpServerContribution::SelectedPlugin {
-                        name,
-                        plugin_id,
-                        plugin_display_name,
-                        selection_order,
-                        config,
-                    } => selected_plugin_registrations.push(
-                        McpServerRegistration::from_selected_plugin(
-                            name,
-                            McpPluginAttribution::new(plugin_id, plugin_display_name),
-                            selection_order,
-                            *config,
-                        ),
-                    ),
-                    McpServerContribution::SelectedPluginPackage {
-                        selected_root_id, ..
-                    } if !config.features.enabled(Feature::Plugins) => {
-                        disabled_plugin_roots.push(selected_root_id);
-                    }
-                    McpServerContribution::SelectedPluginPackage {
-                        selected_root_id,
+                    McpServerContribution::HostedPluginConnectors {
                         plugin_id,
                         plugin_display_name,
                         connector_ids,
                     } => {
-                        if disabled_plugin_ids.contains(&plugin_id) {
-                            disabled_plugin_roots.push(selected_root_id);
-                        } else {
-                            selected_plugin_available = true;
-                            selected_plugins.push(SelectedPluginIdentity {
-                                selected_root_id,
-                                plugin_id: plugin_id.clone(),
-                            });
-                        }
-                        if !connector_ids.is_empty() {
-                            selected_plugin_connector_sources.push(
-                                PluginConnectorSource::from_connector_ids(
-                                    plugin_id,
-                                    plugin_display_name,
-                                    connector_ids.into_iter().map(AppConnectorId),
-                                ),
-                            );
+                        if config.features.enabled(Feature::Plugins) {
+                            if !disabled_plugin_ids.contains(&plugin_id) {
+                                selected_plugins.push(SelectedPluginIdentity {
+                                    selected_root_id: None,
+                                    plugin_id: plugin_id.clone(),
+                                });
+                            }
+                            if !connector_ids.is_empty() {
+                                selected_plugin_connector_sources.push(
+                                    PluginConnectorSource::from_connector_ids(
+                                        plugin_id,
+                                        plugin_display_name,
+                                        connector_ids.into_iter().map(AppConnectorId),
+                                    ),
+                                );
+                            }
                         }
                     }
                     McpServerContribution::Remove { name } => {
@@ -316,7 +343,7 @@ impl McpManager {
         };
         let loaded_plugins = loaded_plugins.without_plugins(disabled_plugin_ids);
         let plugins_available =
-            selected_plugin_available || !loaded_plugins.capability_summaries().is_empty();
+            !selected_plugins.is_empty() || !loaded_plugins.capability_summaries().is_empty();
         let mut mcp_config = config
             .to_mcp_config_with_loaded_plugins(&loaded_plugins, selected_plugin_registrations);
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();

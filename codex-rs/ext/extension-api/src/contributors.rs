@@ -29,6 +29,8 @@ pub use approval_review::SynchronousApprovalReviewer;
 pub use context::TurnContextContributionInput;
 pub use mcp::McpServerContribution;
 pub use mcp::McpServerContributionContext;
+pub use mcp::SelectedPlugin;
+pub use mcp::SelectedPluginContribution;
 pub use mcp::SelectedPluginIdentity;
 pub use mcp::SelectedPluginSnapshot;
 pub use prompt::PromptFragment;
@@ -69,14 +71,15 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Extension contribution that resolves runtime MCP servers from host config.
 ///
-/// Contributors run in registration order. Later contributions for the same
+/// Contributors run in registration order. Later ordinary server contributions for the same
 /// name replace earlier ones. Implementations must contribute only names they
 /// own and must apply any source-specific policy before returning a server.
 /// Thread-scoped resolution exposes the host-seeded thread inputs; global
 /// resolution exposes none and must not imply a local fallback. Thread inputs
 /// are frozen for the runtime and do not include lifecycle-contributor state.
-/// Auto-discovered plugin servers are resolved by the plugin manager. A
-/// thread-selected plugin contribution must carry its own package provenance.
+/// Auto-discovered plugin servers are resolved by the plugin manager. Declare
+/// executor plugins separately so the host attributes their MCP servers
+/// and connectors to the same identity as their other capabilities.
 pub trait McpServerContributor<C: Sync>: Send + Sync {
     /// Stable identity used for registration provenance and conflict diagnostics.
     fn id(&self) -> &'static str;
@@ -85,6 +88,17 @@ pub trait McpServerContributor<C: Sync>: Send + Sync {
         &'a self,
         context: McpServerContributionContext<'a, C>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>>;
+
+    /// Declares executor plugins, including those without MCP servers or connectors. Each
+    /// declaration identifies the plugin once; its deferred MCP data cannot change that identity.
+    /// Return plugins in precedence order: across contributors in registration order, the first
+    /// plugin wins if several provide the same server.
+    fn selected_plugins<'a>(
+        &'a self,
+        _context: McpServerContributionContext<'a, C>,
+    ) -> ExtensionFuture<'a, Vec<SelectedPlugin<'a>>> {
+        Box::pin(async { Vec::new() })
+    }
 }
 
 /// Extension contribution that adds prompt fragments during prompt assembly.

@@ -1589,8 +1589,16 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
 
         fn contribute<'a>(
             &'a self,
-            context: codex_extension_api::McpServerContributionContext<'a, Config>,
+            _context: codex_extension_api::McpServerContributionContext<'a, Config>,
         ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::McpServerContribution>>
+        {
+            Box::pin(async { Vec::new() })
+        }
+
+        fn selected_plugins<'a>(
+            &'a self,
+            context: codex_extension_api::McpServerContributionContext<'a, Config>,
+        ) -> codex_extension_api::ExtensionFuture<'a, Vec<codex_extension_api::SelectedPlugin<'a>>>
         {
             Box::pin(async move {
                 let thread_init = context
@@ -1619,22 +1627,18 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     &selected_root.location;
                 server.environment_id = environment_id.clone();
                 server.enabled = false;
-                let plugin_id = selected_root.id;
-                vec![
-                    codex_extension_api::McpServerContribution::SelectedPluginPackage {
-                        selected_root_id: plugin_id.clone(),
-                        plugin_id: plugin_id.clone(),
-                        plugin_display_name: plugin_id.clone(),
-                        connector_ids: vec![],
-                    },
-                    codex_extension_api::McpServerContribution::SelectedPlugin {
-                        name: plugin_id.clone(),
-                        plugin_display_name: plugin_id.clone(),
-                        plugin_id,
-                        selection_order: 0,
-                        config: Box::new(server),
-                    },
-                ]
+                let plugin_id = format!("plugin-{}", selected_root.id);
+                vec![codex_extension_api::SelectedPlugin {
+                    selected_root_id: selected_root.id.clone(),
+                    plugin_id: plugin_id.clone(),
+                    mcp: Box::pin(async move {
+                        codex_extension_api::SelectedPluginContribution {
+                            plugin_display_name: plugin_id,
+                            connector_ids: vec![format!("{}-connector", selected_root.id)],
+                            servers: vec![(selected_root.id, server)],
+                        }
+                    }),
+                }]
             })
         }
     }
@@ -1661,7 +1665,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
     });
     let mut extensions = codex_extension_api::ExtensionRegistryBuilder::new();
     extensions.thread_lifecycle_contributor(recorder.clone());
-    extensions.mcp_server_contributor(recorder);
+    extensions.mcp_server_contributor(recorder.clone());
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let manager = ThreadManager::new(
@@ -1810,7 +1814,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .get("originator"),
         Some(&"codex_work_desktop".to_string())
     );
-    for disabled_plugin_ids in [vec!["selected-a".to_string()], vec![]] {
+    for disabled_plugin_ids in [vec!["plugin-selected-a".to_string()], vec![]] {
         let projection = first_session
             .services
             .mcp_manager
@@ -1833,11 +1837,23 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
             .await;
         assert_eq!(
             projection.selected_plugins.disabled_plugin_roots,
-            disabled_plugin_ids
+            if disabled_plugin_ids.is_empty() {
+                vec![]
+            } else {
+                vec!["selected-a".to_string()]
+            }
         );
         assert_eq!(
             selected_servers(&projection.config).contains_key("selected-a"),
             disabled_plugin_ids.is_empty()
+        );
+        assert_eq!(
+            projection
+                .config
+                .connector_snapshot
+                .disabled_connector_ids()
+                .contains("selected-a-connector"),
+            !disabled_plugin_ids.is_empty()
         );
         assert_eq!(
             projection.selected_plugins.plugins.len(),

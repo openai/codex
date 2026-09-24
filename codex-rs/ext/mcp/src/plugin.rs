@@ -7,17 +7,19 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
+use codex_extension_api::SelectedPlugin;
+use codex_extension_api::SelectedPluginContribution;
 use codex_features::Feature;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
 use self::provider::PluginMcpProvider;
 use crate::PluginsThreadState;
-use crate::cloud_plugin::CloudPluginMetadata;
-use crate::cloud_plugin::catalog_to_metadata;
+use crate::cloud_plugin::hosted_plugin_connectors;
 use crate::plugin_contributor::PluginContributor;
 use crate::plugin_contributor_state::CachedSelectedRoot;
-use crate::plugin_contributor_state::SelectedPluginMetadata;
 
 mod discovery;
 mod provider;
@@ -33,7 +35,7 @@ impl PluginContributor {
         &self,
         state: &PluginsThreadState,
         selected_root: &SelectedCapabilityRoot,
-    ) -> Option<SelectedPluginMetadata> {
+    ) -> Option<SelectedPluginContribution> {
         if let Some(cached) = state
             .contributor_state()
             .executor_cache
@@ -83,8 +85,7 @@ impl PluginContributor {
                     .into_iter()
                     .map(|declaration| declaration.connector_id.0)
                     .collect();
-                Some(SelectedPluginMetadata {
-                    plugin_id: plugin.plugin().selected_root_id().to_string(),
+                Some(SelectedPluginContribution {
                     plugin_display_name: plugin.plugin().manifest().display_name().to_string(),
                     servers,
                     connector_ids,
@@ -118,23 +119,44 @@ impl McpServerContributor<Config> for PluginContributor {
             let Some(thread_store) = context.thread_store() else {
                 return Vec::new();
             };
-            // Cloud projection is gated independently; executor projection remains unchanged.
             let cloud_plugins_enabled = self.providers.cloud.is_some()
                 && context.config().features.enabled(Feature::Plugins);
             let state = thread_store.get_or_init(PluginsThreadState::default);
-            if !cloud_plugins_enabled || context.auth_changed() {
-                // Clear stale cloud metadata before projecting a replacement runtime.
+            if !cloud_plugins_enabled {
+                state.contributor_state().cloud_generation = None;
+                return Vec::new();
+            }
+            // Core reads hosted connectors after finishing the executor registrations.
+            state
+                .cloud_catalog()
+                .as_ref()
+                .map(hosted_plugin_connectors)
+                .unwrap_or_default()
+        })
+    }
+
+    fn selected_plugins<'a>(
+        &'a self,
+        context: McpServerContributionContext<'a, Config>,
+    ) -> ExtensionFuture<'a, Vec<SelectedPlugin<'a>>> {
+        Box::pin(async move {
+            let Some(thread_store) = context.thread_store() else {
+                return Vec::new();
+            };
+            let state = thread_store.get_or_init(PluginsThreadState::default);
+            if context.auth_changed() {
+                // Clear the old account before executor loading can yield to other work.
                 state.contributor_state().cloud_generation = None;
             }
             let selected_roots = context
                 .ready_selected_capability_roots()
                 .unwrap_or_default();
-            let plugin_policies =
-                configured_plugin_mcp_server_policies(&context.config().config_layer_stack);
-            let mut contributions = Vec::new();
+            // All plugins in this refresh share the same policy, but step-only readers never need it.
+            let plugin_policies = Arc::new(OnceLock::new());
+            let mut plugins = Vec::new();
 
             if let Some(snapshot) = context.executor_capability_discovery() {
-                for (selection_order, root) in snapshot.roots().iter().enumerate() {
+                for root in snapshot.roots() {
                     let discovery = match &root.result {
                         Ok(discovery) => discovery.as_ref(),
                         Err(error) => {
@@ -146,91 +168,77 @@ impl McpServerContributor<Config> for PluginContributor {
                             continue;
                         }
                     };
-                    let Some(plugin) =
-                        discovery::metadata_from_discovery(&root.selected_root, discovery)
+                    let Some((manifest, plugin_files)) =
+                        discovery::manifest_from_discovery(&root.selected_root, discovery)
                     else {
                         continue;
                     };
-                    contributions.extend(project_metadata(
-                        context.config(),
-                        plugin_policies.get(&plugin.plugin_id),
-                        selection_order,
-                        &root.selected_root.id,
-                        plugin,
-                    ));
+                    let plugin_policies = Arc::clone(&plugin_policies);
+                    plugins.push(SelectedPlugin {
+                        selected_root_id: root.selected_root.id.clone(),
+                        plugin_id: root.selected_root.id.clone(),
+                        mcp: Box::pin(async move {
+                            let metadata = discovery::metadata_from_discovery(
+                                &root.selected_root,
+                                discovery,
+                                plugin_files,
+                                manifest,
+                            );
+                            project_metadata(
+                                context.config(),
+                                &root.selected_root.id,
+                                &plugin_policies,
+                                metadata,
+                            )
+                        }),
+                    });
                 }
             } else {
-                for (selection_order, selected_root) in selected_roots.iter().enumerate() {
-                    let Some(plugin) = self.metadata_for_root(&state, selected_root).await else {
+                for selected_root in selected_roots {
+                    let Some(metadata) = self.metadata_for_root(&state, selected_root).await else {
                         continue;
                     };
-                    contributions.extend(project_metadata(
-                        context.config(),
-                        plugin_policies.get(&plugin.plugin_id),
-                        selection_order,
-                        &selected_root.id,
-                        plugin,
-                    ));
+                    let plugin_policies = Arc::clone(&plugin_policies);
+                    plugins.push(SelectedPlugin {
+                        selected_root_id: selected_root.id.clone(),
+                        plugin_id: selected_root.id.clone(),
+                        mcp: Box::pin(async move {
+                            project_metadata(
+                                context.config(),
+                                &selected_root.id,
+                                &plugin_policies,
+                                metadata,
+                            )
+                        }),
+                    });
                 }
             }
-
-            // V1 has no remote plugin identities, so cloud packages are additive for now.
-            // Clone the current snapshot after executor loading and release the lock before projection.
-            if cloud_plugins_enabled && let Some(catalog) = state.cloud_catalog() {
-                for CloudPluginMetadata {
-                    selection_order,
-                    selected_root_id,
-                    metadata,
-                } in catalog_to_metadata(&catalog)
-                {
-                    contributions.extend(project_metadata(
-                        context.config(),
-                        /*plugin_policy*/ None,
-                        selection_order,
-                        &selected_root_id,
-                        metadata,
-                    ));
-                }
-            }
-            contributions
+            plugins
         })
     }
 }
 
 fn project_metadata(
     config: &Config,
-    plugin_policy: Option<&HashMap<String, PluginMcpServerConfig>>,
-    selection_order: usize,
-    selected_root_id: &str,
-    plugin: SelectedPluginMetadata,
-) -> Vec<McpServerContribution> {
+    plugin_id: &str,
+    plugin_policies: &OnceLock<HashMap<String, HashMap<String, PluginMcpServerConfig>>>,
+    plugin: SelectedPluginContribution,
+) -> SelectedPluginContribution {
     let mut servers = if config.features.enabled(Feature::Plugins) {
-        plugin.servers.iter().cloned().collect::<HashMap<_, _>>()
+        plugin.servers.into_iter().collect::<HashMap<_, _>>()
     } else {
         HashMap::new()
     };
-    if let Some(plugin_policy) = plugin_policy {
-        apply_configured_plugin_mcp_server_policies(plugin_policy, &mut servers);
+    if !servers.is_empty() {
+        if let Some(plugin_policy) = plugin_policies
+            .get_or_init(|| configured_plugin_mcp_server_policies(&config.config_layer_stack))
+            .get(plugin_id)
+        {
+            apply_configured_plugin_mcp_server_policies(plugin_policy, &mut servers);
+        }
+        config.apply_plugin_mcp_server_requirements(plugin_id, &mut servers);
     }
-    config.apply_plugin_mcp_server_requirements(&plugin.plugin_id, &mut servers);
     let mut servers = servers.into_iter().collect::<Vec<_>>();
     servers.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    let mut contributions = servers
-        .into_iter()
-        .map(|(name, config)| McpServerContribution::SelectedPlugin {
-            name,
-            plugin_id: plugin.plugin_id.clone(),
-            plugin_display_name: plugin.plugin_display_name.clone(),
-            selection_order,
-            config: Box::new(config),
-        })
-        .collect::<Vec<_>>();
-    // Keep the package visible even when it contributes only skills.
-    contributions.push(McpServerContribution::SelectedPluginPackage {
-        selected_root_id: selected_root_id.to_owned(),
-        plugin_id: plugin.plugin_id,
-        plugin_display_name: plugin.plugin_display_name,
-        connector_ids: plugin.connector_ids,
-    });
-    contributions
+    SelectedPluginContribution { servers, ..plugin }
 }
