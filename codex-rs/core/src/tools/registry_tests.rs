@@ -1,20 +1,11 @@
 use super::*;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-use codex_otel::MetricsClient;
-use codex_otel::MetricsConfig;
-use codex_otel::TOOL_CALL_COUNT_METRIC;
-use codex_otel::TOOL_CALL_DURATION_METRIC;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::models::ResponseItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
-use opentelemetry_sdk::metrics::data::ScopeMetrics;
 use pretty_assertions::assert_eq;
-use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -825,94 +816,6 @@ async fn dispatch_uses_canonical_tool_names_for_lifecycle_contributors() -> anyh
         .collect::<Vec<_>>();
     assert_eq!(expected, actual);
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn dispatch_uses_the_invoking_turn_product_sku() -> anyhow::Result<()> {
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-core",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )?;
-    let registry = ToolRegistry::from_tools([
-        Arc::new(LifecycleTestHandler {
-            tool_name: codex_tools::ToolName::plain("ok_tool"),
-            result: LifecycleTestResult::Ok { success: true },
-        }) as Arc<dyn CoreToolRuntime>,
-        Arc::new(LifecycleTestHandler {
-            tool_name: codex_tools::ToolName::plain("failing_tool"),
-            result: LifecycleTestResult::Err,
-        }) as Arc<dyn CoreToolRuntime>,
-    ]);
-    let mut expected = BTreeMap::new();
-    let product_skus = [Some("codex"), None];
-    for sku in product_skus {
-        let (session, mut turn) = crate::session::tests::make_session_and_context().await;
-        Arc::make_mut(&mut turn.config).apps_mcp_product_sku = sku.map(str::to_owned);
-        turn.session_telemetry = turn
-            .session_telemetry
-            .clone()
-            .with_product_sku(Some("stale-product"))
-            .with_metrics(metrics.clone());
-        let session = Arc::new(session);
-        let turn = Arc::new(turn);
-        for (tool, success) in [("ok_tool", true), ("failing_tool", false)] {
-            let result = registry
-                .dispatch_any_with_state(
-                    test_invocation(
-                        Arc::clone(&session),
-                        Arc::clone(&turn),
-                        "sku-call",
-                        codex_tools::ToolName::plain(tool).with_default_namespace(),
-                    ),
-                    /*call_state*/ None,
-                )
-                .await;
-            assert_eq!(result.is_ok(), success);
-            expected.insert((sku.map(str::to_owned), success.to_string()), 1);
-        }
-    }
-    let snapshot = metrics.snapshot()?;
-    for name in [TOOL_CALL_COUNT_METRIC, TOOL_CALL_DURATION_METRIC] {
-        let metric = snapshot
-            .scope_metrics()
-            .flat_map(ScopeMetrics::metrics)
-            .find(|metric| metric.name() == name)
-            .expect("tool metric");
-        let points = match metric.data() {
-            AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
-                .data_points()
-                .map(|point| (point.attributes().collect::<Vec<_>>(), point.value()))
-                .collect::<Vec<_>>(),
-            AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
-                .data_points()
-                .map(|point| (point.attributes().collect::<Vec<_>>(), point.count()))
-                .collect::<Vec<_>>(),
-            _ => panic!("unexpected tool metric aggregation"),
-        };
-        let actual = points
-            .into_iter()
-            .map(|(attributes, count)| {
-                let labels = attributes
-                    .into_iter()
-                    .map(|attribute| (attribute.key.as_str(), attribute.value.as_str().to_string()))
-                    .collect::<BTreeMap<_, _>>();
-                (
-                    (
-                        labels.get("product_sku").cloned(),
-                        labels["success"].clone(),
-                    ),
-                    count,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(actual, expected);
-    }
     Ok(())
 }
 

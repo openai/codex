@@ -154,10 +154,17 @@ impl SessionTelemetry {
 
     /// Attributes tool telemetry without turning arbitrary configuration into metric labels.
     pub fn with_product_sku(mut self, product_sku: Option<&str>) -> Self {
+        const KNOWN_PRODUCT_SKUS: &[&str] = &["codex"];
+
         self.metadata.product_sku = match product_sku {
             None | Some("") => None,
-            Some("codex") => Some("codex"),
-            Some(_) => Some("other"),
+            Some(sku) => Some(
+                KNOWN_PRODUCT_SKUS
+                    .iter()
+                    .copied()
+                    .find(|known| *known == sku)
+                    .unwrap_or("other"),
+            ),
         };
         self
     }
