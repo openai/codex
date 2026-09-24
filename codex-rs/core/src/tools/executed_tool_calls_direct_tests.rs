@@ -15,6 +15,51 @@ fn output(call_id: &str) -> ResponseItem {
     })
 }
 
+#[test]
+fn direct_budget_keeps_an_omission_marker_when_it_fits() {
+    for metadata in [
+        json!({"provider": "x".repeat(1024)}),
+        json!({"openai/resource_access": "x".repeat(1024)}),
+    ] {
+        let mut features = Features::default();
+        features.enable(Feature::ExecutedToolCallMetadata);
+        let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
+        let mut call = ExecutedToolCall::new("test_tool".to_string(), json!({"argument": "kept"}));
+        call.set_tool_result_metadata(ToolResultMetadata::new(&metadata));
+        let mut expected = output("direct");
+        expected.append_executed_tool_calls(vec![call.clone()]);
+        expected.mark_tool_calls_complete();
+        let available = 512;
+        let overage = executed_tool_call_metadata_bytes(&expected) - available;
+        let mut omitted =
+            ExecutedToolCall::new("test_tool".to_string(), json!({"argument": "kept"}));
+        omitted.set_tool_result_metadata(ToolResultMetadata::new(&json!(format!(
+            "omitted_due_to_size_limit (overage_bytes={overage})"
+        ))));
+        expected.clear_executed_tool_calls();
+        expected.append_executed_tool_calls(vec![omitted]);
+        expected.mark_tool_calls_complete();
+        let retained = MAX_RETAINED_DIRECT_METADATA_BYTES - available;
+        recorder
+            .retained_direct_metadata_bytes
+            .store(retained, Ordering::Relaxed);
+
+        let mut item = output("direct");
+        recorder.attach_direct_call_to_output(
+            &mut item,
+            Some((call, recorder.reserve_direct_call().unwrap())),
+        );
+
+        assert_eq!(item, expected);
+        assert_eq!(
+            recorder
+                .retained_direct_metadata_bytes
+                .load(Ordering::Relaxed),
+            retained + executed_tool_call_metadata_bytes(&expected),
+        );
+    }
+}
+
 #[tokio::test]
 async fn direct_pending_limit_releases_on_completion_or_dropped_future() {
     let (_, turn) = crate::session::tests::make_session_and_context().await;

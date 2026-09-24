@@ -8842,3 +8842,142 @@ text(JSON.stringify({
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_oversized_websocket_yield_keeps_later_wait_incomplete() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    const LIMIT: usize = 15 * 1024 * 1024;
+    const PROMPT: &str = "Record a call, yield, then stop";
+
+    // Calibrate a first request with the same tools/features/turn prompt; its
+    // exact serialized overhead varies with the model catalog and headers.
+    let configure = |config: &mut Config, instructions: String| {
+        config.base_instructions = Some(instructions);
+        config.model_context_window = Some(20_000_000);
+        config.model_auto_compact_token_limit = Some(20_000_000);
+        config.features.disable(Feature::TokenBudget).unwrap();
+        config.features.enable(Feature::CodeMode).unwrap();
+        config
+            .features
+            .enable(Feature::ExecutedToolCallMetadata)
+            .unwrap();
+        config
+            .features
+            .disable(Feature::RemoteCompactionV2)
+            .unwrap();
+        config.model_provider.request_max_retries = Some(0);
+        config.model_provider.stream_max_retries = Some(0);
+    };
+    let warmup = || vec![ev_response_created("warmup"), ev_completed("warmup")];
+    let probe_server = responses::start_websocket_server(vec![vec![
+        warmup(),
+        vec![ev_response_created("probe"), ev_completed("probe")],
+    ]])
+    .await;
+    let mut probe_builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| configure(config, String::new()));
+    let probe = probe_builder
+        .build_with_websocket_server(&probe_server)
+        .await?;
+    probe.submit_turn(PROMPT).await?;
+    let probe_connection = probe_server.single_connection();
+    assert_eq!(probe_connection.len(), 2);
+    let base_bytes = serde_json::to_vec(&probe_connection[1].body_json())?.len();
+    assert!(base_bytes + 4 * 1024 < LIMIT);
+    probe.codex.shutdown_and_wait().await?;
+    probe_server.shutdown().await;
+
+    // One 7 KiB invocation stays under the recorder's per-output argument
+    // budget. It pushes the yielded delta over the message budget only.
+    let instructions = "x".repeat(LIMIT - base_bytes - 4 * 1024);
+    let code = r#"
+await tools.test_sync_tool({ barrier: { id: "x".repeat(7000), participants: 1 } });
+text("yielded");
+yield_control();
+await new Promise(() => {});
+"#;
+    let mut exec = ev_custom_tool_call("exec-a", "exec", code);
+    exec["item"]["id"] = serde_json::json!("ctc_exec_a");
+    let mut wait =
+        responses::ev_function_call("wait-a", "wait", r#"{"cell_id":"1","terminate":true}"#);
+    wait["item"]["id"] = serde_json::json!("fc_wait_a");
+    let server = responses::start_websocket_server(vec![vec![
+        warmup(),
+        vec![ev_response_created("resp-1"), exec, ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), wait, ev_completed("resp-2")],
+        vec![ev_response_created("resp-3"), ev_completed("resp-3")],
+    ]])
+    .await;
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| configure(config, instructions));
+    let test = builder.build_with_websocket_server(&server).await?;
+    test.submit_turn(PROMPT).await?;
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 4);
+    let first = connection[1].body_json();
+    let yielded_request = connection[2].body_json();
+    let terminal_request = connection[3].body_json();
+    assert!(serde_json::to_vec(&first)?.len() <= LIMIT);
+    assert!(serde_json::to_vec(&yielded_request)?.len() <= LIMIT);
+    assert_eq!(yielded_request["previous_response_id"], "resp-1");
+    assert_eq!(terminal_request["previous_response_id"], "resp-2");
+
+    let find_output = |request: &Value, call_id: &str| -> Value {
+        request["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| {
+                item["call_id"] == call_id
+                    && matches!(
+                        item["type"].as_str(),
+                        Some("custom_tool_call_output" | "function_call_output")
+                    )
+            })
+            .unwrap()
+            .clone()
+    };
+    let yielded = find_output(&yielded_request, "exec-a");
+    let observed = &yielded["internal_chat_message_metadata_passthrough"];
+    let output_text = match &yielded["output"] {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => panic!("unexpected Code Mode output"),
+    };
+    assert!(output_text.contains("yielded"));
+    assert!(output_text.contains("Script running with cell ID 1"));
+    // The request budget must actually trim a recorded call's arguments.
+    assert_eq!(observed["cell_id"], "exec-a");
+    let calls = observed["executed_tool_calls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["name"], "test_sync_tool");
+    assert!(
+        calls[0]["arguments"]
+            .get("_codex_executed_tool_call_truncated")
+            .is_some()
+    );
+    let terminal = find_output(&terminal_request, "wait-a");
+    assert_eq!(
+        terminal["internal_chat_message_metadata_passthrough"].get("tool_calls_complete"),
+        None
+    );
+
+    // Compare ordinary outputs against the live session history. No actual
+    // invocation, output, or wait request is changed by metadata trimming.
+    let history = test.codex.conversation_history_snapshot().await;
+    let history = serde_json::to_value(history.items().collect::<Vec<_>>())?;
+    let history_request = serde_json::json!({"input": history});
+    for (call_id, actual) in [("exec-a", yielded), ("wait-a", terminal)] {
+        let original = find_output(&history_request, call_id);
+        assert_eq!(actual["output"], original["output"]);
+    }
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
+}

@@ -485,9 +485,69 @@ fn output_with_tool_result_metadata(metadata: ToolResultMetadata) -> ResponseIte
     output
 }
 
-#[test]
-fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endpoint()
+#[tokio::test]
+async fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endpoint()
 -> anyhow::Result<()> {
+    use crate::session::step_context::StepContext;
+    use crate::tools::ExecutedToolCalls;
+    use crate::tools::context::ToolCallSource;
+    use crate::tools::context::ToolPayload;
+    use crate::tools::router::ToolCall;
+    use codex_features::Feature;
+    use codex_features::Features;
+
+    let (_, turn) = crate::session::tests::make_session_and_context().await;
+    let step = StepContext::for_test(Arc::new(turn));
+    let mut features = Features::default();
+    features.enable(Feature::ExecutedToolCallMetadata);
+    let recorder = ExecutedToolCalls::new(&features, &codex_history::InitialHistory::New);
+    let resource_metadata = json!({"openai/resource_access": {"payload": "x".repeat(600 * 1024)}});
+    let mut outputs = Vec::new();
+    for id in ["first", "second"] {
+        let call = ToolCall {
+            tool_name: codex_tools::ToolName::plain("mcp__apps__read"),
+            call_id: id.to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({"query": id}).to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        let (mut recorded, permit) = recorder
+            .prepare_direct_call(&call, &ToolCallSource::Direct, &step)
+            .expect("direct observation slot");
+        recorded.set_tool_result_metadata(ToolResultMetadata::new(&resource_metadata));
+        let mut item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: id.to_string(),
+            output: FunctionCallOutputPayload::from_text(format!("result for {id}")),
+        });
+        recorder.attach_direct_call_to_output(&mut item, Some((recorded, permit)));
+        outputs.push(item);
+    }
+    let original_outputs = outputs.clone();
+    recorder.attach_to_prompt(&mut outputs, &mut Default::default());
+    assert_eq!(outputs, original_outputs);
+    let recorded = serde_json::to_value(&outputs)?;
+    assert_eq!(
+        recorded[0]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"],
+        resource_metadata,
+    );
+    assert!(
+        recorded[1]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
+            ["tool_result_metadata"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("omitted_due_to_size_limit (overage_bytes="))
+    );
+    let omitted_output = outputs.pop().expect("second direct output");
+    let mut without_omitted_metadata = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+        call_id: "second".to_string(),
+        output: FunctionCallOutputPayload::from_text("result for second".to_string()),
+    });
+    without_omitted_metadata.append_executed_tool_calls(vec![ExecutedToolCall::new(
+        "mcp__apps__read".to_string(),
+        json!({"query": "second"}),
+    )]);
+    without_omitted_metadata.mark_tool_calls_complete();
+
     let provider =
         ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
     let mut api_provider = provider.to_api_provider(/*auth_mode*/ None)?;
@@ -511,7 +571,7 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
         }],
     };
     let prompt = Prompt {
-        input: vec![output.clone()],
+        input: vec![output.clone(), omitted_output.clone()],
         ..Default::default()
     };
     let mut responses_metadata = test_responses_metadata_for_client(
@@ -547,14 +607,22 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
                 &responses_metadata,
                 include_internal,
             )?;
-            assert_eq!(
-                request.input.last(),
-                Some(if allowed {
-                    &output
-                } else {
-                    &without_raw_metadata
-                }),
+            let expected_input = if allowed {
+                vec![output.clone(), omitted_output.clone()]
+            } else {
+                vec![
+                    without_raw_metadata.clone(),
+                    without_omitted_metadata.clone(),
+                ]
+            };
+            assert!(
+                request.input.ends_with(&expected_input),
                 "resolved endpoint: {base_url}, responses_lite: {responses_lite}",
+            );
+            let expected_wire_input = serde_json::to_value(&request.input)?;
+            assert_eq!(
+                serde_json::to_value(&request)?["input"],
+                expected_wire_input
             );
             let expected_json = allowed
                 .then(|| serde_json::to_string(&attribution).map(serde_json::Value::String))
@@ -574,8 +642,10 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
                 client_metadata: Some(ws_client_metadata),
                 ..codex_api::ResponseCreateWsRequest::from(&request)
             };
+            let ws_request = serde_json::to_value(ws_request)?;
+            assert_eq!(ws_request["input"], expected_wire_input);
             assert_eq!(
-                serde_json::to_value(ws_request)?
+                ws_request
                     .get("client_metadata")
                     .and_then(|metadata| metadata.get(MCP_ATTRIBUTION_CLIENT_METADATA_KEY)),
                 expected_json.as_ref(),
@@ -585,7 +655,7 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
                     .get("mcp_attribution")
                     .is_none()
             );
-            assert_eq!(prompt.input, vec![output.clone()]);
+            assert_eq!(prompt.input, vec![output.clone(), omitted_output.clone()]);
         }
     }
     responses_metadata.mcp_attribution = Some(McpAttribution {

@@ -66,6 +66,15 @@ pub(crate) struct ExecutedToolCalls {
     mcp_attribution: mcp_attribution::McpAttributionRecorder,
 }
 
+// Avoid exposing recorded call arguments or result metadata through client Debug output.
+impl std::fmt::Debug for ExecutedToolCalls {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExecutedToolCalls")
+            .finish_non_exhaustive()
+    }
+}
+
 // The tool future owns this reservation, so completion or cancellation releases it.
 pub(crate) struct DirectCallPermit {
     recording: Weak<()>,
@@ -257,6 +266,41 @@ impl ExecutedToolCalls {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// A later wait cannot claim a complete inventory if an earlier wire copy
+    /// lost recorded calls or arguments from the same Code Mode cell.
+    pub(crate) fn invalidate_wire_inventory_loss(
+        &self,
+        original: &[ResponseItem],
+        bounded: &[ResponseItem],
+    ) {
+        let mut state = self.lock_state();
+        let Some(state) = state.as_mut() else {
+            return;
+        };
+        // Request bounding clones the same items in the same order; it only edits metadata.
+        for (original, bounded) in original.iter().zip(bounded) {
+            let Some(metadata) = original.executed_tool_call_metadata() else {
+                continue;
+            };
+            let Some(origin) = metadata.cell_id.as_deref() else {
+                continue;
+            };
+            let Some(calls) = metadata
+                .executed_tool_calls
+                .as_deref()
+                .filter(|calls| !calls.is_empty())
+            else {
+                continue;
+            };
+            if bounded
+                .executed_tool_call_metadata()
+                .is_none_or(|bounded| !bounded.has_same_tool_calls(calls))
+            {
+                state.invalidate_origin(origin);
+            }
+        }
+    }
+
     /// Called under the session config lock; this never changes execution features.
     pub(crate) fn refresh(&self, features: &Features) {
         let enabled = Self::is_enabled(features);
@@ -348,7 +392,11 @@ impl ExecutedToolCalls {
         let mut bytes = executed_tool_call_metadata_bytes(item);
         let original_bytes = bytes;
         if bytes > available {
-            item.retain_tool_resource_access();
+            item.retain_tool_resource_access_or_omit_metadata(bytes - available);
+            bytes = executed_tool_call_metadata_bytes(item);
+        }
+        if bytes > available {
+            item.omit_tool_result_metadata(bytes - available);
             bytes = executed_tool_call_metadata_bytes(item);
         }
         if bytes > available {

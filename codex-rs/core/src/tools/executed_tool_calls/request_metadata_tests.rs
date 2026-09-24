@@ -1578,3 +1578,73 @@ fn finished_cells_without_more_waits_do_not_block_new_calls() {
     assert!(recorder.attach_pending_to_prompt(&mut items, &mut HashMap::new()));
     assert_eq!(items, [exec_input("fresh-output"), expected]);
 }
+
+#[test]
+fn wire_inventory_loss_keeps_later_wait_incomplete() {
+    for (scenario, expect_complete) in [
+        ("metadata_only", true),
+        ("arguments", false),
+        ("name", false),
+        ("removed", false),
+    ] {
+        let recorder = new_recorder(InitialHistory::New);
+        let cell = CellId::new("runtime-a".to_string());
+        let unrelated = CellId::new("runtime-b".to_string());
+        recorder.start_cell(&cell, "exec-a");
+        record_nested_call(&recorder, &cell, "nested-a");
+        recorder.start_cell(&unrelated, "exec-b");
+        record_nested_call(&recorder, &unrelated, "nested-b");
+        let mut original = [exec_input("exec-a"), exec_output("exec-a")];
+        assert!(recorder.attach_pending_to_prompt(&mut original, &mut HashMap::new()));
+        let ResponseItem::CustomToolCallOutput {
+            internal_chat_message_metadata_passthrough: Some(metadata),
+            ..
+        } = &mut original[1]
+        else {
+            panic!("expected exec output metadata");
+        };
+        metadata.executed_tool_calls.as_mut().expect("calls")[0]
+            .set_tool_result_metadata(ToolResultMetadata::new(&json!({"value": "raw"})));
+        let mut bounded = original.clone();
+        match scenario {
+            "metadata_only" => bounded[1].clear_tool_result_metadata(),
+            "removed" => bounded[1].clear_executed_tool_calls(),
+            "arguments" | "name" => {
+                let ResponseItem::CustomToolCallOutput {
+                    internal_chat_message_metadata_passthrough: Some(metadata),
+                    ..
+                } = &mut bounded[1]
+                else {
+                    panic!("expected exec output metadata");
+                };
+                let call = &mut metadata.executed_tool_calls.as_mut().expect("calls")[0];
+                if scenario == "arguments" {
+                    *call = ExecutedToolCall::truncated(
+                        "nested_tool".to_string(),
+                        /*original_bytes*/ 2,
+                        /*max_bytes*/ 0,
+                    );
+                } else {
+                    call.name = "another_tool".to_string();
+                }
+            }
+            _ => unreachable!(),
+        }
+        recorder.invalidate_wire_inventory_loss(&original, &bounded);
+        recorder.register_cell(&cell, "wait-a");
+        recorder.finish_cell_recording(&cell);
+        let mut terminal = [wait_input("wait-a", &cell), output("wait-a")];
+        recorder.attach_pending_to_prompt(&mut terminal, &mut HashMap::new());
+        assert_eq!(
+            tool_calls_complete(&terminal[1]),
+            expect_complete.then_some(true),
+            "{scenario}"
+        );
+
+        // A different cell must not lose its completion marker.
+        recorder.finish_cell_recording(&unrelated);
+        let mut other = [exec_input("exec-b"), exec_output("exec-b")];
+        assert!(recorder.attach_pending_to_prompt(&mut other, &mut HashMap::new()));
+        assert_eq!(tool_calls_complete(&other[1]), Some(true), "{scenario}");
+    }
+}

@@ -624,6 +624,200 @@ fn wire_budget_helpers_preserve_resource_evidence_markers_and_small_values() {
 }
 
 #[test]
+fn message_budget_keeps_smaller_resource_evidence_when_larger_evidence_must_be_shed() {
+    for (sizes, larger_index) in [([1024, 512], 0), ([512, 1024], 1)] {
+        let mut items = sizes.map(|size| {
+            let mut item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+                call_id: format!("call-{size}"),
+                output: FunctionCallOutputPayload::from_text("unchanged output".to_string()),
+            });
+            let mut call =
+                ExecutedToolCall::new(format!("tool_{size}"), serde_json::json!({"query": "kept"}));
+            call.set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
+                r#type: "test_resource".to_string(),
+                id: format!("resource-{size}"),
+            }]));
+            call.set_tool_result_metadata(ToolResultMetadata::new(&serde_json::json!({
+                "openai/resource_access": {"opaque": "é".repeat(size)},
+            })));
+            item.append_executed_tool_calls(vec![call]);
+            item.set_tool_call_cell_id(&format!("cell-{size}"));
+            item.mark_tool_calls_complete();
+            item
+        });
+        let mut expected = items.clone();
+        for item in &mut expected {
+            first_executed_tool_call(item).unwrap().tool_result_sources = None;
+        }
+        let budget = expected
+            .iter()
+            .map(executed_tool_call_metadata_bytes)
+            .sum::<usize>()
+            - 128;
+        first_executed_tool_call(&mut expected[larger_index])
+            .unwrap()
+            .set_tool_result_metadata(ToolResultMetadata::omitted_due_to_size_limit(
+                /*overage_bytes*/ 128,
+            ));
+
+        bound_executed_tool_calls_for_message(&mut items, budget);
+        assert_eq!(items, expected);
+        assert!(
+            items
+                .iter()
+                .map(executed_tool_call_metadata_bytes)
+                .sum::<usize>()
+                <= budget
+        );
+        bound_executed_tool_calls_for_message(&mut items, budget);
+        assert_eq!(items, expected);
+    }
+}
+
+#[test]
+fn message_budget_drops_only_the_sources_needed_to_fit() {
+    let mut items = ["first", "second"].map(|id| {
+        let mut item = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
+            call_id: id.to_string(),
+            output: FunctionCallOutputPayload::from_text("unchanged output".to_string()),
+        });
+        let mut call =
+            ExecutedToolCall::new(format!("tool_{id}"), serde_json::json!({"query": "kept"}));
+        call.set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
+            r#type: "test_resource".to_string(),
+            id: id.to_string(),
+        }]));
+        call.set_tool_result_metadata(ToolResultMetadata::new(&serde_json::json!({
+            "openai/resource_access": {"resource_coverage": "complete", "resources": []},
+        })));
+        item.append_executed_tool_calls(vec![call]);
+        item.set_tool_call_cell_id(id);
+        item.mark_tool_calls_complete();
+        item
+    });
+    let mut expected = items.clone();
+    first_executed_tool_call(&mut expected[0])
+        .unwrap()
+        .tool_result_sources = None;
+    let budget = expected
+        .iter()
+        .map(executed_tool_call_metadata_bytes)
+        .sum::<usize>();
+    assert!(
+        items
+            .iter()
+            .map(executed_tool_call_metadata_bytes)
+            .sum::<usize>()
+            > budget
+    );
+
+    bound_executed_tool_calls_for_message(&mut items, budget);
+    assert_eq!(items, expected);
+    bound_executed_tool_calls_for_message(&mut items, budget);
+    assert_eq!(items, expected);
+}
+
+#[test]
+fn message_budget_removes_generic_fields_before_resources_in_the_same_output() {
+    for generic in [
+        serde_json::json!({}),
+        serde_json::json!(null),
+        serde_json::json!("omitted_due_to_size_limit"),
+    ] {
+        let mut item = output("exec");
+        for metadata in [
+            serde_json::json!({"openai/resource_access": {"opaque": "é".repeat(256)}}),
+            generic.clone(),
+            generic,
+        ] {
+            let mut call = ExecutedToolCall::new("read".to_string(), serde_json::json!({}));
+            call.set_tool_result_metadata(ToolResultMetadata::new(&metadata));
+            item.append_executed_tool_calls(vec![call]);
+        }
+        item.set_tool_call_cell_id("cell");
+        item.mark_tool_calls_complete();
+        let mut expected = item.clone();
+        expected
+            .ensure_tool_call_metadata()
+            .unwrap()
+            .executed_tool_calls
+            .as_mut()
+            .unwrap()[1]
+            .set_tool_result_metadata(ToolResultMetadata::default());
+        let budget = executed_tool_call_metadata_bytes(&expected);
+        bound_executed_tool_calls_for_message(std::slice::from_mut(&mut item), budget);
+        assert_eq!(item, expected);
+    }
+}
+
+#[test]
+fn message_budget_preserves_names_and_turn_metadata_and_invalidates_shared_cell_completion() {
+    let arguments = serde_json::json!({"payload": "é".repeat(256)});
+    let argument_bytes = serde_json::to_vec(&arguments).unwrap().len();
+    let mut exec = output("exec");
+    exec.append_executed_tool_calls(vec![
+        ExecutedToolCall::new("first_é\"".to_string(), arguments.clone()),
+        ExecutedToolCall::new("second".to_string(), arguments),
+    ]);
+    first_executed_tool_call(&mut exec)
+        .unwrap()
+        .set_tool_result_metadata(ToolResultMetadata::new(&serde_json::json!({
+            "openai/resource_access": {"resources": ["R1"]}
+        })));
+    let mut wait = output("wait");
+    for item in [&mut exec, &mut wait] {
+        item.set_tool_call_cell_id("cell_é\"");
+        item.mark_tool_calls_complete();
+        let metadata = item.ensure_tool_call_metadata().unwrap();
+        metadata.turn_id = Some("turn_é\"".to_string());
+        metadata.create_time = Some(serde_json::Number::from(123));
+    }
+    let original = vec![exec, wait];
+    let original_metadata_bytes = original
+        .iter()
+        .map(executed_tool_call_metadata_bytes)
+        .sum::<usize>();
+    // The middle case needs the sibling wait's completeness bytes to fit after
+    // truncating only the first call; the second call's arguments must survive.
+    for budget in [
+        original_metadata_bytes - 64,
+        original_metadata_bytes - (argument_bytes - 32),
+        0,
+    ] {
+        let mut items = original.clone();
+        let mut expected = original.clone();
+        if budget == 0 {
+            for item in &mut expected {
+                item.clear_executed_tool_calls();
+            }
+        } else {
+            first_executed_tool_call(&mut expected[0])
+                .unwrap()
+                .set_truncation(
+                    argument_bytes,
+                    argument_bytes - (original_metadata_bytes - budget),
+                    /*omitted_calls*/ None,
+                );
+            for item in &mut expected {
+                item.clear_tool_calls_complete();
+            }
+        }
+        bound_executed_tool_calls_for_message(&mut items, budget);
+        assert_eq!(items, expected);
+        let bounded_metadata_bytes = items
+            .iter()
+            .map(executed_tool_call_metadata_bytes)
+            .sum::<usize>();
+        assert!(bounded_metadata_bytes <= budget);
+        assert_eq!(
+            serde_json::to_vec(&original).unwrap().len()
+                - serde_json::to_vec(&items).unwrap().len(),
+            original_metadata_bytes - bounded_metadata_bytes,
+        );
+    }
+}
+
+#[test]
 fn raw_result_metadata_is_shed_before_sources_calls_or_completion() -> Result<()> {
     // Keep each result below its capture limit while filling the larger request budget.
     let name = format!(
@@ -773,6 +967,9 @@ fn result_metadata_shedding_keeps_smaller_results_within_one_output() {
         for bound in [
             bound_executed_tool_calls_for_prompt,
             bound_executed_tool_calls_for_prompt_prioritizing_recent,
+            |items: &mut [ResponseItem]| {
+                bound_executed_tool_calls_for_message(items, MAX_EXECUTED_TOOL_CALL_METADATA_BYTES)
+            },
         ] {
             let mut bounded = item.clone();
             bound(std::slice::from_mut(&mut bounded));

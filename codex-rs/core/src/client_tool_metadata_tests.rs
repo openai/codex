@@ -19,16 +19,25 @@ fn request() -> ResponsesApiRequest {
 }
 
 fn request_with_metadata(metadata: &serde_json::Value) -> ResponsesApiRequest {
+    request_with_metadata_and_source(metadata, /*with_source*/ true)
+}
+
+fn request_with_metadata_and_source(
+    metadata: &serde_json::Value,
+    with_source: bool,
+) -> ResponsesApiRequest {
     let mut output = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
         call_id: "call".to_string(),
         output: FunctionCallOutputPayload::from_text("keep result".to_string()),
     });
     let mut call = ExecutedToolCall::new("mcp__apps__read".to_string(), json!({"query": "keep"}));
     call.set_tool_result_metadata(ToolResultMetadata::new(metadata));
-    call.set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
-        r#type: "test_resource".to_string(),
-        id: "resource".to_string(),
-    }]));
+    if with_source {
+        call.set_tool_result_sources(ToolResultSources::new(vec![ToolResultSource {
+            r#type: "test_resource".to_string(),
+            id: "resource".to_string(),
+        }]));
+    }
     output.append_executed_tool_calls(vec![call]);
     output.set_tool_call_cell_id("cell");
     output.mark_tool_calls_complete();
@@ -79,8 +88,11 @@ fn http_message_budget_preserves_resources_until_the_message_still_exceeds_limit
                 })
             );
         } else if overage == 20 * 1024 {
-            let mut resource_only = original_input.clone();
-            resource_only[0].retain_tool_resource_access();
+            let resource_only = request_with_metadata_and_source(
+                &json!({"openai/resource_access": {"resources": ["é".repeat(4 * 1024)]}}),
+                /*with_source*/ false,
+            )
+            .input;
             let first_reduction = metadata_metrics::metadata_bytes(&original_input)
                 - metadata_metrics::metadata_bytes(&resource_only);
             assert_eq!(
@@ -98,11 +110,19 @@ fn http_message_budget_preserves_resources_until_the_message_still_exceeds_limit
             );
         }
         assert_eq!(request.input, original_input);
-        let mut ordinary = original_input;
+        let mut ordinary = if overage == 20 * 1024 {
+            request_with_metadata_and_source(&json!({}), /*with_source*/ false).input
+        } else {
+            original_input
+        };
         let mut bounded_ordinary = bounded.clone();
         for items in [&mut ordinary, &mut bounded_ordinary] {
             for item in items {
-                item.clear_tool_result_metadata();
+                if overage == 40 * 1024 {
+                    item.clear_executed_tool_calls();
+                } else {
+                    item.clear_tool_result_metadata();
+                }
             }
         }
         assert_eq!(bounded_ordinary, ordinary);
@@ -143,6 +163,11 @@ fn message_budget_removes_residual_values_and_markers_when_ordinary_input_fits()
             ordinary.instructions = "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - ordinary_bytes);
             request.instructions = ordinary.instructions.clone();
             let original_input = request.input.clone();
+            let mut expected = ordinary.clone();
+            if metadata.get("openai/resource_access").is_some() {
+                expected.input =
+                    request_with_metadata_and_source(&metadata, /*with_source*/ false).input;
+            }
             let bounded = if websocket {
                 let ordinary_message =
                     ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest::from(&ordinary));
@@ -157,10 +182,13 @@ fn message_budget_removes_residual_values_and_markers_when_ordinary_input_fits()
                     .expect("optional result metadata must not keep a fitting message oversized");
                 let ResponsesWsRequest::ResponseCreate(payload) = &mut message;
                 payload.input = &bounded;
+                let expected_message =
+                    ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest::from(&expected));
                 assert_eq!(
                     serialized_json_bytes(&message).unwrap(),
-                    MAX_RESPONSE_MESSAGE_BYTES - 1,
+                    serialized_json_bytes(&expected_message).unwrap(),
                 );
+                assert!(serialized_json_bytes(&message).unwrap() <= MAX_RESPONSE_MESSAGE_BYTES);
                 bounded
             } else {
                 assert_eq!(
@@ -172,15 +200,12 @@ fn message_budget_removes_residual_values_and_markers_when_ordinary_input_fits()
                     .expect("optional result metadata must not keep a fitting message oversized");
                 let mut message = request.clone();
                 message.input = bounded.clone();
-                assert_eq!(message, ordinary);
-                assert_eq!(
-                    serialized_json_bytes(&message).unwrap(),
-                    MAX_RESPONSE_MESSAGE_BYTES - 1,
-                );
+                assert_eq!(message, expected);
+                assert!(serialized_json_bytes(&message).unwrap() <= MAX_RESPONSE_MESSAGE_BYTES);
                 bounded
             };
             // Whole-input equality covers sources, calls, completion and ordinary output.
-            assert_eq!(bounded, ordinary.input);
+            assert_eq!(bounded, expected.input);
             assert_eq!(request.input, original_input);
         }
     }
@@ -255,9 +280,55 @@ fn websocket_budget_uses_the_actual_delta_and_does_not_mutate_logical_history() 
     assert_eq!(bounded[0], request.input[0]);
     let mut ordinary = request.input[1].clone();
     let mut bounded_ordinary = bounded[1].clone();
-    ordinary.clear_tool_result_metadata();
-    bounded_ordinary.clear_tool_result_metadata();
+    ordinary.clear_executed_tool_calls();
+    bounded_ordinary.clear_executed_tool_calls();
     assert_eq!(bounded_ordinary, ordinary);
     assert_eq!(request.input[1], self::request().input[0]);
     assert_eq!(bounded_input(&full, &bounded), None);
+}
+
+#[test]
+fn inventory_only_message_budget_counts_the_complete_encoded_envelope() {
+    for websocket in [false, true] {
+        let mut request = request();
+        request.input[0].clear_tool_result_metadata();
+        let original_input = request.input.clone();
+        let mut ordinary = request.clone();
+        ordinary.input[0].clear_executed_tool_calls();
+        let ordinary_bytes = if websocket {
+            serialized_json_bytes(&ResponsesWsRequest::ResponseCreate(
+                ResponseCreateWsRequest::from(&ordinary),
+            ))
+            .unwrap()
+        } else {
+            serialized_json_bytes(&ordinary).unwrap()
+        };
+        request.instructions = "x".repeat(MAX_RESPONSE_MESSAGE_BYTES - ordinary_bytes + 1);
+        ordinary.instructions = request.instructions.clone();
+        if websocket {
+            let mut message =
+                ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest::from(&request));
+            let bounded = bounded_input(&message, &request.input)
+                .expect("inventory without raw results must not keep the message oversized");
+            assert_eq!(bounded, ordinary.input);
+            let ResponsesWsRequest::ResponseCreate(payload) = &mut message;
+            payload.input = &bounded;
+            assert_eq!(
+                serialized_json_bytes(&message).unwrap(),
+                MAX_RESPONSE_MESSAGE_BYTES
+            );
+        } else {
+            let bounded = bounded_input(&request, &request.input)
+                .expect("inventory without raw results must not keep the message oversized");
+            assert_eq!(bounded, ordinary.input);
+            let mut message = request.clone();
+            message.input = bounded;
+            assert_eq!(message, ordinary);
+            assert_eq!(
+                serialized_json_bytes(&message).unwrap(),
+                MAX_RESPONSE_MESSAGE_BYTES
+            );
+        }
+        assert_eq!(request.input, original_input);
+    }
 }
