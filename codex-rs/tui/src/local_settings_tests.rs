@@ -97,7 +97,6 @@ async fn local_load_preserves_defaults_and_resolved_overrides() -> anyhow::Resul
         r#"
 [tui]
 animations = false
-whimsy = false # Retired: must not override effects or prevent strict loading.
 show_tooltips = false
 show_server_version_notice = false
 auto_recap = false

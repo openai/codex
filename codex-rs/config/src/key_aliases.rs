@@ -11,6 +11,10 @@ struct ConfigKeyAlias {
 
 const CONFIG_KEY_ALIASES: &[ConfigKeyAlias] = &[
     ConfigKeyAlias {
+        legacy: &["tui", "whimsy"],
+        canonical: &["tui", "effects", "starfield"],
+    },
+    ConfigKeyAlias {
         legacy: &["memories", "no_memories_if_mcp_or_web_search"],
         canonical: &["memories", "disable_on_external_context"],
     },
