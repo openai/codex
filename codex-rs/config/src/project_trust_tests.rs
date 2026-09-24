@@ -45,10 +45,14 @@ fn assert_lookup_order(lookup: &ProjectTrustLookup, entries: &[(&str, Option<Tru
 fn posix_lookup_preserves_cwd_root_alias_order_and_case() {
     let lookup = ProjectTrustLookup::from_paths(
         PathConvention::Posix,
-        [
-            ("/alias/src".into(), Some("/repo/src".into())),
-            ("/alias".into(), Some("/repo".into())),
-        ],
+        ProjectTrustPath {
+            original: "/alias/src".into(),
+            canonical: Some("/repo/src".into()),
+        },
+        Some(ProjectTrustPath {
+            original: "/alias".into(),
+            canonical: Some("/repo".into()),
+        }),
     );
     assert_lookup_order(
         &lookup,
@@ -68,8 +72,14 @@ fn posix_lookup_preserves_cwd_root_alias_order_and_case() {
 
 #[test]
 fn windows_prefers_exact_normalized_key_then_sorted_aliases() {
-    let lookup =
-        ProjectTrustLookup::from_paths(PathConvention::Windows, [(r"C:\Repo".into(), None)]);
+    let lookup = ProjectTrustLookup::from_paths(
+        PathConvention::Windows,
+        ProjectTrustPath {
+            original: r"C:\Repo".into(),
+            canonical: None,
+        },
+        /*repo_root*/ None,
+    );
     assert_lookup_order(
         &lookup,
         &[

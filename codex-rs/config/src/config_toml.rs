@@ -866,10 +866,14 @@ impl ConfigToml {
         repo_root: Option<&Path>,
     ) -> Option<ProjectConfig> {
         self.projects.as_ref()?;
-        self.get_active_project_for_lookup(&crate::ProjectTrustLookup::from_native(
-            resolved_cwd,
-            repo_root,
-        ))
+        // Only canonicalize the repository root when neither cwd key matches.
+        std::iter::once(resolved_cwd)
+            .chain(repo_root)
+            .find_map(|path| {
+                self.get_active_project_for_lookup(&crate::ProjectTrustLookup::from_native_path(
+                    path,
+                ))
+            })
     }
 }
 

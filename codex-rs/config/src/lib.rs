@@ -190,6 +190,7 @@ pub use plugin_edit::set_user_plugin_enabled;
 pub use project_root_markers::default_project_root_markers;
 pub use project_root_markers::project_root_markers_from_config;
 pub use project_trust::ProjectTrustLookup;
+pub use project_trust::ProjectTrustPath;
 pub use requirements_exec_policy::RequirementsExecPolicyDecisionToml;
 pub use requirements_exec_policy::RequirementsExecPolicyParseError;
 pub use requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;

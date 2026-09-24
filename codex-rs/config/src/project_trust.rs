@@ -6,6 +6,13 @@ use codex_utils_path::normalize_for_path_comparison;
 use codex_utils_path_uri::PathConvention;
 use std::path::Path;
 
+/// Original and executor-normalized canonical spellings of one native path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProjectTrustPath {
+    pub original: String,
+    pub canonical: Option<String>,
+}
+
 /// Ordered project lookup keys for one executor working directory.
 ///
 /// Resolve this independently of configuration layers, then apply it after all
@@ -18,23 +25,22 @@ pub struct ProjectTrustLookup {
 }
 
 impl ProjectTrustLookup {
-    pub(crate) fn from_native(cwd: &Path, repo_root: Option<&Path>) -> Self {
+    pub(crate) fn from_native_path(path: &Path) -> Self {
         Self::from_paths(
             PathConvention::native(),
-            std::iter::once(cwd).chain(repo_root).map(|path| {
-                (
-                    path.to_string_lossy().into_owned(),
-                    normalize_for_path_comparison(path)
-                        .ok()
-                        .map(|path| path.to_string_lossy().into_owned()),
-                )
-            }),
+            ProjectTrustPath {
+                original: path.to_string_lossy().into_owned(),
+                canonical: normalize_for_path_comparison(path)
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            },
+            /*repo_root*/ None,
         )
     }
 
-    /// Build lookup keys from `(original, canonical)` native path spellings.
+    /// Build lookup keys for a cwd and optional repository root.
     ///
-    /// Supply the cwd first, followed by the optional repository root. Each
+    /// Cwd keys always take precedence over repository-root keys. Each
     /// canonical spelling is tried before its original spelling; `None` uses
     /// only the original. This method performs no filesystem access or path
     /// resolution. Callers must supply executor-normalized canonical spellings,
@@ -43,10 +49,15 @@ impl ProjectTrustLookup {
     /// matched without ASCII case distinctions; POSIX keys remain case-sensitive.
     pub fn from_paths(
         convention: PathConvention,
-        paths: impl IntoIterator<Item = (String, Option<String>)>,
+        cwd: ProjectTrustPath,
+        repo_root: Option<ProjectTrustPath>,
     ) -> Self {
         let mut keys = Vec::new();
-        for (original, canonical) in paths {
+        for ProjectTrustPath {
+            original,
+            canonical,
+        } in std::iter::once(cwd).chain(repo_root)
+        {
             let original = normalize_lookup_key(&original, convention);
             let canonical = canonical
                 .map(|key| normalize_lookup_key(&key, convention))
