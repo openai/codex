@@ -764,7 +764,6 @@ See the Codex keymap documentation for supported actions and examples."
             keymap: runtime_keymap,
             key_chord_matcher: KeyChordMatcher::default(),
             transcript_cells: Vec::new(),
-            composer_tips: Default::default(),
             native_history: Default::default(),
             transcript_view: Default::default(),
             last_rendered_history_tail: None,

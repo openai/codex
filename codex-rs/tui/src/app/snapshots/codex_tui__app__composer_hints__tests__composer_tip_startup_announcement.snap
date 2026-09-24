@@ -1,5 +1,0 @@
----
-source: tui/src/app/composer_hints_tests.rs
-expression: boot.line.to_string()
----
-Tip: A startup announcement.

@@ -285,11 +285,6 @@ async fn recap_spacing_belongs_to_the_transcript_tail() -> Result<()> {
                     .with_next_action(next_action.map(str::to_owned)),
             ),
         ];
-        crate::app::test_support::select_catalog_tip(
-            &mut app,
-            /*width*/ 80,
-            "Tip: Use /mcp to list configured MCP tools.",
-        );
         let mut tui = crate::tui::test_support::make_test_tui()?;
         tui.set_owned_screen(/*owned*/ true)?;
         let size = Size::new(width, height);

@@ -1,0 +1,47 @@
+---
+source: tui/src/app/tests/startup_frame_tests.rs
+expression: "normalize_snapshot_paths(normalize_agent_center_snapshot(snapshots.join(\"\\n\\n\")))"
+---
+80 columns
+╭────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)               │
+│                                        │
+│ model:     gpt-test   /model to change │
+│ directory: /tmp/project                │
+╰────────────────────────────────────────╯
+
+  Tip: Use /mcp to list configured MCP tools.
+
+• Conversation continues here.
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
+  ? for shortcuts
+
+32 columns
+╭──────────────────────────────╮
+│ >_ OpenAI Codex (v0.0.0)     │
+│                              │
+│ model:     gpt-test   /mode… │
+│ directory: /tmp/project      │
+╰──────────────────────────────╯
+
+  Tip: Use /mcp to list
+  configured MCP tools.
+
+• Conversation continues here.
+
+
+
+
+
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/pr…
+  ? for shortcuts

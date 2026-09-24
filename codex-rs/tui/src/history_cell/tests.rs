@@ -798,6 +798,7 @@ async fn session_info_preserves_styled_tooltip_links() {
 
     let lines = cell.transcript_hyperlink_lines(/*width*/ 30);
     assert_eq!(lines, cell.display_hyperlink_lines(/*width*/ 30));
+    assert_eq!(lines, cell.compact_hyperlink_lines(/*width*/ 30));
     assert_eq!(
         visible_lines(lines.clone()),
         cell.transcript_lines(/*width*/ 30)

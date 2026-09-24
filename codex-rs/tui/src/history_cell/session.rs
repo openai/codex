@@ -80,11 +80,6 @@ impl TooltipHistoryCell {
 }
 
 impl HistoryCell for TooltipHistoryCell {
-    fn compact_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
-        // Optional tips stay available in detailed history without occupying the conversation.
-        Vec::new()
-    }
-
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         visible_lines(self.display_hyperlink_lines(width))
     }
