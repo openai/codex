@@ -26,7 +26,15 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_chatgpt::connectors;
+use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::config::ConfigBuilder;
+use codex_http_client::DestinationPolicy;
+use codex_http_client::HttpError;
+use codex_http_client::NetworkPolicyController;
+use codex_http_client::NetworkPolicyDenied;
+use codex_login::AuthManager;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -82,6 +90,108 @@ fn app_read_deserializes_legacy_tool_summaries() -> Result<()> {
             "missingAppIds": [],
         })
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn connector_requests_preserve_account_policy() -> Result<()> {
+    let state = BatchServerState::new(json!({ "apps": [] }), "chatgpt-token", "codex");
+    let (server_url, server_handle) = start_batch_server(state.clone()).await?;
+    let home = TempDir::new()?;
+    write_apps_config(home.path(), &server_url, /*apps_mcp_product_sku*/ None)?;
+    write_auth(home.path())?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .fallback_cwd(Some(home.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
+        .build()
+        .await?;
+    let controller = NetworkPolicyController::default();
+    let policy = controller.policy();
+    controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+    config.application_network_policy = policy.clone();
+    let manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await?;
+    let (auth, factory) = manager.auth_with_http_client_factory().await.unwrap();
+    config.application_network_policy = factory.network_policy().clone();
+    let app_ids = vec!["alpha".to_string()];
+    connectors::read_connector_metadata(&config, &auth, &app_ids, /*include_tools*/ false).await?;
+    assert_eq!(state.requests().len(), 1);
+
+    policy.invalidate();
+    controller.publish(policy.revision(), DestinationPolicy::Unrestricted);
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        connectors::read_connector_metadata(&config, &auth, &app_ids, /*include_tools*/ false),
+    )
+    .await?
+    .err()
+    .expect("old credentials must retain their revoked policy");
+    assert!(matches!(
+        error.downcast_ref::<HttpError>(),
+        Some(HttpError::Policy(NetworkPolicyDenied::Revoked))
+    ));
+    assert_eq!(state.requests().len(), 1);
+
+    controller.publish(
+        policy.revision(),
+        DestinationPolicy::Restricted {
+            allowed_hosts: Default::default(),
+        },
+    );
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true, &[]),
+    )
+    .await?
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<HttpError>(),
+        Some(HttpError::Policy(NetworkPolicyDenied::Destination))
+    ));
+    server_handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn app_read_applies_network_policy_to_cached_client_after_reload() -> Result<()> {
+    let state = BatchServerState::new(json!({ "apps": [] }), "chatgpt-token", "codex");
+    let (server_url, server_handle) = start_batch_server(state.clone()).await?;
+    let home = TempDir::new()?;
+    write_apps_config(home.path(), &server_url, /*apps_mcp_product_sku*/ None)?;
+    write_auth(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
+        .await?;
+    read_apps(&mut app, vec!["alpha"], /*include_tools*/ false).await?;
+    assert_eq!(state.requests().len(), 1);
+
+    std::fs::write(
+        home.path().join("requirements.toml"),
+        "[application.network]",
+    )?;
+    let reload_id = app.send_request("config/read", Some(json!({}))).await?;
+    let _: Value = timeout(DEFAULT_TIMEOUT, app.read_response(reload_id)).await??;
+    let request_id = app
+        .send_apps_read_request(AppsReadParams {
+            app_ids: vec!["alpha".to_string()],
+            thread_id: None,
+            include_tools: false,
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_TIMEOUT,
+        app.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        error.error.message,
+        "failed to read app metadata: Failed to send request"
+    );
+    assert_eq!(state.requests().len(), 1);
+    server_handle.abort();
     Ok(())
 }
 

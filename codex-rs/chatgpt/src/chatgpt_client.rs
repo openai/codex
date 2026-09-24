@@ -4,7 +4,6 @@ use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
-use codex_login::default_client::create_client;
 use codex_login::default_client::create_client_with_chatgpt_cookies;
 use codex_login::default_client::default_headers;
 
@@ -24,15 +23,15 @@ struct CachedChatGptClient {
     client: HttpClient,
 }
 
-static PSP_CHATGPT_CLIENT: LazyLock<Mutex<Option<CachedChatGptClient>>> =
+static CHATGPT_CLIENT: LazyLock<Mutex<Option<CachedChatGptClient>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// Reuse the default client while retaining its configured ChatGPT cookies.
-fn psp_chatgpt_client(factory: HttpClientFactory) -> HttpClient {
+/// Reuse the client and cookies without changing the caller's captured account policy.
+fn chatgpt_client(factory: HttpClientFactory) -> HttpClient {
     let residency = default_headers()
         .get(RESIDENCY_HEADER_NAME)
         .map(|value| value.as_bytes().to_vec());
-    let mut cached = PSP_CHATGPT_CLIENT
+    let mut cached = CHATGPT_CLIENT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(cached_client) = cached.as_ref()
@@ -64,6 +63,12 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     path: String,
     timeout: Option<Duration>,
 ) -> anyhow::Result<T> {
+    // Bind before loading credentials: the temporary auth manager does not own account changes.
+    let policy = config
+        .application_network_policy
+        .clone()
+        .for_current_account();
+    let client = chatgpt_client(config.http_client_factory().with_network_policy(policy));
     let chatgpt_base_url = &config.chatgpt_base_url;
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await?;
@@ -79,19 +84,12 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         auth.get_account_id().is_some(),
         "ChatGPT account ID not available, please re-run `codex login`"
     );
-
     let url = format!(
         "{}/{}",
         chatgpt_base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
 
-    let http_client_factory = config.http_client_factory();
-    let client = if http_client_factory.has_chatgpt_cookies() {
-        psp_chatgpt_client(http_client_factory)
-    } else {
-        create_client()
-    };
     let mut request = client
         .get(&url)
         .headers(default_headers())
@@ -118,8 +116,8 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
 
 /// Make a POST request to the ChatGPT backend API with an already-captured auth identity.
 ///
-/// Callers that bind other state to the auth snapshot should pass that same snapshot here rather
-/// than reacquiring auth while the request is in flight.
+/// Callers must capture `auth` and `config.application_network_policy` together and preserve
+/// that snapshot rather than reacquiring either while the request is in flight.
 pub(crate) async fn chatgpt_post_request_with_timeout<
     TResponse: DeserializeOwned,
     TRequest: Serialize + ?Sized,
@@ -145,12 +143,7 @@ pub(crate) async fn chatgpt_post_request_with_timeout<
         config.chatgpt_base_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
-    let http_client_factory = config.http_client_factory();
-    let client = if http_client_factory.has_chatgpt_cookies() {
-        psp_chatgpt_client(http_client_factory)
-    } else {
-        create_client()
-    };
+    let client = chatgpt_client(config.http_client_factory());
     let response = client
         .post(&url)
         .headers(default_headers())
