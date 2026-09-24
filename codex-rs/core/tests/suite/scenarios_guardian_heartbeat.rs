@@ -133,8 +133,8 @@ async fn heartbeat_repetitions_keep_later_human_authorization() -> anyhow::Resul
             "$1\"<ENVIRONMENT>\"",
         ),
         (
-            r#"(For this action on environment )"(?:local|remote)","#,
-            "$1\"<ENVIRONMENT>\",",
+            r#"(The active permission profile for environment )"(?:local|remote)""#,
+            "$1\"<ENVIRONMENT>\"",
         ),
         (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),
         (

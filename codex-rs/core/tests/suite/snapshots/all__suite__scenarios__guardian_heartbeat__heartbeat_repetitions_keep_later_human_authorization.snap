@@ -147,7 +147,7 @@ Scenario: Three scheduled runs share one instruction body, a human overrides its
     [24]
         >>> PARENT TURN PERMISSION CONTEXT START
 
-    [25] For this action on environment "<ENVIRONMENT>", the active permission profile has no explicit denied-read paths/globs.
+    [25] The active permission profile for environment "<ENVIRONMENT>" has no explicit denied-read paths/globs.
 
     [26] >>> PARENT TURN PERMISSION CONTEXT END
 
