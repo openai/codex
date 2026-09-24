@@ -61,7 +61,9 @@ async fn dual_write_extracts_and_consolidates_into_independent_stores() -> anyho
         (MemoryVersion::V2, &v2_root, "", "v2 rollout"),
     ] {
         let store = db.memories_for_version(version).await?;
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Both pipelines initialize Git workspaces and run consolidation agents.
+        // Allow for process startup under contention on Windows CI runners.
+        let deadline = Instant::now() + Duration::from_secs(60);
         while store.max_consolidated_thread_count().await? == 0 {
             anyhow::ensure!(
                 Instant::now() < deadline,
