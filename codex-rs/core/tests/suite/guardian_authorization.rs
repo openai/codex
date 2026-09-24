@@ -8,6 +8,7 @@ use codex_core::context::ContextualUserFragment;
 use codex_core::context::GuardianContextMode;
 use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
+use codex_core::context::UserGoalUpdate;
 use codex_features::Feature;
 use codex_history::RolloutItem;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -308,6 +309,16 @@ async fn guardian_authorization_revision_survives_compaction_not_user_input() ->
     test.codex
         .inject_response_items(vec![ContextualUserFragment::into(internal_context)])
         .await?;
+    assert_eq!(test.codex.guardian_authorization_version().await, expected);
+
+    // An explicit user goal edit invalidates cached authorization, unlike its continuation.
+    test.codex
+        .record_user_goal_update(UserGoalUpdate::Set {
+            objective: Some("Do not deploy; inspect only.".to_owned()),
+            status: None,
+        })
+        .await?;
+    expected.user_message_revision += 1;
     assert_eq!(test.codex.guardian_authorization_version().await, expected);
 
     // The same text submitted by the user must invalidate, even if it looks internal.

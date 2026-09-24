@@ -15,7 +15,9 @@ use super::LocalAgentControl;
 use crate::codex_thread::GuardianRootMessage;
 use crate::codex_thread::GuardianRootSnapshot;
 use crate::compact::is_summary_message;
+use crate::context::ContextualUserFragment;
 use crate::context::GuardianReviewEvidence;
+use crate::context::UserGoalUpdate;
 use crate::context::is_contextual_user_fragment;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
@@ -141,9 +143,13 @@ impl LocalAgentControl {
                     } else {
                         Cow::Borrowed(message.text.as_str())
                     };
+                    let is_goal_update = UserGoalUpdate::matches_text(&text);
+                    // A retained placeholder cannot recover an omitted goal restriction.
+                    missing_root_instructions |= is_goal_update && !message.complete;
                     if is_contextual_user_fragment(&ContentItem::InputText {
                         text: text.to_string(),
-                    }) {
+                    }) && !is_goal_update
+                    {
                         return None;
                     }
                     (!is_summary_message(&text) && !text.trim_start().starts_with("<user_action>"))

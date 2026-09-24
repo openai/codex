@@ -14,6 +14,7 @@ mod user_authorization;
 
 use crate::context::ContextualUserFragment;
 use crate::context::ModelSwitchInstructions;
+use crate::context::is_guardian_context_message;
 use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
@@ -170,13 +171,7 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
             self.items
                 .iter()
                 .map(|envelope| &envelope.item)
-                .filter(|item| {
-                    !matches!(
-                        item,
-                        ResponseItem::Message { role, content, .. }
-                            if role == "user" && is_contextual_user_message_content(content)
-                    )
-                }),
+                .filter(|item| !is_guardian_context_message(item)),
         )
     }
 }
@@ -279,10 +274,7 @@ impl ContextManager {
                                 let ResponseItem::Message { role, content, .. } = item else {
                                     return false;
                                 };
-                                if role != source_role
-                                    || (role == "user"
-                                        && is_contextual_user_message_content(content))
-                                {
+                                if role != source_role || is_guardian_context_message(item) {
                                     return false;
                                 }
                                 let text = content
@@ -344,10 +336,10 @@ impl ContextManager {
             history.reset(checkpoint.0.iter());
         } else {
             // Retain the legacy window through replay, including answers captured in its suffix.
-            history.reset(self.raw_items().filter(|item| {
-                !matches!(item, ResponseItem::Message { role, content, .. }
-                    if role == "user" && is_contextual_user_message_content(content))
-            }));
+            history.reset(
+                self.raw_items()
+                    .filter(|item| !is_guardian_context_message(item)),
+            );
         }
         self.review_history = Some(history);
         if self.guardian_review_mode == GuardianContextMode::ThreadOwned
@@ -460,8 +452,7 @@ impl ContextManager {
                 truncate_function_output_payload(output, policy, estimate_audio_token_count);
             }
             if let Some(review_history) = &mut self.review_history
-                && !matches!(item, ResponseItem::Message { role, content, .. }
-                if role == "user" && is_contextual_user_message_content(content))
+                && !is_guardian_context_message(item)
             {
                 review_history.record(&processed.item);
             }
@@ -574,10 +565,12 @@ impl ContextManager {
         self.retained_context = Arc::default();
         self.user_message_revision = self.user_message_revision.saturating_add(1);
         if let Some(review_history) = &mut self.review_history {
-            review_history.reset(items.iter().map(|item| &item.item).filter(|item| {
-                !matches!(item, ResponseItem::Message { role, content, .. }
-                    if role == "user" && is_contextual_user_message_content(content))
-            }));
+            review_history.reset(
+                items
+                    .iter()
+                    .map(|item| &item.item)
+                    .filter(|item| !is_guardian_context_message(item)),
+            );
         }
         self.items = Arc::new(items);
         self.history_version = self.history_version.saturating_add(1);
@@ -608,10 +601,10 @@ impl ContextManager {
         if self.guardian_review_mode == GuardianContextMode::Legacy && self.review_history.is_none()
         {
             let mut retained = TranscriptHistory::new(self.history_version.saturating_add(1));
-            for item in self.raw_items().filter(|item| {
-                !matches!(item, ResponseItem::Message { role, content, .. }
-                    if role == "user" && is_contextual_user_message_content(content))
-            }) {
+            for item in self
+                .raw_items()
+                .filter(|item| !is_guardian_context_message(item))
+            {
                 retained.record(item);
             }
             self.review_history = Some(retained);

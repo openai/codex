@@ -1,8 +1,9 @@
-//! Managed Guardian policies override config defaults and reach the reviewer separately.
+//! Managed policies and explicit user goals reach Guardian through their distinct trusted sources.
 
 use anyhow::Context;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Constrained;
+use codex_core::context::UserGoalUpdate;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;
@@ -86,6 +87,14 @@ guardian_extra_policy = "Draft reminders without sending them."
         })
         .build_with_auto_env(&server)
         .await?;
+    test.codex
+        .record_user_goal_update(UserGoalUpdate::Set {
+            objective: Some(
+                "Inspect the workspace; do not run commands outside the sandbox.".to_owned(),
+            ),
+            status: None,
+        })
+        .await?;
     test.submit_text_turn("Check the workspace.").await?;
 
     let requests = mock.requests();
@@ -105,7 +114,7 @@ guardian_extra_policy = "Draft reminders without sending them."
         "{reviewer_text}"
     );
     let mut snapshot = context_snapshot::format_request_history_snapshot(
-        "Guardian reviews an escalated command with separate tenant and additional policies, denies it, and the parent continues.",
+        "Guardian reviews an escalated command against a restrictive user goal and separate tenant and additional policies, denies it, and the parent continues.",
         &requests,
         &ContextSnapshotOptions::default().include_request_settings(),
     );

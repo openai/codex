@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::ContextManager;
 use crate::compact::is_summary_message;
+use crate::context::UserGoalUpdate;
 use crate::context::is_contextual_user_fragment;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS;
@@ -157,7 +158,10 @@ impl ContextManager {
                         .and_then(|metadata| metadata.content_item_kinds.as_ref())
                         .is_some_and(|kinds| {
                             kinds.len() == content.len()
-                                && kinds.iter().all(|kind| kind.0.starts_with("user."))
+                                && kinds.iter().all(|kind| {
+                                    kind.0.starts_with("user.")
+                                        && kind.0 != UserGoalUpdate::OMITTED_OBJECTIVE_KIND
+                                })
                         }));
             let text = content
                 .iter()

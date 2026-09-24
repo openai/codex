@@ -1111,6 +1111,21 @@ async fn forked_parent_instructions_do_not_become_local_authorization(
             ))
     );
 
+    let goal = "Inspect only; do not publish.";
+    test.codex
+        .record_user_goal_update(codex_core::context::UserGoalUpdate::Set {
+            objective: Some(goal.to_owned()),
+            status: None,
+        })
+        .await?;
+    let snapshot = child
+        .guardian_root_snapshot()
+        .await
+        .context("root after goal")?;
+    assert!(snapshot.messages.iter().any(|message| {
+        matches!(message, codex_core::GuardianRootMessage::User(text) if text.contains(goal))
+    }));
+
     mount_sse_once_match(
         &server,
         header("thread-id", child_id.as_str()),
