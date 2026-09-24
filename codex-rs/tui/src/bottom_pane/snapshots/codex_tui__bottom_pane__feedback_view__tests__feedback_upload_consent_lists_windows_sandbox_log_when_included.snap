@@ -7,6 +7,7 @@ Upload logs?
 
 The following files will be sent:
   • codex-logs.log
+  • client-logs.txt (if available)
   • codex-doctor-report.json
   • codex-apps-tools-cache.json (if available)
   • codex-app-directory-cache.json (if available)

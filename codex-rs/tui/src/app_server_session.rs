@@ -4,7 +4,7 @@
 //! request/response plumbing out of `App` and `ChatWidget`.
 
 mod external_agent_config;
-mod fs;
+pub(crate) mod fs;
 mod history;
 mod models;
 mod realtime;

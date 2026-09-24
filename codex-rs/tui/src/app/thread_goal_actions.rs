@@ -343,7 +343,7 @@ async fn cleanup_materialized_goal_files(
     output_dir: Option<goal_files::GoalFilePath>,
 ) {
     if let Some(output_dir) = output_dir
-        && let Err(err) = app_server.fs_remove_path(&output_dir).await
+        && let Err(err) = app_server.file_system().fs_remove_path(&output_dir).await
     {
         tracing::warn!("failed to clean up materialized goal files at {output_dir}: {err}");
     }
