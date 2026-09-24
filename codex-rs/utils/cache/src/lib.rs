@@ -1,6 +1,8 @@
 use std::borrow::Borrow;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::sync::OnceLock;
 
 use lru::LruCache;
 use sha1::Digest;
@@ -119,6 +121,25 @@ where
     }
 }
 
+impl<K, V> BlockingLruCache<K, Arc<OnceLock<V>>>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    /// Returns the cached value, initializing it outside the global cache lock.
+    ///
+    /// Concurrent callers share initialization while the entry remains cached.
+    /// An in-flight entry can be evicted and initialized again, so factories must
+    /// be deterministic. Initialization and same-key waits use a blocking region.
+    pub fn get_or_init(&self, key: K, value: impl FnOnce() -> V) -> V {
+        let entry = self.get_or_insert_with(key, || Arc::new(OnceLock::new()));
+        if let Some(value) = entry.get() {
+            return value.clone();
+        }
+        tokio::task::block_in_place(|| entry.get_or_init(value).clone())
+    }
+}
+
 fn lock_if_runtime<K, V>(m: &Mutex<LruCache<K, V>>) -> Option<MutexGuard<'_, LruCache<K, V>>>
 where
     K: Eq + Hash,
@@ -140,6 +161,10 @@ pub fn sha1_digest(bytes: &[u8]) -> [u8; 20] {
     out.copy_from_slice(&result);
     out
 }
+
+#[cfg(test)]
+#[path = "initialization_tests.rs"]
+mod initialization_tests;
 
 #[cfg(test)]
 mod tests {

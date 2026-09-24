@@ -72,6 +72,7 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 use crate::context::GuardianContextMode;
 
@@ -949,12 +950,13 @@ const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
 const ORIGINAL_IMAGE_MAX_PATCHES: usize = 10_000;
 const ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE: usize = 32;
 
-static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option<i64>>> =
-    LazyLock::new(|| {
-        BlockingLruCache::new(
-            NonZeroUsize::new(ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN),
-        )
-    });
+type OriginalImageEstimateCache = BlockingLruCache<[u8; 20], Arc<OnceLock<Option<i64>>>>;
+
+static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<OriginalImageEstimateCache> = LazyLock::new(|| {
+    BlockingLruCache::new(
+        NonZeroUsize::new(ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN),
+    )
+});
 
 fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
@@ -1111,7 +1113,7 @@ fn parse_base64_image_data_url(url: &str) -> Option<&str> {
 
 fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
     let key = sha1_digest(image_url.as_bytes());
-    ORIGINAL_IMAGE_ESTIMATE_CACHE.get_or_insert_with(key, || {
+    ORIGINAL_IMAGE_ESTIMATE_CACHE.get_or_init(key, || {
         let payload = match parse_base64_image_data_url(image_url) {
             Some(payload) => payload,
             None => {

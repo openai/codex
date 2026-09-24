@@ -11,7 +11,9 @@ use codex_utils_cache::sha1_digest;
 use codex_utils_string::approx_token_count;
 use std::io::Cursor;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::OnceLock;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::formats::TrackType;
 use symphonia::core::formats::probe::Hint;
@@ -30,7 +32,7 @@ const MAX_PROMPT_AUDIO_BASE64_BYTES: usize = MAX_PROMPT_AUDIO_INPUT_BYTES.div_ce
 const AUDIO_TOKEN_ESTIMATE_CACHE_SIZE: usize = 32;
 const AUDIO_TOKENS_PER_SECOND: f64 = 10.0;
 
-static AUDIO_TOKEN_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], usize>> =
+static AUDIO_TOKEN_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Arc<OnceLock<usize>>>> =
     LazyLock::new(|| {
         BlockingLruCache::new(
             NonZeroUsize::new(AUDIO_TOKEN_ESTIMATE_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN),
@@ -145,7 +147,7 @@ fn canonical_audio_mime(mime: &str) -> Option<&'static str> {
 /// Estimates audio tokens from decoded duration, falling back to the data URL size.
 pub fn estimate_audio_token_count(audio_url: &str) -> usize {
     let key = sha1_digest(audio_url.as_bytes());
-    AUDIO_TOKEN_ESTIMATE_CACHE.get_or_insert_with(key, || {
+    AUDIO_TOKEN_ESTIMATE_CACHE.get_or_init(key, || {
         let Some(duration_seconds) = audio_duration_seconds(audio_url) else {
             return approx_token_count(audio_url);
         };
