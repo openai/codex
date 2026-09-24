@@ -2554,8 +2554,8 @@ async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
         bail!("unexpected login response: {login:?}");
     };
     assert!(
-        auth_url.contains("redirect_uri=http%3A%2F%2Flocalhost"),
-        "auth_url should contain a redirect_uri to localhost"
+        auth_url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A"),
+        "auth_url should contain a redirect_uri to 127.0.0.1"
     );
 
     let cancel_id = mcp
@@ -2646,6 +2646,7 @@ async fn login_account_chatgpt_uses_oauth_overrides() -> Result<()> {
         .query_pairs()
         .find_map(|(key, value)| (key == "state").then_some(value.into_owned()))
         .ok_or_else(|| anyhow::anyhow!("missing state"))?;
+    let token_redirect_uri = callback_url.clone();
     let mut callback_url = Url::parse(&callback_url)?;
     callback_url
         .query_pairs_mut()
@@ -2681,6 +2682,7 @@ async fn login_account_chatgpt_uses_oauth_overrides() -> Result<()> {
         token_form.get("client_id").map(String::as_str),
         Some("staging-client")
     );
+    assert_eq!(token_form.get("redirect_uri"), Some(&token_redirect_uri));
 
     let notification = timeout(
         DEFAULT_READ_TIMEOUT,

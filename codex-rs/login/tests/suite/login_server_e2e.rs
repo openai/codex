@@ -160,6 +160,14 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         "auth URL should include forced workspace parameter"
     );
     let login_port = server.actual_port;
+    let callback_url = Url::parse(&server.auth_url)?
+        .query_pairs()
+        .find_map(|(key, value)| (key == "redirect_uri").then(|| value.into_owned()))
+        .expect("auth URL should include a redirect URI");
+    assert_eq!(
+        callback_url,
+        format!("http://127.0.0.1:{login_port}/auth/callback")
+    );
 
     // Simulate browser callback and assert the local success redirect before following it.
     let client = HttpClientBuilder::new()
@@ -173,7 +181,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         "test_state_123.extra=value.onboarding_entrypoint=life_sciences",
     ] {
         let response = client
-            .get(format!("http://127.0.0.1:{login_port}/auth/callback"))
+            .get(&callback_url)
             .query(&[
                 ("state", state),
                 ("code", "untrusted"),
@@ -190,14 +198,13 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         )?)?,
         stale_auth
     );
-    let url = format!(
-        "http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123.onboarding_entrypoint=life_sciences"
-    );
+    let url =
+        format!("{callback_url}?code=abc&state=test_state_123.onboarding_entrypoint=life_sciences");
     let resp = client.get(&url).send().await?;
     assert_eq!(resp.status(), 302);
     let success_url = resp.headers()["location"].to_str()?;
     let success_url = Url::parse(success_url)?;
-    assert_eq!(success_url.host_str(), Some("localhost"));
+    assert_eq!(success_url.origin(), Url::parse(&callback_url)?.origin());
     assert_eq!(success_url.path(), "/success");
 
     let success_resp = client.get(success_url).send().await?;
@@ -644,7 +651,7 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
 
     assert_eq!(actual_port, FALLBACK_LOGIN_PORT);
     assert!(auth_url.contains(&format!(
-        "redirect_uri=http%3A%2F%2Flocalhost%3A{FALLBACK_LOGIN_PORT}%2Fauth%2Fcallback"
+        "redirect_uri=http%3A%2F%2F127.0.0.1%3A{FALLBACK_LOGIN_PORT}%2Fauth%2Fcallback"
     )));
 
     Ok(())

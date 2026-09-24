@@ -100,7 +100,7 @@ pub(crate) fn compose_success_url(
         .map(|(key, value)| format!("{key}={}", urlencoding::encode(&value)))
         .collect::<Vec<_>>()
         .join("&");
-    LoginSuccessRedirect::Local(format!("http://localhost:{port}/success?{query}"))
+    LoginSuccessRedirect::Local(format!("http://127.0.0.1:{port}/success?{query}"))
 }
 
 pub(crate) fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {

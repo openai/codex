@@ -18,7 +18,7 @@ fn compose_success_url_uses_local_page_by_default() {
     };
     let url = Url::parse(&url).expect("success URL should parse");
 
-    assert_eq!(url.host_str(), Some("localhost"));
+    assert_eq!(url.host_str(), Some("127.0.0.1"));
     assert_eq!(url.path(), "/success");
     assert_eq!(
         url.query_pairs()
@@ -109,7 +109,7 @@ fn compose_success_url_keeps_setup_on_local_page() {
     };
     let url = Url::parse(&url).expect("success URL should parse");
 
-    assert_eq!(url.host_str(), Some("localhost"));
+    assert_eq!(url.host_str(), Some("127.0.0.1"));
     assert_eq!(url.path(), "/success");
     assert_eq!(
         url.query_pairs()
