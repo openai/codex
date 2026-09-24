@@ -1,12 +1,15 @@
 use anyhow::Result;
+use anyhow::bail;
 use app_test_support::ChatGptIdTokenClaims;
 use app_test_support::TestAppServer;
 use app_test_support::encode_id_token;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
+use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -125,6 +128,26 @@ async fn recommended_plugins_after_external_login(
     assert_eq!(
         to_response::<LoginAccountResponse>(login_response)?,
         LoginAccountResponse::ChatgptAuthTokens {}
+    );
+
+    // Login clears the recommendation cache after its RPC response. Wait for completion so
+    // thread startup and the background refresh share the same cache generation.
+    let notification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_notification_message("account/login/completed"),
+    )
+    .await??;
+    let ServerNotification::AccountLoginCompleted(payload) = notification.try_into()? else {
+        bail!("unexpected notification")
+    };
+    assert_eq!(
+        payload,
+        AccountLoginCompletedNotification {
+            login_id: None,
+            success: true,
+            error: None,
+            onboarding_entrypoint: None,
+        }
     );
 
     let thread_id = app_server
