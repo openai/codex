@@ -1180,11 +1180,15 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
                 )
             })
     {
+        let model_messages = ResolvedModelMessages::from_model(context.model_info);
         registry.add_with_exposure(
             RequestUserInputAsyncHandler {
-                description: ResolvedModelMessages::from_model(context.model_info)
+                description: model_messages
                     .request_user_input_async_description()
                     .to_string(),
+                parameters: model_messages
+                    .request_user_input_async_parameters_override()
+                    .map(str::to_owned),
             },
             ToolExposure::DirectModelOnly,
         );

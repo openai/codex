@@ -342,16 +342,41 @@ async fn freeform_async_message_emits_an_item_without_ending_the_turn(
     Ok(())
 }
 
-#[test_case(None, "send_user_message_async"; "fallback_description")]
-#[test_case(None, "request_user_input_async"; "current_catalog_name")]
-#[test_case(Some(ToolMessages::default()), "send_user_message_async"; "missing_tool")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage::default()), ..Default::default() }), "send_user_message_async"; "missing_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async"; "catalog_description")]
-#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async"; "empty_description")]
+const CATALOG_ASYNC_PARAMETERS: &str = r#"{
+    "type": "object",
+    "properties": {
+        "questions": {
+            "type": "array",
+            "description": "Catalog questions for the user.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "options": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    "required": ["questions"],
+    "additionalProperties": false
+}"#;
+
+#[test_case(None, "send_user_message_async", None; "fallback_description")]
+#[test_case(None, "request_user_input_async", None; "current_catalog_name")]
+#[test_case(Some(ToolMessages::default()), "send_user_message_async", None; "missing_tool")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage::default()), ..Default::default() }), "send_user_message_async", None; "missing_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async", None; "catalog_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async", None; "empty_description")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { parameters: Some(CATALOG_ASYNC_PARAMETERS.to_string()), ..Default::default() }), ..Default::default() }), "send_user_message_async", Some(CATALOG_ASYNC_PARAMETERS); "catalog_parameters")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), parameters: Some(CATALOG_ASYNC_PARAMETERS.to_string()) }), ..Default::default() }), "request_user_input_async", Some(CATALOG_ASYNC_PARAMETERS); "catalog_description_and_parameters")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { parameters: Some(String::new()), ..Default::default() }), ..Default::default() }), "send_user_message_async", None; "empty_parameters_fallback")]
+#[test_case(Some(ToolMessages { send_user_message_async: Some(ToolMessage { description: Some("Catalog async message description.".to_string()), parameters: Some(r#"{"type":"object","properties":{"questions":{"type":"unsupported"}}}"#.to_string()) }), ..Default::default() }), "send_user_message_async", None; "invalid_parameters_preserve_description")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_async_emits_item_and_does_not_end_the_turn(
     tool_messages: Option<ToolMessages>,
     catalog_tool_name: &'static str,
+    expected_parameters: Option<&'static str>,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -490,17 +515,24 @@ async fn request_user_input_async_emits_item_and_does_not_end_the_turn(
             .expect("the async message tool should be directly visible to the model");
         assert_eq!(tool["description"], expected_description);
         assert_eq!(tool["strict"], false);
-        assert_eq!(tool["parameters"]["required"], json!(["questions"]));
-        assert_eq!(tool["parameters"]["additionalProperties"], false);
-        let schema = &tool["parameters"]["properties"]["questions"];
-        assert_eq!(schema["minItems"], 1);
-        assert_eq!(schema["items"]["required"], json!(["title"]));
-        assert_eq!(schema["items"]["additionalProperties"], false);
-        assert_eq!(schema["items"]["properties"]["options"]["minItems"], 1);
-        assert_eq!(
-            schema["items"]["properties"]["options"]["items"]["type"],
-            "string"
-        );
+        if let Some(expected_parameters) = expected_parameters {
+            assert_eq!(
+                tool["parameters"],
+                serde_json::from_str::<serde_json::Value>(expected_parameters)?
+            );
+        } else {
+            assert_eq!(tool["parameters"]["required"], json!(["questions"]));
+            assert_eq!(tool["parameters"]["additionalProperties"], false);
+            let schema = &tool["parameters"]["properties"]["questions"];
+            assert_eq!(schema["minItems"], 1);
+            assert_eq!(schema["items"]["required"], json!(["title"]));
+            assert_eq!(schema["items"]["additionalProperties"], false);
+            assert_eq!(schema["items"]["properties"]["options"]["minItems"], 1);
+            assert_eq!(
+                schema["items"]["properties"]["options"]["items"]["type"],
+                "string"
+            );
+        }
         assert!(
             tools
                 .iter()

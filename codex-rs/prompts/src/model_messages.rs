@@ -155,6 +155,17 @@ impl<'a> ResolvedModelMessages<'a> {
             .unwrap_or(REQUEST_USER_INPUT_ASYNC_DESCRIPTION)
     }
 
+    /// Selects the asynchronous user-input schema; parsing belongs to the tool consumer.
+    pub fn request_user_input_async_parameters_override(&self) -> Option<&'a str> {
+        self.catalog_messages?
+            .tools
+            .as_ref()?
+            .send_user_message_async
+            .as_ref()?
+            .parameters
+            .as_deref()
+    }
+
     /// Selects a V2 tool's static description by its name, independently of its runtime namespace.
     /// Missing text retains the tool's bundled description; an empty string replaces it.
     pub fn multi_agent_tool_description_override(&self, tool_name: &str) -> Option<&'a str> {

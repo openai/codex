@@ -2266,6 +2266,22 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             "additionalProperties": false,
         })
     };
+    let async_parameters = |model: &str| {
+        json!({
+            "type": "object",
+            "properties": {"questions": {
+                "type": "array",
+                "description": format!("Questions for {model}."),
+                "items": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}},
+                    "required": ["title"],
+                },
+            }},
+            "required": ["questions"],
+            "additionalProperties": false,
+        })
+    };
     let server = start_mock_server().await;
     let response_mock = mount_sse_sequence(
         &server,
@@ -2313,7 +2329,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                     .tools = Some(ToolMessages {
                     send_user_message_async: Some(ToolMessage {
                         description: Some(format!("Async message description for {}.", model.slug)),
-                        ..Default::default()
+                        parameters: Some(async_parameters(&model.slug).to_string()),
                     }),
                     multi_agent: Some(MultiAgentToolMessages {
                         spawn_agent: tool_message("spawn_agent"),
@@ -2381,6 +2397,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                 json!({
                     "model": body["model"],
                     "async_description": tool("request_user_input_async")["description"],
+                    "async_parameters": tool("request_user_input_async")["parameters"],
                     "multi_agent_messages": multi_agent_messages,
                     "channel_post_description": channel_post["description"].as_str().expect("post description").lines().next(),
                     "channel_post_required": channel_post["parameters"]["required"],
@@ -2394,6 +2411,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             .map(|model| json!({
                 "model": model,
                 "async_description": format!("Async message description for {model}."),
+                "async_parameters": async_parameters(model),
                 "multi_agent_messages": MULTI_AGENT_TOOLS
                     .map(|name| (name.to_string(), json!({
                         "description": format!("{name} description for {model}."),

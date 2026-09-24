@@ -220,6 +220,27 @@ async fn astra_asks_an_async_question_and_receives_the_answer_while_working() ->
     skip_if_no_network!(Ok(()));
 
     let question = "Who should receive the launch update?";
+    let parameters = json!({
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "description": "Catalog questions to ask while continuing work.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Catalog question title."},
+                        "options": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["title"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["questions"],
+        "additionalProperties": false
+    });
+    let catalog_parameters = parameters.to_string();
     let (release_continuation, continuation_gate) = oneshot::channel();
     let mut working_message = ev_assistant_message("working", "I drafted a short launch update.");
     working_message["item"]["phase"] = json!("commentary");
@@ -272,6 +293,23 @@ async fn astra_asks_an_async_question_and_receives_the_answer_while_working() ->
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             configure_scenario_catalog(config);
+            config
+                .model_catalog
+                .as_mut()
+                .expect("scenario model catalog")
+                .models
+                .iter_mut()
+                .find(|model| model.slug == "gpt-6-astra")
+                .expect("Astra model")
+                .model_messages
+                .as_mut()
+                .expect("model messages")
+                .tools
+                .get_or_insert_with(Default::default)
+                .send_user_message_async = Some(ToolMessage {
+                parameters: Some(catalog_parameters),
+                ..Default::default()
+            });
             config.model_provider.base_url = Some(base_url);
             // The gated mock records raw request bodies for the shared snapshot renderer.
             config
@@ -326,12 +364,22 @@ async fn astra_asks_an_async_question_and_receives_the_answer_while_working() ->
         .await
         .iter()
         .map(|body| serde_json::from_slice(body))
-        .collect::<serde_json::Result<Vec<_>>>()?;
+        .collect::<serde_json::Result<Vec<serde_json::Value>>>()?;
+    for request in &requests {
+        let tool = request["input"][0]["tools"]
+            .as_array()
+            .expect("Responses Lite tools")
+            .iter()
+            .flat_map(|namespace| namespace["tools"].as_array().into_iter().flatten())
+            .find(|tool| tool["name"] == "request_user_input_async")
+            .expect("the async question tool should be directly visible to the model");
+        assert_eq!(tool["parameters"], parameters);
+    }
     let entries = requests.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
     insta::assert_snapshot!(
         "astra_async_question_and_answer",
         context_snapshot::format_context_snapshot(
-            "Astra asks who a launch update is for, keeps working, and receives the user's answer in the active turn.",
+            "Astra uses the catalog question schema to ask who a launch update is for, keeps working, and receives the user's answer in the active turn.",
             &entries,
             &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
