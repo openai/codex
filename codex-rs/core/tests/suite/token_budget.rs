@@ -772,6 +772,7 @@ async fn token_budget_context_injects_plain_thread_hint_text() -> Result<()> {
                     environment_id: "local".to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
                     omit_tools_from: None,
                     disabled_reason: None,

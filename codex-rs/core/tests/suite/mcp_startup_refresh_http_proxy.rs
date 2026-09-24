@@ -135,6 +135,7 @@ async fn local_mcp_startup_and_refresh_use_configured_http_client() -> Result<()
                     environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
                     enabled: true,
                     required: false,
+                    startup_readiness: Default::default(),
                     supports_parallel_tool_calls: false,
                     omit_tools_from: None,
                     disabled_reason: None,

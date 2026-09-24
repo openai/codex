@@ -213,10 +213,20 @@ pub enum McpServerAuth {
     EmaAuth,
 }
 
-impl McpServerAuth {
-    fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
+/// Readiness needed before startup can expose this server's tools to the model.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum McpStartupReadiness {
+    /// Use the live connection to determine startup readiness.
+    #[default]
+    Connection,
+    /// Allow a valid cached tool catalog while the live connection starts.
+    /// Tool execution still requires the current connection.
+    Catalog,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -225,7 +235,7 @@ pub struct McpServerConfig {
     pub transport: McpServerTransportConfig,
 
     /// Authentication flow, including an explicit no-fallback EMA mode.
-    #[serde(default, skip_serializing_if = "McpServerAuth::is_default")]
+    #[serde(default, skip_serializing_if = "is_default")]
     pub auth: McpServerAuth,
 
     /// Effective environment id for where Codex should start this MCP server.
@@ -236,8 +246,14 @@ pub struct McpServerConfig {
     pub enabled: bool,
 
     /// When `true`, `codex exec` exits with an error if this MCP server fails to initialize.
+    /// With `startup_readiness = "catalog"`, a valid cached catalog can satisfy startup;
+    /// connection failures are then reported when a tool is invoked.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub required: bool,
+
+    /// Whether startup requires a live connection or can use a valid cached tool catalog.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub startup_readiness: McpStartupReadiness,
 
     /// When `true`, every tool from this server is advertised as safe for parallel tool calls.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -391,6 +407,9 @@ pub struct RawMcpServerConfig {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub required: Option<bool>,
+    /// Whether startup requires a live connection or can use a valid cached tool catalog.
+    #[serde(default)]
+    pub startup_readiness: Option<McpStartupReadiness>,
     #[serde(default)]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default)]
@@ -437,6 +456,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             tool_timeout_sec,
             enabled,
             required,
+            startup_readiness,
             supports_parallel_tool_calls,
             omit_tools_from,
             default_tools_approval_mode,
@@ -556,6 +576,7 @@ impl TryFrom<RawMcpServerConfig> for McpServerConfig {
             tool_timeout_sec,
             enabled: enabled.unwrap_or_else(default_enabled),
             required: required.unwrap_or_default(),
+            startup_readiness: startup_readiness.unwrap_or_default(),
             supports_parallel_tool_calls: supports_parallel_tool_calls.unwrap_or_default(),
             omit_tools_from,
             disabled_reason: None,

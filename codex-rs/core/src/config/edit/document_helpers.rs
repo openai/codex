@@ -5,6 +5,7 @@ use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerToolConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_config::types::McpStartupReadiness;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
 use toml_edit::Array as TomlArray;
@@ -114,6 +115,10 @@ fn serialize_mcp_server_table(config: &McpServerConfig) -> anyhow::Result<TomlTa
     }
     if config.required {
         entry["required"] = value(true);
+    }
+    match config.startup_readiness {
+        McpStartupReadiness::Connection => {}
+        McpStartupReadiness::Catalog => entry["startup_readiness"] = value("catalog"),
     }
     if config.supports_parallel_tool_calls {
         entry["supports_parallel_tool_calls"] = value(true);

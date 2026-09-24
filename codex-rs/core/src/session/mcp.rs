@@ -337,7 +337,11 @@ impl Session {
         self.mcp_refresh.invalidate();
     }
 
-    #[tracing::instrument(name = "mcp.runtime.resolve_for_step", skip_all)]
+    #[tracing::instrument(
+        name = "mcp.runtime.resolve_for_step",
+        skip_all,
+        fields(turn.id = %turn_context.sub_id)
+    )]
     pub(crate) async fn mcp_runtime_for_step(
         self: &Arc<Self>,
         turn_context: &TurnContext,

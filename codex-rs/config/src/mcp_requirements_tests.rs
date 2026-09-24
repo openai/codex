@@ -17,6 +17,7 @@ fn stdio_server(command: &str, args: &[&str]) -> McpServerConfig {
         environment_id: crate::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: false,
+        startup_readiness: Default::default(),
         supports_parallel_tool_calls: false,
         omit_tools_from: None,
         disabled_reason: None,

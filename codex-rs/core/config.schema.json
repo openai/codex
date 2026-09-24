@@ -2393,6 +2393,25 @@
       },
       "type": "object"
     },
+    "McpStartupReadiness": {
+      "description": "Readiness needed before startup can expose this server's tools to the model.",
+      "oneOf": [
+        {
+          "description": "Use the live connection to determine startup readiness.",
+          "enum": [
+            "connection"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Allow a valid cached tool catalog while the live connection starts. Tool execution still requires the current connection.",
+          "enum": [
+            "catalog"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -3658,6 +3677,15 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "startup_readiness": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/McpStartupReadiness"
+            }
+          ],
+          "default": null,
+          "description": "Whether startup requires a live connection or can use a valid cached tool catalog."
         },
         "startup_timeout_ms": {
           "default": null,

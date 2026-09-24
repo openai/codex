@@ -732,6 +732,7 @@ async fn run_code_mode_turn_with_rmcp_config(
                 environment_id: "local".to_string(),
                 enabled: true,
                 required: false,
+                startup_readiness: Default::default(),
                 supports_parallel_tool_calls: false,
                 omit_tools_from: None,
                 disabled_reason: None,

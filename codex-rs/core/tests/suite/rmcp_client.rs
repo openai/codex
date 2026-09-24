@@ -377,6 +377,7 @@ fn insert_mcp_server(
             environment_id: options.environment_id,
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: options.supports_parallel_tool_calls,
             omit_tools_from: None,
             disabled_reason: None,

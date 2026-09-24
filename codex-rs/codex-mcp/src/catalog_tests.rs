@@ -41,6 +41,7 @@ fn server(url: &str) -> McpServerConfig {
         environment_id: DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
         enabled: true,
         required: true,
+        startup_readiness: Default::default(),
         supports_parallel_tool_calls: true,
         omit_tools_from: None,
         disabled_reason: None,

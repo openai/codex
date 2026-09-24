@@ -882,6 +882,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                 environment_id: "local".to_string(),
                 enabled: true,
                 required: false,
+                startup_readiness: Default::default(),
                 supports_parallel_tool_calls: false,
                 omit_tools_from: None,
                 disabled_reason: None,

@@ -291,6 +291,7 @@ fn insert_rmcp_test_server(
             environment_id,
             enabled: true,
             required: false,
+            startup_readiness: Default::default(),
             supports_parallel_tool_calls: false,
             omit_tools_from: None,
             disabled_reason: None,
