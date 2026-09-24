@@ -52,7 +52,7 @@ Scenario: Guardian review request layout
     [14]
         >>> PARENT TURN PERMISSION CONTEXT START
 
-    [15] For this action on environment "local", the active permission profile has no explicit denied-read paths/globs.
+    [15] The active permission profile for environment "local" has no explicit denied-read paths/globs.
 
     [16] >>> PARENT TURN PERMISSION CONTEXT END
 

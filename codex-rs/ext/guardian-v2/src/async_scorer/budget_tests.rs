@@ -196,7 +196,8 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 },
             );
             let progress = thread_store.get::<GuardianV2ScoreProgress>().unwrap();
-            let authorization = ScoreAuthorization::current(&fixture.test.codex).await;
+            let authorization =
+                ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
             seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
             assert_eq!(
                 cached_approval(
@@ -216,6 +217,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         };
         fixture.registry.tool_lifecycle_contributors()[0]
             .on_tool_start(ToolStartInput {
+                permissions: Box::pin(async { Some(Default::default()) }),
                 session_store: &fixture.session_store,
                 thread_store,
                 turn_store: &turn_store,

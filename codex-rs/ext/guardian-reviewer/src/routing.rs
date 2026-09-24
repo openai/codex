@@ -87,7 +87,9 @@ impl<H: ReviewHost> ReviewRequest<'_, H> {
                     "automatic approval review could not prepare the action",
                 ));
             };
+            let permissions = self.host.permissions();
             let input = ApprovalDecisionInput {
+                permissions: permissions.as_ref(),
                 approval_id: self.approval_id,
                 tool_call_id: self.tool_call_id,
                 action,

@@ -242,22 +242,21 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         internal_chat_message_metadata_passthrough: None,
     }];
     for target in [ContextTarget::Sync, ContextTarget::Async] {
-        let context = super::default_registry()
-            .collect(&SectionInput {
-                target,
-                history: &history,
-                transcript: &transcript,
-                root_conversation: &root,
-                trusted_user_answers: &answers,
-                planned_action: Some(&action),
-                permissions: Some(&permissions),
-                previous_reviews: Some(&reviews),
-                trusted_tool: Some(&tool),
-                trusted_skill_paths: &["debug-secret/SKILL.md".into()],
-                images: None,
-                node_repl: Some(&repl),
-            })
-            .unwrap();
+        let input = SectionInput {
+            target,
+            history: &history,
+            transcript: &transcript,
+            root_conversation: &root,
+            trusted_user_answers: &answers,
+            planned_action: Some(&action),
+            permissions: Some(&permissions),
+            previous_reviews: Some(&reviews),
+            trusted_tool: Some(&tool),
+            trusted_skill_paths: &["debug-secret/SKILL.md".into()],
+            images: None,
+            node_repl: Some(&repl),
+        };
+        let context = super::default_registry().collect(&input).unwrap();
         assert!(!format!("{context:?}").contains("debug-secret"));
         let mut expected = vec![ContextSection::RootConversation {
             items: vec![
@@ -288,12 +287,12 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                     text_elements: Vec::new(),
                 }],
             }));
-            expected.push(ContextSection::PermissionContext { items: vec![
+        }
+        expected.push(ContextSection::PermissionContext { items: vec![
                 "\n>>> PARENT TURN PERMISSION CONTEXT START\n".into(),
                 "The parent turn's active permission profile denies reading these paths/globs. These are policy restrictions; do not approve escalation whose purpose is to read them.\n- path `/private`\n- glob `**/*.key`\n".into(),
                 ">>> PARENT TURN PERMISSION CONTEXT END\n".into(),
             ] });
-        }
         if target == ContextTarget::Async {
             expected.insert(
                 0,
@@ -306,6 +305,21 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
         }
         expected.push(ContextSection::PlannedAction(action.clone()));
         assert_eq!(context, expected);
+        if target == ContextTarget::Async {
+            let oversized = super::PermissionContext {
+                denied_paths: vec!["x".repeat(/*n*/ 3_001)],
+                ..Default::default()
+            };
+            assert_eq!(
+                super::default_registry().collect(&SectionInput {
+                    permissions: Some(&oversized),
+                    ..input
+                }),
+                Err(SectionError::EvidenceLimitExceeded {
+                    section: "permissions"
+                })
+            );
+        }
         assert_eq!(
             super::default_registry()
                 .collect(&SectionInput {

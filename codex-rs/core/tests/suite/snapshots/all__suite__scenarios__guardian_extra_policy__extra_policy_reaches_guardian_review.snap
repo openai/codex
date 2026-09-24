@@ -154,7 +154,7 @@ Settings: relative to window 1
     [12]
         >>> PARENT TURN PERMISSION CONTEXT START
 
-    [13] For this action on environment "<ENVIRONMENT>", the active permission profile has no explicit denied-read paths/globs.
+    [13] The active permission profile for environment "<ENVIRONMENT>" has no explicit denied-read paths/globs.
 
     [14] >>> PARENT TURN PERMISSION CONTEXT END
 

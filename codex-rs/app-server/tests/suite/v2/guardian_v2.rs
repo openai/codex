@@ -1207,9 +1207,16 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             assert!(history_texts.contains(&">>> TRANSCRIPT START\n"));
             assert!(history_texts.iter().any(|text| text.contains(USER_CONTEXT)));
             assert!(history_texts.iter().any(|text| text.contains("guardian-0")));
+            assert!(history_texts.windows(2).any(|texts| {
+                texts
+                    == [
+                        ">>> TRANSCRIPT END\n\n",
+                        "\n>>> PARENT TURN PERMISSION CONTEXT START\n",
+                    ]
+            }));
             assert_eq!(
                 history_texts.last().copied(),
-                Some(">>> TRANSCRIPT END\n\n")
+                Some(">>> PARENT TURN PERMISSION CONTEXT END\n")
             );
             assert!(history.iter().all(|item| item["type"] == "input_text"));
 

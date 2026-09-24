@@ -125,8 +125,8 @@ guardian_extra_policy = "Draft reminders without sending them."
             "\"environment_id\": \"<ENVIRONMENT>\"",
         )
         .replace(
-            &format!("For this action on environment {environment_id:?},"),
-            "For this action on environment \"<ENVIRONMENT>\",",
+            &format!("The active permission profile for environment {environment_id:?}"),
+            "The active permission profile for environment \"<ENVIRONMENT>\"",
         );
     for (pattern, replacement) in [
         (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),

@@ -101,6 +101,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
 
     let transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -128,6 +129,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
     let answers = ["assistant: Publish?\nuser: No.\n".to_string()];
     let context = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &root,
@@ -172,6 +174,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
 
     let transcript = output_and_reasoning
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -200,6 +203,7 @@ fn transcript_keeps_conversation_and_configured_sources() {
 
     let transcript = calls_only
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -237,6 +241,7 @@ fn transcript_truncates_oversized_assistant_entries_without_splitting_characters
 
     let mut rendered = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -303,6 +308,7 @@ fn transcript_preserves_user_restrictions_before_final_assistant_messages() {
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -343,6 +349,7 @@ fn transcript_preserves_recent_tool_evidence_when_protected_messages_fill_entry_
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -409,6 +416,7 @@ fn transcript_reserves_five_recent_tool_entries_from_protected_messages() {
 
     let transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -465,6 +473,7 @@ fn rejected_commentary_does_not_evict_retained_message_evidence() {
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -506,6 +515,7 @@ fn transcript_evicts_protected_messages_in_cacheable_chunks() {
             }));
             config
                 .build_context(ContextInput {
+                    permissions: None,
                     target: ContextTarget::Async,
                     history: &TestConversationHistory(&items),
                     root_conversation: &[],
@@ -577,6 +587,7 @@ fn transcript_preserves_latest_final_when_reserved_tools_fill_entry_window() {
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -650,6 +661,7 @@ fn transcript_does_not_protect_legacy_inter_agent_instructions() {
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -697,6 +709,7 @@ fn transcript_reserves_separate_budget_for_recent_tool_evidence() {
 
     let transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -759,6 +772,7 @@ fn transcript_reserves_separate_budget_for_recent_tool_evidence() {
     });
     let next_transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -823,6 +837,7 @@ fn transcript_preserves_newest_manual_approval_when_message_budget_overflows() {
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -883,6 +898,7 @@ fn rejected_message_does_not_evict_retained_tool_entries() {
         ..TranscriptConfig::default()
     }
     .build_context(ContextInput {
+        permissions: None,
         target: ContextTarget::Async,
         history: &TestConversationHistory(&items),
         root_conversation: &[],
@@ -928,6 +944,7 @@ fn transcript_evicts_non_user_entries_in_cacheable_chunks() {
         );
         config
             .build_context(ContextInput {
+                permissions: None,
                 target: ContextTarget::Async,
                 history: &TestConversationHistory(&items),
                 root_conversation: &[],
@@ -1001,6 +1018,7 @@ fn transcript_truncates_tool_results_using_standard_budget() {
 
     let transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -1062,6 +1080,7 @@ fn configured_reasoning_counts_against_message_budget() {
             ..TranscriptConfig::default()
         }
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -1151,6 +1170,7 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
 
     let transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],
@@ -1220,6 +1240,7 @@ fn transcript_omits_encrypted_messages_arguments_and_tool_outputs() {
 
     let transcript = TranscriptConfig::default()
         .build_context(ContextInput {
+            permissions: None,
             target: ContextTarget::Async,
             history: &TestConversationHistory(&items),
             root_conversation: &[],

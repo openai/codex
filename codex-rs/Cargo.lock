@@ -3280,6 +3280,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-exec-server-protocol",
  "codex-file-system",
+ "codex-guardian-context",
  "codex-history",
  "codex-mcp",
  "codex-protocol",

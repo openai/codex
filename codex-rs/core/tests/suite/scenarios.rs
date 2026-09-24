@@ -1222,8 +1222,8 @@ async fn guardian_checkpoint_migration_request_history() -> Result<()> {
             "$1\"<ENVIRONMENT>\"",
         ),
         (
-            r#"(For this action on environment )"(?:local|remote)","#,
-            "$1\"<ENVIRONMENT>\",",
+            r#"(The active permission profile for environment )"(?:local|remote)""#,
+            "$1\"<ENVIRONMENT>\"",
         ),
         (r#"(?m)^(\s*"cwd": )"[^"]*""#, "$1\"<CWD>\""),
         (

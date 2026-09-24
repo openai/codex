@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 codex-api = { workspace = true }
 futures = { workspace = true }
+codex-guardian-context = { workspace = true }
 codex-history = { workspace = true }
 codex-config = { workspace = true }
 codex-context-fragments = { workspace = true }

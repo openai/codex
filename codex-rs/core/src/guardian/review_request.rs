@@ -23,6 +23,15 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
     type Prepared = PreparedApproval;
     type Evidence = ApprovalEvidence;
 
+    fn permissions(&self) -> Option<codex_guardian_context::PermissionContext> {
+        let request = self.request.request.as_ref().ok()?;
+        crate::guardian::permissions::for_environment(
+            &self.context,
+            request.target_environment_id(),
+        )
+        .ok()
+    }
+
     async fn servicing_turn(
         &self,
     ) -> Option<(String, Arc<codex_protocol::openai_models::ModelInfo>)> {

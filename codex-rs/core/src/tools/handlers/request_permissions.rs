@@ -22,9 +22,9 @@ use serde::Deserialize;
 pub struct RequestPermissionsHandler;
 
 #[derive(Deserialize)]
-struct RequestPermissionsEnvironmentArgs {
+pub(crate) struct RequestPermissionsEnvironmentArgs {
     #[serde(default, rename = "environment_id", alias = "environmentId")]
-    environment_id: Option<String>,
+    pub(crate) environment_id: Option<String>,
 }
 
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {

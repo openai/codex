@@ -1,4 +1,4 @@
-//! Sync permission evidence formatting. The host resolves the reviewed environment
+//! Shared permission evidence formatting. The host resolves the reviewed environment
 //! and its filesystem policy; this section neither resolves nor relaxes restrictions.
 
 use crate::ContextSection;
@@ -50,9 +50,9 @@ impl ContextualUserFragment for PermissionContext {
             )
             .collect::<Vec<_>>();
         let scope = match &self.environment_id {
-            Some(environment_id) => format!(
-                "For this action on environment {environment_id:?}, the active permission profile"
-            ),
+            Some(environment_id) => {
+                format!("The active permission profile for environment {environment_id:?}")
+            }
             None => "The parent turn's active permission profile".to_string(),
         };
         if entries.is_empty() {
@@ -66,11 +66,14 @@ impl ContextualUserFragment for PermissionContext {
     }
 }
 
+// Keep async permission evidence below one thousand estimated tokens.
+const MAX_ASYNC_PERMISSION_BYTES: usize = 3_000;
+
 pub(crate) struct PermissionContextSection;
 
 impl SectionContributor for PermissionContextSection {
     fn scope(&self) -> SectionScope {
-        SectionScope::SyncOnly
+        SectionScope::Shared
     }
 
     fn contribute(&self, input: &SectionInput<'_>) -> Result<Option<ContextSection>, SectionError> {
@@ -83,9 +86,16 @@ impl SectionContributor for PermissionContextSection {
         {
             return Ok(None);
         }
+        let body = permissions.body();
+        // Async scoring falls back to synchronous review instead of dropping restrictions.
+        if input.target == crate::ContextTarget::Async && body.len() > MAX_ASYNC_PERMISSION_BYTES {
+            return Err(SectionError::EvidenceLimitExceeded {
+                section: "permissions",
+            });
+        }
         let (start, end) = permissions.markers();
         Ok(Some(ContextSection::PermissionContext {
-            items: vec![start.into(), permissions.body(), end.into()],
+            items: vec![start.into(), body, end.into()],
         }))
     }
 }

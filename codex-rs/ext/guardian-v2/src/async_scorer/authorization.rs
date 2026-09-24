@@ -5,6 +5,7 @@ use codex_core::GuardianAuthorizationVersion;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ScoreAuthorization {
+    pub(super) permissions: codex_guardian_context::PermissionContext,
     pub(super) settings: codex_protocol::protocol::ThreadSettingsSnapshot,
     pub(super) environments: Vec<codex_protocol::protocol::TurnEnvironmentSelection>,
     pub(super) local: GuardianAuthorizationVersion,
@@ -13,12 +14,16 @@ pub(super) struct ScoreAuthorization {
 }
 
 impl ScoreAuthorization {
-    pub(super) async fn current(thread: &CodexThread) -> Self {
+    pub(super) async fn current(
+        thread: &CodexThread,
+        permissions: &codex_guardian_context::PermissionContext,
+    ) -> Self {
         let root = thread
             .guardian_root_snapshot()
             .await
             .map(|snapshot| snapshot.authorization_version);
         Self {
+            permissions: permissions.clone(),
             settings: thread.thread_settings_snapshot().await,
             environments: thread
                 .config_snapshot()

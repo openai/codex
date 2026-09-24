@@ -310,7 +310,17 @@ impl GuardianV2Extension {
             None
         };
 
-        let score_authorization = ScoreAuthorization::current(&thread).await;
+        let Some(permissions) = input.permissions.await else {
+            score_progress.fail_closed(sampled_at);
+            record_classification(
+                metrics.as_deref(),
+                classification_started_at.elapsed(),
+                "failure",
+                Some("permission_resolution_error"),
+            );
+            return;
+        };
+        let score_authorization = ScoreAuthorization::current(&thread, &permissions).await;
         let classification = Classification {
             classification_started_at,
             sampler,

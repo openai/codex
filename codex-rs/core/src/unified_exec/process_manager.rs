@@ -1816,6 +1816,16 @@ impl UnifiedExecProcessManager {
         }
     }
 
+    /// Resolves stdin's target from the host-owned terminal, not model-supplied metadata.
+    pub(crate) async fn environment_id_for_process(&self, process_id: i32) -> Option<String> {
+        self.process_store
+            .lock()
+            .await
+            .processes
+            .get(&process_id)
+            .map(|entry| entry.environment_id.clone())
+    }
+
     pub(crate) async fn list_processes(&self) -> Vec<BackgroundTerminalInfo> {
         let store = self.process_store.lock().await;
         let mut entries = store

@@ -33,6 +33,8 @@ pub struct ApprovalDecisionInput<'a> {
     pub approval_id: &'a str,
     /// Host tool invocation being approved, absent for approvals without a tool call.
     pub tool_call_id: Option<&'a str>,
+    /// Host-resolved permission evidence; unavailable evidence cannot authorize cached approval.
+    pub permissions: Option<&'a codex_guardian_context::PermissionContext>,
     pub action: &'a serde_json::Value,
     pub thread_id: ThreadId,
     pub thread_store: &'a ExtensionData,

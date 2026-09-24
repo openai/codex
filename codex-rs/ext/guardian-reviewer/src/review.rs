@@ -29,6 +29,8 @@ pub trait ReviewHost: Send + Sync {
     type Prepared: Send + Sync;
     /// Evidence captured for one completed assessment, never reused by another attempt.
     type Evidence: Send;
+    /// Returns the target's rules, or no evidence when they cannot be resolved.
+    fn permissions(&self) -> Option<codex_guardian_context::PermissionContext>;
     /// Captures the turn currently servicing reviews, which may differ from a yielded cell's origin.
     fn servicing_turn(&self) -> impl Future<Output = Option<(String, Arc<ModelInfo>)>> + Send;
     /// Returns the owning turn and optional target item after validating the action.

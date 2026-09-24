@@ -190,6 +190,7 @@ impl Classification {
                     root_conversation: root_conversation.as_deref().unwrap_or_default(),
                     trusted_user_answers: &trusted_user_inputs,
                     planned_action: Some(&action_section),
+                    permissions: Some(&score_authorization.permissions),
                     previous_reviews: Some(&reviews),
                     trusted_tool: trusted_tool_context.as_ref(),
                     trusted_skill_paths: &trusted_skill_paths,
@@ -302,7 +303,9 @@ impl Classification {
                 ),
                 sampled_at: Some(sampled_at.into()),
             };
-            if score_authorization != ScoreAuthorization::current(&thread).await {
+            if score_authorization
+                != ScoreAuthorization::current(&thread, &score_authorization.permissions).await
+            {
                 return Ok(ClassificationOutcome::Superseded);
             }
             let accepted =

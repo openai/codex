@@ -12,6 +12,7 @@ use codex_protocol::mcp::CallToolResult;
 use codex_tools::ToolName;
 use codex_utils_path_uri::PathUri;
 
+use crate::guardian::tool_permission_context;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ToolCallSource;
@@ -49,6 +50,7 @@ pub(crate) async fn notify_tool_start(
                 originating_item_id: originating_item_id.as_ref(),
                 tool_name: &invocation.tool_name,
                 mcp_tool,
+                permissions: Box::pin(async { tool_permission_context(invocation).await.ok() }),
                 payload: &invocation.payload,
                 conversation_history: Arc::clone(&conversation_history),
                 source: extension_tool_call_source(invocation.source.clone()),

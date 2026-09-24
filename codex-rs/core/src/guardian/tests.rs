@@ -625,6 +625,13 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
         port: 443,
         trigger: None,
     };
+    assert_eq!(
+        super::permissions::for_environment(&context, /*environment_id*/ None)?,
+        super::permissions::for_environment(
+            &context,
+            Some(codex_exec_server::LOCAL_ENVIRONMENT_ID),
+        )?,
+    );
     let requests = [
         network_request("secondary"),
         network_request("windows"),
@@ -674,7 +681,7 @@ async fn approval_permissions_use_the_owning_environment() -> anyhow::Result<()>
         .await?;
         let text = guardian_prompt_text(&prompt.context.into_user_inputs()?);
         assert!(text.contains(&format!(
-            "For this action on environment {environment_id:?}"
+            "The active permission profile for environment {environment_id:?}"
         )));
         if is_windows {
             assert!(
