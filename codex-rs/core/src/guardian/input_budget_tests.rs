@@ -49,7 +49,7 @@ async fn cancelled_startup_does_not_record_unselected_review_evidence() {
         .insert(PendingReviewContext(context));
     session
         .set_session_startup_prewarm(
-            crate::session_startup_prewarm::SessionStartupPrewarmHandle::new(
+            crate::session::startup_prewarm::SessionStartupPrewarmHandle::new(
                 tokio::spawn(std::future::pending()),
                 std::time::Instant::now(),
                 crate::client::WEBSOCKET_CONNECT_TIMEOUT,

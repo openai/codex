@@ -239,6 +239,13 @@ impl CodexThread {
         self.session.services.session_telemetry.clone()
     }
 
+    /// Schedule the same background model warmup used at startup for an idle thread.
+    /// The next turn consumes the warmup through the existing startup handoff.
+    /// Call after installing host services such as the thread's attestation routing.
+    pub async fn prewarm(&self) {
+        self.session.schedule_startup_prewarm().await;
+    }
+
     /// Whether analytics is enabled for this thread after configuration and host overrides.
     pub fn analytics_enabled(&self) -> bool {
         self.session.services.analytics_events_client.is_enabled()
@@ -523,6 +530,17 @@ impl CodexThread {
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
         self.session.inject_if_running(items).await
+    }
+
+    /// Environment selections captured by the active turn, before later settings updates.
+    /// Includes environments that are still starting or have failed. Hosts use this snapshot
+    /// to authorize steering against every executor that the active turn selected.
+    pub async fn active_turn_environment_selections(
+        &self,
+    ) -> Option<Vec<TurnEnvironmentSelection>> {
+        let active = self.session.active_turn.lock().await;
+        let task = active.as_ref()?.task.as_ref()?;
+        Some(task.turn_context.initial_environments.all_selections())
     }
 
     /// Captures a regular turn only after its input is recorded. The caller must flush the rollout.

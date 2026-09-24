@@ -9,7 +9,9 @@ use codex_core::ResponseEvent;
 use codex_core::TurnInputRequest;
 use codex_core::X_CODEX_ROUTING_HINT_HEADER;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
+use codex_core::test_support::EmptyUserInstructionsProvider;
 use codex_core::test_support::with_parent_turn;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
@@ -50,6 +52,7 @@ use codex_rollout_trace::RawTraceEventPayload;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
 use core_test_support::TestCodexResponsesRequestKind;
+use core_test_support::ThreadIdle;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
@@ -60,6 +63,7 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::RecordingUserInstructionsProvider;
 use core_test_support::test_codex::test_codex;
 use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
@@ -603,6 +607,88 @@ async fn responses_websocket_preconnect_reuses_connection_without_replacing_turn
     assert_eq!(turn_metadata["request_kind"], "turn");
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_resume_prewarm_reuses_and_repairs_connection() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server_with_headers(vec![
+        WebSocketConnectionConfig {
+            requests: vec![
+                vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+                vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+                vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+            ],
+            response_headers: Vec::new(),
+            accept_delay: None,
+            close_after_requests: true,
+        },
+        WebSocketConnectionConfig {
+            requests: vec![
+                vec![ev_response_created("warm-2"), ev_completed("warm-2")],
+                vec![ev_response_created("resp-3"), ev_completed("resp-3")],
+            ],
+            response_headers: Vec::new(),
+            accept_delay: Some(Duration::from_millis(100)),
+            close_after_requests: false,
+        },
+    ])
+    .await;
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let instructions = Arc::new(RecordingUserInstructionsProvider::new(Arc::new(
+        EmptyUserInstructionsProvider,
+    )));
+    let test = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
+        .with_user_instructions_provider(instructions.clone())
+        .build_with_websocket_server(&server)
+        .await?;
+    test.submit_text_turn("hello").await?;
+    ThreadIdle::wait(&test.codex).await;
+
+    // A healthy warm resume preserves the response baseline and skips preparation.
+    let instruction_loads = instructions.load_count();
+    test.codex.prewarm().await;
+    test.codex.prewarm().await;
+    test.submit_text_turn("continue").await?;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(instructions.load_count(), instruction_loads + 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 3);
+    assert_eq!(connection[2].body_json()["previous_response_id"], "resp-1");
+
+    // Turn idle does not synchronize with the reader observing the server's close.
+    // Retry resume until it sees the close; pending attempts must still share one socket.
+    ThreadIdle::wait(&test.codex).await;
+    let warmup = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            test.codex.prewarm().await;
+            test.codex.prewarm().await;
+            tokio::select! {
+                request = server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0) => break request,
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    })
+    .await?;
+    assert_eq!(warmup.body_json()["generate"], false);
+    assert!(warmup.body_json().get("previous_response_id").is_none());
+
+    test.submit_text_turn("continue after reconnect").await?;
+    assert_eq!(server.handshakes().len(), 2);
+    let connections = server.connections();
+    assert_eq!(connections[1].len(), 2);
+    assert_eq!(
+        connections[1][1].body_json()["previous_response_id"],
+        "warm-2"
+    );
+
+    test.codex.shutdown_and_wait().await?;
+    server.shutdown().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

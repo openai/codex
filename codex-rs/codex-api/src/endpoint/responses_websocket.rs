@@ -223,7 +223,11 @@ impl ResponsesWebsocketConnection {
     }
 
     pub async fn is_closed(&self) -> bool {
-        self.stream.lock().await.is_none()
+        self.stream
+            .lock()
+            .await
+            .as_ref()
+            .is_none_or(|stream| stream.pump_task.is_finished())
     }
 
     #[instrument(

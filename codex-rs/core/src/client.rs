@@ -100,6 +100,7 @@ use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
+use futures::FutureExt;
 use futures::StreamExt;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
@@ -417,6 +418,17 @@ fn is_internal_metadata_destination(provider: &ApiProvider) -> bool {
 }
 
 impl WebsocketSession {
+    /// A nonblocking resume check. A busy stream is already in use, so resume
+    /// leaves it alone. The next request still validates provider, auth, and headers.
+    fn is_prewarmed(&self, auth_owner_generation: Option<u64>) -> bool {
+        self.auth_owner_generation == auth_owner_generation
+            && self.last_request.is_some()
+            && self
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.is_closed().now_or_never() != Some(true))
+    }
+
     fn reset(&mut self, reason: Option<&'static str>) {
         // Per-socket backend metrics call a resend after reconnect "initial".
         // Retain the loss reason across reconnects/turns until the next send.
@@ -616,6 +628,15 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.provider.auth_manager()
+    }
+
+    pub(crate) fn is_websocket_prewarmed(&self) -> bool {
+        let auth_owner_generation = self.auth_owner_generation();
+        self.state
+            .cached_websocket_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_prewarmed(auth_owner_generation)
     }
 
     fn auth_owner_generation(&self) -> Option<u64> {
@@ -1340,6 +1361,11 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn is_websocket_prewarmed(&self) -> bool {
+        self.websocket_session
+            .is_prewarmed(self.client.auth_owner_generation())
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///
@@ -2126,7 +2152,12 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
-        if self.websocket_session.last_request.is_some() {
+        // A previous request only makes prewarm unnecessary while its socket is
+        // still alive. Reconnecting below resets the old continuation normally.
+        if self.websocket_session.last_request.is_some()
+            && let Some(connection) = self.websocket_session.connection.as_ref()
+            && !connection.is_closed().await
+        {
             return Ok(());
         }
 
