@@ -2578,6 +2578,7 @@ dependencies = [
  "rand 0.9.3",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -3338,7 +3339,6 @@ name = "codex-features"
 version = "0.0.0"
 dependencies = [
  "codex-network-proxy",
- "codex-otel",
  "codex-protocol",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -3989,7 +3989,7 @@ dependencies = [
 name = "codex-model-provider-info"
 version = "0.0.0"
 dependencies = [
- "codex-api",
+ "codex-client",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-redacted-string",
@@ -4956,6 +4956,7 @@ dependencies = [
  "divan",
  "image",
  "mime_guess",
+ "png",
  "thiserror 2.0.18",
  "tokio",
 ]

@@ -3,7 +3,6 @@
 //! This crate defines the feature registry plus the logic used to resolve an
 //! effective feature set from config-like inputs.
 
-use codex_otel::SessionTelemetry;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -560,24 +559,6 @@ impl Features {
 
     pub fn legacy_feature_usages(&self) -> impl Iterator<Item = &LegacyFeatureUsage> + '_ {
         self.legacy_usages.iter()
-    }
-
-    pub fn emit_metrics(&self, otel: &SessionTelemetry) {
-        for feature in FEATURES {
-            if matches!(feature.stage, Stage::Removed) {
-                continue;
-            }
-            if self.enabled(feature.id) != feature.default_enabled {
-                otel.counter(
-                    "codex.feature.state",
-                    /*inc*/ 1,
-                    &[
-                        ("feature", feature.key),
-                        ("value", &self.enabled(feature.id).to_string()),
-                    ],
-                );
-            }
-        }
     }
 
     /// Apply a table of key -> bool toggles (e.g. from TOML).

@@ -12,6 +12,7 @@ http = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
 tracing = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

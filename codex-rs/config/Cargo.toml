@@ -42,7 +42,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs"] }
 toml = { workspace = true, features = ["preserve_order"] }
 toml_edit = { workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["tls-native-roots", "tls-ring"] }
 tonic-prost = { workspace = true }
 tracing = { workspace = true }
 wildmatch = { workspace = true }
