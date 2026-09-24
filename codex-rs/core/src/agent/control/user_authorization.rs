@@ -34,7 +34,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::MultiAgentVersion;
 
-const MAX_ROOT_MESSAGES: usize = 8;
+const MAX_ROOT_MESSAGES: usize = 16;
 
 impl LocalAgentControl {
     /// Returns bounded root conversation and authorization state for a MultiAgent V2 worker.

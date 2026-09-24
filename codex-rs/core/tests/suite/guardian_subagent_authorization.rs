@@ -393,7 +393,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         ]),
     )
     .await;
-    let mut question_events = (0..8)
+    let mut question_events = (0..16)
         .map(|index| {
             ev_assistant_message(
                 &format!("deployment-update-{index}"),
@@ -522,8 +522,8 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         );
     }
     if matches!(root_context, RootContext::RetainedAtMessageLimit) {
-        // Eight retained instructions plus the later answer exceed the root projection cap.
-        root_history_items.extend((0..6).map(|index| ResponseItem::Message {
+        // Sixteen user instructions plus the later answer exceed the root projection cap.
+        root_history_items.extend((0..14).map(|index| ResponseItem::Message {
             id: Some(ResponseItemId::with_suffix("root-instruction", index)),
             role: "user".to_owned(),
             content: vec![ContentItem::InputText {
@@ -705,6 +705,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
         RootContext::RetainedAtMessageLimit => {
             let mut messages = vec![
                 GuardianRootMessage::RetainedContextScope,
+                GuardianRootMessage::IncompleteRootInstructions,
                 GuardianRootMessage::IncompleteAssistantContext,
             ];
             messages.push(GuardianRootMessage::User(
@@ -714,7 +715,8 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 ),
             ));
             messages.extend(
-                (1..6).map(|index| GuardianRootMessage::User(format!("Root instruction {index}."))),
+                (1..14)
+                    .map(|index| GuardianRootMessage::User(format!("Root instruction {index}."))),
             );
             messages.push(GuardianRootMessage::User(USER_APPROVAL.to_owned()));
             messages.extend(answer_message);
@@ -737,7 +739,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 }
                 RootAnswer::Oversized => 4,
             };
-            messages.extend((first_assistant..8).map(|index| {
+            messages.extend((first_assistant..16).map(|index| {
                 GuardianRootMessage::Assistant(format!("Deployment inspection update {index}."))
             }));
             if question_delivered {
@@ -770,7 +772,11 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
             snapshot.messages,
             snapshot.authorization_version.retained_context_complete
         ),
-        (root_thread_id, expected_messages.clone(), evidence_complete),
+        (
+            root_thread_id,
+            expected_messages.clone(),
+            evidence_complete && !matches!(root_context, RootContext::RetainedAtMessageLimit),
+        ),
     );
 
     let worker_request = worker_review_request.single_request();
@@ -784,7 +790,10 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     if matches!(root_context, RootContext::RetainedAtMessageLimit) {
         assert!(guardian_transcript.contains("<truncated omitted_approx_tokens="));
     }
-    assert!(!guardian_transcript.contains("some root user instructions are unavailable"));
+    assert_eq!(
+        guardian_transcript.contains("some root user instructions are unavailable"),
+        matches!(root_context, RootContext::RetainedAtMessageLimit),
+    );
     assert!(guardian_transcript.contains(">>> ROOT CONVERSATION START"));
     assert!(guardian_transcript.contains("only user messages can authorize actions"));
     assert!(
@@ -1238,7 +1247,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     ) {
         // Later progress evicts the question from retained storage. Its raw source must
         // still beat newer progress when selecting the context for the ordinary reply.
-        let progress = (0..8)
+        let progress = (0..16)
             .map(|index| {
                 let mut event = ev_assistant_message(
                     &format!("post-approval-progress-{index}"),
@@ -1260,7 +1269,7 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
                 "assistant: {ROOT_QUESTION}\nuser: {ROOT_ANSWER}\n"
             )),
         ];
-        expected.extend((5..8).map(|index| {
+        expected.extend((5..16).map(|index| {
             GuardianRootMessage::Assistant(format!("Preparing deployment step {index}."))
         }));
         assert_eq!(
