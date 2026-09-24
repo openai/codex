@@ -219,9 +219,12 @@ async fn owner_cancellation_closes_agent_and_preserves_history_and_parent() -> a
         fixture.thread_store.flush_thread(agent.thread_id).await,
         Err(ThreadStoreError::ThreadNotFound { .. })
     ));
-    let history = agent
-        .thread
-        .load_history(/*include_archived*/ false)
+    let history = fixture
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id: agent.thread_id,
+            include_archived: false,
+        })
         .await?;
     assert!(history.items.iter().any(|item| matches!(
         item,

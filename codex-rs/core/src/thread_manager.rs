@@ -212,7 +212,7 @@ struct ForkHistory {
     persistence: ForkPersistence,
 }
 
-/// Preserve legacy `fork_thread(usize, ...)` callsites by mapping them to the
+/// Preserve legacy `fork_legacy_thread(usize, ...)` callsites by mapping them to the
 /// existing truncate-before-nth-user-message snapshot mode.
 impl From<usize> for ForkSnapshot {
     fn from(value: usize) -> Self {
@@ -1155,8 +1155,11 @@ impl ThreadManager {
     }
 
     // TODO(jif) merge with fork_agent
-    /// Spawn a subagent by forking persisted history from `forked_from_thread_id`.
-    pub async fn spawn_subagent(
+    /// Spawn a subagent from a legacy thread's full persisted history.
+    ///
+    /// Paginated sources are rejected. For paginated thread forks, use
+    /// [`ThreadStore::prepare_fork`] and [`Self::fork_prepared_thread`].
+    pub async fn spawn_legacy_subagent(
         &self,
         forked_from_thread_id: ThreadId,
         mut options: StartThreadOptions,
@@ -1191,7 +1194,12 @@ impl ThreadManager {
             .await
     }
 
-    pub async fn resume_thread_from_rollout(
+    /// Resume a legacy thread by reading its full rollout history.
+    ///
+    /// Paginated sources are rejected. Load their context with
+    /// [`ThreadStore::load_latest_model_context`] and pass it to
+    /// [`Self::resume_thread_with_history`] instead.
+    pub async fn resume_legacy_thread_from_rollout(
         &self,
         config: Config,
         rollout_path: PathBuf,
@@ -1199,7 +1207,9 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
-        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
+        let initial_history = self
+            .legacy_initial_history_from_rollout_path(rollout_path)
+            .await?;
         Box::pin(self.resume_thread_with_history(
             config,
             initial_history,
@@ -1290,7 +1300,7 @@ impl ThreadManager {
         Box::pin(self.state.spawn_thread(request)).await
     }
 
-    pub(crate) async fn resume_thread_from_rollout_with_user_shell_override_for_tests(
+    pub(crate) async fn resume_legacy_thread_from_rollout_with_user_shell_override_for_tests(
         &self,
         config: Config,
         rollout_path: PathBuf,
@@ -1299,7 +1309,9 @@ impl ThreadManager {
         client_mcp_extensions: ClientMcpExtensions,
     ) -> CodexResult<NewThread> {
         let agent_control = self.agent_control_for_config(&config);
-        let initial_history = self.initial_history_from_rollout_path(rollout_path).await?;
+        let initial_history = self
+            .legacy_initial_history_from_rollout_path(rollout_path)
+            .await?;
         let (session_source, thread_source) = initial_history
             .get_resumed_session_sources()
             .unwrap_or_else(|| (self.state.session_source.clone(), None));
@@ -1411,12 +1423,15 @@ impl ThreadManager {
         report
     }
 
-    /// Fork an existing thread by snapshotting rollout history according to
+    /// Fork a legacy thread by snapshotting its full rollout history according to
     /// `snapshot` and starting a new thread with identical configuration
     /// (unless overridden by the caller's options). The new thread has a fresh id.
     /// Fork history replaces `options.initial_history`; hosts can supply the new
     /// task's instruction provider through the same options as thread creation.
-    pub async fn fork_thread<S>(
+    ///
+    /// Paginated sources are rejected. Use [`ThreadStore::prepare_fork`] and
+    /// [`Self::fork_prepared_thread`] for paginated thread forks.
+    pub async fn fork_legacy_thread<S>(
         &self,
         snapshot: S,
         options: StartThreadOptions,
@@ -1426,12 +1441,12 @@ impl ThreadManager {
         S: Into<ForkSnapshot>,
     {
         let snapshot = snapshot.into();
-        let history = self.initial_history_from_rollout_path(path).await?;
+        let history = self.legacy_initial_history_from_rollout_path(path).await?;
         self.fork_thread_from_history(snapshot, options, history)
             .await
     }
 
-    async fn initial_history_from_rollout_path(
+    async fn legacy_initial_history_from_rollout_path(
         &self,
         rollout_path: PathBuf,
     ) -> CodexResult<InitialHistory> {

@@ -1126,7 +1126,7 @@ async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
         thread.ephemeral,
         "ephemeral threads should be marked explicitly"
     );
-    assert_eq!(thread.history_mode, ThreadHistoryMode::Legacy);
+    assert_eq!(thread.history_mode, ThreadHistoryMode::Paginated);
     assert_eq!(
         thread.path, None,
         "ephemeral threads should not expose a path"

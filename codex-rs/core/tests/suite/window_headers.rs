@@ -67,7 +67,7 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork(
 
     let forked = resumed
         .thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             /*snapshot*/ 0usize,
             codex_core::StartThreadOptions::new(resumed.config.clone()),
             rollout_path,

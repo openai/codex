@@ -263,9 +263,12 @@ async fn host_threads_preserve_lineage_settings_and_resume_routing() -> anyhow::
     assert_eq!(controller.service_tier(), Some("priority".to_string()));
     child.thread.ensure_rollout_materialized().await;
     child.thread.flush_rollout().await?;
-    let saved = child
-        .thread
-        .load_history(/*include_archived*/ false)
+    let saved = test
+        .thread_store
+        .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+            thread_id: child.thread_id,
+            include_archived: false,
+        })
         .await?;
     assert!(saved.items.iter().any(|item| matches!(item,
         RolloutItem::SessionMeta(meta) if meta.meta.parent_thread_id == Some(root_id)

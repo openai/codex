@@ -1099,6 +1099,9 @@ async fn opted_in_executor_provider_skips_host_discovery_but_injects_discovered_
     let executor_thread = test
         .thread_manager
         .start_thread(StartThreadOptions {
+            // Keep the trace fixture's legacy mode: paginated SQLite workers can close
+            // spans through a different subscriber than this test's scoped collector.
+            history_mode: Some(codex_protocol::protocol::ThreadHistoryMode::Legacy),
             environments: Some(vec![environment.clone()]),
             thread_extension_init,
             ..StartThreadOptions::new(executor_config)

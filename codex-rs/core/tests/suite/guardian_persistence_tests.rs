@@ -22,6 +22,7 @@ use codex_thread_store::PersistContext;
 use codex_thread_store::ReadThreadByRolloutPathParams;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
+use codex_thread_store::StoredModelContext;
 use codex_thread_store::StoredThread;
 use codex_thread_store::StoredThreadHistory;
 use codex_thread_store::ThreadPage;
@@ -42,7 +43,7 @@ use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 struct PendingSave {
-    history: StoredThreadHistory,
+    history: StoredModelContext,
     complete: oneshot::Sender<()>,
 }
 
@@ -107,7 +108,7 @@ impl ThreadStore for GatedReviewerStore {
         Box::pin(async move {
             let is_reviewer = self.reviewer.lock().await.thread_id == Some(thread_id);
             let pending = if is_reviewer {
-                let history = ThreadStore::load_history(
+                let history = ThreadStore::load_latest_model_context(
                     &self.inner,
                     LoadThreadHistoryParams {
                         thread_id,
@@ -192,6 +193,13 @@ async fn guardian_saves_each_completed_review_before_releasing_its_action() -> a
         let pending = timeout(Duration::from_secs(10), pending_saves.recv())
             .await?
             .expect("review save");
+        assert_eq!(
+            pending.history.items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta) => Some(meta.meta.history_mode),
+                _ => None,
+            }),
+            Some(ThreadHistoryMode::Paginated)
+        );
         assert_eq!(
             *reviewer_id.get_or_insert(pending.history.thread_id),
             pending.history.thread_id

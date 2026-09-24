@@ -328,6 +328,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
     let started = test
         .thread_manager
         .start_thread(StartThreadOptions {
+            history_mode: Some(ThreadHistoryMode::Legacy),
             dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
                 name: "diagnostics".to_string(),
                 description: "Returns diagnostic text and a screenshot.".to_string(),
@@ -574,7 +575,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
         replay_config.model = Some(model.to_string());
         let resumed = test
             .thread_manager
-            .resume_thread_from_rollout(
+            .resume_legacy_thread_from_rollout(
                 replay_config.clone(),
                 rollout_path.clone(),
                 codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
@@ -585,7 +586,7 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
             .thread;
         let forked = test
             .thread_manager
-            .fork_thread(
+            .fork_legacy_thread(
                 ForkSnapshot::Interrupted,
                 StartThreadOptions::new(replay_config),
                 rollout_path.clone(),
@@ -707,7 +708,7 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
     replay_config.model = Some(MODEL_A.to_string());
     let resumed = test
         .thread_manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             replay_config.clone(),
             rollout_path.clone(),
             codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
@@ -718,7 +719,7 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
         .thread;
     let forked = test
         .thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::Interrupted,
             StartThreadOptions::new(replay_config),
             rollout_path,

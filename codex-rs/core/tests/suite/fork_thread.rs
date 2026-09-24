@@ -133,7 +133,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork1,
         ..
     } = thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(1),
             codex_core::StartThreadOptions::new(config_for_fork.clone()),
             base_path.clone(),
@@ -160,7 +160,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork2,
         ..
     } = thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
             codex_core::StartThreadOptions::new(config_for_fork.clone()),
             fork1_path.clone(),

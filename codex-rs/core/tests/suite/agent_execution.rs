@@ -249,7 +249,13 @@ async fn child_turn_start_preserves_root_attribution() -> Result<()> {
             wait_for_event(&thread, |event| matches!(event, EventMsg::TurnComplete(_))).await;
         }
         thread.flush_rollout().await?;
-        let history = thread.load_history(/*include_archived*/ false).await?;
+        let history = test
+            .thread_store
+            .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+                thread_id,
+                include_archived: false,
+            })
+            .await?;
         for item in history.items {
             if let codex_history::RolloutItem::EventMsg(EventMsg::TurnStarted(event)) = item {
                 starts.push((thread_id, event));

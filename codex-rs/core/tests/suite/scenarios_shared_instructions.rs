@@ -72,7 +72,7 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
     let root_response = mount_sse_once(&server, responses::sse_completed("root-step")).await;
     submit_thread_turn(&root.thread, "persist the root before it unloads").await?;
     root_response.single_request();
-    let (_, history) = persisted_resume_history(&root.thread).await?;
+    let (_, history) = persisted_resume_history(&root.thread, test.thread_store.as_ref()).await?;
     root.thread.shutdown_and_wait().await?;
     assert!(
         test.thread_manager

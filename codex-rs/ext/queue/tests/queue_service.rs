@@ -690,7 +690,7 @@ async fn externally_changed_queues_dispatch_independently_and_retry_failed_wakes
     advance_queue_poll().await;
     let resumed = test
         .thread_manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             test.config.clone(),
             rollout_path,
             test.thread_manager.auth_manager(),

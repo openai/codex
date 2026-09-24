@@ -1810,7 +1810,7 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             (
                 r#"{"subagent":{"other":"guardian"}}"#,
                 "Guardian review",
-                None,
+                Some("Guardian review"),
                 Some("Approval review"),
                 None
             ),

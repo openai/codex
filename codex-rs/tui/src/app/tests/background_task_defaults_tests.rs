@@ -577,6 +577,9 @@ async fn command_center_new_preserves_only_selected_server_profiles() -> Result<
     app.app_server_target = AppServerTarget::Remote {
         endpoint: crate::resolve_remote_addr("ws://127.0.0.1:8765")?,
     };
+    let state_db =
+        crate::init_state_db_for_app_server_target(&server_config, &AppServerTarget::Embedded)
+            .await?;
     let client = crate::start_embedded_app_server(
         codex_arg0::Arg0DispatchPaths::default(),
         server_config,
@@ -586,7 +589,7 @@ async fn command_center_new_preserves_only_selected_server_profiles() -> Result<
         CloudConfigBundleLoader::default(),
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
-        /*state_db*/ None,
+        state_db,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         Default::default(),
     )

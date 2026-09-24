@@ -348,7 +348,12 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown(
             metadata.preview.as_deref(),
             metadata.first_user_message.as_deref(),
         ),
-        ("Guardian review", None, Some("Approval review"), None),
+        (
+            "Guardian review",
+            Some("Guardian review"),
+            Some("Approval review"),
+            None
+        ),
     );
     // Saved reviewers remain discoverable through the existing subagent filters.
     for kind in [ThreadSourceKind::SubAgent, ThreadSourceKind::SubAgentOther] {

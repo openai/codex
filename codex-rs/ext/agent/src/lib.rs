@@ -30,7 +30,7 @@ pub struct AgentRun {
     pub thread: Arc<CodexThread>,
 }
 
-/// Runs resolved agents in threads forked by the owning [`ThreadManager`].
+/// Runs resolved agents in legacy threads forked by the owning [`ThreadManager`].
 #[derive(Clone)]
 pub struct AgentRunner {
     thread_manager: Weak<ThreadManager>,
@@ -41,7 +41,9 @@ impl AgentRunner {
         Self { thread_manager }
     }
 
-    /// Starts a resolved agent in a fork of `parent_thread_id`.
+    /// Starts a resolved agent in a fork of a legacy `parent_thread_id`.
+    ///
+    /// Paginated parents are rejected by [`ThreadManager::spawn_legacy_subagent`].
     pub async fn start(
         &self,
         parent_thread_id: ThreadId,
@@ -65,7 +67,7 @@ impl AgentRunner {
         let NewThread {
             thread_id, thread, ..
         } = thread_manager
-            .spawn_subagent(
+            .spawn_legacy_subagent(
                 parent_thread_id,
                 StartThreadOptions {
                     parent_trace: parent_trace.clone(),

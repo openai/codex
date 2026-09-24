@@ -266,7 +266,7 @@ async fn first_turn_after_empty_prefix_fork_preserves_inherited_base_instruction
     fork_config.base_instructions = None;
     let fork = test
         .thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::TruncateBeforeNthUserMessage(0),
             codex_core::StartThreadOptions::new(fork_config),
             source_rollout_path,
@@ -987,7 +987,7 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
         MediaHistorySource::Live => Arc::clone(&test.codex),
         MediaHistorySource::Resume => {
             test.thread_manager
-                .resume_thread_from_rollout(
+                .resume_legacy_thread_from_rollout(
                     test.config.clone(),
                     rollout_path,
                     test.thread_manager.auth_manager(),
@@ -999,7 +999,7 @@ async fn model_change_projects_media_without_changing_live_or_replayed_history(
         }
         MediaHistorySource::Fork => {
             test.thread_manager
-                .fork_thread(
+                .fork_legacy_thread(
                     ForkSnapshot::Interrupted,
                     codex_core::StartThreadOptions::new(test.config.clone()),
                     rollout_path,

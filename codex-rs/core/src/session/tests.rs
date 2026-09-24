@@ -3908,7 +3908,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         codex_config::Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             usize::MAX,
             core_test_support::test_codex::StartThreadOptions::new(fork_config.clone()),
             rollout_path,

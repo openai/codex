@@ -1,12 +1,16 @@
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_history::InitialHistory;
+use codex_history::ResumedHistory;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::LoadThreadHistoryParams;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_reasoning_item;
@@ -20,6 +24,74 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
+
+#[test_case::test_case(None, ThreadHistoryMode::Paginated; "store default")]
+#[test_case::test_case(Some(ThreadHistoryMode::Legacy), ThreadHistoryMode::Legacy; "explicit legacy")]
+#[test_case::test_case(Some(ThreadHistoryMode::Paginated), ThreadHistoryMode::Paginated; "explicit paginated")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_thread_history_mode_survives_restart(
+    requested: Option<ThreadHistoryMode>,
+    expected: ThreadHistoryMode,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_history_mode(requested);
+    let initial = builder.build_with_auto_env(&server).await?;
+    assert_eq!(initial.codex.config_snapshot().await.history_mode, expected);
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("seed", "Remembered answer"),
+            ev_completed("seed"),
+        ]),
+    )
+    .await;
+    initial.submit_text_turn("Remember this task").await?;
+
+    initial.codex.shutdown_and_wait().await?;
+    let history = initial
+        .thread_store
+        .load_latest_model_context(LoadThreadHistoryParams {
+            thread_id: initial.session_configured.thread_id,
+            include_archived: true,
+        })
+        .await?;
+    let resumed = initial
+        .thread_manager
+        .resume_thread_with_history(
+            initial.config.clone(),
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: history.thread_id,
+                history: Arc::new(history.items),
+                rollout_path: initial.session_configured.rollout_path.clone(),
+            }),
+            initial.thread_manager.auth_manager(),
+            /*parent_trace*/ None,
+            ClientMcpExtensions::default(),
+        )
+        .await?;
+    assert_eq!(
+        resumed.thread.config_snapshot().await.history_mode,
+        expected
+    );
+    let response = mount_sse_once(&server, sse(vec![ev_completed("followup")])).await;
+    resumed
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Continue".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&resumed.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let request = response.single_request();
+    assert!(request.body_contains_text("Remember this task"));
+    assert!(request.body_contains_text("Remembered answer"));
+    resumed.thread.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_restores_windows_sandbox_override() -> Result<()> {
@@ -111,7 +183,7 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
     resumed.codex.flush_rollout().await?;
     let mut rejoined = resumed
         .thread_manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             resumed.config.clone(),
             resumed.codex.rollout_path().expect("resumed rollout path"),
             resumed.thread_manager.auth_manager(),

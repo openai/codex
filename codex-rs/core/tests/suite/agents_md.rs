@@ -266,12 +266,13 @@ pub(super) async fn submit_thread_turn(
 
 pub(super) async fn persisted_resume_history(
     thread: &Arc<codex_core::CodexThread>,
+    store: &dyn codex_thread_store::ThreadStore,
 ) -> Result<(ThreadId, InitialHistory)> {
     thread.ensure_rollout_materialized().await;
     thread.flush_rollout().await?;
     let stored = thread
         .read_thread(
-            /*include_archived*/ true, /*include_history*/ true,
+            /*include_archived*/ true, /*include_history*/ false,
         )
         .await?;
     let thread_id = stored.thread_id;
@@ -280,9 +281,12 @@ pub(super) async fn persisted_resume_history(
         InitialHistory::Resumed(ResumedHistory {
             conversation_id: thread_id,
             history: Arc::new(
-                stored
-                    .history
-                    .ok_or_else(|| anyhow!("thread history should be loaded"))?
+                store
+                    .load_latest_model_context(codex_thread_store::LoadThreadHistoryParams {
+                        thread_id,
+                        include_archived: true,
+                    })
+                    .await?
                     .items,
             ),
             rollout_path: stored.rollout_path,
@@ -1564,7 +1568,7 @@ async fn fork_preserves_thread_instructions(
     let fork = match source {
         InstructionForkSource::LiveRollout => {
             test.thread_manager
-                .fork_thread(ForkSnapshot::Interrupted, options, rollout_path)
+                .fork_legacy_thread(ForkSnapshot::Interrupted, options, rollout_path)
                 .await?
         }
         InstructionForkSource::OfflineHistory => {
@@ -1654,7 +1658,8 @@ async fn thread_provider_lives_with_its_session_across_resume() -> Result<()> {
         })
         .await?;
     assert_eq!(provider.load_count(), 1);
-    let (_, history) = persisted_resume_history(&started.thread).await?;
+    let (_, history) =
+        persisted_resume_history(&started.thread, test.thread_store.as_ref()).await?;
     let cold_provider = Arc::new(RecordingThreadInstructionsProvider::with_text(
         "cold session instructions",
     ));
@@ -1688,7 +1693,8 @@ async fn thread_provider_lives_with_its_session_across_resume() -> Result<()> {
     submit_thread_turn(&started.thread, "load instructions added after creation").await?;
     assert_eq!(provider.load_count(), 2);
     assert_eq!(same_provider.load_count(), 0);
-    let (_, history) = persisted_resume_history(&started.thread).await?;
+    let (_, history) =
+        persisted_resume_history(&started.thread, test.thread_store.as_ref()).await?;
     started.thread.shutdown_and_wait().await?;
     let resumed = test
         .thread_manager
@@ -2324,7 +2330,7 @@ async fn fork_injects_changed_agents_md_once() -> Result<()> {
         .expect("test config should allow ContentItemKinds override");
     let forked = parent
         .thread_manager
-        .fork_thread(
+        .fork_legacy_thread(
             ForkSnapshot::Interrupted,
             codex_core::StartThreadOptions::new(fork_config),
             rollout_path,
