@@ -2,7 +2,7 @@
 //!
 //! This gives direct-spawn callers an argv-shaped Windows sandbox launcher,
 //! analogous to the macOS seatbelt and Linux sandbox wrapper paths. The wrapper
-//! parses sandbox metadata from argv, launches the requested inner command in a
+//! parses sandbox metadata from argv or a launch environment, launches the inner command in a
 //! Windows sandbox session, and forwards stdio to that inner command.
 
 use std::collections::HashMap;
@@ -53,7 +53,7 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     command: Vec<String>,
     command_cwd: &AbsolutePathBuf,
     workspace_roots: &[AbsolutePathBuf],
-    env_map: &HashMap<String, String>,
+    env_map: &mut HashMap<String, String>,
     permission_profile: &PermissionProfile,
     windows_sandbox_level: WindowsSandboxLevel,
     proxy_enforced: bool,
@@ -66,6 +66,8 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     deny_write_paths_override: &[AbsolutePathBuf],
     codex_home: &Path,
 ) -> Result<Vec<String>> {
+    // Launcher-only variables must not enter the serialized workload environment.
+    env_map.retain(|key, _| !crate::environment_transport::is_key(key.as_ref()));
     let permission_profile_json = serde_json::to_string(permission_profile)
         .unwrap_or_else(|err| panic!("failed to serialize permission profile: {err}"));
     let env_json = serde_json::to_string(env_map)
@@ -241,6 +243,14 @@ pub fn create_windows_sandbox_command_args_for_permission_profile(
     }
     args.push("--".to_string());
     args.extend(command);
+    let payload = serde_json::to_string(&args[1..])?;
+    if crate::launch_environment::needs_environment(&payload) {
+        crate::environment_transport::encode(&payload, env_map)?;
+        return Ok(vec![
+            CODEX_WINDOWS_SANDBOX_ARG1.to_string(),
+            crate::launch_environment::ARG.to_string(),
+        ]);
+    }
     Ok(args)
 }
 
@@ -275,6 +285,12 @@ pub fn run_windows_sandbox_wrapper_main() -> ! {
 }
 
 async fn run_windows_sandbox_wrapper_args(args: Vec<String>) -> Result<i32> {
+    let args = if args == [crate::launch_environment::ARG] {
+        serde_json::from_str(&crate::environment_transport::decode(std::env::vars_os())?)
+            .context("failed to parse Windows sandbox launch arguments")?
+    } else {
+        args
+    };
     let request = parse_windows_sandbox_wrapper_args(args)?;
     run_windows_sandbox_wrapper_request(request).await
 }

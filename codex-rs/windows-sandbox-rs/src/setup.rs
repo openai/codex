@@ -387,8 +387,8 @@ fn run_setup_refresh_payload(b64: &str, codex_home: &Path) -> Result<()> {
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
-    cmd.arg(b64)
-        .stdin(Stdio::null())
+    crate::launch_environment::configure_command(&mut cmd, b64)?;
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| codex_home.to_path_buf());
@@ -977,17 +977,16 @@ fn run_setup_exe_payload(
     };
 
     if !needs_elevation {
+        let mut command = Command::new(&exe);
+        crate::launch_environment::configure_command(&mut command, payload_b64)?;
         let status = if retained_handles.is_empty() {
-            Command::new(&exe)
-                .arg(payload_b64)
+            command
                 .creation_flags(0x08000000) // CREATE_NO_WINDOW
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
         } else {
-            let mut command = Command::new(&exe);
-            command.arg(payload_b64);
             crate::setup_launch::spawn_with_retained_handles(&mut command, retained_handles)
                 .and_then(|mut child| child.wait())
         }

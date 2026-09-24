@@ -27,6 +27,71 @@ use super::create_windows_sandbox_command_args_for_permission_profile;
 use super::parse_windows_sandbox_wrapper_args;
 
 #[test]
+fn large_deny_list_uses_environment_without_changing_the_request() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let cwd = AbsolutePathBuf::from_absolute_path(temp.path()).expect("absolute command cwd");
+    let paths = (0..1000)
+        .map(|index| {
+            AbsolutePathBuf::from_absolute_path(format!(r"C:\private\nested\file-{index}.txt"))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let expected_env = HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())]);
+    let mut env = expected_env.clone();
+    crate::environment_transport::encode("must not reach workload", &mut env).unwrap();
+    let profile = PermissionProfile::read_only();
+    let command = vec![
+        "codex.exe".to_string(),
+        "--codex-run-as-fs-helper".to_string(),
+    ];
+    let args = create_windows_sandbox_command_args_for_permission_profile(
+        command.clone(),
+        &cwd,
+        std::slice::from_ref(&cwd),
+        &mut env,
+        &profile,
+        WindowsSandboxLevel::RestrictedToken,
+        /*proxy_enforced*/ true,
+        /*network_proxy_restricting_sid*/ Some("S-1-5-21-100-200-300-400"),
+        crate::WindowsSandboxProxySettingsMode::Preserve,
+        /*read_roots_override*/ None,
+        /*read_roots_include_platform_defaults*/ true,
+        /*write_roots_override*/ None,
+        &paths,
+        &paths,
+        temp.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        args,
+        vec![CODEX_WINDOWS_SANDBOX_ARG1, crate::launch_environment::ARG]
+    );
+    let decoded = crate::environment_transport::decode(env).unwrap();
+    let parsed =
+        parse_windows_sandbox_wrapper_args(serde_json::from_str(&decoded).unwrap()).unwrap();
+    let desktop = crate::desktop::LaunchDesktop::open_private(&parsed.private_desktop_name)
+        .expect("wrapper must receive a live private desktop");
+    drop(desktop);
+    assert_eq!(parsed.deny_read_paths_override, paths);
+    assert_eq!(parsed.deny_write_paths_override, paths);
+    assert_eq!(parsed.env_map, expected_env);
+    assert_eq!(parsed.permission_profile, profile);
+    assert_eq!(parsed.command, command);
+    assert_eq!(parsed.command_cwd, cwd);
+    assert_eq!(parsed.workspace_roots, vec![cwd]);
+    assert_eq!(parsed.proxy_enforced, true);
+    assert_eq!(parsed.read_roots_include_platform_defaults, true);
+    assert_eq!(
+        parsed.network_proxy_restricting_sid.as_deref(),
+        Some("S-1-5-21-100-200-300-400")
+    );
+    assert_eq!(
+        parsed.proxy_settings_mode,
+        crate::WindowsSandboxProxySettingsMode::Preserve
+    );
+}
+
+#[test]
 fn windows_wrapper_args_round_trip() {
     let temp = tempfile::tempdir().expect("tempdir");
     let command_cwd =
@@ -36,7 +101,7 @@ fn windows_wrapper_args_round_trip() {
         AbsolutePathBuf::from_absolute_path(Path::new(r"D:\other-workspace"))
             .expect("absolute workspace root"),
     ];
-    let env = HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())]);
+    let mut env = HashMap::from([("Path".to_string(), r"C:\Windows\System32".to_string())]);
     let permission_profile = PermissionProfile::read_only();
     let read_roots_override = vec![PathBuf::from(r"C:\read")];
     let write_roots_override = vec![PathBuf::from(r"C:\write")];
@@ -56,7 +121,7 @@ fn windows_wrapper_args_round_trip() {
         ],
         &command_cwd,
         workspace_roots.as_slice(),
-        &env,
+        &mut env,
         &permission_profile,
         WindowsSandboxLevel::RestrictedToken,
         /*proxy_enforced*/ true,

@@ -655,7 +655,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial(codex_home)]
-async fn windows_elevated_unified_exec_enforces_managed_deny_reads() -> anyhow::Result<()> {
+async fn windows_elevated_unified_exec_enforces_large_recursive_deny_reads() -> anyhow::Result<()> {
     let codex_home =
         codex_home_for_windows_sandbox_test("windows-elevated-tool-runtime-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
@@ -711,6 +711,15 @@ async fn windows_elevated_unified_exec_enforces_managed_deny_reads() -> anyhow::
                 .expect("set managed deny-read permission profile");
         })
         .with_workspace_setup(|cwd, _fs| async move {
+            let nested = cwd.join("nested");
+            std::fs::create_dir_all(&nested)?;
+            for index in 0..1_000 {
+                std::fs::write(nested.join(format!("bulk-{index}.env")), "bulk secret\n")?;
+            }
+            std::fs::write(
+                cwd.join("AGENTS.md"),
+                "Preserve the large payload integration fixture.\n",
+            )?;
             std::fs::write(
                 cwd.join("secret.env"),
                 "glob secret should remain private\n",
@@ -724,9 +733,24 @@ async fn windows_elevated_unified_exec_enforces_managed_deny_reads() -> anyhow::
         });
     let harness = TestCodexHarness::with_builder(builder).await?;
 
+    let config = &harness.test().config;
+    let paths = codex_windows_sandbox::resolve_windows_deny_read_paths(
+        &config.permissions.file_system_sandbox_policy(),
+        &config.cwd,
+    )
+    .map_err(anyhow::Error::msg)?;
+    assert!(
+        paths.len() >= 1_002,
+        "recursive deny fixture was not fully expanded"
+    );
+    // The deny list alone exceeds CreateProcessW's limit, so both wrapper and
+    // setup-refresh must transport the full request outside argv.
+    assert!(serde_json::to_string(&paths)?.encode_utf16().count() > 32_767);
+
     let command = concat!(
         "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & ",
         "(type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & ",
+        "(type nested\\bulk-999.env 1>NUL 2>NUL && echo BULK-READ || echo BULK-DENIED) & ",
         "type public.txt"
     );
     let call_id = "windows-managed-deny-read-exec-command";
@@ -766,6 +790,18 @@ async fn windows_elevated_unified_exec_enforces_managed_deny_reads() -> anyhow::
         .await?;
 
     let output = harness.function_call_stdout(call_id).await;
+    assert!(
+        harness.request_bodies().await.iter().any(|body| body
+            .to_string()
+            .contains("Preserve the large payload integration fixture.")),
+        "sandboxed AGENTS.md discovery must load the fixture instructions"
+    );
+    assert!(
+        output.contains("BULK-DENIED")
+            && !output.contains("BULK-READ")
+            && !output.contains("bulk secret"),
+        "large recursive deny list must remain enforced: {output:?}"
+    );
     assert!(
         output.contains("GLOB-DENIED"),
         "exec_command should reject glob-denied reads: {output:?}"
