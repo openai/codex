@@ -3651,8 +3651,8 @@ async fn pre_tool_use_hook_model_tracks_step_after_a_turn_update() -> Result<()>
         .expect("bundled models should parse")
         .models
         .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("bundled gpt-5.4 model");
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled gpt-5.5 model");
     let models = [model_a, model_b]
         .into_iter()
         .map(|slug| {

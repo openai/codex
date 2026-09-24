@@ -1972,7 +1972,7 @@ async fn exec_command_clamps_model_requested_max_output_tokens_to_policy() -> Re
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.5").with_config(|config| {
         config.tool_output_token_limit = Some(50);
     });
     let test = builder.build_with_auto_env(&server).await?;
@@ -2031,7 +2031,7 @@ async fn write_stdin_clamps_model_requested_max_output_tokens_to_policy() -> Res
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.5").with_config(|config| {
         config.tool_output_token_limit = Some(50);
     });
     let test = builder.build_with_auto_env(&server).await?;

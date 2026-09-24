@@ -286,7 +286,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
 
     let mut builder = test_codex()
         .with_extensions(skills_extensions())
-        .with_model("gpt-5.4")
+        .with_model("gpt-5.5")
         .with_config(|config| {
             config.update_plan_enabled = true;
         });
@@ -399,7 +399,7 @@ async fn snapshot_model_visible_layout_cwd_change_refreshes_agents() -> Result<(
     let mut builder = test_codex()
         .with_config(|config| config.update_plan_enabled = true)
         .with_extensions(skills_extensions())
-        .with_model("gpt-5.4");
+        .with_model("gpt-5.5");
     let test = builder.build(&server).await?;
     let cwd_one = test.cwd_path().join("agents_one");
     let cwd_two = test.cwd_path().join("agents_two");
@@ -546,9 +546,9 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
 
     let mut resume_builder = test_codex()
         .with_extensions(skills_extensions())
+        .with_model_info_override("gpt-5.4", |_| {})
         .with_config(|config| {
             config.update_plan_enabled = true;
-            config.model = Some("gpt-5.4".to_string());
             config.personality = Some(Personality::Pragmatic);
         });
     let resumed = resume_builder.restart(&server, &initial).await?;
@@ -654,9 +654,9 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
 
     let mut resume_builder = test_codex()
         .with_extensions(skills_extensions())
+        .with_model_info_override("gpt-5.4", |_| {})
         .with_config(|config| {
             config.update_plan_enabled = true;
-            config.model = Some("gpt-5.4".to_string());
         });
     let resumed = resume_builder.restart(&server, &initial).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);

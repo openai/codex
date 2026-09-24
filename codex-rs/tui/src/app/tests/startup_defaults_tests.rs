@@ -90,6 +90,7 @@ async fn cli_fork_omits_implicit_model_and_effort() -> Result<()> {
     });
     assert!(
         crate::app::startup_prompts::should_show_model_migration_prompt(
+            "openai",
             "gpt-5.5",
             "server-model",
             &Default::default(),

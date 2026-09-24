@@ -1,6 +1,8 @@
 use super::*;
 use assert_matches::assert_matches;
 use codex_config::types::ModelAvailabilityNuxConfig;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use pretty_assertions::assert_eq;
@@ -8,6 +10,16 @@ use tokio::sync::mpsc::unbounded_channel;
 
 fn all_model_presets() -> Vec<ModelPreset> {
     crate::test_support::TEST_MODEL_PRESETS.clone()
+}
+
+fn bedrock_model_presets() -> Vec<ModelPreset> {
+    create_model_provider(
+        ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
+        /*auth_manager*/ None,
+    )
+    .models_manager_without_cache(/*config_model_catalog*/ None)
+    .try_list_models()
+    .expect("Bedrock model catalog")
 }
 
 #[tokio::test]
@@ -175,40 +187,43 @@ async fn model_migration_prompt_only_shows_for_deprecated_models() {
     let seen = BTreeMap::new();
     let presets = model_presets_with_test_upgrades();
     assert!(should_show_model_migration_prompt(
-        "gpt-5.2", "gpt-5.5", &seen, &presets
+        "openai", "gpt-5.2", "gpt-5.5", &seen, &presets
     ));
     assert!(should_show_model_migration_prompt(
+        "openai",
         "gpt-5.4",
         "gpt-6-sol",
         &seen,
         &presets
     ));
     assert!(!should_show_model_migration_prompt(
-        "gpt-5.4", "gpt-5.4", &seen, &presets
+        "openai", "gpt-5.4", "gpt-5.4", &seen, &presets
     ));
 }
 
 #[test]
 fn retired_model_migration_respects_catalog_metadata() {
-    let mut presets = model_presets_with_test_upgrades();
-    let current = presets
-        .iter_mut()
-        .find(|preset| preset.model == "gpt-5.2")
-        .expect("test preset");
-    current.id = "gpt-5.4-mini".to_string();
-    current.model = "gpt-5.4-mini".to_string();
-    let expected = current.upgrade.clone();
-    assert_eq!(
-        model_upgrade_for_migration("gpt-5.4-mini", &presets),
-        expected
-    );
+    for model in ["gpt-5.4-mini", "gpt-5.4", "openai.gpt-5.4"] {
+        let mut presets = model_presets_with_test_upgrades();
+        let current = presets
+            .iter_mut()
+            .find(|preset| preset.model == "gpt-5.2")
+            .expect("test preset");
+        current.id = model.to_string();
+        current.model = model.to_string();
+        let expected = current.upgrade.clone();
+        assert_eq!(
+            model_upgrade_for_migration("openai", model, &presets),
+            expected
+        );
 
-    presets
-        .iter_mut()
-        .find(|preset| preset.model == "gpt-5.4-mini")
-        .expect("catalog preset")
-        .upgrade = None;
-    assert_eq!(model_upgrade_for_migration("gpt-5.4-mini", &presets), None);
+        presets
+            .iter_mut()
+            .find(|preset| preset.model == model)
+            .expect("catalog preset")
+            .upgrade = None;
+        assert_eq!(model_upgrade_for_migration("openai", model, &presets), None);
+    }
 }
 
 #[test]
@@ -366,30 +381,39 @@ async fn prepare_startup_tooltip_override_persists_model_availability_nux_count(
 
 #[tokio::test]
 async fn accepted_model_migration_persists_target_default_reasoning_effort() -> Result<()> {
-    let presets = all_model_presets();
     let mut migration_copies = Vec::new();
-    for (model, replacement) in [
-        ("gpt-5.4", "gpt-6-sol"),
-        ("gpt-5.4-mini", "gpt-6-luna"),
-        ("gpt-5.5", "gpt-6-sol"),
-        ("gpt-5.6-luna", "gpt-6-luna"),
-        ("gpt-5.6-terra", "gpt-6-sol"),
-        ("gpt-5.6-sol", "gpt-6-sol"),
+    for (model, replacement, provider_id, presets) in [
+        ("gpt-5.4", "gpt-6-sol", "openai", all_model_presets()),
+        ("gpt-5.4-mini", "gpt-6-luna", "openai", all_model_presets()),
+        ("gpt-5.5", "gpt-6-sol", "openai", all_model_presets()),
+        ("gpt-5.6-luna", "gpt-6-luna", "openai", all_model_presets()),
+        ("gpt-5.6-terra", "gpt-6-sol", "openai", all_model_presets()),
+        ("gpt-5.6-sol", "gpt-6-sol", "openai", all_model_presets()),
+        (
+            "openai.gpt-5.4",
+            "openai.gpt-6-sol",
+            "amazon-bedrock",
+            bedrock_model_presets(),
+        ),
     ] {
         let codex_home = tempdir()?;
         std::fs::write(
             codex_home.path().join("config.toml"),
-            format!("model = \"{model}\"\nmodel_reasoning_effort = \"xhigh\"\n"),
+            format!(
+                "model = \"{model}\"\nmodel_reasoning_effort = \"xhigh\"\nmodel_provider = \"{provider_id}\"\n"
+            ),
         )?;
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .build()
             .await?;
         let current_model = config.model.clone().expect("saved model");
-        let upgrade = model_upgrade_for_migration(&current_model, &presets)
+        let provider = config.model_provider.clone();
+        let upgrade = model_upgrade_for_migration(provider_id, &current_model, &presets)
             .expect("catalog selection should have an upgrade");
         assert_eq!(upgrade.id, replacement);
         assert!(should_show_model_migration_prompt(
+            provider_id,
             &current_model,
             &upgrade.id,
             &BTreeMap::new(),
@@ -421,8 +445,20 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
             target_effort.clone(),
         );
 
-        assert_eq!(config.model.as_deref(), Some(replacement));
-        assert_eq!(config.model_reasoning_effort, Some(target_effort.clone()));
+        assert_eq!(
+            (
+                config.model.as_deref(),
+                config.model_reasoning_effort.as_ref(),
+                config.model_provider_id.as_str(),
+                &config.model_provider,
+            ),
+            (
+                Some(replacement),
+                Some(&target_effort),
+                provider_id,
+                &provider
+            )
+        );
 
         let acknowledged = rx.try_recv().expect("acknowledged event");
         assert_matches!(
@@ -474,65 +510,103 @@ async fn accepted_model_migration_persists_target_default_reasoning_effort() -> 
     Meet GPT-6 Sol
 
     Our latest Sol is more intelligent and more efficient so your usage limits go further. This model is a great daily driver for complex tasks, especially coding.
+
+    GPT-5.4 on Amazon Bedrock is no longer offered in Codex
+
+    Codex now uses GPT-6 Sol on Amazon Bedrock in place of GPT-5.4 on Amazon Bedrock. Switch to GPT-6 Sol on Amazon Bedrock to continue.
     ");
     Ok(())
 }
 
 #[tokio::test]
 async fn model_migration_prompt_respects_hide_flag_and_self_target() {
-    let presets = all_model_presets();
-    let mut seen = BTreeMap::new();
-    // A previously acknowledged intermediate upgrade must not hide the new target.
-    seen.insert("gpt-5.4-mini".to_string(), "gpt-5.6-luna".to_string());
-    assert!(should_show_model_migration_prompt(
-        "gpt-5.4-mini",
-        "gpt-6-luna",
-        &seen,
-        &presets
-    ));
-    seen.insert("gpt-5.4-mini".to_string(), "gpt-6-luna".to_string());
-    assert!(!should_show_model_migration_prompt(
-        "gpt-5.4-mini",
-        "gpt-6-luna",
-        &seen,
-        &presets
-    ));
-    assert!(!should_show_model_migration_prompt(
-        "gpt-6-luna",
-        "gpt-6-luna",
-        &seen,
-        &presets
-    ));
+    for (model, previous_target, target, presets) in [
+        (
+            "gpt-5.4-mini",
+            "gpt-5.6-luna",
+            "gpt-6-luna",
+            all_model_presets(),
+        ),
+        ("gpt-5.4", "gpt-5.6-terra", "gpt-6-sol", all_model_presets()),
+        (
+            "openai.gpt-5.4",
+            "openai.gpt-5.6-terra",
+            "openai.gpt-6-sol",
+            bedrock_model_presets(),
+        ),
+    ] {
+        let provider_id = if model == "openai.gpt-5.4" {
+            "amazon-bedrock"
+        } else {
+            "openai"
+        };
+        // A previously acknowledged intermediate upgrade must not hide the new target.
+        let mut seen = BTreeMap::from([(model.to_string(), previous_target.to_string())]);
+        assert!(should_show_model_migration_prompt(
+            provider_id,
+            model,
+            target,
+            &seen,
+            &presets
+        ));
+        seen.insert(model.to_string(), target.to_string());
+        assert!(!should_show_model_migration_prompt(
+            provider_id,
+            model,
+            target,
+            &seen,
+            &presets
+        ));
+        assert!(!should_show_model_migration_prompt(
+            provider_id,
+            target,
+            target,
+            &seen,
+            &presets
+        ));
+    }
 }
 
 #[tokio::test]
 async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
-    let mut available = all_model_presets();
-    available.retain(|preset| preset.model != "gpt-6-luna");
+    for (model, target_model, mut available) in [
+        ("gpt-5.4-mini", "gpt-6-luna", all_model_presets()),
+        ("gpt-5.4", "gpt-6-sol", all_model_presets()),
+        (
+            "openai.gpt-5.4",
+            "openai.gpt-6-sol",
+            bedrock_model_presets(),
+        ),
+    ] {
+        let provider_id = if model == "openai.gpt-5.4" {
+            "amazon-bedrock"
+        } else {
+            "openai"
+        };
+        let target = available
+            .iter_mut()
+            .find(|preset| preset.model == target_model)
+            .expect("target preset present");
+        target.show_in_picker = false;
+        assert!(!should_show_model_migration_prompt(
+            provider_id,
+            model,
+            target_model,
+            &BTreeMap::new(),
+            &available,
+        ));
+        assert!(target_preset_for_upgrade(&available, target_model).is_none());
 
-    assert!(!should_show_model_migration_prompt(
-        "gpt-5.4-mini",
-        "gpt-6-luna",
-        &BTreeMap::new(),
-        &available,
-    ));
-
-    assert!(target_preset_for_upgrade(&available, "gpt-6-luna").is_none());
-
-    let mut with_hidden_target = all_model_presets();
-    let target = with_hidden_target
-        .iter_mut()
-        .find(|preset| preset.model == "gpt-6-luna")
-        .expect("target preset present");
-    target.show_in_picker = false;
-
-    assert!(!should_show_model_migration_prompt(
-        "gpt-5.4-mini",
-        "gpt-6-luna",
-        &BTreeMap::new(),
-        &with_hidden_target,
-    ));
-    assert!(target_preset_for_upgrade(&with_hidden_target, "gpt-6-luna").is_none());
+        available.retain(|preset| preset.model != target_model);
+        assert!(!should_show_model_migration_prompt(
+            provider_id,
+            model,
+            target_model,
+            &BTreeMap::new(),
+            &available,
+        ));
+        assert!(target_preset_for_upgrade(&available, target_model).is_none());
+    }
 }
 
 #[tokio::test]
@@ -564,6 +638,7 @@ async fn model_migration_prompt_shows_for_hidden_model() {
         .show_in_picker = true;
     assert!(
         should_show_model_migration_prompt(
+            "openai",
             &current.model,
             &upgrade.id,
             &config.notices.model_migrations,

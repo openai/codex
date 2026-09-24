@@ -22,8 +22,6 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
-const LOCAL_FRIENDLY_TEMPLATE: &str =
-    "You optimize for team morale and being a supportive teammate as much as code quality.";
 const BUNDLED_FRIENDLY_TEMPLATE: &str = "You have a vivid inner life as Codex:";
 const CUSTOM_INSTRUCTIONS: &str = "Custom instructions\n# Personality\nThis must remain\n## Writing Style\nThis must also remain\n# General\nGeneral instructions";
 
@@ -225,13 +223,8 @@ async fn default_instructions_are_friendly_without_config_toml() -> anyhow::Resu
     Ok(())
 }
 
-#[test_case("gpt-5.4", LOCAL_FRIENDLY_TEMPLATE; "gpt_5_4")]
-#[test_case("gpt-5.5", BUNDLED_FRIENDLY_TEMPLATE; "gpt_5_5")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn fixed_friendly_personality_ignores_pragmatic_update(
-    model: &str,
-    friendly_template: &str,
-) -> anyhow::Result<()> {
+async fn fixed_friendly_personality_ignores_pragmatic_update() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -240,7 +233,7 @@ async fn fixed_friendly_personality_ignores_pragmatic_update(
         vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
-    let mut builder = test_codex().with_model(model).with_config(|config| {
+    let mut builder = test_codex().with_model("gpt-5.5").with_config(|config| {
         config.personality = Some(Personality::Friendly);
     });
     let test = builder.build_with_auto_env(&server).await?;
@@ -259,7 +252,11 @@ async fn fixed_friendly_personality_ignores_pragmatic_update(
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    assert!(requests[0].instructions_text().contains(friendly_template));
+    assert!(
+        requests[0]
+            .instructions_text()
+            .contains(BUNDLED_FRIENDLY_TEMPLATE)
+    );
     assert_eq!(
         requests[1].instructions_text(),
         requests[0].instructions_text()

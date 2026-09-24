@@ -256,7 +256,7 @@ async fn thread_start_provider_model_fallback_uses_bedrock_static_catalog() -> R
     }
     let supported_with_fallback = start_thread_with_model(
         &mut mcp,
-        "openai.gpt-5.4",
+        "openai.gpt-5.5",
         /*allow_provider_model_fallback*/ true,
     )
     .await?;
@@ -273,7 +273,7 @@ async fn thread_start_provider_model_fallback_uses_bedrock_static_catalog() -> R
             supported_with_fallback.model,
             unsupported_without_fallback.model,
         ],
-        vec!["openai.gpt-6-sol", "openai.gpt-5.4", "gpt-5.4-mini"]
+        vec!["openai.gpt-6-sol", "openai.gpt-5.5", "gpt-5.4-mini"]
     );
     Ok(())
 }

@@ -492,7 +492,7 @@ async fn apply_patch_cli_uses_codex_self_exe_with_linux_sandbox_helper_alias() -
 async fn apply_patch_cli_multiple_operations_integration() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.5")).await?;
 
     // Seed workspace state
     harness.write_file("modify.txt", "line1\nline2\n").await?;
@@ -1014,7 +1014,7 @@ async fn intercepted_apply_patch_updates_absolute_target_after_turn_cwd_is_remov
         "the default Windows restricted-token test backend cannot enforce denied reads"
     );
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.5")).await?;
     let test = harness.test();
     let workspace = test.workspace_path_uri("")?;
     let original_cwd = test.workspace_path_uri("policy-cwd")?;
@@ -1165,7 +1165,7 @@ async fn escalated_patch_rejects_symlink_swapped_after_approval_request() -> Res
     fs::write(work.join("file.txt"), "original\n")?;
     fs::write(&outside, "original\n")?;
     let harness = apply_patch_harness_with(move |builder| {
-        builder.with_model("gpt-5.4").with_config(move |config| {
+        builder.with_model("gpt-5.5").with_config(move |config| {
             config.cwd = work.try_into().expect("absolute workspace");
             config.workspace_roots = vec![config.cwd.clone()];
             config
@@ -1545,7 +1545,7 @@ async fn apply_patch_exec_command_heredoc_with_cd_updates_relative_workdir() -> 
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc and cd command");
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.5")).await?;
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
     harness.write_file("sub/in_sub.txt", "before\n").await?;
@@ -1585,7 +1585,7 @@ async fn apply_patch_cli_can_use_exec_command_output_as_patch_input() -> Result<
     );
 
     let harness =
-        apply_patch_harness_with(|builder| builder.with_model("gpt-5.4").with_windows_cmd_shell())
+        apply_patch_harness_with(|builder| builder.with_model("gpt-5.5").with_windows_cmd_shell())
             .await?;
 
     let source_contents = "line1\nnaïve café\nline3\n";
@@ -1829,7 +1829,7 @@ async fn apply_patch_exec_command_heredoc_with_cd_emits_turn_diff() -> Result<()
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc and cd command");
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.5")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
 
@@ -1895,7 +1895,7 @@ async fn apply_patch_turn_diff_paths_stay_repo_relative_when_session_cwd_is_nest
 
     let harness = apply_patch_harness_with(|builder| {
         builder
-            .with_model("gpt-5.4")
+            .with_model("gpt-5.5")
             .with_config(|config| {
                 config.cwd = config.cwd.join("subdir");
             })
@@ -1987,7 +1987,7 @@ async fn apply_patch_turn_diff_skips_git_root_when_feature_is_enabled(
 
     let harness = apply_patch_harness_with(|builder| {
         builder
-            .with_model("gpt-5.4")
+            .with_model("gpt-5.5")
             .with_config(move |config| {
                 config.cwd = config.cwd.join("subdir");
                 if cwd_relative_turn_diffs {
@@ -2081,7 +2081,7 @@ async fn apply_patch_exec_command_failure_propagates_error_and_skips_diff() -> R
     skip_if_wine_exec!(Ok(()), "uses a POSIX shell heredoc");
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.4")).await?;
+    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.5")).await?;
     let test = harness.test();
     let codex = test.codex.clone();
 

@@ -5183,7 +5183,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
     let model_provider = non_openai_model_provider(&server);
     let test = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model(previous_model)
+        .with_model_info_override(previous_model, |_| {})
         .with_config(move |config| {
             config.update_plan_enabled = true;
             config.model_provider = model_provider;

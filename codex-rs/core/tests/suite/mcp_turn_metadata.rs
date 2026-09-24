@@ -475,8 +475,8 @@ fn attribution_models(model_slugs: [&str; 2]) -> Vec<codex_protocol::openai_mode
         .expect("bundled models should parse")
         .models
         .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("bundled gpt-5.4 model");
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled gpt-5.5 model");
     model_slugs
         .into_iter()
         .map(|slug| {

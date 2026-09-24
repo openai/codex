@@ -808,8 +808,8 @@ async fn assert_plugin_measurement_analytics(remote: bool, background: bool) -> 
     let model = bundled_models_response()?
         .models
         .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("bundled gpt-5.4 model");
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("bundled gpt-5.5 model");
     let models = [
         ("initial-model", ReasoningEffort::Low),
         ("invoking-model", ReasoningEffort::High),

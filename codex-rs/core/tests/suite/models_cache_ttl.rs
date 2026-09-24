@@ -65,7 +65,7 @@ async fn guardian_reused_reviewer_avoids_stale_catalog_lookup() -> Result<()> {
         models: bundled
             .models
             .into_iter()
-            .filter(|model| ["gpt-5.4", "codex-auto-review"].contains(&model.slug.as_str()))
+            .filter(|model| ["gpt-5.5", "codex-auto-review"].contains(&model.slug.as_str()))
             .collect(),
     };
     assert_eq!(catalog.models.len(), 2);
@@ -74,7 +74,7 @@ async fn guardian_reused_reviewer_avoids_stale_catalog_lookup() -> Result<()> {
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model("gpt-5.4");
+        .with_model("gpt-5.5");
     builder = builder.with_config(|config| {
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.approvals_reviewer = ApprovalsReviewer::AutoReview;

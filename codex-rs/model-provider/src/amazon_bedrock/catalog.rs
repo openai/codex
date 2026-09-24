@@ -1,4 +1,3 @@
-use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_5_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
@@ -22,7 +21,6 @@ const GPT_6_SOL_OPENAI_MODEL_ID: &str = "gpt-6-sol";
 const GPT_6_LUNA_OPENAI_MODEL_ID: &str = "gpt-6-luna";
 const GPT_6_ASTRA_OPENAI_MODEL_ID: &str = "gpt-6-astra";
 const GPT_5_5_OPENAI_MODEL_ID: &str = "gpt-5.5";
-const GPT_5_4_OPENAI_MODEL_ID: &str = "gpt-5.4";
 
 pub(crate) fn static_model_catalog() -> ModelsResponse {
     normalize_bedrock_catalog(ModelsResponse {
@@ -69,12 +67,6 @@ pub(crate) fn static_model_catalog() -> ModelsResponse {
                 "GPT-5.5",
                 /*priority*/ 6,
             ),
-            gpt_5_bedrock_model(
-                GPT_5_4_OPENAI_MODEL_ID,
-                AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
-                "GPT-5.4",
-                /*priority*/ 7,
-            ),
         ],
     })
 }
@@ -84,9 +76,7 @@ pub(super) fn static_gov_model_catalog() -> ModelsResponse {
     catalog.models.retain(|model| {
         matches!(
             model.slug.as_str(),
-            AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID
-                | AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID
-                | AMAZON_BEDROCK_GPT_5_4_MODEL_ID
+            AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID | AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID
         )
     });
     catalog
@@ -178,7 +168,6 @@ mod tests {
                 AMAZON_BEDROCK_GPT_5_6_TERRA_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID,
                 AMAZON_BEDROCK_GPT_5_5_MODEL_ID,
-                AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
             ]
         );
     }
@@ -241,19 +230,13 @@ mod tests {
                     Some(GPT_5_BEDROCK_CONTEXT_WINDOW),
                     WebSearchToolType::Text,
                 ),
-                (
-                    AMAZON_BEDROCK_GPT_5_4_MODEL_ID,
-                    Some(GPT_5_BEDROCK_CONTEXT_WINDOW),
-                    Some(GPT_5_BEDROCK_CONTEXT_WINDOW),
-                    WebSearchToolType::Text,
-                ),
             ]
         );
     }
 
     #[test]
     fn configured_bedrock_catalogs_normalize_unsupported_model_capabilities() {
-        let model = bundled_openai_model(GPT_5_4_OPENAI_MODEL_ID);
+        let model = bundled_openai_model(GPT_5_5_OPENAI_MODEL_ID);
         let mut expected = model.clone();
         expected.additional_speed_tiers.clear();
         expected.service_tiers.clear();

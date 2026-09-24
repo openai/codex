@@ -122,7 +122,7 @@ async fn responses_api_emits_api_request_event() {
     let response_mock = mount_sse_once(&server, sse(vec![ev_completed("done")])).await;
 
     let TestCodex { codex, .. } = test_codex()
-        .with_model("gpt-5.4")
+        .with_model("gpt-5.5")
         .with_config(|config| {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
             config.model_reasoning_effort = Some(ReasoningEffort::High);

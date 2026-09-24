@@ -3025,8 +3025,8 @@ pub(super) fn guardian_parent_catalog() -> ModelsResponse {
         .expect("bundled model catalog")
         .models
         .into_iter()
-        .find(|model| model.slug == "gpt-5.4")
-        .expect("gpt-5.4 in bundled catalog");
+        .find(|model| model.slug == "gpt-5.5")
+        .expect("gpt-5.5 in bundled catalog");
     // Keep safety settings compatible so active publication can switch A to B.
     ModelsResponse {
         models: ["guardian-parent-a", "guardian-parent-b"]
