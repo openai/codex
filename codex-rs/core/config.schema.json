@@ -3191,6 +3191,10 @@
           "description": "Opt in to logging final main-agent and spawned-subagent responses to an OTLP log exporter. Defaults to false. Response text can be sensitive and is capped at 64 KiB.",
           "type": "boolean"
         },
+        "log_guardian_assessments": {
+          "description": "Opt in to logging completed Guardian assessments to an OTLP log exporter. Defaults to false. Rationales can be sensitive and are capped at 64 KiB.",
+          "type": "boolean"
+        },
         "log_user_prompt": {
           "description": "Log user prompt in traces",
           "type": "boolean"

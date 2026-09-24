@@ -9901,6 +9901,7 @@ async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<
 
     assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
     assert!(!config.otel.agent_response_logging_enabled());
+    assert!(!config.otel.guardian_assessment_logging_enabled());
     Ok(())
 }
 
@@ -9911,6 +9912,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
     cfg.otel = Some(OtelConfigToml {
         tool_result: toml::from_str("max_bytes = 8192").expect("tool-result logging config"),
         log_agent_responses: Some(true),
+        log_guardian_assessments: Some(true),
         exporter: Some(OtelExporterKind::OtlpHttp {
             endpoint: "http://localhost:14318/v1/logs".to_string(),
             headers: HashMap::new(),
@@ -9921,7 +9923,7 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
         ..Default::default()
     });
 
-    let config = Config::load_from_base_config_with_overrides(
+    let mut config = Config::load_from_base_config_with_overrides(
         cfg,
         ConfigOverrides {
             cwd: Some(fixture.cwd_path()),
@@ -9933,11 +9935,14 @@ async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::
 
     assert_eq!(config.otel.tool_result.max_bytes, 8192);
     assert!(config.otel.agent_response_logging_enabled());
+    assert!(config.otel.guardian_assessment_logging_enabled());
     assert!(matches!(
         config.otel.exporter,
         OtelExporterKind::OtlpHttp { .. }
     ));
     assert_eq!(config.otel.trace_exporter, OtelExporterKind::None);
+    config.otel.exporter = OtelExporterKind::None;
+    assert!(!config.otel.guardian_assessment_logging_enabled());
     Ok(())
 }
 

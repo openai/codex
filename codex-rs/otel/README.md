@@ -129,6 +129,24 @@ behavior, without an exactly-once guarantee.
 Core supplies completed raw items and step attribution, retaining the logger in
 the existing turn extension data; it does not own response-logging policy.
 
+### Guardian assessment logs
+
+Set `otel.log_guardian_assessments = true` with an OTLP HTTP or gRPC log exporter
+to emit `codex.guardian_assessment` once a synchronous Guardian review finishes.
+The default is false. Events include the reviewed conversation, turn, review and
+target item IDs, status, risk level, user authorization and rationale. `outcome`
+is `allow` or `deny` for a completed model assessment and absent for review errors,
+timeouts and cancellations, including fail-closed denials. Low-risk approvals
+may contain the reviewer's generic fallback explanation.
+
+Rationales can contain sensitive content. The exported copy is capped at 65,536
+UTF-8 bytes at a character boundary; `rationale_length` records the original byte
+count and `rationale_truncated` indicates truncation. The log-only target is
+excluded from trace export, local state logs and the feedback log buffer. This
+does not add content to the main model's conversation or grant it log read access.
+Cached V2 approvals do not create a synchronous assessment and are not included.
+Delivery uses the existing best-effort OTLP exporter.
+
 ## Metrics (OTLP or in-memory)
 
 Modes:

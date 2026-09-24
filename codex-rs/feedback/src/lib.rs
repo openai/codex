@@ -948,6 +948,7 @@ mod tests {
             target: "codex_otel.log_only", tracing::Level::INFO,
             event.name = "codex.agent_response", response = "private-agent-response"
         );
+        tracing::info!(target: "codex_otel.log_only", rationale = "private-guardian-rationale");
         tracing::trace!(target: "codex_http_client::transport", "transport-trace");
         tracing::trace!(target: "codex_api::sse", "sse-trace");
         tracing::trace!(target: "codex_api::sse::responses", "nested-sse-trace");
@@ -966,6 +967,7 @@ mod tests {
         for excluded in [
             "secret",
             "private-agent-response",
+            "private-guardian-rationale",
             "transport-trace",
             "sse-trace",
             "nested-sse-trace",

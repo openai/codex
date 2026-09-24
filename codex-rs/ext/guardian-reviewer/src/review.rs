@@ -105,6 +105,10 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 analytics,
                 completed_at_ms.try_into().unwrap_or_default(),
             );
+            if self.log_assessments {
+                self.telemetry
+                    .guardian_assessment(&completed.event, completed.assessment_outcome);
+            }
             report.track(
                 self.telemetry,
                 self.analytics,

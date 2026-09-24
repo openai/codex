@@ -45,6 +45,8 @@ pub struct ReviewRequest<'a, H> {
     pub cancellation: CancellationToken,
     pub model: &'a ModelInfo,
     pub telemetry: &'a SessionTelemetry,
+    /// The host verified the assessment opt-in and an explicit OTLP log destination.
+    pub log_assessments: bool,
     pub analytics: &'a AnalyticsEventsClient,
     pub metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
