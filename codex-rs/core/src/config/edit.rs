@@ -40,8 +40,6 @@ pub enum ConfigEdit {
     SetServiceTier { service_tier: Option<String> },
     /// Toggle the acknowledgement flag under `[notice]`.
     SetNoticeHideFullAccessWarning(bool),
-    /// Toggle the Windows world-writable directories warning acknowledgement flag.
-    SetNoticeHideWorldWritableWarning(bool),
     /// Toggle the rate limit model nudge acknowledgement flag.
     SetNoticeHideRateLimitModelNudge(bool),
     /// Toggle the model migration prompt acknowledgement flag.
@@ -244,10 +242,6 @@ impl ConfigDocument {
             )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 &[NOTICE_TABLE_KEY, "hide_full_access_warning"],
-                value(*acknowledged),
-            )),
-            ConfigEdit::SetNoticeHideWorldWritableWarning(acknowledged) => Ok(self.write_value(
-                &[NOTICE_TABLE_KEY, "hide_world_writable_warning"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged) => Ok(self.write_value(
@@ -823,12 +817,6 @@ impl ConfigEditsBuilder {
     pub fn set_hide_full_access_warning(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged));
-        self
-    }
-
-    pub fn set_hide_world_writable_warning(mut self, acknowledged: bool) -> Self {
-        self.edits
-            .push(ConfigEdit::SetNoticeHideWorldWritableWarning(acknowledged));
         self
     }
 
