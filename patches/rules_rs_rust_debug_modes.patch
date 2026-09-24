@@ -1,0 +1,42 @@
+diff --git a/rs/toolchains/declare_rustc_toolchains.bzl b/rs/toolchains/declare_rustc_toolchains.bzl
+--- a/rs/toolchains/declare_rustc_toolchains.bzl
++++ b/rs/toolchains/declare_rustc_toolchains.bzl
+@@ -45,6 +45,14 @@
+             },
+         )
+         source_stdlib_building_select[config_setting] = "@rules_rs//rs/private:empty_stdlib"
++
++    # Apple targets default to packed dSYMs and invoke dsymutil at link time.
++    # The Linux remote Rust action has no dsymutil. Match Cargo release's
++    # split-debuginfo policy so line/full info remains available before packaging.
++    darwin_debug_flags = select({
++        "@platforms//os:macos": ["-Csplit-debuginfo=off"],
++        "//conditions:default": [],
++    })
+-
++
+     for triple in execs:
+         exec_triple = _parse_triple(triple)
+@@ -152,8 +160,20 @@
+                 "//conditions:default": [],
+             }),
+             default_edition = edition,
+-            extra_exec_rustc_flags = _rustc_flags_to_select(extra_exec_rustc_flags),
+-            extra_rustc_flags = _rustc_flags_to_select(extra_rustc_flags),
++            extra_exec_rustc_flags = _rustc_flags_to_select(extra_exec_rustc_flags) + darwin_debug_flags,
++            extra_rustc_flags = _rustc_flags_to_select(extra_rustc_flags) + darwin_debug_flags,
++            # Retain source locations through linking; release packaging owns
++            # extracting and stripping symbols. Keep -c dbg for full debugging.
++            debug_info = {
++                "dbg": "full",
++                "fastbuild": "line-tables-only",
++                "opt": "line-tables-only",
++            },
++            strip_level = {
++                "dbg": "none",
++                "fastbuild": "none",
++                "opt": "none",
++            },
+             exec_triple = triple,
+             target_triple = select(target_triple_select),
+             visibility = ["//visibility:public"],

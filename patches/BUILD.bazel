@@ -14,6 +14,7 @@ exports_files([
     "rules_foreign_cc_make_xcompile.patch",
     "rules_foreign_cc_make_msvc_stdint.patch",
     "rules_rs_build_script_deps_annotation.patch",
+    "rules_rs_rust_debug_modes.patch",
     "rules_rs_windows_msvc_linker.patch",
     "rules_rs_zlib_snapshot_urls.patch",
     "rusty_v8_prebuilt_out_dir.patch",
