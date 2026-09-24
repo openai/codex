@@ -1,4 +1,5 @@
 import hashlib
+import io
 import sys
 import tempfile
 import unittest
@@ -146,6 +147,165 @@ class FetchCodexV8ArtifactsTest(unittest.TestCase):
 
             download.assert_called_once()
             self.assertEqual(download.call_args.args[1].name, manifest_name)
+
+    def test_verified_cache_needs_no_network(self) -> None:
+        with self.release("x86_64-unknown-linux-gnu") as (spec, download, _):
+            first = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            download.reset_mock()
+            download.side_effect = AssertionError("unexpected network request")
+
+            second = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            self.assertEqual(second, first)
+            download.assert_not_called()
+
+    def test_missing_or_corrupt_manifest_refresh_retains_valid_artifacts(self) -> None:
+        with self.release("x86_64-unknown-linux-gnu") as (spec, download, name):
+            artifacts = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            manifest = artifacts.archive.parent / name
+            expected = manifest.read_bytes()
+            for contents in (None, b"corrupt"):
+                with self.subTest(contents=contents):
+                    if contents is None:
+                        manifest.unlink()
+                    else:
+                        manifest.write_bytes(contents)
+                    download.reset_mock()
+                    refreshed = v8.fetch_codex_v8_artifacts(
+                        spec, version=self.version, cache_root=self.root / "cache"
+                    )
+                    self.assertEqual(refreshed, artifacts)
+                    self.assertEqual(manifest.read_bytes(), expected)
+                    download.assert_called_once()
+                    self.assertEqual(download.call_args.args[1], manifest)
+
+    def test_cached_manifest_still_authenticates_both_artifacts(self) -> None:
+        with self.release("x86_64-unknown-linux-gnu") as (spec, download, _):
+            artifacts = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            artifacts.archive.write_bytes(b"corrupt archive")
+            artifacts.binding.write_bytes(b"corrupt binding")
+            download.reset_mock()
+            repaired = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            self.assertEqual(repaired, artifacts)
+            self.assertEqual(
+                (repaired.archive.read_bytes(), repaired.binding.read_bytes()),
+                (b"trusted V8 archive", b"trusted V8 binding"),
+            )
+            self.assertEqual(
+                [call.args[1] for call in download.call_args_list],
+                [artifacts.archive, artifacts.binding],
+            )
+
+    def test_changed_repository_pin_rejects_old_cache_and_bad_refresh(self) -> None:
+        with self.release("x86_64-unknown-linux-gnu") as (spec, download, name):
+            artifacts = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            pins = (
+                self.root / "third_party/v8/rusty_v8_150_4_0_release_manifests.sha256"
+            )
+            pins.write_text(f"{'0' * 64}  {name}\n")
+            download.reset_mock()
+            with self.assertRaisesRegex(
+                RuntimeError, "does not match its trusted SHA-256"
+            ):
+                v8.fetch_codex_v8_artifacts(
+                    spec, version=self.version, cache_root=self.root / "cache"
+                )
+            download.assert_called_once()
+            self.assertEqual(
+                download.call_args.args[1], artifacts.archive.parent / name
+            )
+            self.assertFalse((artifacts.archive.parent / name).exists())
+            self.assertEqual(artifacts.archive.read_bytes(), b"trusted V8 archive")
+            self.assertEqual(artifacts.binding.read_bytes(), b"trusted V8 binding")
+
+    @unittest.skipIf(sys.platform == "win32", "requires unprivileged symlinks")
+    def test_symlink_manifest_is_replaced_without_writing_through_link(self) -> None:
+        actual_download = v8.download_file
+        with self.release("x86_64-unknown-linux-gnu") as (spec, download, name):
+            artifacts = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            manifest = artifacts.archive.parent / name
+            expected = manifest.read_bytes()
+            backing = manifest.with_suffix(".original")
+            manifest.rename(backing)
+            manifest.symlink_to(backing)
+            download.reset_mock()
+            download.side_effect = actual_download
+            with patch.object(v8, "urlopen", return_value=io.BytesIO(expected)):
+                refreshed = v8.fetch_codex_v8_artifacts(
+                    spec, version=self.version, cache_root=self.root / "cache"
+                )
+            self.assertEqual(refreshed, artifacts)
+            self.assertFalse(manifest.is_symlink())
+            self.assertEqual(
+                (manifest.read_bytes(), backing.read_bytes()), (expected, expected)
+            )
+            download.assert_called_once()
+
+    def test_interrupted_refresh_preserves_cache(self) -> None:
+        actual_download = v8.download_file
+
+        class InterruptedResponse(io.BytesIO):
+            def read(self, size=-1):
+                if self.tell():
+                    raise OSError("interrupted download")
+                return super().read(size)
+
+        with self.release("x86_64-unknown-linux-gnu") as (spec, download, name):
+            artifacts = v8.fetch_codex_v8_artifacts(
+                spec, version=self.version, cache_root=self.root / "cache"
+            )
+            manifest = artifacts.archive.parent / name
+            manifest.write_bytes(b"stale manifest")
+            download.reset_mock()
+            download.side_effect = actual_download
+            with (
+                patch.object(
+                    v8, "urlopen", return_value=InterruptedResponse(b"partial")
+                ),
+                self.assertRaisesRegex(OSError, "interrupted download"),
+            ):
+                v8.fetch_codex_v8_artifacts(
+                    spec, version=self.version, cache_root=self.root / "cache"
+                )
+            self.assertEqual(manifest.read_bytes(), b"stale manifest")
+            self.assertEqual(artifacts.archive.read_bytes(), b"trusted V8 archive")
+            self.assertEqual(artifacts.binding.read_bytes(), b"trusted V8 binding")
+            self.assertFalse(list(manifest.parent.glob("*.tmp")))
+
+    def test_source_and_paired_overrides_do_not_touch_cache(self) -> None:
+        spec = TARGET_SPECS["x86_64-unknown-linux-gnu"]
+        for environ in (
+            {"V8_FROM_SOURCE": "1"},
+            {
+                "RUSTY_V8_ARCHIVE": "archive.a",
+                "RUSTY_V8_SRC_BINDING_PATH": "binding.rs",
+            },
+        ):
+            with (
+                self.subTest(environ=environ),
+                patch.object(
+                    v8,
+                    "fetch_codex_v8_artifacts",
+                    side_effect=AssertionError("unexpected fetch"),
+                ) as fetch,
+            ):
+                self.assertEqual(
+                    v8.resolve_codex_v8_cargo_env(spec, environ=environ), {}
+                )
+                fetch.assert_not_called()
 
 
 if __name__ == "__main__":

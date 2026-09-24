@@ -73,8 +73,20 @@ def fetch_codex_v8_artifacts(
     binding = cache_dir / binding_name
     checksums = cache_dir / checksums_name
 
-    download_file(f"{release_url}/{checksums.name}", checksums)
-    verify_release_checksum_manifest(checksums, version=version)
+    # A cached manifest is sufficient only while it matches this checkout's
+    # release pin. Probe without deleting it in case refresh is unavailable.
+    cached_manifest_valid = False
+    try:
+        if not checksums.is_symlink():
+            verify_release_checksum_manifest(
+                checksums, version=version, remove_invalid=False
+            )
+            cached_manifest_valid = True
+    except (OSError, RuntimeError, ValueError):
+        pass
+    if not cached_manifest_valid:
+        download_file(f"{release_url}/{checksums.name}", checksums)
+        verify_release_checksum_manifest(checksums, version=version)
     expected_checksums = load_checksums(checksums, {archive.name, binding.name})
     for artifact in [archive, binding]:
         ensure_valid_artifact(
@@ -108,7 +120,9 @@ def default_cache_root() -> Path:
     return Path(tempfile.gettempdir()) / "codex-package"
 
 
-def verify_release_checksum_manifest(checksums_path: Path, *, version: str) -> None:
+def verify_release_checksum_manifest(
+    checksums_path: Path, *, version: str, remove_invalid: bool = True
+) -> None:
     version_suffix = version.replace(".", "_")
     trusted_checksums = (
         REPO_ROOT
@@ -124,7 +138,8 @@ def verify_release_checksum_manifest(checksums_path: Path, *, version: str) -> N
         if has_checksum(checksums_path, digest):
             return
 
-        checksums_path.unlink(missing_ok=True)
+        if remove_invalid:
+            checksums_path.unlink(missing_ok=True)
         raise RuntimeError(
             f"V8 checksum manifest {checksums_path} does not match its trusted SHA-256."
         )
