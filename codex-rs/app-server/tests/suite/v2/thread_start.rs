@@ -949,8 +949,9 @@ fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
     path.as_ref().to_path_buf()
 }
 
+#[test_case("codex_work_desktop")]
 #[tokio::test]
-async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
+async fn thread_start_tracks_thread_initialized_analytics(originator: &str) -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -966,7 +967,7 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
     let ThreadStartResponse { thread, .. } = mcp
         .start_thread(ThreadStartParams {
             thread_source: Some(ThreadSource::User),
-            service_name: Some("codex_work_desktop".to_string()),
+            service_name: Some(originator.to_string()),
             ..Default::default()
         })
         .await?;
@@ -978,7 +979,7 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         event,
         &thread.id,
         &thread.session_id,
-        "codex_work_desktop",
+        originator,
         "mock-model",
         "new",
         "user",
