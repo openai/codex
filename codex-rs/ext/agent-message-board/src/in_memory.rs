@@ -1,5 +1,6 @@
 //! Tree-owned message boards for training. Agent handles share state; nothing is written to disk.
 //! Mutations and recipient selection are atomic. Host callbacks run outside the state lock.
+//! Opening a board prunes registry entries whose state has been released.
 
 use crate::ChannelSummary;
 use crate::CreateChannelRequest;
@@ -31,6 +32,10 @@ use uuid::Uuid;
 
 mod queries;
 
+#[cfg(test)]
+#[path = "in_memory_tests.rs"]
+mod tests;
+
 /// Shares board state across a tree while giving each agent its own host handle.
 #[derive(Default)]
 pub struct InMemoryMessageBoards {
@@ -44,6 +49,7 @@ impl InMemoryMessageBoards {
         host: Arc<dyn MessageBoardHost>,
     ) -> InMemoryAgentMessageBoard {
         let mut states = self.states.lock().await;
+        states.retain(|_, state| state.strong_count() > 0);
         let entry = states.entry(identity).or_default();
         let state = entry.upgrade().unwrap_or_else(|| {
             let state = Arc::default();
