@@ -4733,6 +4733,10 @@ fn core_error_info_converts_to_camel_case() {
         (CoreCodexErrorInfo::BioPolicy, json!("other")),
         (CoreCodexErrorInfo::InvalidPrompt, json!("other")),
         (
+            CoreCodexErrorInfo::FlexUnavailable,
+            json!("flexUnavailable"),
+        ),
+        (
             CoreCodexErrorInfo::RateLimitExceeded,
             json!("rateLimitExceeded"),
         ),

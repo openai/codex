@@ -1856,6 +1856,7 @@ pub enum CodexErrorInfo {
     SessionBudgetExceeded,
     UsageLimitExceeded,
     RateLimitExceeded,
+    FlexUnavailable,
     ServerOverloaded,
     CyberPolicy,
     BioPolicy,
@@ -1899,6 +1900,7 @@ impl CodexErrorInfo {
             | Self::SessionBudgetExceeded
             | Self::UsageLimitExceeded
             | Self::RateLimitExceeded
+            | Self::FlexUnavailable
             | Self::ServerOverloaded
             | Self::CyberPolicy
             | Self::BioPolicy

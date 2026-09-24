@@ -1,5 +1,6 @@
 use crate::TransportError;
 use crate::error::ApiError;
+use crate::error::parse_flex_unavailable;
 use crate::rate_limits::parse_promo_message;
 use crate::rate_limits::parse_rate_limit_for_limit;
 use crate::rate_limits::parse_rate_limit_reached_type;
@@ -30,6 +31,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         | ApiError::ContextWindowExceeded
         | ApiError::QuotaExceeded
         | ApiError::UsageNotIncluded
+        | ApiError::FlexUnavailable
         | ApiError::RateLimit(_)
         | ApiError::InvalidRequest { .. }
         | ApiError::InvalidPrompt { .. }
@@ -55,6 +57,7 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
         }
         ApiError::Stream(msg) => CodexErr::Stream(msg),
         ApiError::ServerOverloaded { .. } => CodexErr::ServerOverloaded,
+        ApiError::FlexUnavailable => CodexErr::new(CodexErrorDetails::FlexUnavailable),
         ApiError::Api { status, message } => {
             let user_message = api_error_user_message(status, &message);
             CodexErr::UnexpectedStatus(UnexpectedResponseError {
@@ -174,6 +177,11 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else if status == http::StatusCode::TOO_MANY_REQUESTS {
+                    if let Ok(body) = serde_json::from_str::<Value>(&body_text)
+                        && let Some(error) = body.get("error").and_then(parse_flex_unavailable)
+                    {
+                        return map_api_error(error);
+                    }
                     if let Ok(err) = serde_json::from_str::<UsageErrorResponse>(&body_text) {
                         if err.error.error_type.as_deref() == Some("usage_limit_reached") {
                             let limit_id = extract_header(headers.as_ref(), ACTIVE_LIMIT_HEADER);

@@ -3,6 +3,7 @@ use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
 use crate::error::ApiError;
+use crate::error::parse_flex_unavailable;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
@@ -173,6 +174,7 @@ pub struct ResponsesStreamEvent {
     pub(crate) headers: Option<Value>,
     metadata: Option<Value>,
     response: Option<Value>,
+    error: Option<Value>,
     item: Option<Value>,
     item_id: Option<String>,
     call_id: Option<String>,
@@ -355,6 +357,11 @@ pub fn process_responses_event(
     event: ResponsesStreamEvent,
 ) -> std::result::Result<Option<ResponseEvent>, ResponsesEventError> {
     match event.kind.as_str() {
+        "error" => {
+            if let Some(error) = event.error.as_ref().and_then(parse_flex_unavailable) {
+                return Err(ResponsesEventError::Api(error));
+            }
+        }
         "response.output_item.done" => {
             if let Some(item_val) = event.item {
                 if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
@@ -418,6 +425,9 @@ pub fn process_responses_event(
         "response.failed" => {
             if let Some(resp_val) = event.response {
                 let mut response_error = ApiError::Stream("response.failed event received".into());
+                if let Some(error) = resp_val.get("error").and_then(parse_flex_unavailable) {
+                    return Err(ResponsesEventError::Api(error));
+                }
                 if let Some(error) = resp_val.get("error")
                     && let Ok(error) = serde_json::from_value::<Error>(error.clone())
                 {
@@ -697,7 +707,12 @@ async fn process_sse_with_treatment(
             }
             Ok(None) => {}
             Err(error) => {
-                response_error = Some(error.into_api_error());
+                let error = error.into_api_error();
+                if matches!(error, ApiError::FlexUnavailable) {
+                    let _ = tx_event.send(Err(error)).await;
+                    return;
+                }
+                response_error = Some(error);
             }
         };
     }

@@ -21,6 +21,7 @@ enum CodexErrorInfoWire {
     SessionBudgetExceeded,
     UsageLimitExceeded,
     RateLimitExceeded,
+    FlexUnavailable,
     ServerOverloaded,
     CyberPolicy,
     BioPolicy,

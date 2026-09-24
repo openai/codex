@@ -496,6 +496,35 @@ async fn responses_http_overload_without_retry_after_exhausts_request_retries() 
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn responses_http_504_preserves_status_after_stream_retry() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock =
+        responses::mount_response_sequence(&server, vec![ResponseTemplate::new(504); 2]).await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.service_tier = Some("flex".to_string());
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    submit_user_input(&test, "surface the timeout after one retry").await?;
+    assert_terminal_failure(
+        &test,
+        CodexErrorInfo::HttpConnectionFailed {
+            http_status_code: Some(504),
+        },
+        /*expected_retries*/ 1,
+    )
+    .await?;
+    assert_eq!(response_mock.requests().len(), 2);
+    Ok(())
+}
+
 /// Remote compaction v2 uses the upstream header before another HTTP request.
 #[tokio::test(flavor = "current_thread")]
 async fn compact_v2_uses_retry_after() -> Result<()> {
@@ -1408,6 +1437,135 @@ async fn sse_overload_without_retry_after_is_terminal() -> Result<()> {
         Err(mpsc::error::TryRecvError::Empty)
     );
 
+    Ok(())
+}
+
+async fn assert_terminal_failure(
+    test: &TestCodex,
+    expected: CodexErrorInfo,
+    expected_retries: usize,
+) -> Result<()> {
+    let mut errors = Vec::new();
+    let mut completions = Vec::new();
+    let mut retries = 0;
+    loop {
+        match wait_for_event(&test.codex, |_| true).await {
+            EventMsg::Error(error) => errors.push(error.codex_error_info),
+            EventMsg::StreamError(_) => retries += 1,
+            EventMsg::TurnComplete(event) => {
+                completions.push(event.error.and_then(|error| error.codex_error_info));
+                test.codex.submit(Op::Shutdown).await?;
+            }
+            EventMsg::ShutdownComplete => break,
+            _ => {}
+        }
+    }
+    assert_eq!(errors, vec![Some(expected.clone())]);
+    assert_eq!(completions, vec![Some(expected)]);
+    assert_eq!(retries, expected_retries);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn http_and_sse_flex_unavailable_are_terminal() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let error = json!({
+        "type": "resource_unavailable", "code": "flex_unavailable",
+        "message": "Flex capacity unavailable."
+    });
+    for response in [
+        ResponseTemplate::new(429)
+            .insert_header("Retry-After", "300")
+            .set_body_json(json!({"error": error})),
+        responses::sse_response(responses::sse(vec![
+            json!({"type": "error", "error": error}),
+        ])),
+        responses::sse_response(responses::sse_failed(
+            "failed",
+            "flex_unavailable",
+            "No capacity",
+        )),
+    ] {
+        let server = responses::start_mock_server().await;
+        let response_mock = responses::mount_response_once(&server, response).await;
+        let test = test_codex()
+            .with_config(|config| {
+                config.service_tier = Some("flex".to_string());
+                config.model_provider.request_max_retries = Some(2);
+                config.model_provider.stream_max_retries = Some(2);
+            })
+            .build_with_auto_env(&server)
+            .await?;
+
+        submit_user_input(&test, "surface the Flex capacity failure").await?;
+        assert_terminal_failure(
+            &test,
+            CodexErrorInfo::FlexUnavailable,
+            /*expected_retries*/ 0,
+        )
+        .await?;
+        assert_eq!(
+            response_mock.single_request().body_json()["service_tier"],
+            json!("flex")
+        );
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| request.url.path() == "/v1/responses")
+                .count(),
+            1
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn websocket_streamed_flex_unavailable_is_terminal() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let error = json!({
+        "type": "resource_unavailable", "code": "flex_unavailable",
+        "message": "Flex capacity unavailable."
+    });
+    for event in [
+        json!({"type": "error", "status": 429, "headers": {"retry-after": "300"}, "error": error}),
+        json!({"type": "response.failed", "response": {"error": error}}),
+    ] {
+        let server = responses::start_websocket_server(vec![vec![
+            vec![
+                responses::ev_response_created("prewarm"),
+                responses::ev_completed("prewarm"),
+            ],
+            vec![event],
+        ]])
+        .await;
+        let test = test_codex()
+            .with_config(|config| {
+                config.service_tier = Some("flex".to_string());
+                config.model_catalog =
+                    Some(bundled_models_response().expect("bundled models.json should parse"));
+                config.model_provider.request_max_retries = Some(2);
+                config.model_provider.stream_max_retries = Some(2);
+            })
+            .build_with_websocket_server(&server)
+            .await?;
+
+        submit_user_input(&test, "surface the Flex capacity failure").await?;
+        assert_terminal_failure(
+            &test,
+            CodexErrorInfo::FlexUnavailable,
+            /*expected_retries*/ 0,
+        )
+        .await?;
+        let requests = server.single_connection();
+        assert_eq!(requests.len(), 2, "prewarm and failed turn");
+        assert_eq!(requests[1].body_json()["service_tier"], json!("flex"));
+        server.shutdown().await;
+    }
     Ok(())
 }
 

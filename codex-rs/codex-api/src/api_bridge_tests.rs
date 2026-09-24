@@ -64,7 +64,13 @@ fn map_api_error_distinguishes_capacity_from_slow_down() {
             false,
         ),
         ("slow_down", CodexErrorInfo::RateLimitExceeded, true),
-        ("unknown_error", CodexErrorInfo::Other, true),
+        (
+            "unknown_error",
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: Some(503),
+            },
+            true,
+        ),
     ] {
         let err = map_api_error(ApiError::Transport(TransportError::Http {
             retry_after: None,

@@ -543,6 +543,7 @@ class CodexErrorInfoValue(Enum):
     session_budget_exceeded = "sessionBudgetExceeded"
     usage_limit_exceeded = "usageLimitExceeded"
     rate_limit_exceeded = "rateLimitExceeded"
+    flex_unavailable = "flexUnavailable"
     server_overloaded = "serverOverloaded"
     cyber_policy = "cyberPolicy"
     misalignment_policy_violation = "misalignmentPolicyViolation"
