@@ -1350,10 +1350,7 @@ async fn maybe_run_previous_model_inline_compact(
         turn_context.model_info().comp_hash.as_deref(),
     );
     let previous_model = previous_turn_settings.model;
-    if crate::guardian::is_basic_session_source(&turn_context.session_source)
-        && !should_compact_for_comp_hash_change
-        && previous_model == turn_context.model_info().slug
-    {
+    if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
         return Ok(());
     }
     let previous_model_turn_context = Arc::new(
