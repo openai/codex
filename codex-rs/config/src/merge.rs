@@ -55,7 +55,7 @@ impl ShellEnvironmentPolicyFilterRepresentation {
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
 pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
-    merge_toml_values_at_path(base, overlay, &mut Vec::new());
+    merge_toml_values_at_path(base, overlay.clone(), &mut Vec::new());
 }
 
 pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
@@ -72,8 +72,8 @@ pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
         )
 }
 
-fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &mut Vec<String>) {
-    replace_shell_environment_policy_filter_representation(base, overlay, path);
+fn merge_toml_values_at_path(base: &mut TomlValue, overlay: TomlValue, path: &mut Vec<String>) {
+    replace_shell_environment_policy_filter_representation(base, &overlay, path);
 
     if is_structured_feature_path(path) {
         if let TomlValue::Boolean(enabled) = base
@@ -86,16 +86,15 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         } else if let TomlValue::Table(table) = base
             && let TomlValue::Boolean(enabled) = overlay
         {
-            table.insert("enabled".to_string(), TomlValue::Boolean(*enabled));
+            table.insert("enabled".to_string(), TomlValue::Boolean(enabled));
             return;
         }
     }
 
-    if let TomlValue::Table(overlay_table) = overlay
-        && let TomlValue::Table(base_table) = base
+    if let TomlValue::Table(base_table) = &mut *base
+        && let TomlValue::Table(mut overlay_table) = overlay
     {
         normalize_key_aliases(path, base_table);
-        let mut overlay_table = overlay_table.clone();
         normalize_key_aliases(path, &mut overlay_table);
         if is_network_domains_path(path) {
             normalize_network_domain_keys(base_table);
@@ -140,14 +139,14 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: &TomlValue, path: &m
         for (key, value) in overlay_table {
             path.push(key.clone());
             if let Some(existing) = base_table.get_mut(&key) {
-                merge_toml_values_at_path(existing, &value, path);
+                merge_toml_values_at_path(existing, value, path);
             } else {
                 base_table.insert(key, normalized_with_key_aliases(&value, path));
             }
             path.pop();
         }
     } else {
-        *base = normalized_with_key_aliases(overlay, path);
+        *base = normalized_with_key_aliases(&overlay, path);
     }
 }
 
