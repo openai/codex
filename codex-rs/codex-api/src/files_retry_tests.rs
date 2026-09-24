@@ -50,12 +50,21 @@ async fn mock_upload(
 }
 
 #[tokio::test]
-async fn retries_503_within_budget_but_not_4xx() {
+async fn retries_transient_upload_statuses_within_budget() {
     for (statuses, azure_code, retry_after) in [
-        (vec![503, 200], "ServerBusy", None),
-        (vec![503; 5], "ServerBusy", None),
-        (vec![403], "AuthenticationFailed", None),
-        (vec![503], "ServerBusy", Some("301")),
+        (vec![502, 200], None, None),
+        (vec![503, 200], Some("ServerBusy"), None),
+        (vec![504, 200], None, None),
+        (vec![502, 504, 503, 200], None, None),
+        (vec![502; 5], None, None),
+        (vec![503; 5], Some("ServerBusy"), None),
+        (vec![504; 5], None, None),
+        (vec![403], Some("AuthenticationFailed"), None),
+        (vec![409], None, None),
+        (vec![500], None, None),
+        (vec![502], None, Some("301")),
+        (vec![503], Some("ServerBusy"), Some("301")),
+        (vec![504], None, Some("301")),
     ] {
         let server = MockServer::start().await;
         let attempts = statuses.len();
@@ -71,7 +80,10 @@ async fn retries_503_within_budget_but_not_4xx() {
                     Some(delay) => response.insert_header("retry-after", delay),
                     None => response.insert_header("x-ms-retry-after-ms", "0"),
                 };
-                response.insert_header("x-ms-error-code", azure_code)
+                match azure_code {
+                    Some(code) => response.insert_header("x-ms-error-code", code),
+                    None => response,
+                }
             },
             attempts as u64,
             u64::from(succeeds),
@@ -97,7 +109,7 @@ async fn retries_503_within_budget_but_not_4xx() {
         if let Err(error) = result {
             let message = error.to_string();
             assert!(message.contains(&format!("azure_request_id=request-{}", attempts - 1)));
-            assert!(message.contains(azure_code));
+            assert!(message.contains(azure_code.unwrap_or("missing")));
             assert!(!format!("{error:?}").contains("sig=secret"));
         }
         let requests = server.received_requests().await.expect("requests");

@@ -291,7 +291,12 @@ where
                         azure_request_id: azure_request_id.clone(),
                         azure_error_code: azure_error_code.clone(),
                     },
-                    upload_status == StatusCode::SERVICE_UNAVAILABLE,
+                    matches!(
+                        upload_status,
+                        StatusCode::BAD_GATEWAY
+                            | StatusCode::SERVICE_UNAVAILABLE
+                            | StatusCode::GATEWAY_TIMEOUT
+                    ),
                     "http_status",
                 )
             }
