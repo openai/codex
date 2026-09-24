@@ -611,6 +611,92 @@ fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endp
 }
 
 #[test]
+fn responses_request_preserves_smaller_result_metadata_under_aggregate_budget() -> anyhow::Result<()>
+{
+    let result_metadata = [
+        json!({ "payload": "l".repeat(31 * 1024) }),
+        json!({ "payload": "m".repeat(20 * 1024) }),
+        json!({ "payload": "m".repeat(20 * 1024) }),
+        json!({ "payload": "m".repeat(20 * 1024) }),
+        json!({ "payload": "m".repeat(20 * 1024) }),
+        json!({ "payload": "m".repeat(20 * 1024) }),
+        json!({ "status": "ok" }),
+    ];
+    let sizes = result_metadata
+        .iter()
+        .map(|metadata| serde_json::to_vec(metadata).unwrap().len())
+        .collect::<Vec<_>>();
+    assert!(sizes.iter().all(|bytes| *bytes < 32 * 1024));
+    assert!(sizes.iter().sum::<usize>() > 128 * 1024);
+    let mut history = Vec::new();
+    for (index, metadata) in result_metadata.iter().enumerate() {
+        let id = format!("tool-call-{index}");
+        history.push(serde_json::from_value(json!({
+            "type": "function_call", "call_id": id, "name": "test_tool",
+            "arguments": json!({ "query": "keep" }).to_string(),
+        }))?);
+        let mut output = output_with_tool_result_metadata(ToolResultMetadata::new(metadata));
+        let ResponseItem::FunctionCallOutput { call_id, .. } = &mut output else {
+            unreachable!("helper returns a function call output");
+        };
+        *call_id = Some(id);
+        history.push(output);
+    }
+    let original_history = serde_json::to_value(&history)?;
+    let mut expected_input = original_history.clone();
+    expected_input[1]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"] =
+        json!("omitted_due_to_size_limit");
+
+    let mut features = codex_features::Features::default();
+    features.enable(codex_features::Feature::ExecutedToolCallMetadata);
+    let recorder =
+        crate::tools::ExecutedToolCalls::new(&features, &codex_history::InitialHistory::New);
+    let mut prompt = Prompt {
+        input: history.clone(),
+        ..Default::default()
+    };
+    // Follow the sampling path: budget the request copy before client serialization.
+    recorder.attach_to_prompt(&mut prompt.input, &mut Default::default());
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
+    let api_provider = provider.to_api_provider(/*auth_mode*/ None)?;
+    let mut client = test_model_client(SessionSource::Cli);
+    Arc::get_mut(&mut client.state)
+        .expect("test client should have unique session state")
+        .provider = create_model_provider(provider, /*auth_manager*/ None);
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        /*turn_id*/ None,
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    let request = client.build_responses_request(
+        &prompt,
+        &test_model_info(),
+        /*effort*/ None,
+        codex_protocol::config_types::ReasoningSummary::None,
+        /*service_tier*/ None,
+        &responses_metadata,
+        super::is_internal_metadata_destination(&api_provider),
+    )?;
+    let body = serde_json::to_value(&request)?;
+    // Whole-input equality covers bindings, arguments, results, sources and completion too.
+    assert_eq!(body["input"], expected_input);
+    let mut without_metadata = body.clone();
+    for item in without_metadata["input"].as_array_mut().unwrap() {
+        item.as_object_mut()
+            .unwrap()
+            .remove("internal_chat_message_metadata_passthrough");
+    }
+    let metadata_bytes =
+        serde_json::to_vec(&body)?.len() - serde_json::to_vec(&without_metadata)?.len();
+    assert!(metadata_bytes <= 128 * 1024);
+    assert_eq!(serde_json::to_value(&history)?, original_history);
+    Ok(())
+}
+
+#[test]
 fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()> {
     let provider =
         ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));

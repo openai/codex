@@ -48,7 +48,7 @@ async fn local_compaction_respects_tool_metadata_state(
     .await;
 
     let mut items = vec![user_message("Update the plan")];
-    for index in 0..5 {
+    for index in 0..20 {
         let call_id = format!("direct-{index}");
         let arguments = json!({"plan": [{"step": "x".repeat(7 * 1024), "status": "completed"}]});
         assert!(serde_json::to_vec(&arguments)?.len() < 8 * 1024);
@@ -129,7 +129,7 @@ async fn local_compaction_respects_tool_metadata_state(
             _ => None,
         })
         .collect::<serde_json::Result<Vec<_>>>()?;
-    assert_eq!(outputs.len(), 5);
+    assert_eq!(outputs.len(), 20);
     let metadata_bytes: usize = outputs
         .iter()
         .map(|item| {
@@ -140,7 +140,7 @@ async fn local_compaction_respects_tool_metadata_state(
         .sum();
     // Compaction does not rebudget source records as a normal inference request.
     // Passthrough bytes are also excluded from model token estimates.
-    assert!(metadata_bytes > 32 * 1024);
+    assert!(metadata_bytes > 128 * 1024);
 
     if !metadata_enabled {
         let mut config = (*session.get_config().await).clone();

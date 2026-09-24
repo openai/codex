@@ -345,6 +345,10 @@ impl ExecutedToolCalls {
         let available = MAX_RETAINED_DIRECT_METADATA_BYTES.saturating_sub(retained);
         let mut bytes = executed_tool_call_metadata_bytes(item);
         if bytes > available {
+            item.retain_tool_resource_access();
+            bytes = executed_tool_call_metadata_bytes(item);
+        }
+        if bytes > available {
             item.clear_tool_result_metadata();
             bytes = executed_tool_call_metadata_bytes(item);
         }

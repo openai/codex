@@ -203,7 +203,7 @@ async fn direct_call_metadata_during_compaction_respects_provider_support(
 }
 
 #[test_case(false, 0; "metadata disabled")]
-#[test_case(true, 6; "request budget exceeded")]
+#[test_case(true, 24; "request budget exceeded")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_function_and_tool_search_mark_complete_attempts(
     metadata_enabled: bool,
@@ -211,7 +211,7 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let request_budget = 32 * 1024;
+    let request_budget = 128 * 1024;
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         configure_search_capable_model(config);
