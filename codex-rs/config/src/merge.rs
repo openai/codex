@@ -1,5 +1,5 @@
+use crate::key_aliases::normalize_base_key_aliases;
 use crate::key_aliases::normalize_key_aliases;
-use crate::key_aliases::normalized_with_key_aliases;
 use codex_network_proxy::normalize_host;
 use toml::Value as TomlValue;
 
@@ -55,7 +55,9 @@ impl ShellEnvironmentPolicyFilterRepresentation {
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
 pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
-    merge_toml_values_at_path(base, overlay.clone(), &mut Vec::new());
+    let overlay = normalize_key_aliases(overlay);
+    normalize_base_key_aliases(base, &overlay, &mut Vec::new());
+    merge_toml_values_at_path(base, overlay, &mut Vec::new());
 }
 
 pub fn is_structured_feature_path<S: AsRef<str>>(path: &[S]) -> bool {
@@ -94,8 +96,6 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: TomlValue, path: &mu
     if let TomlValue::Table(base_table) = &mut *base
         && let TomlValue::Table(mut overlay_table) = overlay
     {
-        normalize_key_aliases(path, base_table);
-        normalize_key_aliases(path, &mut overlay_table);
         if is_network_domains_path(path) {
             normalize_network_domain_keys(base_table);
             normalize_network_domain_keys(&mut overlay_table);
@@ -141,12 +141,12 @@ fn merge_toml_values_at_path(base: &mut TomlValue, overlay: TomlValue, path: &mu
             if let Some(existing) = base_table.get_mut(&key) {
                 merge_toml_values_at_path(existing, value, path);
             } else {
-                base_table.insert(key, normalized_with_key_aliases(&value, path));
+                base_table.insert(key, value);
             }
             path.pop();
         }
     } else {
-        *base = normalized_with_key_aliases(&overlay, path);
+        *base = overlay;
     }
 }
 

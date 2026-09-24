@@ -1,3 +1,5 @@
+//! Normalize config aliases before merging layers and reporting origins.
+
 use toml::Value as TomlValue;
 use toml::map::Map as TomlMap;
 
@@ -21,7 +23,7 @@ const CONFIG_KEY_ALIASES: &[ConfigKeyAlias] = &[
     },
 ];
 
-pub(crate) fn normalize_key_aliases(path: &[String], table: &mut TomlMap<String, TomlValue>) {
+fn normalize_table_key_aliases(path: &[String], table: &mut TomlMap<String, TomlValue>) {
     for alias in CONFIG_KEY_ALIASES {
         if path
             .iter()
@@ -36,24 +38,61 @@ pub(crate) fn normalize_key_aliases(path: &[String], table: &mut TomlMap<String,
     }
 }
 
-pub(crate) fn normalized_with_key_aliases(value: &TomlValue, path: &[String]) -> TomlValue {
+pub(crate) fn normalize_key_aliases(value: &TomlValue) -> TomlValue {
+    normalize_key_aliases_at_path(value, &[])
+}
+
+fn normalize_key_aliases_at_path(value: &TomlValue, path: &[String]) -> TomlValue {
     match value {
         TomlValue::Table(table) => {
             let mut normalized = TomlMap::new();
             for (key, child) in table {
                 let mut child_path = path.to_vec();
                 child_path.push(key.clone());
-                normalized.insert(key.clone(), normalized_with_key_aliases(child, &child_path));
+                normalized.insert(
+                    key.clone(),
+                    normalize_key_aliases_at_path(child, &child_path),
+                );
             }
-            normalize_key_aliases(path, &mut normalized);
+            normalize_table_key_aliases(path, &mut normalized);
             TomlValue::Table(normalized)
         }
         TomlValue::Array(items) => TomlValue::Array(
             items
                 .iter()
-                .map(|item| normalized_with_key_aliases(item, path))
+                .map(|item| normalize_key_aliases_at_path(item, path))
                 .collect(),
         ),
         _ => value.clone(),
+    }
+}
+
+/// Normalize only base tables reached by the overlay, leaving unrelated raw config intact.
+///
+/// Config-edit table Upserts start from the raw user layer, not the normalized effective config.
+/// They use a sparse overlay and persist only the edited subtree, but compute the returned
+/// version from the whole in-memory config. Normalizing unrelated base tables would make
+/// that version disagree with the file on disk.
+///
+/// For example, given `[memories] no_memories_if_mcp_or_web_search = false` and
+/// `[agents] max_depth = 1`, upserting `agents` with `{ "max_depth": 2 }` must leave
+/// the memories alias untouched. Renaming it only in memory would cause the next write
+/// using the returned version to fail with `ConfigVersionConflict`, despite no intervening edit.
+pub(crate) fn normalize_base_key_aliases(
+    base: &mut TomlValue,
+    overlay: &TomlValue,
+    path: &mut Vec<String>,
+) {
+    if let TomlValue::Table(base) = base
+        && let TomlValue::Table(overlay) = overlay
+    {
+        normalize_table_key_aliases(path, base);
+        for (key, value) in overlay {
+            if let Some(existing) = base.get_mut(key) {
+                path.push(key.clone());
+                normalize_base_key_aliases(existing, value, path);
+                path.pop();
+            }
+        }
     }
 }

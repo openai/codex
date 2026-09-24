@@ -729,3 +729,20 @@ exclude = []
         assert_eq!(base, overlay);
     }
 }
+
+#[test]
+fn sparse_overlay_preserves_unvisited_base_aliases() {
+    let mut base = parse_toml(
+        "[memories]\nno_memories_if_mcp_or_web_search = false\n[agents]\nmax_threads = 2",
+    );
+    let overlay = parse_toml("[agents]\nmax_depth = 3");
+
+    merge_toml_values(&mut base, &overlay);
+
+    assert_eq!(
+        base,
+        parse_toml(
+            "[memories]\nno_memories_if_mcp_or_web_search = false\n[agents]\nmax_concurrent_threads_per_session = 2\nmax_depth = 3",
+        ),
+    );
+}
