@@ -287,6 +287,24 @@ impl Session {
 
 async fn schedule_startup_prewarm_inner(session: Arc<Session>) -> CodexResult<ModelClientSession> {
     let prewarm_started_at = Instant::now();
+    let mut client_session = session.services.model_client.new_session();
+    let websocket_ready = client_session.is_websocket_prewarmed().await;
+    // Count the decision before preparation can fail; fresh clients also need prewarm.
+    session.services.session_telemetry.counter(
+        "codex.startup_prewarm.websocket_check",
+        /*inc*/ 1,
+        &[(
+            "outcome",
+            if websocket_ready {
+                "ready"
+            } else {
+                "needs_prewarm"
+            },
+        )],
+    );
+    if websocket_ready {
+        return Ok(client_session);
+    }
     let base_instructions = session.get_prompt_base_instructions().await.text;
     let startup_turn_context = session
         .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
@@ -329,7 +347,6 @@ async fn schedule_startup_prewarm_inner(session: Arc<Session>) -> CodexResult<Mo
         window_number,
         context_window_id,
     );
-    let mut client_session = session.services.model_client.new_session();
     // Start the handshake with the expected route while capturing tools for generate=false.
     let (step_context, ()) = tokio::try_join!(
         async {
