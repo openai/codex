@@ -66,8 +66,69 @@ alias(
     actual = ":src_binding_release_aarch64_unknown_linux_gnu_150_4_0_release",
 )
 
+# Published files contain both pointer compression and the in-process sandbox.
+# Use the source pair together whenever those options differ or a caller needs
+# custom V8 C++ flags. The main-repo flag is shared with the @v8_targets copy
+# of this BUILD file used by rules_rs.
+config_setting(
+    name = "use_rusty_v8_prebuilts",
+    flag_values = {
+        "@//:rusty_v8_from_source": "False",
+        "@v8//:v8_enable_pointer_compression": "True",
+        "@v8//:v8_enable_sandbox": "True",
+    },
+)
+
 alias(
     name = "rusty_v8_archive_for_target",
+    actual = select({
+        ":use_rusty_v8_prebuilts": ":rusty_v8_prebuilt_archive_for_target",
+        "//conditions:default": ":rusty_v8_source_archive_for_target",
+    }),
+)
+
+alias(
+    name = "rusty_v8_prebuilt_archive_for_target",
+    actual = select({
+        "@rules_rs//rs/platforms/config:aarch64-apple-darwin": "@rusty_v8_150_4_0_aarch64_apple_darwin_archive//file",
+        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": ":v8_150_4_0_aarch64_unknown_linux_gnu_prebuilt",
+        "@rules_rs//rs/platforms/config:x86_64-apple-darwin": "@rusty_v8_150_4_0_x86_64_apple_darwin_archive//file",
+        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": ":v8_150_4_0_x86_64_unknown_linux_gnu_prebuilt",
+        ":platform_aarch64_unknown_linux_musl": ":rusty_v8_source_archive_for_target",
+        ":platform_x86_64_unknown_linux_musl": ":rusty_v8_source_archive_for_target",
+        "//conditions:default": ":rusty_v8_source_archive_for_target",
+    }),
+)
+
+# A GNU Codex release archive carries Chromium's namespaced libc++ runtime.
+# Bazel also links its own libc++. Both keep their exception classes in std::,
+# so prefer the toolchain definitions of just those shared ABI entry points.
+# Inputs remain checksum-verified and immutable; only the Bazel output changes.
+[
+    genrule(
+        name = "v8_150_4_0_%s_unknown_linux_gnu_prebuilt" % arch,
+        srcs = [
+            ":gnu_libcxx_shared_exception_symbols.txt",
+            "@rusty_v8_150_4_0_%s_unknown_linux_gnu_archive//file" % arch,
+        ],
+        outs = ["libv8_150_4_0_%s_unknown_linux_gnu_prebuilt.a" % arch],
+        cmd = """
+            gzip -dc "$(location @rusty_v8_150_4_0_%s_unknown_linux_gnu_archive//file)" > "$@.unadjusted"
+            $(location @llvm//tools:llvm-objcopy) \
+                --weaken-symbols="$(location :gnu_libcxx_shared_exception_symbols.txt)" \
+                "$@.unadjusted" "$@"
+            rm "$@.unadjusted"
+        """ % arch,
+        tools = ["@llvm//tools:llvm-objcopy"],
+    )
+    for arch in [
+        "aarch64",
+        "x86_64",
+    ]
+]
+
+alias(
+    name = "rusty_v8_source_archive_for_target",
     actual = select({
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":v8_150_4_0_aarch64_apple_darwin_bazel",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":v8_150_4_0_aarch64_pc_windows_gnullvm",
@@ -85,6 +146,27 @@ alias(
 
 alias(
     name = "rusty_v8_binding_for_target",
+    actual = select({
+        ":use_rusty_v8_prebuilts": ":rusty_v8_prebuilt_binding_for_target",
+        "//conditions:default": ":rusty_v8_source_binding_for_target",
+    }),
+)
+
+alias(
+    name = "rusty_v8_prebuilt_binding_for_target",
+    actual = select({
+        "@rules_rs//rs/platforms/config:aarch64-apple-darwin": "@rusty_v8_150_4_0_aarch64_apple_darwin_binding//file",
+        "@rules_rs//rs/platforms/config:aarch64-unknown-linux-gnu": "@rusty_v8_150_4_0_aarch64_unknown_linux_gnu_binding//file",
+        "@rules_rs//rs/platforms/config:x86_64-apple-darwin": "@rusty_v8_150_4_0_x86_64_apple_darwin_binding//file",
+        "@rules_rs//rs/platforms/config:x86_64-unknown-linux-gnu": "@rusty_v8_150_4_0_x86_64_unknown_linux_gnu_binding//file",
+        ":platform_aarch64_unknown_linux_musl": ":rusty_v8_source_binding_for_target",
+        ":platform_x86_64_unknown_linux_musl": ":rusty_v8_source_binding_for_target",
+        "//conditions:default": ":rusty_v8_source_binding_for_target",
+    }),
+)
+
+alias(
+    name = "rusty_v8_source_binding_for_target",
     actual = select({
         "@rules_rs//rs/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin_150_4_0_release",
         "@rules_rs//rs/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm_150_4_0_release",

@@ -3,18 +3,24 @@
 This directory wires the `v8` crate to exact-version Bazel inputs.
 Bazel consumer builds use:
 
-- upstream `denoland/rusty_v8` release archives on Windows MSVC
-- source-built V8 archives on Darwin, GNU Linux, musl Linux, and Windows GNU
+- Codex-published sandbox archive/binding pairs on Darwin and GNU Linux (x64
+  and arm64), with checksums pinned from the trusted release manifests
+- the existing Codex-published Windows MSVC archives
+- source-built V8 archives on musl Linux and Windows GNU
 
 Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
 Selected Cargo CI, release, and package builds override
 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with Codex release assets. Bazel
-sets those variables independently in `MODULE.bazel` to select source-built
-local archives and bindings for its consumer builds.
+sets those variables independently in `MODULE.bazel`, selecting the pair above
+for its consumers. All Bazel compilation modes use the same published V8
+release archive on supported platforms.
 
-The Bazel `v8` crate feature selection enables V8's in-process sandbox for
-Darwin, Linux, and Windows GNU. Windows MSVC remains on upstream non-sandboxed
-prebuilts.
+The Bazel `v8` crate feature selection enables V8's in-process sandbox.
+Darwin/GNU consumers select prebuilts only when both the V8 sandbox and pointer
+compression settings match the published artifact. For source instrumentation
+or custom V8 C++ settings, use `--//:rusty_v8_from_source=true`; the archive
+and binding then both come from the source path. The published release archive
+cannot incorporate local V8 C++ flags or native debug/sanitizer settings.
 
 Current pinned versions:
 
@@ -36,7 +42,7 @@ Use this as the maintainer flow for a version bump:
 6. Once the release build completes, rerun the build on the candidate branch
    and verify that the final artifact builds and tests pass.
 
-When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
+When changing the prebuilt `rusty_v8` `http_file` inputs, keep the
 checked-in checksum manifest and `MODULE.bazel` in sync:
 
 ```bash
@@ -44,9 +50,12 @@ python3 .github/scripts/rusty_v8_bazel.py update-module-bazel
 python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
 ```
 
-The commands default to the single `rusty_v8_*` `http_file` version still
-present in `MODULE.bazel` and validate every matching entry. CI runs the check
-command to block checksum drift.
+For the Darwin/GNU pairs, verify each published
+`rusty_v8_ptrcomp_sandbox_release_<target>.sha256` against the committed
+`rusty_v8_<version>_release_manifests.sha256` first. Copy the verified archive
+and binding checksums into `rusty_v8_<version>.sha256`, then run these
+commands. They validate every matching `http_file` entry, and CI blocks
+checksum drift.
 
 The consumer-facing selectors are:
 
@@ -101,8 +110,17 @@ the final static archive so consumers can link it with the `v8` crate's default
 `use_custom_libcxx` feature. The config keeps the object files and the bundled
 runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those objects
 with the toolchain libc++ default namespace. Bazel consumers use these
-source-built targets directly; Cargo release and package builds use the
-published copies.
+published archives for supported Darwin/GNU platforms, as do Cargo release and
+package builds. On GNU Linux, Bazel decompresses to a private output and weakens
+the ten shared `std::logic_error` and `std::runtime_error` constructors and
+assignment entry points listed in `gnu_libcxx_shared_exception_symbols.txt`.
+libc++ keeps these exception functions in `std::` across inline ABI namespaces;
+the toolchain's definitions then take precedence if both runtimes are linked.
+Constructors accepting Chromium's `std::__Cr::string` remain strong in the V8
+archive. The verified input and the producer's archive are never mutated.
+This depends on libc++'s shared exception-object ABI; updates to either libc++
+revision must keep the native GNU link/runtime checks passing. The Bazel pair targets above still point directly to source
+targets so a new release or canary never depends on an older published copy.
 
 MSVC is not part of the Bazel-produced matrix yet. The repository's current
 hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so

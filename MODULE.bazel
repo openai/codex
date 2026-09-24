@@ -833,6 +833,78 @@ http_file(
     ],
 )
 
+http_file(
+    name = "rusty_v8_150_4_0_aarch64_apple_darwin_archive",
+    downloaded_file_path = "librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz",
+    sha256 = "00adbb48798848c77550441c68673a5e8529b8e1b73eabcdee232cb39b40f4a1",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_aarch64_apple_darwin_binding",
+    downloaded_file_path = "src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs",
+    sha256 = "ca5adf0cf89c9a70ad460ae73648b2fe89b74aa113b3cb7f757b6a02b758394f",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/src_binding_ptrcomp_sandbox_release_aarch64-apple-darwin.rs",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_aarch64_unknown_linux_gnu_archive",
+    downloaded_file_path = "librusty_v8_ptrcomp_sandbox_release_aarch64-unknown-linux-gnu.a.gz",
+    sha256 = "d1517eed405468537029b005d5fe997ec74d5c8d351f916b3a6df20b7d2811ba",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/librusty_v8_ptrcomp_sandbox_release_aarch64-unknown-linux-gnu.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_aarch64_unknown_linux_gnu_binding",
+    downloaded_file_path = "src_binding_ptrcomp_sandbox_release_aarch64-unknown-linux-gnu.rs",
+    sha256 = "7727826ae479bdb645e807239fb12d1f8e2e23de7a6cf16f5ee592690d1d8506",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/src_binding_ptrcomp_sandbox_release_aarch64-unknown-linux-gnu.rs",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_x86_64_apple_darwin_archive",
+    downloaded_file_path = "librusty_v8_ptrcomp_sandbox_release_x86_64-apple-darwin.a.gz",
+    sha256 = "e0d9bb64e8b3a034c2930c83972f3f35760211148342fa0407b38250ef330856",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/librusty_v8_ptrcomp_sandbox_release_x86_64-apple-darwin.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_x86_64_apple_darwin_binding",
+    downloaded_file_path = "src_binding_ptrcomp_sandbox_release_x86_64-apple-darwin.rs",
+    sha256 = "ca5adf0cf89c9a70ad460ae73648b2fe89b74aa113b3cb7f757b6a02b758394f",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/src_binding_ptrcomp_sandbox_release_x86_64-apple-darwin.rs",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_x86_64_unknown_linux_gnu_archive",
+    downloaded_file_path = "librusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.a.gz",
+    sha256 = "a35c75d1f26e6a983885a45b33490a4ebe54f05050568b32b89cfb421b30b583",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/librusty_v8_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_150_4_0_x86_64_unknown_linux_gnu_binding",
+    downloaded_file_path = "src_binding_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.rs",
+    sha256 = "7727826ae479bdb645e807239fb12d1f8e2e23de7a6cf16f5ee592690d1d8506",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v150.4.0/src_binding_ptrcomp_sandbox_release_x86_64-unknown-linux-gnu.rs",
+    ],
+)
+
 use_repo(crate, "crates")
 
 bazel_dep(name = "libcap", version = "2.27.bcr.1")

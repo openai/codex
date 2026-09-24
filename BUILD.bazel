@@ -1,4 +1,12 @@
 load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+# Set for builds that need custom V8 C++ flags or source instrumentation.
+bool_flag(
+    name = "rusty_v8_from_source",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
 
 xcode_config(name = "disable_xcode")
 

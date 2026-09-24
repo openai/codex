@@ -1,0 +1,13 @@
+# libc++ intentionally leaves these exception functions in std:: across ABI
+# namespaces. Prefer the Bazel toolchain definitions if both runtimes link.
+# Keep constructors taking std::__Cr::string strong in the V8 archive.
+_ZNSt11logic_errorC1EPKc
+_ZNSt11logic_errorC1ERKS_
+_ZNSt11logic_errorC2EPKc
+_ZNSt11logic_errorC2ERKS_
+_ZNSt11logic_erroraSERKS_
+_ZNSt13runtime_errorC1EPKc
+_ZNSt13runtime_errorC1ERKS_
+_ZNSt13runtime_errorC2EPKc
+_ZNSt13runtime_errorC2ERKS_
+_ZNSt13runtime_erroraSERKS_

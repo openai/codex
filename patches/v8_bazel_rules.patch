@@ -7,7 +7,7 @@ diff --git a/orig/v8-15.0.245.2/bazel/defs.bzl b/mod/v8-15.0.245.2/bazel/defs.bz
 index bbe1495..6673518 100644
 --- a/orig/v8-15.0.245.2/bazel/defs.bzl
 +++ b/mod/v8-15.0.245.2/bazel/defs.bzl
-@@ -33,9 +33,21 @@ _create_option_int = rule(
+@@ -33,9 +33,25 @@ _create_option_int = rule(
  )
  
  def v8_flag(name, default = False):
@@ -30,8 +30,14 @@ index bbe1495..6673518 100644
 +        visibility = ["//visibility:public"],
 +    )
  
- def v8_string(name, default = ""):
-     _create_option_string(name = name, build_setting_default = default)
+-def v8_string(name, default = ""):
+-    _create_option_string(name = name, build_setting_default = default)
++def v8_string(name, default = "", visibility = None):
++    _create_option_string(
++        name = name,
++        build_setting_default = default,
++        visibility = visibility,
++    )
 @@ -97,7 +109,13 @@ v8_config = rule(
  
  def _default_args():
@@ -169,12 +175,13 @@ index b432f86..28c567b 100644
  v8_flag(name = "v8_enable_verify_csa")
  
  v8_flag(name = "v8_enable_verify_heap")
-@@ -313,7 +317,7 @@ v8_int(
+@@ -313,7 +317,8 @@ v8_int(
  # If no explicit value for v8_enable_pointer_compression, we set it to 'none'.
  v8_string(
      name = "v8_enable_pointer_compression",
 -    default = "none",
 +    default = "False",
++    visibility = ["//visibility:public"],
  )
  
  # Default setting for v8_enable_pointer_compression.
