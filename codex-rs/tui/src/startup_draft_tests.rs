@@ -414,7 +414,7 @@ fn startup_draft_preserves_multiline_editing_without_submitting() {
     assert!(pump.app_event_rx.try_recv().is_err());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn startup_draft_preserves_non_bracketed_multiline_pastes_without_submitting() {
     let events = "first line\n\nsecond line\nthird line"
         .chars()

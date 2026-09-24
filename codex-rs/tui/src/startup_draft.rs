@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::Poll;
 use std::time::Duration;
-use std::time::Instant;
+use tokio::time::Instant;
 
 use crossterm::SynchronizedUpdate;
 use ratatui::layout::Size;

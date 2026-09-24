@@ -2,7 +2,9 @@
 //!
 //! It edits [`TextArea`] and attachments, routes popup keys, makes completed slash commands atomic,
 //! and handles Enter/newlines. It shows Luna Reserve's yellow arrow and detects unbracketed paste
-//! bursts, especially on Windows. Copy shortcuts and right clicks preserve selected draft text.
+//! bursts, especially on Windows. Paste timing uses Tokio's clock so asynchronous flush deadlines
+//! and input classification share a clock, including in paused-time tests. Copy shortcuts and right
+//! clicks preserve selected draft text.
 //! The live voice strip renders after effort ignition, followed by the Astra sparkle when eligible.
 //! Owned transcripts keep persistent status below the composer and hints on a separate final row.
 //! Shortcut help expands above the composer, with its close hint replacing the final shortcuts row
@@ -1840,7 +1842,7 @@ impl ChatComposer {
     /// This also allows a single "held" ASCII char to render even when it turns out not to be part
     /// of a paste burst.
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.handle_paste_burst_flush(Instant::now())
+        self.handle_paste_burst_flush(tokio::time::Instant::now().into_std())
     }
 
     /// Returns whether the composer is currently in any paste-burst related transient state.
@@ -1982,7 +1984,7 @@ impl ChatComposer {
             return self.begin_history_search();
         }
 
-        if self.handle_paste_tab(key_event, Instant::now()) {
+        if self.handle_paste_tab(key_event, tokio::time::Instant::now().into_std()) {
             return (InputResult::None, true);
         }
 
@@ -3119,7 +3121,8 @@ impl ChatComposer {
     /// Common logic for handling message submission/queuing.
     /// Returns the appropriate InputResult based on `should_queue`.
     fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
-        let result = self.handle_submission_with_time(should_queue, Instant::now());
+        let result =
+            self.handle_submission_with_time(should_queue, tokio::time::Instant::now().into_std());
         self.reset_vim_mode_after_successful_dispatch(&result.0);
         result
     }
@@ -3604,7 +3607,7 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
-        self.handle_input_basic_with_time(input, Instant::now())
+        self.handle_input_basic_with_time(input, tokio::time::Instant::now().into_std())
     }
 
     fn handle_input_basic_with_time(

@@ -4,7 +4,7 @@
 //! preserved, protected screens do not consume draft input, and confirmation never removes text.
 
 use std::io;
-use std::time::Instant;
+use tokio::time::Instant;
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
