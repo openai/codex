@@ -169,6 +169,29 @@ impl Error for TypedRequestError {
     }
 }
 
+// Await transport in a separate statement before calling this: dropping the
+// completed future must precede any caller-provided Deserialize implementation.
+fn decode_typed_response<T>(
+    method: &str,
+    response: IoResult<RequestResult>,
+) -> Result<T, TypedRequestError>
+where
+    T: DeserializeOwned,
+{
+    let response = response.map_err(|source| TypedRequestError::Transport {
+        method: method.to_string(),
+        source,
+    })?;
+    let result = response.map_err(|source| TypedRequestError::Server {
+        method: method.to_string(),
+        source,
+    })?;
+    serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize {
+        method: method.to_string(),
+        source,
+    })
+}
+
 #[derive(Clone)]
 pub struct InProcessClientStartArgs {
     /// Resolved argv0 dispatch paths used by command execution internals.
@@ -486,21 +509,8 @@ impl InProcessAppServerClient {
         T: DeserializeOwned,
     {
         let method = request.method_name();
-        let response =
-            self.request(request)
-                .await
-                .map_err(|source| TypedRequestError::Transport {
-                    method: method.to_string(),
-                    source,
-                })?;
-        let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.to_string(),
-            source,
-        })?;
-        serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize {
-            method: method.to_string(),
-            source,
-        })
+        let response = self.request(request).await;
+        decode_typed_response(method, response)
     }
 
     /// Sends a typed client notification.
@@ -656,21 +666,8 @@ impl InProcessAppServerRequestHandle {
         T: DeserializeOwned,
     {
         let method = request.method_name();
-        let response =
-            self.request(request)
-                .await
-                .map_err(|source| TypedRequestError::Transport {
-                    method: method.to_string(),
-                    source,
-                })?;
-        let result = response.map_err(|source| TypedRequestError::Server {
-            method: method.to_string(),
-            source,
-        })?;
-        serde_json::from_value(result).map_err(|source| TypedRequestError::Deserialize {
-            method: method.to_string(),
-            source,
-        })
+        let response = self.request(request).await;
+        decode_typed_response(method, response)
     }
 }
 
@@ -686,10 +683,9 @@ impl AppServerRequestHandle {
     where
         T: DeserializeOwned,
     {
-        match self {
-            Self::InProcess(handle) => handle.request_typed(request).await,
-            Self::Remote(handle) => handle.request_typed(request).await,
-        }
+        let method = request.method_name();
+        let response = self.request(request).await;
+        decode_typed_response(method, response)
     }
 }
 
@@ -731,10 +727,9 @@ impl AppServerClient {
     where
         T: DeserializeOwned,
     {
-        match self {
-            Self::InProcess(client) => client.request_typed(request).await,
-            Self::Remote(client) => client.request_typed(request).await,
-        }
+        let method = request.method_name();
+        let response = self.request(request).await;
+        decode_typed_response(method, response)
     }
 
     pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
@@ -812,6 +807,7 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use futures::SinkExt;
     use futures::StreamExt;
+    use futures::poll;
     use pretty_assertions::assert_eq;
     use std::ops::Deref;
     use std::path::Path;
@@ -1126,6 +1122,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn typed_request_drop_cancels_waiting_send_and_reply() {
+        let (command_tx, mut commands) = mpsc::channel(/*buffer*/ 1);
+        let handle =
+            AppServerRequestHandle::InProcess(InProcessAppServerRequestHandle { command_tx });
+        let request = ClientRequest::ConfigRequirementsRead {
+            request_id: RequestId::String("typed-request".to_string()),
+            params: None,
+        };
+        let mut pending = Box::pin(handle.request_typed::<serde_json::Value>(request.clone()));
+        assert!(matches!(
+            commands.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(poll!(&mut pending).is_pending());
+        let mut blocked = Box::pin(handle.request_typed::<serde_json::Value>(request.clone()));
+        assert!(poll!(&mut blocked).is_pending());
+        drop(blocked);
+
+        let ClientCommand::Request {
+            request: sent,
+            response_tx,
+        } = commands.try_recv().expect("first request should be queued")
+        else {
+            panic!("expected request command");
+        };
+        assert_eq!(*sent, request);
+        assert!(!response_tx.is_closed());
+        drop(pending);
+        assert!(response_tx.is_closed());
+        assert!(matches!(
+            commands.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
     async fn typed_request_roundtrip_works() {
         let TestClient {
             _codex_home,
@@ -1377,6 +1409,7 @@ mod tests {
 
         assert_eq!(client.server_version(), Some("9.8.7-test"));
         assert_eq!(client.codex_home(), Some("/server/.codex"));
+        let client = AppServerClient::Remote(client);
         let response: GetAccountResponse = client
             .request_typed(ClientRequest::GetAccount {
                 request_id: RequestId::Integer(1),
