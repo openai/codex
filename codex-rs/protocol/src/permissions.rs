@@ -1555,12 +1555,54 @@ impl FileSystemSandboxPolicy {
         {
             return Vec::new();
         }
+        // Include resolved gitdirs in the entries used to carve out broader grants.
+        // Seatbelt grants are independent, and later bubblewrap binds cover earlier mounts.
+        let include_resolved_gitdirs = match path_resolution {
+            WritableRootPathResolution::Effective => cfg!(target_os = "linux"),
+            WritableRootPathResolution::PreserveMutableComponents => cfg!(target_os = "macos"),
+        };
+        let resolved_gitdir_entries: Vec<ResolvedFileSystemEntry> = if include_resolved_gitdirs {
+            effective_entries
+                .iter()
+                .filter(|entry| entry.access.can_write())
+                .filter_map(|entry| {
+                    let dot_git = path_resolution
+                        .resolve(entry.path.clone())
+                        .join(PROTECTED_METADATA_GIT_PATH_NAME);
+                    is_git_pointer_file(&dot_git)
+                        .then(|| resolve_gitdir_from_file(&dot_git))
+                        .flatten()
+                })
+                .filter(|path| !has_explicit_resolved_path_entry(&resolved_entries, path))
+                .map(|path| ResolvedFileSystemEntry {
+                    path,
+                    access: FileSystemAccessMode::Read,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let prepared_entries: Vec<PreparedFileSystemEntry<'_>> = effective_entries
             .into_iter()
             .map(|entry| PreparedFileSystemEntry {
                 entry,
                 effective_path: path_resolution.resolve(entry.path.clone()),
             })
+            .chain(resolved_gitdir_entries.iter().map(|entry| {
+                PreparedFileSystemEntry {
+                    entry,
+                    // Resolve the exclusion target while retaining the logical entry path.
+                    effective_path: entry
+                        .path
+                        .as_path()
+                        .canonicalize()
+                        .ok()
+                        .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok())
+                        .unwrap_or_else(|| {
+                            WritableRootPathResolution::Effective.resolve(entry.path.clone())
+                        }),
+                }
+            }))
             .collect();
         let writable_entries: Vec<&PreparedFileSystemEntry<'_>> = prepared_entries
             .iter()
@@ -2532,6 +2574,53 @@ mod tests {
     #[cfg(unix)]
     fn symlink_dir(original: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(original, link)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn writable_roots_protect_gitdir_target_outside_alias_root() {
+        let temp = TempDir::new().expect("tempdir");
+        let base = temp.path().canonicalize().expect("canonical tempdir");
+        let workspace = base.join("workspace");
+        let writable = base.join("writable");
+        let aliases = base.join("readonly-aliases");
+        let gitdir = writable.join("gitdir");
+        fs::create_dir(&workspace).expect("create workspace");
+        fs::create_dir_all(&gitdir).expect("create gitdir");
+        fs::create_dir(&aliases).expect("create aliases");
+        let alias = aliases.join("repo");
+        symlink_dir(&writable, &alias).expect("create alias");
+        fs::write(
+            workspace.join(".git"),
+            format!("gitdir: {}\n", alias.join("gitdir").display()),
+        )
+        .expect("write Git pointer");
+        let policy = FileSystemSandboxPolicy::restricted(
+            [&workspace, &writable]
+                .into_iter()
+                .map(|path| {
+                    FileSystemSandboxEntry::new(
+                        AbsolutePathBuf::from_absolute_path(path)
+                            .expect("absolute root")
+                            .into(),
+                        FileSystemAccessMode::Write,
+                    )
+                })
+                .collect(),
+        );
+        let roots = if cfg!(target_os = "macos") {
+            policy.get_writable_roots_with_cwd_preserving_mutable_paths(&workspace)
+        } else {
+            policy.get_writable_roots_with_cwd(&workspace)
+        };
+        let root = roots
+            .iter()
+            .find(|root| root.root.as_path() == writable)
+            .expect("additional writable root");
+        assert_eq!(
+            root.read_only_subpaths,
+            vec![AbsolutePathBuf::from_absolute_path(gitdir).expect("absolute gitdir")],
+        );
     }
 
     #[test]

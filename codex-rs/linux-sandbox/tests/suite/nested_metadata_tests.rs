@@ -1,7 +1,8 @@
-//! Nested writable roots must start while preserving read-only metadata protections.
+//! Mounts for writable roots must preserve read-only metadata protections.
 
 use super::LONG_TIMEOUT_MS;
 use super::create_env_from_core_vars;
+use super::run_cmd_result_with_cwd_and_writable_roots;
 use super::run_cmd_result_with_permission_profile_for_cwd;
 use super::should_skip_bwrap_tests;
 use codex_protocol::models::PermissionProfile;
@@ -129,5 +130,75 @@ printf nested-metadata-protected
             !visualization.join(name).exists(),
             "temporary {name} mountpoint should be cleaned up"
         );
+    }
+}
+
+#[test_case::test_case(RootLayout::Directory; "direct")]
+#[test_case::test_case(RootLayout::Symlink; "alias_outside_writable_roots")]
+#[tokio::test]
+async fn workspace_write_protects_resolved_gitdir_in_another_writable_root(layout: RootLayout) {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    // Roots at the same depth keep the workspace mount before the additional writable root.
+    let workspace = temp.path().join("workspace");
+    let writable = temp.path().join("writable");
+    let gitdir = writable.join("gitdir");
+    std::fs::create_dir(&workspace).expect("create workspace");
+    std::fs::create_dir_all(gitdir.join("hooks")).expect("create Git hooks directory");
+    let pointer_target = match layout {
+        RootLayout::Directory => gitdir.clone(),
+        RootLayout::Symlink => {
+            let aliases = temp.path().join("readonly-aliases");
+            std::fs::create_dir(&aliases).expect("create aliases directory");
+            let alias = aliases.join("repo");
+            std::os::unix::fs::symlink(&writable, &alias).expect("create gitdir alias");
+            alias.join("gitdir")
+        }
+    };
+    std::fs::write(
+        workspace.join(".git"),
+        format!("gitdir: {}\n", pointer_target.display()),
+    )
+    .expect("write Git pointer");
+    let hook = gitdir.join("hooks/pre-commit");
+    std::fs::write(&hook, "unchanged").expect("write Git hook");
+
+    let script = r#"
+set -eu
+printf allowed > "$1/allowed.txt"
+if (printf changed > "$1/gitdir/hooks/pre-commit") 2>/dev/null; then
+    exit 10
+fi
+"#;
+    let output = run_cmd_result_with_cwd_and_writable_roots(
+        &[
+            "/bin/sh",
+            "-c",
+            script,
+            "resolved-gitdir-test",
+            writable.to_str().expect("UTF-8 writable root"),
+        ],
+        &workspace,
+        std::slice::from_ref(&writable),
+        LONG_TIMEOUT_MS,
+        /*use_legacy_landlock*/ false,
+        /*network_access*/ true,
+    )
+    .await
+    .expect("sandboxed command should complete");
+
+    assert_eq!(
+        (output.exit_code, output.stdout.text, output.stderr.text),
+        (0, String::new(), String::new())
+    );
+    for (path, expected) in [
+        (writable.join("allowed.txt"), "allowed"),
+        (hook, "unchanged"),
+    ] {
+        assert_eq!(std::fs::read_to_string(path).expect("read file"), expected);
     }
 }

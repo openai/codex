@@ -2742,6 +2742,69 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
 }
 
 #[test]
+fn workspace_write_protects_linked_worktree_gitdir_under_tmp() {
+    let tmp = TempDir::new_in("/private/tmp").expect("tempdir");
+    let worktree = tmp.path().join("worktree");
+    let gitdir = tmp.path().join("common/.git/worktrees/worktree");
+    fs::create_dir(&worktree).expect("create worktree");
+    fs::create_dir_all(&gitdir).expect("create gitdir");
+    fs::write(
+        worktree.join(".git"),
+        format!("gitdir: {}\n", gitdir.display()),
+    )
+    .expect("write .git pointer");
+    let commondir = gitdir.join("commondir");
+    fs::write(&commondir, "../..\n").expect("write commondir");
+    let allowed = tmp.path().join("allowed");
+    let policy = FileSystemSandboxPolicy::workspace_write(
+        &[],
+        /*exclude_tmpdir_env_var*/ false,
+        /*exclude_slash_tmp*/ false,
+    );
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf allowed > \"$1\" && printf changed > \"$2\"".to_string(),
+            "sh".to_string(),
+            allowed.display().to_string(),
+            commondir.display().to_string(),
+        ],
+        file_system_sandbox_policy: &policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: &worktree,
+        enforce_managed_network: false,
+        managed_network: None,
+        environment_id: None,
+        network: None,
+        extra_allow_unix_sockets: &[],
+    })
+    .expect("create seatbelt args");
+    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+        .args(args)
+        .current_dir(&worktree)
+        .output()
+        .expect("execute seatbelt command");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted") {
+        return;
+    }
+
+    assert_eq!(
+        fs::read_to_string(allowed).expect("read allowed file"),
+        "allowed"
+    );
+    assert!(
+        !output.status.success(),
+        "gitdir write succeeded: {output:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(commondir).expect("read commondir"),
+        "../..\n"
+    );
+}
+
+#[test]
 fn create_seatbelt_args_for_cwd_as_git_repo() {
     // Create a temporary workspace with two writable roots: one containing
     // top-level workspace metadata paths and one without them.
