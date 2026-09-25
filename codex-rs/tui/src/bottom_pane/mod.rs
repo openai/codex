@@ -818,8 +818,9 @@ impl BottomPane {
                 .warnings_view
                 .as_mut()
                 .is_some_and(|view| view.handle_key(key_event))
+                && let Some(view) = self.warnings_view.take()
             {
-                self.warnings_view = None;
+                view.close();
             }
             self.request_redraw();
             return InputResult::None;
@@ -941,7 +942,9 @@ impl BottomPane {
     /// quit/interrupt state machine and uses the result to decide what happens next.
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.warnings_active() {
-            self.warnings_view = None;
+            if let Some(view) = self.warnings_view.take() {
+                view.close();
+            }
             self.request_redraw();
             return CancellationEvent::Handled;
         }
@@ -2851,14 +2854,14 @@ mod tests {
         ] {
             let mut pane = test_pane(tx.clone());
             match source {
-                "warning open" => pane.show_warnings(Vec::new()),
+                "warning open" => pane.show_warnings(Vec::new(), Default::default()),
                 "warning navigation" => {
-                    pane.show_warnings(Vec::new());
+                    pane.show_warnings(Vec::new(), Default::default());
                     pane.last_composer_activity_at = None;
                     pane.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
                 }
                 "warning paste" => {
-                    pane.show_warnings(Vec::new());
+                    pane.show_warnings(Vec::new(), Default::default());
                     pane.last_composer_activity_at = None;
                     pane.handle_paste("query".into());
                 }

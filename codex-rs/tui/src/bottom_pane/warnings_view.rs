@@ -1,4 +1,5 @@
 //! A frozen set of warnings, shown one at a time without changing the retained draft.
+//! On intentional close, dismiss only warnings whose pages were actually drawn.
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -11,13 +12,16 @@ use crate::keymap::RuntimeKeymap;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use std::cell::Cell;
+use std::sync::Arc;
 
 #[path = "warnings_view_render.rs"]
 mod render;
 
 pub(super) struct WarningsView {
     entries: Vec<WarningEntry>,
+    transcript: Arc<()>,
     current: usize,
+    visited: Vec<Cell<bool>>,
     offset: Cell<usize>,
     page_size: Cell<usize>,
     max_offset: Cell<usize>,
@@ -30,11 +34,14 @@ pub(super) struct WarningsView {
 impl WarningsView {
     pub(super) fn new(
         entries: Vec<WarningEntry>,
+        transcript: Arc<()>,
         keymap: RuntimeKeymap,
         tx: AppEventSender,
     ) -> Self {
         Self {
+            visited: vec![Cell::new(/*value*/ false); entries.len()],
             entries,
+            transcript,
             current: 0,
             offset: Cell::new(/*value*/ 0),
             page_size: Cell::new(/*value*/ 1),
@@ -54,6 +61,21 @@ impl WarningsView {
         KeymapContextSet::warnings()
     }
 
+    pub(super) fn close(self) {
+        let dismissed: Vec<_> = self
+            .entries
+            .into_iter()
+            .zip(self.visited)
+            .filter_map(|(entry, visited)| visited.get().then_some(entry))
+            .collect();
+        if !dismissed.is_empty() {
+            self.tx.send(AppEvent::UpdateWarnings {
+                transcript: self.transcript,
+                dismissed,
+            });
+        }
+    }
+
     /// Returns true when the user closes the viewer. No key is forwarded to the draft.
     pub(super) fn handle_key(&mut self, event: KeyEvent) -> bool {
         if event.kind == KeyEventKind::Release {
@@ -64,9 +86,7 @@ impl WarningsView {
             .list
             .action_for(event)
             .filter(|action| *action != ListAction::Accept);
-        if action.is_none() && self.keymap.app.open_warnings.is_pressed(event)
-            || self.keymap.list.cancel.is_pressed(event)
-        {
+        if action.is_none() && self.keymap.app.open_warnings.is_pressed(event) {
             return true;
         }
         if action.is_none() && self.keymap.app.copy.is_pressed(event) {

@@ -64,8 +64,13 @@ async fn warnings_hide_and_restore_draft_and_freeze_until_reopened() -> Result<(
     app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Paste("xample".into()))
         .await?;
     assert!(app.chat_widget.keymap_contexts().is_warnings());
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyCode::Esc.into()),
+    )
+    .await?;
+    assert!(!app.chat_widget.keymap_contexts().is_warnings());
     app.render_owned_transcript(&mut tui, size)?;
     assert_eq!(
         crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
@@ -85,19 +90,63 @@ async fn warnings_hide_and_restore_draft_and_freeze_until_reopened() -> Result<(
         .map(ratatui::buffer::Cell::symbol)
         .collect::<String>();
     assert!(frozen.contains("1 of 1"));
+    // The first close's queued update may arrive while the frozen viewer is reopened.
+    let first_dismissal = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::UpdateWarnings { dismissed, .. } if !dismissed.is_empty()))
+        .expect("the first close queued a dismissal");
+    app.handle_event(&mut tui, &mut app_server, first_dismissal)
+        .await?;
     app.chat_widget.handle_key_event(KeyCode::Esc.into());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "/m");
+    let dismissal = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::UpdateWarnings { dismissed, .. } if !dismissed.is_empty()))
+        .expect("dismiss the viewed warning offline");
+    app.handle_event(&mut tui, &mut app_server, dismissal)
+        .await?;
+    // The slash popup masks the passive footer; check the count with a plain draft.
+    app.chat_widget.apply_external_edit("draft".into());
+    app.render_owned_transcript(&mut tui, size)?;
+    let screen = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)
+        .content
+        .chunks(usize::from(size.width))
+        .map(|row| {
+            row.iter()
+                .map(ratatui::buffer::Cell::symbol)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(
+        "warnings_partial_dismissal",
+        crate::chatwidget::tests::helpers::normalize_snapshot_paths(screen),
+    );
+    app.chat_widget.apply_external_edit("/m".into());
     app.chat_widget.open_warnings(&app.transcript_cells);
-    app.chat_widget.handle_key_event(KeyCode::Right.into());
     app.render_owned_transcript(&mut tui, size)?;
     let reopened = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal)
         .content
         .iter()
         .map(ratatui::buffer::Cell::symbol)
         .collect::<String>();
-    assert!(reopened.contains("2 of 2"));
+    assert!(reopened.contains("1 of 1"));
     assert!(reopened.contains("Later warning"));
-    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.handle_tui_event(
+        &mut tui,
+        &mut app_server,
+        TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+    )
+    .await?;
+    let dismissal = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::UpdateWarnings { dismissed, .. } if !dismissed.is_empty()))
+        .expect("Ctrl+C dismisses the viewed warning");
+    app.handle_event(&mut tui, &mut app_server, dismissal)
+        .await?;
+    app.render_owned_transcript(&mut tui, size)?;
+    let after = crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal);
+    assert!(!after.content.iter().any(|cell| cell.symbol() == "⚠"));
+    assert_eq!(tui.terminal.last_known_cursor_pos, cursor);
 
     // An empty composer must not steal Escape for transcript backtracking.
     app.chat_widget.apply_external_edit(String::new());
@@ -167,13 +216,76 @@ async fn warnings_badge_and_pages_work_with_terminal_scrollback() -> Result<()> 
         assert!(screen.contains(text));
     }
     assert!(!screen.contains("fallback draft"));
-    app.chat_widget
-        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
     app.render_chat_widget_frame(&mut tui, size)?;
     assert_eq!(
         crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
         &before
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn warnings_changed_details_reappear_and_clear_resets_dismissal() -> Result<()> {
+    use crate::chatwidget::tests::helpers::render_bottom_popup;
+    use codex_app_server_protocol::McpServerStartupFailureReason;
+
+    let (mut app, mut events, _ops) = crate::app::tests::make_test_app_with_channels().await;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let mut app_server = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let original = history_cell::StartupWarningsCell::mcp(
+        vec!["example MCP unavailable".into()],
+        vec!["example".into()],
+        /*failure_reason*/ None,
+    );
+    app.insert_history_cell(&mut tui, Box::new(original.clone()));
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    let before = render_bottom_popup(&app.chat_widget, /*width*/ 80);
+    // The ID stays the same. Sign-in instructions arrive while the old page is open.
+    app.insert_history_cell(
+        &mut tui,
+        Box::new(history_cell::StartupWarningsCell::mcp(
+            vec!["Login again".into()],
+            vec!["example".into()],
+            Some(McpServerStartupFailureReason::ReauthenticationRequired),
+        )),
+    );
+    assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), before);
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    let dismissal = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::UpdateWarnings { dismissed, .. } if !dismissed.is_empty()))
+        .expect("old details dismissed");
+    app.handle_event(&mut tui, &mut app_server, dismissal)
+        .await?;
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("Sign-in required"));
+    app.chat_widget.handle_key_event(KeyCode::F(2).into());
+    let dismissal = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::UpdateWarnings { dismissed, .. } if !dismissed.is_empty()))
+        .expect("updated details dismissed");
+    app.handle_event(&mut tui, &mut app_server, dismissal)
+        .await?;
+    // Duplicate unchanged delivery must not restore the badge or page.
+    app.insert_history_cell(&mut tui, Box::new(original.clone()));
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("No warnings"));
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.reset_app_ui_state_after_clear();
+    app.insert_history_cell(&mut tui, Box::new(original.clone()));
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), before);
+    // Clear before the queued dismissal arrives, then deliver the same warning again.
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.reset_app_ui_state_after_clear();
+    app.insert_history_cell(&mut tui, Box::new(original));
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, AppEvent::UpdateWarnings { .. }) {
+            app.handle_event(&mut tui, &mut app_server, event).await?;
+        }
+    }
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), before);
+    app_server.shutdown().await?;
     Ok(())
 }
 

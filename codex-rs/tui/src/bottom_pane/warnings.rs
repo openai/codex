@@ -2,11 +2,13 @@
 
 use super::*;
 use crate::history_cell::WarningEntry;
+use std::sync::Arc;
 
 impl BottomPane {
-    pub(crate) fn show_warnings(&mut self, entries: Vec<WarningEntry>) {
+    pub(crate) fn show_warnings(&mut self, entries: Vec<WarningEntry>, transcript: Arc<()>) {
         self.warnings_view = Some(warnings_view::WarningsView::new(
             entries,
+            transcript,
             self.keymap.clone(),
             self.app_event_tx.clone(),
         ));

@@ -38,6 +38,12 @@ impl Renderable for WarningsView {
         };
         Line::from(title.bold()).render(header, buf);
         let details = entry.map_or("No warnings", |entry| entry.details.as_str());
+        if body.width > 0
+            && body.height > 0
+            && let Some(visited) = self.visited.get(self.current)
+        {
+            visited.set(/*val*/ true);
+        }
         let lines: Vec<_> = details
             .lines()
             .flat_map(|line| textwrap::wrap(line, usize::from(body.width.max(/*other*/ 1))))
@@ -70,7 +76,7 @@ impl Renderable for WarningsView {
                 self.keymap
                     .primary_hint(KeymapContext::List, "cancel")
                     .map(crate::key_hint::ShortcutHint::display_label),
-                "back",
+                "dismiss & close",
             ),
             (
                 self.keymap
