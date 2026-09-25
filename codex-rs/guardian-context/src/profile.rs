@@ -138,15 +138,15 @@ impl ContextProfile {
                     ContextTarget::Sync => "",
                     ContextTarget::Async => "\n",
                 };
-                let retained_source = entry.retained_source.as_ref().filter(|_| {
-                    self.target == ContextTarget::Sync
-                        && entry.kind == ConversationTranscriptEntryKind::User
-                });
+                let retained_source = entry
+                    .retained_source
+                    .as_ref()
+                    .filter(|_| entry.kind == ConversationTranscriptEntryKind::User);
                 let text = if let Some(retained) = retained_source {
                     let order = &retained.order;
                     let message = GuardianRootMessage::User(entry.text.clone());
                     format!(
-                        "[{number}] Retained source order: {order}\n{}",
+                        "[{number}] Retained source order: {order}\n{}{suffix}",
                         message.render()
                     )
                 } else {

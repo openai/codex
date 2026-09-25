@@ -359,57 +359,66 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
             }),
         }],
     };
-    let profile = crate::ContextProfile::synchronous();
-    let mut context = transcript_context(&history, profile);
-    context.retain_new_instructions(&[]);
-    let guidance = vec![crate::composition::user_message(vec![
-        ContentItem::InputText {
-            text: START.to_owned(),
-        },
-        ContentItem::InputText {
-            text: END.to_owned(),
-        },
-    ])];
-    assert_eq!(context.retained_instructions().into_messages(), guidance);
-    let mut delivered = context.clone().into_annotated_messages();
-    let mut next = transcript_context(&history, profile);
-    next.retain_new_instructions(&delivered);
-    assert!(next.retained_instructions().into_messages().is_empty());
-    for envelope in &mut delivered {
-        if let Some(metadata) = &mut envelope.metadata {
-            metadata.mark_retained_sources_incomplete();
-        }
-    }
-    let mut next = transcript_context(&history, profile);
-    next.retain_new_instructions(&delivered);
-    assert_eq!(next.retained_instructions().into_messages(), guidance);
-    let budget = crate::RequestBudget {
-        max_input_tokens: context.estimated_tokens() - 1,
-        existing_context_tokens: 0,
-    };
-    assert!(
-        context
-            .enforce_budget(budget, String::new(), crate::HistoryTruncation::Allow)
-            .is_err()
-    );
-
-    // An ID alone, or a partial copy of that ID/revision, cannot suppress its original.
-    history.messages[0]
-        .metadata
-        .as_mut()
-        .unwrap()
-        .mark_retained_sources_incomplete();
-    for metadata in [history.messages[0].metadata.take(), None] {
-        history.messages[0].metadata = metadata;
+    for profile in [
+        crate::ContextProfile::synchronous(),
+        crate::ContextProfile::asynchronous(),
+    ] {
+        let deduplicate = |context: &mut ComposedContext| match profile.target {
+            crate::ContextTarget::Sync => context.retain_new_instructions(&[]),
+            crate::ContextTarget::Async => context.deduplicate_transcript_instructions(),
+        };
         let mut context = transcript_context(&history, profile);
-        let originals = context
-            .clone()
-            .retained_instructions()
-            .into_annotated_messages();
-        context.retain_new_instructions(&[]);
-        assert_eq!(
-            context.retained_instructions().into_annotated_messages(),
-            originals
+        deduplicate(&mut context);
+        let guidance = vec![crate::composition::user_message(vec![
+            ContentItem::InputText {
+                text: START.to_owned(),
+            },
+            ContentItem::InputText {
+                text: END.to_owned(),
+            },
+        ])];
+        assert_eq!(context.retained_instructions().into_messages(), guidance);
+        if profile.target == crate::ContextTarget::Sync {
+            let mut delivered = context.clone().into_annotated_messages();
+            let mut next = transcript_context(&history, profile);
+            next.retain_new_instructions(&delivered);
+            assert!(next.retained_instructions().into_messages().is_empty());
+            for envelope in &mut delivered {
+                if let Some(metadata) = &mut envelope.metadata {
+                    metadata.mark_retained_sources_incomplete();
+                }
+            }
+            let mut next = transcript_context(&history, profile);
+            next.retain_new_instructions(&delivered);
+            assert_eq!(next.retained_instructions().into_messages(), guidance);
+        }
+        let budget = crate::RequestBudget {
+            max_input_tokens: context.estimated_tokens() - 1,
+            existing_context_tokens: 0,
+        };
+        assert!(
+            context
+                .enforce_budget(budget, String::new(), crate::HistoryTruncation::Allow)
+                .is_err()
         );
+
+        // An ID alone, or a partial copy of that ID/revision, cannot suppress its original.
+        let original_metadata = history.messages[0].metadata.clone();
+        history.messages[0]
+            .metadata
+            .as_mut()
+            .unwrap()
+            .mark_retained_sources_incomplete();
+        for metadata in [history.messages[0].metadata.take(), None] {
+            history.messages[0].metadata = metadata;
+            let mut context = transcript_context(&history, profile);
+            let originals = context.retained_instructions().into_annotated_messages();
+            deduplicate(&mut context);
+            assert_eq!(
+                context.retained_instructions().into_annotated_messages(),
+                originals
+            );
+        }
+        history.messages[0].metadata = original_metadata;
     }
 }

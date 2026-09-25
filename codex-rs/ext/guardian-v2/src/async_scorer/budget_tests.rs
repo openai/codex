@@ -270,7 +270,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
             assert!(input.contains("optional old commentary"));
         } else {
             assert!(text.contains(&format!(
-                "[1] user: {instruction}\n[2] developer: {approval}\n[3] user: {restriction}\n"
+                "[1] user: {instruction}\n[2] developer: {approval}\n[3] Retained source order: 1\nuser: {restriction}\n"
             )));
         }
         assert!(text.contains(&instruction));

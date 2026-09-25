@@ -3,7 +3,7 @@
 //! are never truncated into partial permissions, and retained source order is preserved.
 //! Section omissions do not change fast-approval eligibility.
 //! Sync delivery compares against admitted reviewer history, so forks and compaction
-//! need no separate retained-evidence cursor. Async requests keep the full section.
+//! need no separate retained-evidence cursor. Async deduplication is request-local.
 
 use std::collections::HashSet;
 
@@ -167,9 +167,30 @@ impl ComposedContext {
         }
     }
 
+    /// Each async sample carries its own originals and ordering guidance.
+    pub fn deduplicate_transcript_instructions(&mut self) {
+        self.remove_delivered_instructions(&[]);
+    }
+
     /// Omit complete source revisions still present in the admitted reviewer history.
     /// Missing host metadata, changed revisions and incomplete copies require redelivery.
     pub fn retain_new_instructions(&mut self, reviewer_history: &[ResponseItemEnvelope]) {
+        self.remove_delivered_instructions(reviewer_history);
+        if reviewer_history.iter().any(|item| {
+            item.metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.guardian_source_order_guidance)
+        }) {
+            self.sections.retain(|section| {
+            section.id != "retained_user_instructions" || match &section.delivery {
+                SectionDelivery::UserContent(items) => !items.iter().all(|item| matches!(&item.content, ContentItem::InputText { text } if text == START || text == LEGACY_START || text == END)),
+                SectionDelivery::Message(_) => true,
+            }
+        });
+        }
+    }
+
+    fn remove_delivered_instructions(&mut self, reviewer_history: &[ResponseItemEnvelope]) {
         let transcript_sources: HashSet<_> = self
             .sections
             .iter()
@@ -203,10 +224,6 @@ impl ComposedContext {
                     .any(|delivered| delivered.complete && delivered == source)
             })
         });
-        if reviewer_history.iter().any(|item| item.metadata.as_ref().is_some_and(|metadata| metadata.guardian_source_order_guidance))
-            && items.iter().all(|item| matches!(&item.content, ContentItem::InputText { text } if text == START || text == LEGACY_START || text == END)) {
-            self.sections.retain(|section| section.id != "retained_user_instructions");
-        }
     }
 }
 

@@ -138,7 +138,11 @@ impl TranscriptConfig {
         })?;
         let transcript =
             profile.render_transcript(context.transcript_entries(), /*entry_number_offset*/ 0);
-        context.compose(ContextPresentation::Async, transcript)
+        let mut context = context.compose(ContextPresentation::Async, transcript)?;
+        // Each sample is self-contained: only this request's protected transcript
+        // entries can replace retained originals, never a previous sample's history.
+        context.deduplicate_transcript_instructions();
+        Ok(context)
     }
 }
 
