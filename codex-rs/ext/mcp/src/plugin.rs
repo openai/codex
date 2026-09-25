@@ -10,6 +10,7 @@ use codex_extension_api::McpServerContributor;
 use codex_extension_api::SelectedPlugin;
 use codex_extension_api::SelectedPluginContribution;
 use codex_features::Feature;
+use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -85,8 +86,11 @@ impl PluginContributor {
                     .into_iter()
                     .map(|declaration| declaration.connector_id.0)
                     .collect();
+                let CapabilityRootLocation::Environment { environment_id, .. } =
+                    &selected_root.location;
                 Some(SelectedPluginContribution {
                     plugin_display_name: plugin.plugin().manifest().display_name().to_string(),
+                    source_environment_id: environment_id.clone(),
                     servers,
                     connector_ids,
                 })

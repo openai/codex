@@ -161,7 +161,7 @@ impl Fixture {
             ready_selected_capability_roots: Vec::new(),
             mcp_servers: HashMap::from([(
                 CODEX_APPS_MCP_SERVER_NAME.into(),
-                EffectiveMcpServer::configured(server_config.clone()),
+                EffectiveMcpServer::from_host_config(server_config.clone()),
             )]),
             submit_id: "test".into(),
             tx_event: None,

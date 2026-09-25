@@ -390,6 +390,10 @@ fn is_trusted_chatgpt_mcp_server(
 ///
 /// Compatibility built-ins and extension overlays must already be reflected in
 /// `configured_servers`; this function does not synthesize missing servers.
+///
+/// # Panics
+///
+/// Panics if a materialized server is missing from the catalog.
 pub fn effective_mcp_servers_from_configured(
     configured_servers: HashMap<String, McpServerConfig>,
     config: &McpConfig,
@@ -398,6 +402,14 @@ pub fn effective_mcp_servers_from_configured(
     let mut servers = configured_servers
         .into_iter()
         .map(|(name, mut server)| {
+            #[expect(
+                clippy::expect_used,
+                reason = "materialized servers must have catalog registrations"
+            )]
+            let registration = config
+                .mcp_server_catalog
+                .server(&name)
+                .expect("materialized MCP server must have a catalog registration");
             match server.auth.clone() {
                 McpServerAuth::ChatGpt => {
                     if !is_trusted_chatgpt_mcp_server(&server.transport, &config.chatgpt_base_url) {
@@ -406,13 +418,13 @@ pub fn effective_mcp_servers_from_configured(
                 }
                 McpServerAuth::OAuth | McpServerAuth::EmaAuth => {}
             }
-            let agent_plugin = config
-                .mcp_server_catalog
-                .server(&name)
-                .is_some_and(|server| server.source().is_agent_plugin());
             (
                 name,
-                EffectiveMcpServer::configured(server).with_agent_plugin(agent_plugin),
+                EffectiveMcpServer::from_config_with_policy(
+                    server,
+                    registration.credential_policy(),
+                )
+                .with_agent_plugin(registration.source().is_agent_plugin()),
             )
         })
         .collect::<HashMap<_, _>>();

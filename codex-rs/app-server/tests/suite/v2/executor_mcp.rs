@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
+use app_test_support::write_models_cache;
 use axum::Json;
 use axum::Router;
 use axum::body::Bytes;
@@ -51,6 +52,7 @@ use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -239,14 +241,18 @@ async fn selected_executor_discovers_browser_mcp_with_executor_only_bearer_token
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Result<()> {
+async fn legacy_executor_blocks_plugin_host_credentials_and_keeps_host_owned_mcp() -> Result<()> {
+    const PLUGIN_ID: &str = "legacy-plugin@1";
+    const TOKEN_ENV: &str = "SELECTED_PLUGIN_CREDENTIAL_TEST_TOKEN";
+    const HOST_TOKEN: &str = "selected-plugin-host-credential-canary";
+    const EXECUTOR_TOKEN: &str = "selected-plugin-executor-credential-canary";
     let responses_server = responses::start_mock_server().await;
     let codex_home = TempDir::new()?;
     let executor_home = TempDir::new()?;
+    let plugin = TempDir::new()?;
 
     let http_listener = TcpListener::bind("127.0.0.1:0").await?;
     let mcp_url = format!("http://{}/mcp", http_listener.local_addr()?);
-    let expected_authorization = "Bearer host-only-token";
     let service = StreamableHttpService::new(
         || Ok(ExecutorHttpMcpServer),
         Arc::new(LocalSessionManager::default()),
@@ -256,12 +262,14 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
         .nest_service("/mcp", service)
         .layer(axum::middleware::from_fn(
             move |request: axum::extract::Request, next: axum::middleware::Next| async move {
-                let authorized = request
+                let authorization = request
                     .headers()
                     .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|value| value.to_str().ok())
-                    .is_some_and(|value| value == expected_authorization);
-                if !authorized {
+                    .and_then(|value| value.to_str().ok());
+                if !matches!(
+                    authorization,
+                    Some("Bearer host-only-token" | "Bearer plugin-public-token")
+                ) {
                     return axum::http::StatusCode::UNAUTHORIZED.into_response();
                 }
                 next.run(request).await
@@ -275,7 +283,7 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
         "[mcp_servers.host_remote]\nurl = \"{mcp_url}\"\nenvironment_id = \"{EXECUTOR_ID}\"\nbearer_token_env_var = \"HOST_MCP_TEST_TOKEN\"\nrequired = true\n"
     );
     MockResponsesConfig::new(&responses_server.uri())
-        .with_sandbox_mode("danger-full-access")
+        .with_sandbox_mode("workspace-write")
         .with_extra_config(&root_config)
         .write(codex_home.path())?;
     std::fs::write(
@@ -284,12 +292,34 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
             "[mcp_servers.node_repl]\nurl = \"http://127.0.0.1:9/mcp\"\nbearer_token_env_var = \"NODE_REPL_AUTH_TOKEN\"\nrequired = true\nstartup_timeout_sec = 1\n\n[mcp_servers.executor_public]\nurl = \"{mcp_url}\"\nhttp_headers = {{ Authorization = \"Bearer host-only-token\" }}\nrequired = true\n"
         ),
     )?;
+    std::fs::create_dir_all(plugin.path().join(".codex-plugin"))?;
+    std::fs::write(
+        plugin.path().join(".codex-plugin/plugin.json"),
+        r#"{"name":"legacy-plugin"}"#,
+    )?;
+    std::fs::write(
+        plugin.path().join(".mcp.json"),
+        serde_json::to_vec(&json!({
+            "mcpServers": {
+                "plugin_public": {
+                    "url": mcp_url,
+                    "http_headers": {"Authorization": "Bearer plugin-public-token"},
+                },
+                "plugin_sensitive": {
+                    "url": mcp_url,
+                    "environment_id": "local",
+                    "bearer_token_env_var": TOKEN_ENV,
+                }
+            }
+        }))?,
+    )?;
 
     let mut executor = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
         .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
         .stdout(Stdio::piped())
         .kill_on_drop(true)
         .env("CODEX_HOME", executor_home.path())
+        .env(TOKEN_ENV, EXECUTOR_TOKEN)
         .spawn()?;
     let stdout = executor.stdout.take().expect("executor stdout is piped");
     let mut lines = BufReader::new(stdout).lines();
@@ -299,6 +329,7 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
 
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_url = format!("ws://{}", proxy_listener.local_addr()?);
+    let (http_requests_tx, mut http_requests_rx) = mpsc::unbounded_channel();
     let legacy_executor = tokio::spawn(async move {
         let (stream, _) = proxy_listener.accept().await?;
         let downstream = accept_async(stream).await?;
@@ -311,15 +342,16 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
                 let mut message = message?;
                 if let Message::Text(text) = &message {
                     let mut request: Value = serde_json::from_str(text)?;
-                    if request["method"] == "http/request"
-                        && let Some(headers) = request["params"]["headers"].as_array_mut()
-                    {
-                        for header in headers {
-                            if let Some(header) = header.as_object_mut() {
-                                header.remove("valueEnvVar");
+                    if request["method"] == "http/request" {
+                        http_requests_tx.send(request.clone())?;
+                        if let Some(headers) = request["params"]["headers"].as_array_mut() {
+                            for header in headers {
+                                if let Some(header) = header.as_object_mut() {
+                                    header.remove("valueEnvVar");
+                                }
                             }
+                            message = Message::Text(request.to_string().into());
                         }
-                        message = Message::Text(request.to_string().into());
                     }
                 }
                 upstream_tx.send(message).await?;
@@ -364,11 +396,24 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
 
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
-        .with_env_overrides(&[("HOST_MCP_TEST_TOKEN", Some("host-only-token"))])
+        .with_env_overrides(&[
+            ("HOST_MCP_TEST_TOKEN", Some("host-only-token")),
+            (TOKEN_ENV, Some(HOST_TOKEN)),
+        ])
         .without_auto_env()
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
-    let thread_id = start_thread(&mut app_server, /*selected_capability_roots*/ None).await?;
+    let thread_id = start_thread(
+        &mut app_server,
+        Some(vec![SelectedCapabilityRoot {
+            id: PLUGIN_ID.to_string(),
+            location: CapabilityRootLocation::Environment {
+                environment_id: EXECUTOR_ID.to_string(),
+                path: PathUri::from_host_native_path(plugin.path())?,
+            },
+        }]),
+    )
+    .await?;
     let servers = mcp_server_statuses(&mut app_server, thread_id.clone()).await?;
     assert!(servers.iter().any(|server| server.name == "host_remote"));
     assert!(
@@ -377,6 +422,28 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
             .any(|server| server.name == "executor_public")
     );
     assert!(servers.iter().all(|server| server.name != "node_repl"));
+    let public_plugin = servers
+        .iter()
+        .find(|server| server.name == "plugin_public")
+        .expect("selected plugin public MCP should be discovered");
+    assert_eq!(public_plugin.plugin_id.as_deref(), Some(PLUGIN_ID));
+    assert!(public_plugin.tools.contains_key("echo"));
+    let sensitive_plugin = servers
+        .iter()
+        .find(|server| server.name == "plugin_sensitive")
+        .expect("selected plugin credential-bearing MCP should be discovered");
+    assert_eq!(sensitive_plugin.plugin_id.as_deref(), Some(PLUGIN_ID));
+    assert!(sensitive_plugin.tools.is_empty());
+    assert!(
+        sensitive_plugin
+            .tools_error
+            .as_deref()
+            .is_some_and(|error| {
+                error.contains("requires executor-side environment credential resolution")
+            }),
+        "legacy executor should reject the plugin's environment credential: {:?}",
+        sensitive_plugin.tools_error
+    );
 
     let response = responses::mount_sse_once(
         &responses_server,
@@ -410,8 +477,353 @@ async fn legacy_executor_skips_required_browser_and_keeps_host_owned_mcp() -> Re
             .tool_by_name("mcp__host_remote", "echo")
             .is_some()
     );
+    assert!(
+        response
+            .single_request()
+            .tool_by_name("mcp__plugin_public", "echo")
+            .is_some()
+    );
+    let http_requests = std::iter::from_fn(|| http_requests_rx.try_recv().ok()).collect::<Vec<_>>();
+    for token in ["host-only-token", "plugin-public-token"] {
+        assert!(
+            http_requests
+                .iter()
+                .any(|request| request["params"]["headers"].to_string().contains(token)),
+            "expected a captured HTTP request using {token}"
+        );
+    }
+    assert!(
+        http_requests
+            .iter()
+            .all(|request| !request.to_string().contains(HOST_TOKEN)),
+        "the selected plugin sent the host credential to the legacy executor"
+    );
 
     legacy_executor.abort();
+    http_server.abort();
+    Ok(())
+}
+
+/// A cached executor declaration must retain its credential boundary after reconnecting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cached_executor_mcp_cannot_read_host_token_after_capability_downgrade() -> Result<()> {
+    const TOKEN_ENV: &str = "MCP_CREDENTIAL_BOUNDARY_TEST_TOKEN";
+    const HOST_TOKEN: &str = "host-only-credential-boundary-canary";
+    const EXECUTOR_TOKEN: &str = "executor-only-credential-boundary-canary";
+    const PARENT_PROMPT: &str = "spawn the credential boundary worker";
+    const CHILD_PROMPT: &str = "check cached credential boundary";
+    const DISCONNECT_MARKER: &str = "credential-boundary-disconnect";
+    const CALL_ID: &str = "cached-credential-call";
+
+    let responses_server = responses::start_mock_server().await;
+    let codex_home = TempDir::new()?;
+    let executor_home = TempDir::new()?;
+    MockResponsesConfig::new(&responses_server.uri())
+        .with_model("gpt-5.4")
+        .with_sandbox_mode("danger-full-access")
+        .with_approval_policy("never")
+        .with_extra_config("[features.multi_agent_v2]\nenabled = true\n")
+        .write(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mcp_url = format!("http://{}/mcp", listener.local_addr()?);
+    let initializations = Arc::new(AtomicUsize::new(0));
+    let service = StreamableHttpService::new(
+        || Ok(ExecutorHttpMcpServer),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+    let requests_seen = Arc::clone(&initializations);
+    let router = Router::new()
+        .nest_service("/mcp", service)
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let requests_seen = Arc::clone(&requests_seen);
+                async move {
+                    let expected_authorization = format!("Bearer {EXECUTOR_TOKEN}");
+                    assert_eq!(
+                        request
+                            .headers()
+                            .get(axum::http::header::AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok()),
+                        Some(expected_authorization.as_str())
+                    );
+                    if request.method() == axum::http::Method::POST {
+                        let (parts, body) = request.into_parts();
+                        let body = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+                        let value: Value = serde_json::from_slice(&body).unwrap();
+                        if value["method"] == "initialize" {
+                            requests_seen.fetch_add(1, Ordering::SeqCst);
+                        }
+                        return next
+                            .run(axum::extract::Request::from_parts(parts, body.into()))
+                            .await;
+                    }
+                    next.run(request).await
+                }
+            },
+        ));
+    let http_server = tokio::spawn(async move { axum::serve(listener, router).await });
+    std::fs::write(
+        executor_home.path().join("config.toml"),
+        format!(
+            "[mcp_servers.cached_executor]\nurl = \"{mcp_url}\"\nbearer_token_env_var = \"{TOKEN_ENV}\"\nrequired = true\nstartup_timeout_sec = 3\n"
+        ),
+    )?;
+    let mut executor = Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
+        .args(["exec-server", "--listen", "ws://127.0.0.1:0"])
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .env("CODEX_HOME", executor_home.path())
+        .env(TOKEN_ENV, EXECUTOR_TOKEN)
+        .spawn()?;
+    let mut lines = BufReader::new(executor.stdout.take().expect("executor stdout")).lines();
+    let executor_url = timeout(DEFAULT_READ_TIMEOUT, lines.next_line())
+        .await??
+        .expect("executor websocket URL");
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_url = format!("ws://{}", proxy_listener.local_addr()?);
+    let downgraded = Arc::new(AtomicBool::new(false));
+    let downgrade_seen = Arc::clone(&downgraded);
+    let fresh_connection = Arc::new(AtomicBool::new(false));
+    let fresh_connection_seen = Arc::clone(&fresh_connection);
+    let (http_requests_tx, mut http_requests_rx) = mpsc::unbounded_channel();
+    let proxy = tokio::spawn(async move {
+        while let Ok((stream, _)) = proxy_listener.accept().await {
+            let mut downstream = accept_async(stream).await?;
+            let initialize = downstream.next().await.expect("executor initialize")?;
+            let Message::Text(text) = &initialize else {
+                anyhow::bail!("expected text initialize request");
+            };
+            let request: Value = serde_json::from_str(text)?;
+            assert_eq!(request["method"], "initialize");
+            let legacy = downgrade_seen.load(Ordering::SeqCst);
+            if legacy && !request["params"]["resumeSessionId"].is_null() {
+                // Successful resume preserves cached metadata; retire the old logical session.
+                let response = json!({
+                    "id": request["id"],
+                    "error": {"code": -32602, "message": "test executor session retired"}
+                });
+                downstream
+                    .send(Message::Text(response.to_string().into()))
+                    .await?;
+                downstream.close(/*msg*/ None).await?;
+                continue;
+            }
+            fresh_connection_seen.fetch_or(legacy, Ordering::SeqCst);
+            let (mut upstream, _) = connect_async(&executor_url).await?;
+            upstream.send(initialize).await?;
+            let (mut downstream_tx, mut downstream_rx) = downstream.split();
+            let (mut upstream_tx, mut upstream_rx) = upstream.split();
+            let requests = async {
+                while let Some(message) = downstream_rx.next().await {
+                    let message = message?;
+                    if let Message::Text(text) = &message {
+                        let request: Value = serde_json::from_str(text)?;
+                        if request["method"] == "http/request" {
+                            http_requests_tx.send(request.clone())?;
+                        }
+                        if request["method"] == "process/start"
+                            && request["params"]["argv"]
+                                .to_string()
+                                .contains(DISCONNECT_MARKER)
+                        {
+                            // The child's first tool forces reconnect before its cached MCP starts.
+                            assert_eq!(initializations.load(Ordering::SeqCst), 1);
+                            downgrade_seen.store(true, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                    upstream_tx.send(message).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            let responses = async {
+                while let Some(message) = upstream_rx.next().await {
+                    let mut message = message?;
+                    if legacy && let Message::Text(text) = &message {
+                        let mut response: Value = serde_json::from_str(text)?;
+                        if let Some(result) =
+                            response.get_mut("result").and_then(Value::as_object_mut)
+                        {
+                            result.remove("environmentInfo");
+                        }
+                        if let Some(capabilities) = response
+                            .pointer_mut("/result/capabilities")
+                            .and_then(Value::as_object_mut)
+                        {
+                            capabilities.remove("httpHeaderEnvVars");
+                        }
+                        message = Message::Text(response.to_string().into());
+                    }
+                    downstream_tx.send(message).await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::select! {
+                result = requests => result?,
+                result = responses => result?,
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    });
+    std::fs::write(
+        codex_home.path().join("environments.toml"),
+        format!(
+            "default = \"{EXECUTOR_ID}\"\ninclude_local = false\n\n[[environments]]\nid = \"{EXECUTOR_ID}\"\nurl = \"{proxy_url}\"\n"
+        ),
+    )?;
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[(TOKEN_ENV, Some(HOST_TOKEN))])
+        .without_auto_env()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request_id = app_server
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        app_server.read_stream_until_matching_notification("executor MCP ready", |notification| {
+            notification.method == "mcpServer/startupStatus/updated"
+                && notification.params.as_ref().is_some_and(|params| {
+                    params["name"] == "cached_executor" && params["status"] == "ready"
+                })
+        }),
+    )
+    .await??;
+
+    for (marker, events) in [
+        (
+            PARENT_PROMPT,
+            vec![responses::ev_function_call_with_namespace(
+                "spawn-credential-worker",
+                "collaboration",
+                "spawn_agent",
+                &json!({"task_name": "worker", "message": CHILD_PROMPT, "fork_turns": "none"})
+                    .to_string(),
+            )],
+        ),
+        (
+            CHILD_PROMPT,
+            vec![responses::ev_exec_command_call(
+                "disconnect-call",
+                &format!("echo {DISCONNECT_MARKER}"),
+            )],
+        ),
+        (
+            "disconnect-call",
+            // A process RPC waits for terminal recovery before the MCP credential lookup.
+            vec![responses::ev_exec_command_call(
+                "reconnect-barrier",
+                "echo credential-boundary-ready",
+            )],
+        ),
+        (
+            "reconnect-barrier",
+            vec![responses::ev_function_call_with_namespace(
+                CALL_ID,
+                "mcp__cached_executor",
+                "echo",
+                r#"{"message":"test credential boundary"}"#,
+            )],
+        ),
+        (
+            "spawn-credential-worker",
+            vec![responses::ev_assistant_message("parent-done", "Done")],
+        ),
+    ] {
+        responses::mount_sse_once_match(
+            &responses_server,
+            move |request: &wiremock::Request| {
+                let body = String::from_utf8_lossy(&request.body);
+                body.contains(marker)
+                    && (marker != CHILD_PROMPT || !body.contains("spawn-credential-worker"))
+            },
+            responses::sse(
+                events
+                    .into_iter()
+                    .chain([responses::ev_completed(marker)])
+                    .collect(),
+            ),
+        )
+        .await;
+    }
+    let child_done = responses::mount_sse_once_match(
+        &responses_server,
+        |request: &wiremock::Request| String::from_utf8_lossy(&request.body).contains(CALL_ID),
+        responses::sse(vec![
+            responses::ev_assistant_message("child-done", "Done"),
+            responses::ev_completed("child-done"),
+        ]),
+    )
+    .await;
+    let request_id = app_server
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: PARENT_PROMPT.to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, app_server.read_response(request_id)).await??;
+    let request = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if let Some(request) = child_done.requests().into_iter().next() {
+                break request;
+            }
+            tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+        }
+    })
+    .await?;
+    assert!(downgraded.load(Ordering::SeqCst));
+    assert!(fresh_connection.load(Ordering::SeqCst));
+    let (barrier_output, barrier_success) = request
+        .function_call_output_content_and_success("reconnect-barrier")
+        .expect("reconnect barrier should have an output");
+    let barrier_output = barrier_output.expect("reconnect barrier output should contain text");
+    assert_ne!(barrier_success, Some(false));
+    assert!(
+        barrier_output.contains("Process exited with code 0")
+            && barrier_output.contains("credential-boundary-ready"),
+        "reconnect barrier did not complete successfully: {barrier_output}"
+    );
+    let mut http_requests = Vec::new();
+    while let Ok(request) = http_requests_rx.try_recv() {
+        http_requests.push(request);
+    }
+    assert!(
+        http_requests
+            .iter()
+            .any(|request| request["params"]["headers"].to_string().contains(TOKEN_ENV))
+    );
+    assert!(
+        http_requests
+            .iter()
+            .all(|request| !request.to_string().contains(HOST_TOKEN)),
+        "worker credentials reached executor HTTP requests"
+    );
+    let output = request.function_call_output(CALL_ID);
+    assert!(
+        output["output"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| {
+                item["type"] == "input_text"
+                    && item["text"]
+                        == "MCP tool `cached_executor/echo` is not available to the model"
+            })),
+        "expected the failed MCP server to be unavailable: {output}"
+    );
+    proxy.abort();
     http_server.abort();
     Ok(())
 }

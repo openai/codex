@@ -60,6 +60,7 @@ struct ContributionSummary {
     name: String,
     plugin_id: String,
     plugin_display_name: String,
+    source_environment_id: String,
     selection_order: usize,
     enabled: bool,
 }
@@ -68,6 +69,7 @@ struct ContributionSummary {
 struct PackageSummary {
     plugin_id: String,
     plugin_display_name: String,
+    source_environment_id: String,
     connector_ids: Vec<String>,
 }
 
@@ -120,6 +122,7 @@ command = "expected-command"
                 name: "allowed".to_string(),
                 plugin_id: "selected-root".to_string(),
                 plugin_display_name: "Selected Demo".to_string(),
+                source_environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 selection_order: 0,
                 enabled: true,
             },
@@ -127,6 +130,7 @@ command = "expected-command"
                 name: "mismatched".to_string(),
                 plugin_id: "selected-root".to_string(),
                 plugin_display_name: "Selected Demo".to_string(),
+                source_environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 selection_order: 0,
                 enabled: false,
             },
@@ -134,6 +138,7 @@ command = "expected-command"
                 name: "unlisted".to_string(),
                 plugin_id: "selected-root".to_string(),
                 plugin_display_name: "Selected Demo".to_string(),
+                source_environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 selection_order: 0,
                 enabled: false,
             },
@@ -169,6 +174,7 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
         .map(|(_, plugin_id, contribution)| PackageSummary {
             plugin_id,
             plugin_display_name: contribution.plugin_display_name,
+            source_environment_id: contribution.source_environment_id,
             connector_ids: contribution.connector_ids,
         });
 
@@ -177,6 +183,7 @@ async fn selected_plugin_package_is_contributed_without_servers_or_connectors() 
         Some(PackageSummary {
             plugin_id: "selected-root".to_string(),
             plugin_display_name: "Skill Only".to_string(),
+            source_environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
             connector_ids: Vec::new(),
         })
     );
@@ -216,7 +223,9 @@ plugins = false
         matches!(
             direct.as_slice(),
             [(selected_root_id, _, contribution)]
-                if selected_root_id == "selected-root" && contribution.servers.is_empty()
+                if selected_root_id == "selected-root"
+                    && contribution.source_environment_id == LOCAL_ENVIRONMENT_ID
+                    && contribution.servers.is_empty()
         ),
         "managed Plugins disable should preserve only the direct selected-root identity"
     );
@@ -230,7 +239,9 @@ plugins = false
         matches!(
             discovered.as_slice(),
             [(selected_root_id, _, contribution)]
-                if selected_root_id == "selected-root" && contribution.servers.is_empty()
+                if selected_root_id == "selected-root"
+                    && contribution.source_environment_id == LOCAL_ENVIRONMENT_ID
+                    && contribution.servers.is_empty()
         ),
         "managed Plugins disable should preserve only the discovered selected-root identity"
     );
@@ -362,6 +373,13 @@ default_tools_approval_mode = "auto"
         .expect("test config should allow feature update");
     let high_level = selected_plugin_contributions(&config, plugin_root.path()).await?;
 
+    assert_eq!(
+        existing
+            .iter()
+            .map(|contribution| contribution.source_environment_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![LOCAL_ENVIRONMENT_ID, LOCAL_ENVIRONMENT_ID]
+    );
     assert_eq!(high_level, existing);
     Ok(())
 }
@@ -382,6 +400,7 @@ async fn selected_plugin_contributions(
                     name,
                     plugin_id: plugin_id.clone(),
                     plugin_display_name: contribution.plugin_display_name.clone(),
+                    source_environment_id: contribution.source_environment_id.clone(),
                     selection_order,
                     enabled: config.enabled,
                 })

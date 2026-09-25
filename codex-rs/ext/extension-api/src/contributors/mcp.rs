@@ -157,6 +157,8 @@ pub struct SelectedPlugin<'a> {
 #[derive(Clone)]
 pub struct SelectedPluginContribution {
     pub plugin_display_name: String,
+    /// Environment that supplied the plugin, independent of where its MCP servers run.
+    pub source_environment_id: String,
     pub connector_ids: Vec<String>,
     pub servers: Vec<(String, McpServerConfig)>,
 }

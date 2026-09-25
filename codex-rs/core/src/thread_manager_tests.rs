@@ -1625,7 +1625,8 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                 );
                 let CapabilityRootLocation::Environment { environment_id, .. } =
                     &selected_root.location;
-                server.environment_id = environment_id.clone();
+                let source_environment_id = environment_id.clone();
+                server.environment_id = source_environment_id.clone();
                 server.enabled = false;
                 let plugin_id = format!("plugin-{}", selected_root.id);
                 vec![codex_extension_api::SelectedPlugin {
@@ -1634,6 +1635,7 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
                     mcp: Box::pin(async move {
                         codex_extension_api::SelectedPluginContribution {
                             plugin_display_name: plugin_id,
+                            source_environment_id,
                             connector_ids: vec![format!("{}-connector", selected_root.id)],
                             servers: vec![(selected_root.id, server)],
                         }
@@ -1799,6 +1801,25 @@ async fn start_thread_seeds_extension_data_for_mcp_and_lifecycle_contributors() 
         selected_servers(&second_resolved.config),
         std::collections::BTreeMap::from([("selected-b".to_string(), "env-b".to_string())])
     );
+    for (config, name, source_environment_id) in [
+        (&first_resolved.config, "selected-a", "env-a"),
+        (&second_resolved.config, "selected-b", "env-b"),
+    ] {
+        let server = config
+            .mcp_server_catalog
+            .server(name)
+            .expect("selected plugin server should be registered");
+        let plugin_id = format!("plugin-{name}");
+        let mut expected = codex_mcp::ResolvedMcpCatalog::builder();
+        expected.register(codex_mcp::McpServerRegistration::from_selected_plugin(
+            name.to_string(),
+            codex_mcp::McpPluginAttribution::new(plugin_id.clone(), plugin_id),
+            /*selection_order*/ 0,
+            source_environment_id,
+            server.config().clone(),
+        ));
+        assert_eq!(Some(server), expected.build().server(name));
+    }
     let codex_apps_server = codex_mcp::configured_mcp_servers(&first_resolved.config)
         .remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
         .expect("Codex Apps server should be configured");

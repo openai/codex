@@ -18,6 +18,7 @@ use pretty_assertions::assert_eq;
 
 use crate::CODEX_APPS_MCP_SERVER_NAME;
 use crate::McpProtocolMode;
+use crate::server::McpCredentialPolicy;
 
 use super::McpEnvironmentAuthority;
 use super::McpPluginAttribution;
@@ -93,6 +94,107 @@ fn register(source: McpServerSource) -> McpServerConflictAction {
 
 fn remove(source: McpServerSource) -> McpServerConflictAction {
     McpServerConflictAction::Remove(source)
+}
+
+#[test]
+fn executor_credential_policy_survives_catalog_rebuilds_and_materialization() {
+    let mut config = server("https://executor.example/mcp");
+    config.environment_id = "remote".to_string();
+    let mut executor = ResolvedMcpCatalog::builder();
+    executor.register(McpServerRegistration::from_executor_config(
+        "docs".to_string(),
+        config.clone(),
+    ));
+    let executor = executor.build();
+    let mut host = ResolvedMcpCatalog::builder();
+    host.register(McpServerRegistration::from_config(
+        "docs".to_string(),
+        config,
+    ));
+    let host = host.build();
+
+    for catalog in [
+        executor.to_builder().build(),
+        executor.with_materialized_servers(executor.configured_servers()),
+    ] {
+        assert_eq!(
+            catalog.server("docs").unwrap(),
+            executor.server("docs").unwrap(),
+        );
+        assert_eq!(
+            catalog.server("docs").unwrap().credential_policy(),
+            McpCredentialPolicy::ExecutorOnly,
+        );
+        assert!(!catalog.has_same_servers(&host));
+    }
+    assert_eq!(
+        host.server("docs").unwrap().credential_policy(),
+        McpCredentialPolicy::HostFallbackAllowed,
+    );
+}
+
+#[test]
+#[should_panic(expected = "materialized MCP server must have a catalog registration")]
+fn materialized_server_requires_catalog_registration() {
+    let catalog = ResolvedMcpCatalog::default();
+    let server: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://executor.example/mcp",
+        "environment_id": "remote",
+        "bearer_token_env_var": "MCP_EXECUTOR_CREDENTIAL_CANARY",
+    }))
+    .expect("valid MCP server config");
+
+    catalog.with_materialized_servers(HashMap::from([("unregistered".to_string(), server)]));
+}
+
+#[test]
+fn selected_plugin_credential_policy_follows_origin_and_survives_catalog_rebuild() {
+    let mut remote_stdio: McpServerConfig =
+        serde_json::from_value(serde_json::json!({ "command": "remote-server" }))
+            .expect("valid stdio server");
+    remote_stdio.environment_id = "executor-1".to_string();
+    let mut remote_destination = server("https://executor.example/mcp");
+    remote_destination.environment_id = "executor-1".to_string();
+
+    for (source_environment_id, config, expected_policy) in [
+        (
+            "executor-1",
+            server("https://executor.example/mcp"),
+            McpCredentialPolicy::ExecutorOnly,
+        ),
+        (
+            DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
+            remote_destination,
+            McpCredentialPolicy::HostFallbackAllowed,
+        ),
+        (
+            "executor-1",
+            remote_stdio,
+            McpCredentialPolicy::HostFallbackAllowed,
+        ),
+    ] {
+        let mut builder = ResolvedMcpCatalog::builder();
+        builder.register(McpServerRegistration::from_selected_plugin(
+            "docs".to_string(),
+            plugin("selected-root"),
+            /*selection_order*/ 0,
+            source_environment_id,
+            config,
+        ));
+        let catalog = builder.build();
+        for rebuilt in [
+            catalog.to_builder().build(),
+            catalog.with_materialized_servers(catalog.configured_servers()),
+        ] {
+            let registration = rebuilt.server("docs").unwrap();
+            assert_eq!(
+                registration.source(),
+                &selected_plugin_source("selected-root")
+            );
+            assert_eq!(registration.credential_policy(), expected_policy);
+            assert_eq!(registration, catalog.server("docs").unwrap());
+        }
+    }
 }
 
 #[test]
@@ -246,6 +348,7 @@ fn rejected_plugin_ema_registration_does_not_veto_hosted_apps() {
                             host_owned_apps: true,
                         },
                         config: expected,
+                        credential_policy: McpCredentialPolicy::HostFallbackAllowed,
                         protocol_mode: None,
                     }),
                 );
@@ -363,6 +466,7 @@ fn disabled_winner_remains_a_veto_when_the_catalog_is_extended() {
         Some(&super::ResolvedMcpServer {
             source: extension_source("hosted"),
             config: expected,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -396,6 +500,7 @@ fn disabled_discovered_plugin_remains_a_veto_for_runtime_overlays() {
         Some(&super::ResolvedMcpServer {
             source: extension_source("hosted"),
             config: expected,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -453,12 +558,14 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         "docs".to_string(),
         plugin("selected-beta"),
         /*selection_order*/ 1,
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
         server("https://selected-beta.example/mcp"),
     ));
     builder.register(McpServerRegistration::from_selected_plugin(
         "docs".to_string(),
         plugin("selected-alpha"),
         /*selection_order*/ 0,
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
         selected.clone(),
     ));
 
@@ -469,6 +576,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         Some(&super::ResolvedMcpServer {
             source: selected_plugin_source("selected-alpha"),
             config: selected,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -496,6 +604,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         Some(&super::ResolvedMcpServer {
             source: selected_plugin_source("selected-alpha"),
             config: refreshed,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -513,6 +622,7 @@ fn selected_plugins_override_discovered_plugins_but_not_config() {
         Some(&super::ResolvedMcpServer {
             source: McpServerSource::Config,
             config: configured,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -528,6 +638,7 @@ fn disabled_selected_plugin_does_not_veto_runtime_overlays() {
         "docs".to_string(),
         plugin("selected"),
         /*selection_order*/ 0,
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
         disabled,
     ));
     let mut builder = builder.build().to_builder();
@@ -545,6 +656,7 @@ fn disabled_selected_plugin_does_not_veto_runtime_overlays() {
         Some(&super::ResolvedMcpServer {
             source: extension_source("hosted"),
             config: extension,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -571,6 +683,7 @@ fn equal_precedence_uses_insertion_order_not_source_identity() {
         Some(&super::ResolvedMcpServer {
             source: compatibility_source("a-second"),
             config: server("https://second.example/mcp"),
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: None,
         })
     );
@@ -642,6 +755,7 @@ fn extension_protocol_mode_follows_the_winner_through_materialization() {
         Some(&ResolvedMcpServer {
             source: extension_source("winner"),
             config: refreshed,
+            credential_policy: McpCredentialPolicy::HostFallbackAllowed,
             protocol_mode: Some(McpProtocolMode::Legacy),
         })
     );
@@ -694,6 +808,7 @@ fn environment_policy_preserves_selected_plugin_and_empty_server_allowlist_seman
         "selected".to_string(),
         plugin("selected-plugin"),
         /*selection_order*/ 0,
+        DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
         server("https://plugin.example/mcp"),
     ));
     let metadata_only_policy = EnvironmentMcpPolicy {

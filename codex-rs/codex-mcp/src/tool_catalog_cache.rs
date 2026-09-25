@@ -26,6 +26,7 @@ use tokio::time::Instant;
 use crate::McpProtocolMode;
 use crate::McpRuntimeContext;
 use crate::ToolInfo;
+use crate::server::McpCredentialPolicy;
 use crate::server::McpServerConnectionIdentity;
 use crate::server::has_explicit_http_authorization;
 
@@ -324,6 +325,10 @@ impl ToolCatalogTransportIdentity {
             }
 
             let mut hasher = Sha1::new();
+            hasher.update(match connection_identity.credential_policy {
+                McpCredentialPolicy::HostFallbackAllowed => b"host-fallback".as_slice(),
+                McpCredentialPolicy::ExecutorOnly => b"executor-only".as_slice(),
+            });
             hasher.update(
                 serde_json::to_vec(&(
                     url,
@@ -351,9 +356,12 @@ impl ToolCatalogTransportIdentity {
             env_vars.dedup();
             for name in env_vars {
                 hasher.update(name.as_bytes());
-                let mut value_hasher = DefaultHasher::new();
-                std::env::var_os(name).hash(&mut value_hasher);
-                hasher.update(value_hasher.finish().to_le_bytes());
+                if connection_identity.credential_policy == McpCredentialPolicy::HostFallbackAllowed
+                {
+                    let mut value_hasher = DefaultHasher::new();
+                    std::env::var_os(name).hash(&mut value_hasher);
+                    hasher.update(value_hasher.finish().to_le_bytes());
+                }
             }
             return Some(Self::StreamableHttp {
                 fingerprint: hasher.finalize().into(),

@@ -262,7 +262,7 @@ impl Session {
                     registered.insert(name.clone());
                     catalog
                         .get_or_insert_with(|| projection.config.mcp_server_catalog.to_builder())
-                        .register(McpServerRegistration::from_config(name, server));
+                        .register(McpServerRegistration::from_executor_config(name, server));
                 }
             }
 
