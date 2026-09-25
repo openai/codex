@@ -24,6 +24,7 @@ fn instructions_preserve_source_order_and_whole_records() {
     });
     context.record_user_message(
         RetainedUserMessage {
+            phase: None,
             origin: codex_history::UserInputOrigin::User,
             turn_id: "revocation".to_owned(),
             message_id: Some("msg_revoke".to_owned()),
@@ -52,6 +53,7 @@ fn instructions_preserve_source_order_and_whole_records() {
     );
     context.record_user_message(
         RetainedUserMessage {
+            phase: None,
             origin: codex_history::UserInputOrigin::User,
             turn_id: "oversized".to_owned(),
             message_id: Some("msg_large".to_owned()),
@@ -75,6 +77,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     let mut context = RetainedContext::default();
     context.record_assistant_message(
         RetainedUserMessage {
+            phase: None,
             origin: codex_history::UserInputOrigin::User,
             turn_id: "question".to_owned(),
             message_id: Some("question".to_owned()),
@@ -88,6 +91,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     );
     context.record_user_message(
         RetainedUserMessage {
+            phase: None,
             origin: codex_history::UserInputOrigin::User,
             turn_id: "reply".to_owned(),
             message_id: Some("reply".to_owned()),
@@ -138,6 +142,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
     }
     context.record_assistant_message(
         RetainedUserMessage {
+            phase: None,
             origin: codex_history::UserInputOrigin::User,
             turn_id: "large".to_owned(),
             message_id: Some("large".to_owned()),
@@ -180,6 +185,7 @@ fn legacy_verified_answers_keep_distinct_source_order() {
 fn delivery_uses_source_revision_and_complete_host_metadata() {
     let mut retained = RetainedContext::default();
     let mut message = RetainedUserMessage {
+        phase: None,
         turn_id: "turn".to_owned(),
         message_id: Some("source".to_owned()),
         text: "Draft only.".to_owned(),

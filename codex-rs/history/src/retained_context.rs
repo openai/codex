@@ -53,6 +53,9 @@ pub struct RetainedUserMessage {
     /// Missing provenance in older checkpoints conservatively remains ordinary input.
     #[serde(default, skip_serializing_if = "crate::UserInputOrigin::is_user")]
     pub origin: crate::UserInputOrigin,
+    /// Original assistant phase; absent in legacy checkpoints and non-message evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<codex_protocol::models::MessagePhase>,
 }
 
 /// Local facts use their acceptance counter; copied parent instructions use prefix order.

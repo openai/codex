@@ -7,6 +7,7 @@ use pretty_assertions::assert_eq;
 
 fn instruction(text: &str) -> RetainedUserMessage {
     RetainedUserMessage {
+        phase: None,
         origin: crate::UserInputOrigin::User,
         turn_id: "turn-1".to_owned(),
         message_id: None,
@@ -160,6 +161,7 @@ fn heartbeat_versions_survive_retention_restore_and_reconciliation() {
             _ => ("Monitor only.", crate::UserInputOrigin::Heartbeat),
         };
         RetainedUserMessage {
+            phase: None,
             turn_id: format!("turn-{index}"),
             message_id: Some(format!("message-{index}")),
             text: format!("<heartbeat>\n  <automation_id>monitor</automation_id>\n  <current_time_iso>2026-09-23T00:{index:02}:00Z</current_time_iso>\n  <instructions>\n{instructions}\n  </instructions>\n</heartbeat>\n"),

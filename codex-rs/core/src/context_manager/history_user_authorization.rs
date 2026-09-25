@@ -56,6 +56,7 @@ impl ContextManager {
                 }
                 let text = guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS).0;
                 Some(RetainedUserMessage {
+                    phase: None,
                     origin: codex_history::UserInputOrigin::from_message(item),
                     turn_id: item.turn_id().unwrap_or_default().to_owned(),
                     message_id: item.id().map(|id| id.as_str().to_owned()),
@@ -126,6 +127,7 @@ impl ContextManager {
             // the original call's position, not at its later completion position.
             Arc::make_mut(&mut self.retained_context).record_assistant_message(
                 RetainedUserMessage {
+                    phase: None,
                     origin: codex_history::UserInputOrigin::User,
                     turn_id: call.item.turn_id().unwrap_or_default().to_owned(),
                     message_id: call.item.id().map(|id| id.as_str().to_owned()),
@@ -148,6 +150,7 @@ impl ContextManager {
         if (!inherited || self.retain_inherited_user_messages)
             && let ResponseItem::Message {
                 content,
+                phase,
                 internal_chat_message_metadata_passthrough,
                 ..
             } = item
@@ -186,6 +189,7 @@ impl ContextManager {
             let (text, truncated) = guardian_truncate_text(&text, GUARDIAN_MAX_ROOT_MESSAGE_TOKENS);
             complete &= !truncated;
             let message = RetainedUserMessage {
+                phase: phase.clone(),
                 origin: codex_history::UserInputOrigin::from_message(item),
                 turn_id: item.turn_id().unwrap_or_default().to_owned(),
                 message_id: item.id().map(|id| id.as_str().to_owned()),
