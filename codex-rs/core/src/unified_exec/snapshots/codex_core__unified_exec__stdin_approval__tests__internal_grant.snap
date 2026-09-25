@@ -2,4 +2,4 @@
 source: core/src/unified_exec/stdin_approval_tests.rs
 expression: reason
 ---
-Send input to an existing terminal. This terminal retains additional permissions. It also has an internal filesystem grant. The cwd is its launch directory; the terminal's current directory and state may have changed.
+Send input to an existing terminal. This terminal uses the current permissions. It also has an internal filesystem grant. The cwd is its launch directory; the terminal's current directory and state may have changed.

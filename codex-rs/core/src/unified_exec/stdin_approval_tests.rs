@@ -161,7 +161,7 @@ async fn captured_network_changes_require_review() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn internal_grants_require_review_without_exposing_paths() -> anyhow::Result<()> {
+async fn internal_grants_do_not_require_review_or_hide_agent_grants() -> anyhow::Result<()> {
     let (_session, turn) = make_session_and_context().await;
     let mut environment = turn
         .initial_environments
@@ -176,27 +176,44 @@ async fn internal_grants_require_review_without_exposing_paths() -> anyhow::Resu
             "write": [turn.config.cwd.join("private-metrics")]
         }
     }))?;
-    let permissions = TerminalPermissions::for_launch(
-        &environment,
-        &turn,
-        TerminalSandboxSource::Native,
-        SandboxPermissions::UseDefault,
-        /*additional_permissions*/ None,
-        Some(&grants),
-    );
-    let current = TerminalPolicy::capture(
-        &environment,
-        &turn,
-        TerminalSandboxSource::Native,
-        Some(grants),
-    );
-    let expected = SandboxPermissions::WithAdditionalPermissions;
-    assert_eq!(
-        permissions.review_requirement(&current, environment.permission_profile()),
-        Ok(expected)
-    );
-    assert_eq!(permissions.additional_permissions, None);
-    insta::assert_snapshot!("internal_grant", permissions.approval_reason(expected)?);
+    for (additional_permissions, expected) in [
+        (None, SandboxPermissions::UseDefault),
+        (
+            Some(serde_json::from_value(json!({
+                "file_system": {"write": [turn.config.cwd.join("agent-output")]}
+            }))?),
+            SandboxPermissions::WithAdditionalPermissions,
+        ),
+        (
+            Some(serde_json::from_value(
+                json!({"network": {"enabled": true}}),
+            )?),
+            SandboxPermissions::WithAdditionalPermissions,
+        ),
+    ] {
+        let permissions = TerminalPermissions::for_launch(
+            &environment,
+            &turn,
+            TerminalSandboxSource::Native,
+            SandboxPermissions::UseDefault,
+            additional_permissions.as_ref(),
+            Some(&grants),
+        );
+        assert_eq!(
+            permissions.review_requirement(&permissions.policy, environment.permission_profile()),
+            Ok(expected)
+        );
+        if additional_permissions.is_none() {
+            // Strict review can still request this description for ordinary stdin.
+            insta::assert_snapshot!("internal_grant", permissions.approval_reason(expected)?);
+        }
+        let mut bypassed = permissions;
+        bypassed.launch_permissions = SandboxPermissions::RequireEscalated;
+        assert_eq!(
+            bypassed.review_requirement(&bypassed.policy, environment.permission_profile()),
+            Ok(SandboxPermissions::RequireEscalated)
+        );
+    }
     Ok(())
 }
 
