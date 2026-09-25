@@ -30,9 +30,14 @@ use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::AgentMessageDelivery;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ImageReference;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
@@ -990,6 +995,134 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
             &ContextSnapshotOptions::default(),
         )
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_continues_after_input_yields_a_code_mode_cell() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_config(|config| {
+            configure_scenario_catalog(config);
+            config.workspace_roots = vec![config.cwd.clone()];
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable instant interrupt");
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable code mode");
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("enable code-mode-only tools");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable the code-mode host");
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("disable request compression");
+            config.code_mode.disable_in_process_fallback = true;
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let codex = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "check_release".into(),
+                description: "Check whether the release is ready.".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await?
+        .thread;
+    // A fresh code-mode session allocates its first cell as "1", as in the
+    // neighboring code-mode scenario. Assert that assumption below.
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("exec-response"),
+                ev_custom_tool_call(
+                    "exec-call",
+                    "exec",
+                    "// @exec: {\"yield_time_ms\": 60000}\ntext(await tools.check_release({}));",
+                ),
+                ev_completed("exec-response"),
+            ]),
+            sse(vec![
+                ev_response_created("wait-response"),
+                ev_function_call_with_namespace(
+                    "wait-call",
+                    "functions",
+                    "wait",
+                    r#"{"cell_id":"1","yield_time_ms":60000}"#,
+                ),
+                ev_completed("wait-response"),
+            ]),
+            sse(vec![
+                ev_assistant_message(
+                    "final",
+                    "The release is ready; I'll highlight the customer impact.",
+                ),
+                ev_completed("final-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Check the release status.",
+        )]))
+        .await?;
+    let EventMsg::DynamicToolCallRequest(tool_request) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(request) if request.tool == "check_release")
+    })
+    .await else {
+        unreachable!("predicate guarantees a dynamic tool request");
+    };
+    codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Please also highlight the customer impact.",
+        )]))
+        .await?;
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::RawResponseItem(raw) if matches!(&raw.item, ResponseItem::FunctionCall { call_id, .. } if call_id == "wait-call"))
+    })
+    .await;
+    codex
+        .submit(Op::DynamicToolResponse {
+            id: tool_request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "Release ready".into(),
+                }],
+                success: true,
+            },
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let requests = mock.requests();
+    assert!(requests[1].body_contains_text("Script running with cell ID 1"));
+    let snapshot = context_snapshot::format_request_history_snapshot(
+        "Astra continues after new user input yields a running code cell, then waits for its result.",
+        &requests,
+        &ContextSnapshotOptions::default(),
+    )
+    .replace("cell ID 1", "cell ID <CELL_ID>")
+    .replace("\"cell_id\":\"1\"", "\"cell_id\":\"<CELL_ID>\"");
+    insta::assert_snapshot!("astra_input_yields_code_mode_cell", snapshot);
     Ok(())
 }
 

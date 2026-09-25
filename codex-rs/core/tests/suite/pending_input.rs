@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_core::CodexThread;
 use codex_core::StartIfIdleSubmission;
+use codex_core::StartThreadOptions;
 use codex_core::TurnInput;
 use codex_core::TurnInputRequest;
 use codex_core::TurnInputSubmission;
@@ -17,6 +18,10 @@ use codex_protocol::AgentPath;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
@@ -36,6 +41,7 @@ use core_test_support::context_snapshot::SnapshotEntry;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_message_item_added;
@@ -56,6 +62,11 @@ use serde_json::from_slice;
 use serde_json::json;
 use test_case::test_case;
 use tokio::sync::oneshot;
+use wiremock::Mock;
+use wiremock::Request;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn idle_user_input_reaches_the_first_model_request() -> anyhow::Result<()> {
@@ -1111,6 +1122,676 @@ async fn injected_response_item_reopens_turn_after_final_answer() {
     );
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steers_during_tool_drain_preserve_tool_output_and_each_input() {
+    const TOOL_CALL_ID: &str = "held-tool";
+    let (release_response, response_gate) = oneshot::channel();
+    let first_chunks = vec![
+        chunk(ev_response_created("resp-1")),
+        chunk(ev_function_call(TOOL_CALL_ID, "held_tool", "{}")),
+        gated_chunk(response_gate, vec![ev_completed("resp-1")]),
+    ];
+    let (server, _) =
+        start_streaming_sse_server(vec![first_chunks, response_completed_chunks("resp-2")]).await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session");
+    let codex = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "held_tool".to_string(),
+                description: "A tool held by the test until both steers are queued.".to_string(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await
+        .expect("start thread with dynamic tool")
+        .thread;
+
+    submit_user_input(&codex, "first prompt").await;
+    let EventMsg::DynamicToolCallRequest(tool_request) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(request) if request.call_id == TOOL_CALL_ID)
+    })
+    .await else {
+        unreachable!("predicate guarantees tool request");
+    };
+
+    steer_user_input(&codex, "second prompt").await;
+    steer_user_input(&codex, "third prompt").await;
+    release_response
+        .send(())
+        .expect("release the model response");
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            server.wait_for_request_count(/*count*/ 2),
+        )
+        .await
+        .is_err(),
+        "the replacement request must wait for the direct tool"
+    );
+    codex
+        .submit(Op::DynamicToolResponse {
+            id: tool_request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "held tool result".to_string(),
+                }],
+                success: true,
+            },
+        })
+        .await
+        .expect("complete dynamic tool");
+    wait_for_event(&codex, |event| {
+        assert!(!matches!(
+            event,
+            EventMsg::TurnAborted(_) | EventMsg::StreamError(_)
+        ));
+        matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_none())
+    })
+    .await;
+
+    let requests = server.requests().await;
+    assert_eq!(requests.len(), 2);
+    let second: Value = from_slice(&requests[1]).expect("parse replacement request");
+    let prompts = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| {
+            matches!(
+                text.as_str(),
+                "first prompt" | "second prompt" | "third prompt"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prompts,
+        vec!["first prompt", "second prompt", "third prompt"]
+    );
+    let result = function_call_output_text(&second, TOOL_CALL_ID).expect("real tool output");
+    assert!(result.contains("held tool result"), "tool output: {result}");
+    assert_eq!(
+        second["input"]
+            .as_array()
+            .expect("request input is an array")
+            .iter()
+            .filter(|item| item["type"] == "function_call_output" && item["call_id"] == TOOL_CALL_ID)
+            .count(),
+        1,
+        "the direct tool result should be recorded exactly once"
+    );
+
+    server.shutdown().await;
+}
+
+#[test_case(false; "disabled")]
+#[test_case(true; "enabled")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt: bool) {
+    const EXEC_ID: &str = "exec-call";
+    const WAIT_ONE_ID: &str = "wait-one";
+    const WAIT_TWO_ID: &str = "wait-two";
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(move |config| {
+            if instant_interrupt {
+                config
+                    .features
+                    .enable(Feature::InstantInterrupt)
+                    .expect("enable InstantInterrupt feature");
+            } else {
+                config
+                    .features
+                    .disable(Feature::InstantInterrupt)
+                    .expect("disable InstantInterrupt feature");
+            }
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable CodeMode feature");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable CodeModeHost feature");
+            config.code_mode.disable_in_process_fallback = true;
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("disable request compression");
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await
+        .expect("build Codex test session");
+    let codex = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "held_tool".into(),
+                description: "A tool held until the test responds.".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await
+        .expect("start thread with dynamic tool")
+        .thread;
+
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("resp-exec"),
+            ev_custom_tool_call(
+                EXEC_ID,
+                "exec",
+                "// @exec: {\"yield_time_ms\": 60000}\nawait tools.held_tool({}); text('background result');",
+            ),
+            ev_completed("resp-exec"),
+        ]),
+    )
+    .await;
+
+    // The cell ID comes from the real yielded exec result, so do not predict a
+    // runtime generation or rely on a fixed ID when issuing subsequent waits.
+    let cell_id = Arc::new(std::sync::Mutex::new(None::<String>));
+    if instant_interrupt {
+        let cell_id_for_first_wait = Arc::clone(&cell_id);
+        Mock::given(method("POST"))
+            .and(path_regex(".*/responses$"))
+            .respond_with(move |request: &Request| {
+                let body: Value = from_slice(&request.body).expect("parse replacement request");
+                let output = call_output_text(&body, "custom_tool_call_output", EXEC_ID)
+                    .expect("yielded exec output");
+                let call_items = body["input"]
+                    .as_array()
+                    .expect("request input is an array")
+                    .iter()
+                    .filter(|item| item.get("call_id").is_some())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let id = output
+                    .strip_prefix("Script running with cell ID ")
+                    .and_then(|rest| rest.lines().next())
+                    .unwrap_or_else(|| {
+                        panic!("missing running cell ID in exec output: {output:?}; call items: {call_items:?}")
+                    })
+                    .to_string();
+                *cell_id_for_first_wait.lock().expect("lock cell ID") = Some(id.clone());
+                ResponseTemplate::new(200).set_body_raw(
+                    responses::sse(vec![
+                        ev_response_created("resp-wait-one"),
+                        ev_function_call(
+                            WAIT_ONE_ID,
+                            "wait",
+                            &json!({"cell_id": id, "yield_time_ms": 60000}).to_string(),
+                        ),
+                        ev_completed("resp-wait-one"),
+                    ]),
+                    "text/event-stream",
+                )
+            })
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        let cell_id_for_second_wait = Arc::clone(&cell_id);
+        Mock::given(method("POST"))
+            .and(path_regex(".*/responses$"))
+            .respond_with(move |_: &Request| {
+                let id = cell_id_for_second_wait
+                    .lock()
+                    .expect("lock cell ID")
+                    .clone()
+                    .expect("yielded cell ID");
+                ResponseTemplate::new(200).set_body_raw(
+                    responses::sse(vec![
+                        ev_response_created("resp-wait-two"),
+                        ev_function_call(
+                            WAIT_TWO_ID,
+                            "wait",
+                            &json!({"cell_id": id, "yield_time_ms": 60000}).to_string(),
+                        ),
+                        ev_completed("resp-wait-two"),
+                    ]),
+                    "text/event-stream",
+                )
+            })
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+    }
+    let final_response =
+        responses::mount_sse_once(&server, responses::sse_completed("resp-done")).await;
+
+    submit_user_input(&codex, "start the cell").await;
+    let EventMsg::DynamicToolCallRequest(tool_request) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(request) if request.tool == "held_tool")
+    })
+    .await else {
+        unreachable!("predicate guarantees tool request");
+    };
+    steer_user_input(&codex, "interrupt exec").await;
+    if !instant_interrupt {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            final_response.requests().is_empty(),
+            "a disabled interrupt must leave exec waiting for the nested tool"
+        );
+        codex
+            .submit(Op::DynamicToolResponse {
+                id: tool_request.call_id,
+                response: DynamicToolResponse {
+                    content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                        text: "released".into(),
+                    }],
+                    success: true,
+                },
+            })
+            .await
+            .expect("release nested tool");
+        wait_for_turn_complete(&codex).await;
+        let request = final_response.single_request().body_json();
+        assert!(
+            call_output_text(&request, "custom_tool_call_output", EXEC_ID)
+                .expect("exec output")
+                .contains("background result")
+        );
+        assert!(message_input_texts(&request, "user").contains(&"interrupt exec".to_string()));
+        return;
+    }
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::RawResponseItem(raw) if matches!(&raw.item, ResponseItem::FunctionCall { call_id, .. } if call_id == WAIT_ONE_ID))
+    })
+    .await;
+    steer_user_input(&codex, "interrupt wait").await;
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::RawResponseItem(raw) if matches!(&raw.item, ResponseItem::FunctionCall { call_id, .. } if call_id == WAIT_TWO_ID))
+    })
+    .await;
+    codex
+        .submit(Op::DynamicToolResponse {
+            id: tool_request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "released".into(),
+                }],
+                success: true,
+            },
+        })
+        .await
+        .expect("release nested tool");
+    wait_for_event(&codex, |event| {
+        assert!(!matches!(
+            event,
+            EventMsg::TurnAborted(_) | EventMsg::StreamError(_)
+        ));
+        matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_none())
+    })
+    .await;
+
+    let request = final_response.single_request().body_json();
+    let id = cell_id
+        .lock()
+        .expect("lock cell ID")
+        .clone()
+        .expect("yielded cell ID");
+    let exec_output =
+        call_output_text(&request, "custom_tool_call_output", EXEC_ID).expect("exec output");
+    let wait_output =
+        call_output_text(&request, "function_call_output", WAIT_ONE_ID).expect("first wait output");
+    assert!(exec_output.contains(&format!("Script running with cell ID {id}")));
+    assert!(wait_output.contains(&format!("Script running with cell ID {id}")));
+    let completed_output = call_output_text(&request, "function_call_output", WAIT_TWO_ID)
+        .expect("second wait output");
+    assert!(
+        completed_output.contains("background result"),
+        "{completed_output}"
+    );
+    let prompts = message_input_texts(&request, "user")
+        .into_iter()
+        .filter(|text| {
+            matches!(
+                text.as_str(),
+                "start the cell" | "interrupt exec" | "interrupt wait"
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        prompts,
+        vec!["start the cell", "interrupt exec", "interrupt wait"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steer_deferred_during_compaction_yields_code_mode() {
+    const EXEC_ID: &str = "post-compact-exec";
+    let (release_compact, compact_gate) = oneshot::channel();
+    let (release_continuation, continuation_gate) = oneshot::channel();
+    let (release_follow_up, follow_up_gate) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![
+            chunk(ev_response_created("resp-first")),
+            chunk(ev_custom_tool_call("initial-exec", "exec", "text('ready');")),
+            chunk(ev_completed_with_tokens("resp-first", /*total_tokens*/ 500)),
+        ],
+        vec![
+            chunk(ev_response_created("resp-compact")),
+            gated_chunk(
+                compact_gate,
+                vec![
+                    ev_message_item_done("msg-compact", "AUTO_COMPACT_SUMMARY"),
+                    ev_completed_with_tokens("resp-compact", /*total_tokens*/ 50),
+                ],
+            ),
+        ],
+        vec![
+            chunk(ev_response_created("resp-continuation")),
+            chunk(ev_custom_tool_call(
+                EXEC_ID,
+                "exec",
+                "// @exec: {\"yield_time_ms\": 60000}\nawait tools.held_tool({}); text('finished');",
+            )),
+            gated_chunk(
+                continuation_gate,
+                vec![ev_completed_with_tokens("resp-continuation", /*total_tokens*/ 60)],
+            ),
+        ],
+        vec![
+            chunk(ev_response_created("resp-follow-up")),
+            gated_chunk(follow_up_gate, vec![ev_completed("resp-follow-up")]),
+        ],
+    ])
+    .await;
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config.model_provider.name = "OpenAI (test)".into();
+            config.model_provider.supports_websockets = false;
+            config.model_auto_compact_token_limit = Some(200);
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable CodeMode feature");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable CodeModeHost feature");
+            config.code_mode.disable_in_process_fallback = true;
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("disable request compression");
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session");
+    let codex = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "held_tool".into(),
+                description: "A tool held until the test responds.".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await
+        .expect("start thread with dynamic tool")
+        .thread;
+
+    submit_user_input(&codex, "first prompt").await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.wait_for_request_count(/*count*/ 2),
+    )
+    .await
+    .expect("compaction request should begin");
+    steer_user_input(&codex, "old steer").await;
+    release_compact.send(()).expect("finish compaction");
+    let EventMsg::DynamicToolCallRequest(held_tool) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(request) if request.tool == "held_tool")
+    })
+    .await else {
+        unreachable!("predicate guarantees a dynamic tool request");
+    };
+    release_continuation
+        .send(())
+        .expect("finish continuation response");
+    wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::RawResponseCompleted(completed) if completed.response_id == "resp-continuation")
+    })
+    .await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.wait_for_request_count(/*count*/ 4),
+    )
+    .await
+    .expect("the deferred steer should yield the exec");
+    let requests = server.requests().await;
+    let continuation: Value = from_slice(&requests[2]).expect("parse continuation request");
+    assert!(!message_input_texts(&continuation, "user").contains(&"old steer".to_string()));
+    let follow_up: Value = from_slice(&requests[3]).expect("parse follow-up request");
+    assert!(
+        call_output_text(&follow_up, "custom_tool_call_output", EXEC_ID)
+            .expect("exec output")
+            .contains("Script running with cell ID ")
+    );
+    let steers = message_input_texts(&follow_up, "user")
+        .into_iter()
+        .filter(|text| text == "old steer")
+        .collect::<Vec<_>>();
+    assert_eq!(steers, vec!["old steer"]);
+
+    codex
+        .submit(Op::DynamicToolResponse {
+            id: held_tool.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "released".into(),
+                }],
+                success: true,
+            },
+        })
+        .await
+        .expect("release nested tool");
+    release_follow_up.send(()).expect("finish follow-up");
+    wait_for_turn_complete(&codex).await;
+    codex
+        .shutdown_and_wait()
+        .await
+        .expect("shut down test session");
+    server.shutdown().await;
+}
+
+struct FirstExecYielded {
+    sender: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+}
+
+impl codex_extension_api::ToolLifecycleContributor for FirstExecYielded {
+    fn on_tool_finish<'a>(
+        &'a self,
+        input: codex_extension_api::ToolFinishInput<'a>,
+    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if input.tool_name.name == "exec"
+                && input.call_id == "first-exec"
+                && let Some(sender) = self.sender.lock().expect("lock sender").take()
+            {
+                let _ = sender.send(());
+            }
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn input_yields_a_code_mode_call_received_later_in_the_same_response() {
+    let (first_yielded_tx, first_yielded_rx) = oneshot::channel();
+    let (release_second_tx, release_second_rx) = oneshot::channel();
+    let (release_final_tx, release_final_rx) = oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![
+        vec![
+            chunk(ev_response_created("resp-calls")),
+            chunk(ev_custom_tool_call(
+                "first-exec",
+                "exec",
+                "// @exec: {\"yield_time_ms\": 60000}\nawait tools.held_tool({}); text('first completed');",
+            )),
+            // This call is not even received until the first observation has
+            // yielded, proving it sees the already-latched request signal.
+            gated_chunk(
+                release_second_rx,
+                vec![
+                    ev_custom_tool_call(
+                        "second-exec",
+                        "exec",
+                        "// @exec: {\"yield_time_ms\": 60000}\nawait new Promise(() => {});",
+                    ),
+                    ev_completed("resp-calls"),
+                ],
+            ),
+        ],
+        vec![
+            chunk(ev_response_created("resp-follow-up")),
+            gated_chunk(release_final_rx, vec![ev_completed("resp-follow-up")]),
+        ],
+    ])
+    .await;
+    let mut extensions =
+        codex_extension_api::ExtensionRegistryBuilder::<codex_core::config::Config>::new();
+    extensions.tool_lifecycle_contributor(Arc::new(FirstExecYielded {
+        sender: std::sync::Mutex::new(Some(first_yielded_tx)),
+    }));
+    let test = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("enable CodeMode feature");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable CodeModeHost feature");
+            config.code_mode.disable_in_process_fallback = true;
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("disable request compression");
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_streaming_server(&server)
+        .await
+        .expect("build Codex test session");
+    let codex = test
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "held_tool".into(),
+                description: "A tool held until the test responds.".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(test.config.clone())
+        })
+        .await
+        .expect("start thread with dynamic tool")
+        .thread;
+
+    submit_user_input(&codex, "start cells").await;
+    let EventMsg::DynamicToolCallRequest(held_tool) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(request) if request.tool == "held_tool")
+    })
+    .await else {
+        unreachable!("predicate guarantees a dynamic tool request");
+    };
+    steer_user_input(&codex, "yield cells").await;
+    tokio::time::timeout(std::time::Duration::from_secs(10), first_yielded_rx)
+        .await
+        .expect("first exec should yield while the stream stays open")
+        .expect("first exec completion observer");
+    release_second_tx.send(()).expect("release second exec");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.wait_for_request_count(/*count*/ 2),
+    )
+    .await
+    .expect("both exec observations should yield before the follow-up");
+    let requests = server.requests().await;
+    let follow_up: Value = from_slice(&requests[1]).expect("parse follow-up request");
+    let cell_id = |call_id| {
+        let output = call_output_text(&follow_up, "custom_tool_call_output", call_id)
+            .expect("yielded exec output");
+        output
+            .strip_prefix("Script running with cell ID ")
+            .and_then(|rest| rest.lines().next())
+            .expect("running cell ID")
+            .to_string()
+    };
+    assert_ne!(cell_id("first-exec"), cell_id("second-exec"));
+    assert!(message_input_texts(&follow_up, "user").contains(&"yield cells".to_string()));
+
+    codex
+        .submit(Op::DynamicToolResponse {
+            id: held_tool.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "released".into(),
+                }],
+                success: true,
+            },
+        })
+        .await
+        .expect("release nested tool");
+    release_final_tx
+        .send(())
+        .expect("finish follow-up response");
+    wait_for_turn_complete(&codex).await;
+    codex
+        .shutdown_and_wait()
+        .await
+        .expect("shut down test session");
+    server.shutdown().await;
+}
+
+fn call_output_text(body: &Value, output_type: &str, call_id: &str) -> Option<String> {
+    let output = &body["input"]
+        .as_array()?
+        .iter()
+        .find(|item| item["type"] == output_type && item["call_id"] == call_id)?["output"];
+    match output {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(items) => Some(
+            items
+                .iter()
+                .filter_map(|item| item["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        _ => None,
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

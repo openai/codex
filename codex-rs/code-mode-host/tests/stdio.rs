@@ -246,6 +246,7 @@ async fn interrupt_yields_observations_without_stopping_the_cell() {
         description: String::new(),
         kind: CodeModeToolKind::Function,
         input_schema: None,
+        input_schema_max_bytes: None,
         output_schema: None,
     }];
     let signal = CancellationToken::new();

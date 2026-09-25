@@ -15,10 +15,13 @@ use codex_mcp::McpBinding;
 use codex_otel::SessionTelemetry;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::protocol::TurnContextItem;
+use tokio_util::sync::CancellationToken;
 
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
+    /// Yields this request's code-mode observations when a user message arrives.
+    pub(crate) preempt: Option<CancellationToken>,
     /// Realtime call activity and instructions captured for this sampling request.
     pub(crate) realtime: RealtimeConversationSnapshot,
     /// One immutable settings version captured before request preparation.

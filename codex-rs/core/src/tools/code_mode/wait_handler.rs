@@ -134,10 +134,13 @@ impl CodeModeWaitHandler {
                     exec.session
                         .services
                         .code_mode_service
-                        .wait(codex_code_mode::WaitRequest {
-                            cell_id,
-                            yield_time_ms: args.yield_time_ms,
-                        })
+                        .wait(
+                            codex_code_mode::WaitRequest {
+                                cell_id,
+                                yield_time_ms: args.yield_time_ms,
+                            },
+                            step_context.preempt.clone(),
+                        )
                         .await
                 }
                 .map_err(|error| {

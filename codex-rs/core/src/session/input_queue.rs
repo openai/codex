@@ -14,6 +14,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 static PENDING_MAILBOX_MESSAGES: Gauge = Gauge::new("core.mailbox.pending");
 
@@ -215,6 +217,29 @@ impl InputQueue {
         })
     }
 
+    /// Signal once a user message is queued for this sampling request.
+    pub(crate) async fn watch_user_input(
+        &self,
+        active_turn: &Mutex<Option<ActiveTurn>>,
+        sub_id: &str,
+        interrupt: CancellationToken,
+    ) -> Option<AbortOnDropHandle<()>> {
+        let turn_state = self.turn_state_for_sub_id(active_turn, sub_id).await?;
+        // Subscribe before inspecting the queue so an arrival cannot be missed.
+        let mut activity = self.activity_tx.subscribe();
+        Some(AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if turn_state.lock().await.pending_input.has_user_input() {
+                    interrupt.cancel();
+                    return;
+                }
+                if activity.changed().await.is_err() {
+                    return;
+                }
+            }
+        })))
+    }
+
     /// Clear any pending waiters and input buffered for the current turn.
     pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
         let mut turn_state = active_turn.turn_state.lock().await;
@@ -363,6 +388,12 @@ impl InputQueue {
 }
 
 impl TurnInputQueue {
+    fn has_user_input(&self) -> bool {
+        self.items
+            .iter()
+            .any(|input| matches!(input, TurnInput::UserInput { .. }))
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
