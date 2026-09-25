@@ -123,12 +123,20 @@ async fn snapshot_failure_retries_are_bounded_and_single_flight(
             cache.prepare(&params, &mut prepared, &telemetry, purpose),
             cache.prepare(&params, &mut concurrent, &telemetry, CapturePurpose::Execution),
         );
-        if prewarming {
+        let first = if prewarming {
             first.expect_err("prewarm must report failure without caching it");
+            None
         } else {
-            first.expect("capture failure must preserve command fallback");
+            first.expect("capture failure must preserve command fallback")
+        };
+        let second = second.expect("waiting command must complete even when prewarm fails");
+        for (prepared, reader) in [(&mut prepared, first), (&mut concurrent, second)] {
+            if let Some(reader) = reader {
+                let fd = std::os::fd::AsRawFd::as_raw_fd(&reader);
+                prepared.command[2] =
+                    prepared.command[2].replace(&format!("/dev/fd/{fd}"), "/dev/fd/SNAPSHOT");
+            }
         }
-        second.expect("waiting command must complete even when prewarm fails");
         assert_eq!(
             (&prepared.command, &prepared.env),
             (&concurrent.command, &concurrent.env)

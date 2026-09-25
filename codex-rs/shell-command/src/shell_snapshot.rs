@@ -15,6 +15,7 @@ pub use capture::CapturedSnapshot;
 pub use capture::CapturedStartupEnvironment;
 pub use capture::SnapshotCaptureOptions;
 pub use capture::snapshot_capture_script;
+pub use capture::snapshot_source_capture_script;
 pub use credentials::PreparedSnapshot;
 pub use credentials::SnapshotCredentialEnvironment;
 pub use credentials::prepare_snapshot_credentials;

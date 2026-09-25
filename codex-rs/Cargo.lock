@@ -3176,6 +3176,7 @@ dependencies = [
  "codex-shell-command",
  "codex-skills",
  "codex-test-binary-support",
+ "codex-uds",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",

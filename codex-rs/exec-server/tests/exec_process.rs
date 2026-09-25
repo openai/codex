@@ -1,4 +1,7 @@
 mod common;
+#[cfg(unix)]
+#[path = "exec_process/shell_snapshot.rs"]
+mod shell_snapshot;
 #[path = "exec_process/windows_sandbox.rs"]
 mod windows_sandbox;
 
@@ -250,7 +253,7 @@ async fn shell_snapshot_v2_filters_profile_exports_and_stays_in_memory(
     let shadowed_builtins = if posix_shell {
         ""
     } else {
-        "unset() { exit 41; }\nbuiltin() { :; }\n"
+        "unset() { exit 41; }\nbuiltin() { exit 41; }\nexec() { exit 41; }\n"
     };
     std::fs::write(
         &profile_path,

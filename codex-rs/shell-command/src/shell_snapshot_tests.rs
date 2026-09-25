@@ -2233,3 +2233,53 @@ fn captured_script(shell_type: ShellType, source: &str) -> Result<String> {
         CapturedSnapshot::parse(shell_type, source.as_bytes()).context("invalid native capture")?;
     Ok(captured.render_script())
 }
+
+#[test]
+fn streamed_snapshot_preserves_alias_and_option_parse_order() -> Result<()> {
+    for (shell, shell_type, options) in [
+        ("/bin/bash", ShellType::Bash, "shopt -s expand_aliases"),
+        ("/bin/zsh", ShellType::Zsh, "setopt RC_QUOTES"),
+    ] {
+        if !std::path::Path::new(shell).exists() {
+            continue;
+        }
+        let dir = tempdir()?;
+        let mut setup = format!(
+            "{options}\nhelper() {{ printf helper; }}\nfunction : () {{ exit 41; }}\nalias snapshot_alias=\"printf 'one''two'\"\n"
+        );
+        if shell_type == ShellType::Zsh {
+            setup.push_str("alias alias=false\n");
+        }
+        let mut results = Vec::new();
+        for source in [false, true] {
+            let capture = if source {
+                super::snapshot_source_capture_script(shell_type, CAPTURE_NON_INTERACTIVE)
+            } else {
+                snapshot_capture_script(shell_type, CAPTURE_NON_INTERACTIVE)
+            }
+            .unwrap();
+            let output = Command::new(shell)
+                .args(["-c", &format!("{setup}{capture}")])
+                .output()?;
+            assert!(output.status.success(), "{shell}: {output:?}");
+            let captured = CapturedSnapshot::parse(shell_type, &output.stdout).unwrap();
+            let path = dir.path().join("state");
+            std::fs::write(&path, captured.render_state())?;
+            let restore = if source {
+                ". \"$1\""
+            } else {
+                "eval \"$(cat \"$1\")\""
+            };
+            let command = format!("{restore}\n\\alias snapshot_alias\nhelper\n");
+            let output = Command::new(shell)
+                .args(["-c", &command, "snapshot-test"])
+                .arg(&path)
+                .output()?;
+            assert!(output.status.success(), "{shell}: {output:?}");
+            assert!(String::from_utf8_lossy(&output.stdout).contains("snapshot_alias="));
+            results.push((output.stdout, output.stderr));
+        }
+        assert_eq!(results[0], results[1], "{shell}");
+    }
+    Ok(())
+}

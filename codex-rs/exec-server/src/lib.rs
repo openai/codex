@@ -46,6 +46,8 @@ mod sandboxed_file_system;
 mod server;
 #[cfg(unix)]
 mod shell_snapshot;
+#[cfg(unix)]
+mod shell_snapshot_file;
 mod telemetry;
 mod trace_context;
 mod websocket_pong_watchdog;

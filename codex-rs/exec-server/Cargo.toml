@@ -73,8 +73,10 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
+codex-uds = { workspace = true }
 libc = { workspace = true }
 rustix = { workspace = true, features = ["fs"] }
+tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [
