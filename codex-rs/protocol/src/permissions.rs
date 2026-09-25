@@ -248,6 +248,12 @@ enum WritableRootPathResolution {
     PreserveMutableComponents,
 }
 
+#[derive(Clone, Copy)]
+enum RootMetadataWriteMounts {
+    Separate,
+    InheritWritableRoot,
+}
+
 impl WritableRootPathResolution {
     fn resolve(self, path: AbsolutePathBuf) -> AbsolutePathBuf {
         match self {
@@ -1472,7 +1478,27 @@ impl FileSystemSandboxPolicy {
     /// Returns the writable roots together with read-only carveouts resolved
     /// against the provided cwd.
     pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
-        self.get_writable_roots_with_cwd_impl(cwd, WritableRootPathResolution::Effective)
+        self.get_writable_roots_with_cwd_impl(
+            cwd,
+            WritableRootPathResolution::Effective,
+            RootMetadataWriteMounts::Separate,
+        )
+    }
+
+    /// Omits redundant root-metadata mounts when the filesystem root is writable.
+    ///
+    /// Explicit root metadata writes still disable their default protection. Linux
+    /// inherits those writes from its root bind so a metadata symlink cannot cause
+    /// a second bind to reopen its target under an explicitly denied directory.
+    pub fn get_writable_roots_with_cwd_inheriting_root_metadata(
+        &self,
+        cwd: &Path,
+    ) -> Vec<WritableRoot> {
+        self.get_writable_roots_with_cwd_impl(
+            cwd,
+            WritableRootPathResolution::Effective,
+            RootMetadataWriteMounts::InheritWritableRoot,
+        )
     }
 
     /// Reports configured writable roots for diagnostics without inspecting the filesystem.
@@ -1513,6 +1539,7 @@ impl FileSystemSandboxPolicy {
         self.get_writable_roots_with_cwd_impl(
             cwd,
             WritableRootPathResolution::PreserveMutableComponents,
+            RootMetadataWriteMounts::Separate,
         )
     }
 
@@ -1520,6 +1547,7 @@ impl FileSystemSandboxPolicy {
         &self,
         cwd: &Path,
         path_resolution: WritableRootPathResolution,
+        root_metadata_mounts: RootMetadataWriteMounts,
     ) -> Vec<WritableRoot> {
         if self.has_full_disk_write_access() {
             return Vec::new();
@@ -1604,9 +1632,21 @@ impl FileSystemSandboxPolicy {
                 }
             }))
             .collect();
+        let inherits_root_metadata = matches!(
+            root_metadata_mounts,
+            RootMetadataWriteMounts::InheritWritableRoot
+        ) && prepared_entries.iter().any(|entry| {
+            entry.entry.access.can_write() && entry.entry.path.as_path().parent().is_none()
+        });
         let writable_entries: Vec<&PreparedFileSystemEntry<'_>> = prepared_entries
             .iter()
             .filter(|entry| entry.entry.access.can_write())
+            .filter(|entry| {
+                let path = entry.entry.path.as_path();
+                !inherits_root_metadata
+                    || path.parent().is_none_or(|parent| parent.parent().is_some())
+                    || !path.file_name().is_some_and(is_protected_metadata_name)
+            })
             .collect();
 
         let effective_cwd = AbsolutePathBuf::from_absolute_path(cwd)
@@ -1749,6 +1789,27 @@ impl FileSystemSandboxPolicy {
                 .collect(),
             /*normalize_effective_paths*/ true,
         )
+    }
+
+    /// Includes literal denies alongside their resolved targets so Linux can reject a denial
+    /// through a writable symlink instead of only masking the symlink's current target.
+    pub fn get_unreadable_roots_with_cwd_preserving_symlinks(
+        &self,
+        cwd: &Path,
+    ) -> Vec<AbsolutePathBuf> {
+        let mut roots = self.get_unreadable_roots_with_cwd(cwd);
+        if matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            for entry in self.resolved_entries_with_cwd(cwd) {
+                if entry.access == FileSystemAccessMode::Deny
+                    && entry.path.as_path().parent().is_some()
+                    && !self.can_read_local_path_with_cwd(entry.path.as_path(), cwd)
+                    && !roots.contains(&entry.path)
+                {
+                    roots.push(entry.path);
+                }
+            }
+        }
+        roots
     }
 
     /// Returns unreadable glob patterns resolved against the provided cwd.

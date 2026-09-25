@@ -82,6 +82,58 @@ fn symbolic_root_precedence_is_independent_of_drive_and_cwd() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn approved_command_expands_volume_roots_without_retaining_original_grants() -> Result<()> {
+    use FileSystemAccessMode::Deny;
+    use FileSystemAccessMode::Read;
+    use FileSystemAccessMode::Write;
+
+    let volumes = [
+        PathUri::parse("file:///C:/")?,
+        PathUri::parse("file:///D:/")?,
+    ];
+    let cwd = volumes[0].join("work")?;
+    let secret = volumes[0].join("private")?;
+    let formerly_readonly = volumes[1].join("scoped")?;
+    let reopened = secret.join("reopened")?;
+    let root_git = volumes[0].join(".git")?;
+    let denied_root_metadata = volumes[0].join(".agents")?;
+    let workspace_git = cwd.join(".git/FETCH_HEAD")?;
+    let context = FileSystemSandboxPolicyContext {
+        cwd: &cwd,
+        workspace_roots: std::slice::from_ref(&cwd),
+        user_home_dir: None,
+        temporary_directories: Some(&[]),
+    };
+    let mut policy = FileSystemSandboxPolicy::read_only();
+    policy.entries.extend([
+        FileSystemSandboxEntry::new(secret.clone().into(), Deny),
+        FileSystemSandboxEntry::new(denied_root_metadata.clone().into(), Deny),
+        FileSystemSandboxEntry::new(reopened.clone().into(), Write),
+        FileSystemSandboxEntry::new(formerly_readonly.clone().into(), Read),
+    ]);
+    let approved = policy.for_approved_command(&context);
+    assert_eq!(approved.resolve_access(&formerly_readonly, &context), Deny);
+    let translated = materialize_volume_roots(approved, &volumes)?;
+    assert_eq!(
+        [
+            &volumes[0],
+            &volumes[1],
+            &formerly_readonly,
+            &secret,
+            &reopened,
+        ]
+        .map(|path| translated.resolve_access(path, &context)),
+        [Write, Write, Write, Deny, Deny]
+    );
+    assert_eq!(
+        [&root_git, &denied_root_metadata, &workspace_git]
+            .map(|path| translated.can_write_path(path, &context)),
+        [true, false, true]
+    );
+    Ok(())
+}
+
 fn canonical_root(temp: &tempfile::TempDir) -> Result<PathBuf> {
     Ok(
         PathUri::from_host_native_path(std::fs::canonicalize(temp.path())?)?

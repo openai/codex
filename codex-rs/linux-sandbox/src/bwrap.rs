@@ -416,7 +416,8 @@ fn create_bwrap_flags(
 /// 3. Unreadable ancestors of writable roots are masked before their child
 ///    mounts are rebound so nested writable carveouts can be reopened safely.
 /// 4. `--bind <root> <root>` re-enables writes for allowed roots, including
-///    writable subpaths under `/dev` (for example, `/dev/shm`).
+///    writable subpaths under `/dev` (for example, `/dev/shm`). Binding `/`
+///    recreates the minimal `/dev` before applying any carveouts below it.
 /// 5. `--ro-bind <subpath> <subpath>` re-applies read-only protections under
 ///    those writable roots so protected subpaths win.
 /// 6. Nested unreadable carveouts under a writable root are masked after that
@@ -438,7 +439,7 @@ fn create_filesystem_args(
     // roots so mixed-platform configs can keep harmless paths for other
     // environments without breaking Linux command startup.
     let mut writable_roots = file_system_sandbox_policy
-        .get_writable_roots_with_cwd(cwd)
+        .get_writable_roots_with_cwd_inheriting_root_metadata(cwd)
         .into_iter()
         .filter(|writable_root| writable_root.root.as_path().exists())
         .collect::<Vec<_>>();
@@ -486,7 +487,7 @@ fn create_filesystem_args(
             })
             .collect();
     let mut unreadable_roots = file_system_sandbox_policy
-        .get_unreadable_roots_with_cwd(cwd)
+        .get_unreadable_roots_with_cwd_preserving_symlinks(cwd)
         .into_iter()
         .map(AbsolutePathBuf::into_path_buf)
         .collect::<Vec<_>>();
@@ -606,6 +607,9 @@ fn create_filesystem_args(
     let unreadable_paths: HashSet<PathBuf> = unreadable_roots.iter().cloned().collect();
     let mut sorted_writable_roots = writable_roots;
     sorted_writable_roots.sort_by_key(|writable_root| path_depth(writable_root.root.as_path()));
+    let binds_file_system_root = sorted_writable_roots
+        .iter()
+        .any(|writable_root| writable_root.root.as_path() == Path::new("/"));
     // Mask only the unreadable ancestors that sit outside every writable root.
     // Unreadable paths nested under a broader writable root are applied after
     // that broader root is bound, then reopened by any deeper writable child.
@@ -643,10 +647,27 @@ fn create_filesystem_args(
         }
 
         let mount_root = symlink_target.as_deref().unwrap_or(root);
-        bwrap_args.args.push("--bind".to_string());
-        bwrap_args.args.push(path_to_string(mount_root));
-        bwrap_args.args.push(path_to_string(mount_root));
-        append_daemon_socket_masks(&mut bwrap_args.args, mount_root, &daemon_directories)?;
+        // Rebinding a root alias would also undo masks already applied to `/`.
+        // The physical root is already writable; only the alias's carveouts remain.
+        let redundant_root_alias =
+            binds_file_system_root && root != Path::new("/") && mount_root == Path::new("/");
+        if !redundant_root_alias {
+            bwrap_args.args.push("--bind".to_string());
+            bwrap_args.args.push(path_to_string(mount_root));
+            bwrap_args.args.push(path_to_string(mount_root));
+            if mount_root == Path::new("/") {
+                // The root bind shadows the earlier device tree and applies nodev.
+                // Recreate only standard devices before applying explicit deny masks.
+                bwrap_args.args.extend([
+                    "--dev".to_string(),
+                    "/dev".to_string(),
+                    "--bind-try".to_string(),
+                    "/dev/shm".to_string(),
+                    "/dev/shm".to_string(),
+                ]);
+            }
+            append_daemon_socket_masks(&mut bwrap_args.args, mount_root, &daemon_directories)?;
+        }
 
         let mut read_only_subpaths: Vec<PathBuf> = writable_root
             .read_only_subpaths
@@ -1631,6 +1652,8 @@ mod tests {
         let temp_dir = TempDir::new().expect("temp dir");
         let root_env = temp_dir.path().join(".env");
         std::fs::write(&root_env, "secret").expect("write env");
+        let root_alias = temp_dir.path().join("root-alias");
+        std::os::unix::fs::symlink("/", &root_alias).expect("create root symlink");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -1640,6 +1663,18 @@ mod tests {
                 missing_path_behavior: None,
             },
             unreadable_glob_entry(format!("{}/**/*.env", temp_dir.path().display())),
+            FileSystemSandboxEntry::new(
+                AbsolutePathBuf::from_absolute_path(root_alias)
+                    .expect("absolute root alias")
+                    .into(),
+                FileSystemAccessMode::Write,
+            ),
+            FileSystemSandboxEntry::new(
+                AbsolutePathBuf::try_from("/dev/zero")
+                    .expect("device path")
+                    .into(),
+                FileSystemAccessMode::Deny,
+            ),
         ]);
         let command = vec!["/bin/true".to_string()];
 
@@ -1657,6 +1692,30 @@ mod tests {
             "full-write policy with unreadable globs must still use bwrap"
         );
         assert_file_masked(&args.args, &root_env);
+        assert_file_masked(&args.args, Path::new("/dev/zero"));
+        assert_eq!(
+            args.args
+                .windows(3)
+                .filter(|window| *window == ["--bind", "/", "/"])
+                .count(),
+            1,
+        );
+        let writable_root = args
+            .args
+            .windows(3)
+            .position(|window| window == ["--bind", "/", "/"])
+            .expect("writable root");
+        let devices = args
+            .args
+            .windows(5)
+            .rposition(|window| window == ["--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm"])
+            .expect("minimal device tree with shared memory");
+        let device_mask = args
+            .args
+            .windows(3)
+            .position(|window| window[0] == "--ro-bind-data" && window[2] == "/dev/zero")
+            .expect("explicit device deny mask");
+        assert!(writable_root < devices && devices < device_mask);
     }
 
     #[cfg(unix)]
@@ -2262,11 +2321,15 @@ mod tests {
                 PathBuf::from("/dev/.codex"),
             ]
         );
-        let dev_mount = args
+        let dev_mounts = args
             .args
             .windows(2)
-            .position(|args| args == ["--dev", "/dev"])
-            .expect("/dev mount");
+            .enumerate()
+            .filter_map(|(index, args)| (args == ["--dev", "/dev"]).then_some(index))
+            .collect::<Vec<_>>();
+        let [initial_dev_mount, restored_dev_mount] = dev_mounts.as_slice() else {
+            panic!("expected exactly two /dev mounts, got {dev_mounts:?}");
+        };
         let root_bind = args
             .args
             .windows(3)
@@ -2277,7 +2340,8 @@ mod tests {
             .windows(3)
             .position(|args| args == ["--bind", "/dev", "/dev"])
             .expect("/dev bind");
-        assert!(dev_mount < root_bind && root_bind < dev_bind);
+        assert!(*initial_dev_mount < root_bind && root_bind < *restored_dev_mount);
+        assert!(*restored_dev_mount < dev_bind);
     }
 
     #[test]

@@ -31,6 +31,9 @@ mod wslg_tests;
 #[path = "nested_metadata_tests.rs"]
 mod nested_metadata_tests;
 
+#[path = "root_metadata_tests.rs"]
+mod root_metadata_tests;
+
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
 #[cfg(not(target_arch = "aarch64"))]

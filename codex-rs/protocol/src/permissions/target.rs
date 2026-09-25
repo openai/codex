@@ -2,11 +2,14 @@
 
 use super::FileSystemAccessMode;
 use super::FileSystemPath;
+use super::FileSystemSandboxEntry;
 use super::FileSystemSandboxKind;
 use super::FileSystemSandboxPolicy;
 use super::FileSystemSandboxPolicyContext;
 use super::FileSystemSpecialPath;
 use super::InvalidDenyReadGlobBehavior;
+use super::PROJECT_ROOTS_GLOB_PATTERN_PREFIX;
+use super::PROTECTED_METADATA_PATH_NAMES;
 use super::ReadDenyMatcher;
 use super::deny_read_validator::DenyReadValidator;
 use super::deny_read_validator::has_context_read_denials;
@@ -40,6 +43,70 @@ impl ReadDenyMatcher {
 }
 
 impl FileSystemSandboxPolicy {
+    /// Grants root and root-metadata write for an approved command unless explicitly denied.
+    /// If a retained denial cannot be resolved or denies the root, keep the original policy.
+    pub fn for_approved_command(&self, context: &FileSystemSandboxPolicyContext<'_>) -> Self {
+        if self.kind != FileSystemSandboxKind::Restricted {
+            return self.clone();
+        }
+        let mut approved = Self::restricted(vec![FileSystemSandboxEntry::new(
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            FileSystemAccessMode::Write,
+        )]);
+        approved.preserve_deny_read_restrictions_from(self);
+        if context.workspace_roots.is_empty()
+            && approved.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots { .. }
+                    }
+                ) || matches!(
+                    &entry.path,
+                    FileSystemPath::GlobPattern { pattern }
+                        if pattern.starts_with(PROJECT_ROOTS_GLOB_PATTERN_PREFIX)
+                )
+            })
+        {
+            return self.clone();
+        }
+        let Some(mut approved) =
+            approved.try_materialize_project_roots_with_path_uris(context.workspace_roots)
+        else {
+            return self.clone();
+        };
+        let Some(root) = file_system_root(context) else {
+            return self.clone();
+        };
+        let Ok(matcher) = ReadDenyMatcher::try_new_with_context(&approved, context) else {
+            return self.clone();
+        };
+        if !approved.resolve_access(&root, context).can_write()
+            || matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_read_denied_uri(&root, context))
+        {
+            return self.clone();
+        }
+        for name in PROTECTED_METADATA_PATH_NAMES {
+            let Ok(path) = root.join_descendant(name) else {
+                return self.clone();
+            };
+            if !matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_read_denied_uri(&path, context))
+            {
+                approved.entries.push(FileSystemSandboxEntry::new(
+                    path.into(),
+                    FileSystemAccessMode::Write,
+                ));
+            }
+        }
+        approved
+    }
+
     /// Checks exact-root read access using paths owned by the execution host.
     /// Deny glob enforcement is checked separately with [`ReadDenyMatcher`].
     pub fn can_read_path(
@@ -193,3 +260,7 @@ fn validate_context_paths(
 #[cfg(test)]
 #[path = "target_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "target_approved_materialization_tests.rs"]
+mod approved_materialization_tests;
