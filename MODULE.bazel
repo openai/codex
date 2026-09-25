@@ -351,11 +351,15 @@ crate.from_cargo(
 bazel_dep(name = "zstd", version = "1.5.7")
 
 crate.annotation(
+    # Daemon tests repeatedly hash large CLI binaries, even in fastbuild mode.
+    # Optimize the native backends as well as the Rust implementation.
+    build_script_env = {"OPT_LEVEL": "3"},
     # The Windows lint toolchain cannot reliably materialize blake3's native x86 assembly archives.
     crate = "blake3",
     crate_features_select = {
         "x86_64-pc-windows-gnullvm": ["pure"],
     },
+    rustc_flags = ["-Copt-level=3"],
 )
 crate.annotation(
     crate = "zstd-sys",
