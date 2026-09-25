@@ -116,7 +116,7 @@ pub enum SubscriptionChange {
     Unsubscribe,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateChannelRequest {
     pub channel_name: String,
     pub subscription: SubscriptionChange,
@@ -180,7 +180,7 @@ pub struct ReadThreadRequest {
     pub max_chars_per_post: NonZeroU32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReadPostRequest {
     pub message_id: Uuid,
     /// Offsets and lengths count Unicode scalar values, not UTF-8 bytes.
@@ -194,7 +194,7 @@ pub enum SubscriptionTarget {
     Thread(Uuid),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubscriptionRequest {
     pub target: SubscriptionTarget,
     /// None changes the caller's subscription.
