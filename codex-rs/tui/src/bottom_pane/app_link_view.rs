@@ -203,7 +203,7 @@ impl AppLinkViewParams {
     }
 }
 
-fn validate_external_url(url: &str, require_chatgpt_host: bool) -> Option<Url> {
+pub(super) fn validate_external_url(url: &str, require_chatgpt_host: bool) -> Option<Url> {
     let parsed = Url::parse(url).ok()?;
     if parsed.scheme() != "https" || parsed.host_str().is_none() {
         return None;

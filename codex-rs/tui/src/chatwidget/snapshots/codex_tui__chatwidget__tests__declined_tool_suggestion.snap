@@ -1,0 +1,8 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+assertion_line: 572
+expression: popup
+---
+› Ask Codex to do anything
+
+  GPT-5.6-Sol default · /tmp/project
