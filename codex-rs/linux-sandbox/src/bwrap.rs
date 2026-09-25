@@ -65,11 +65,10 @@ pub(crate) const WSLG_DISTRO_ROOT: &str = "/mnt/wslg/distro";
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
-    /// Whether to mount a fresh `/proc` inside the sandbox.
-    ///
-    /// This is the secure default, but some restrictive container environments
-    /// deny `--proc /proc`.
+    /// Whether to mount a fresh `/proc`; disabled by `--no-proc` or mount fallback.
     pub mount_proc: bool,
+    /// Explicitly reuse the caller's PID namespace instead of creating one.
+    pub inherit_pid_namespace: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
     /// Hide the WSL Windows interop socket from commands with restricted filesystem access.
@@ -88,6 +87,7 @@ impl Default for BwrapOptions {
     fn default() -> Self {
         Self {
             mount_proc: true,
+            inherit_pid_namespace: false,
             network_mode: BwrapNetworkMode::FullAccess,
             mask_wsl_interop: false,
             mask_wslg_distro: false,
@@ -295,9 +295,11 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         // Always enter a fresh user namespace so root inside a container does
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
-        "--unshare-pid".to_string(),
         "--unshare-ipc".to_string(),
     ];
+    if !options.inherit_pid_namespace {
+        args.push("--unshare-pid".to_string());
+    }
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -371,7 +373,9 @@ fn create_bwrap_flags(
     // This also blocks host procfs root/cwd/fd links through ptrace permission
     // checks, including when a container requires retaining the host procfs.
     args.push("--unshare-user".to_string());
-    args.push("--unshare-pid".to_string());
+    if !options.inherit_pid_namespace {
+        args.push("--unshare-pid".to_string());
+    }
     args.push("--unshare-ipc".to_string());
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
@@ -538,6 +542,11 @@ fn create_filesystem_args(
                     .map(|path| PathBuf::from(*path))
                     .filter(|path| path.exists()),
             );
+            if options.inherit_pid_namespace {
+                // Reuse the caller's procfs, including its submount masks. Bind it
+                // with the other read roots so explicit deny rules still win.
+                readable_roots.insert(PathBuf::from("/proc"));
+            }
         }
 
         // A restricted policy can still explicitly request `/`, which is
@@ -1483,6 +1492,7 @@ mod wslg_tests;
 mod tests {
     use super::*;
 
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::protocol::FileSystemAccessMode;
     use codex_protocol::protocol::FileSystemPath;
     use codex_protocol::protocol::FileSystemSandboxEntry;
@@ -1495,6 +1505,45 @@ mod tests {
     #[test]
     fn default_unreadable_glob_scan_has_no_depth_cap() {
         assert_eq!(BwrapOptions::default().glob_scan_max_depth, None);
+    }
+
+    #[test]
+    fn pid_inheritance_and_legacy_proc_modes_read_only() {
+        assert_pid_namespace_args(&PermissionProfile::read_only().file_system_sandbox_policy());
+    }
+
+    #[test]
+    fn pid_inheritance_and_legacy_proc_modes_full_filesystem() {
+        assert_pid_namespace_args(&FileSystemSandboxPolicy::unrestricted());
+    }
+
+    fn assert_pid_namespace_args(policy: &FileSystemSandboxPolicy) {
+        for (mount_proc, inherit_pid_namespace) in [(true, false), (false, false), (false, true)] {
+            let args = create_bwrap_command_args(
+                vec!["/bin/true".to_string()],
+                policy,
+                Path::new("/"),
+                Path::new("/"),
+                BwrapOptions {
+                    mount_proc,
+                    inherit_pid_namespace,
+                    network_mode: BwrapNetworkMode::Isolated,
+                    ..Default::default()
+                },
+            )
+            .expect("create bwrap args")
+            .args;
+
+            assert_eq!(
+                args.iter().any(|arg| arg == "--unshare-pid"),
+                !inherit_pid_namespace
+            );
+            assert_eq!(args.iter().any(|arg| arg == "--proc"), mount_proc);
+            assert!(args.iter().any(|arg| arg == "--unshare-user"));
+            assert!(args.iter().any(|arg| arg == "--unshare-ipc"));
+            assert!(args.iter().any(|arg| arg == "--unshare-net"));
+            assert!(args.windows(2).any(|args| args == ["--cap-drop", "ALL"]));
+        }
     }
 
     fn unreadable_glob_entry(pattern: String) -> FileSystemSandboxEntry {
@@ -1560,8 +1609,8 @@ mod tests {
                 "/dev/shm".to_string(),
                 "/dev/shm".to_string(),
                 "--unshare-user".to_string(),
-                "--unshare-pid".to_string(),
                 "--unshare-ipc".to_string(),
+                "--unshare-pid".to_string(),
                 "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),

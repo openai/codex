@@ -43,6 +43,11 @@ pub(super) struct ExecServerCommand {
     )]
     pub(super) strict_config: bool,
 
+    /// Linux PID namespace: isolate (default) or inherit. Inherit allows signals to
+    /// other same-UID processes; enable only when provisioning a dedicated environment.
+    #[arg(long, value_name = "MODE", default_value = "isolate", global = true)]
+    linux_sandbox_pid_namespace: codex_sandboxing::LinuxSandboxPidNamespace,
+
     /// Maximum number of requests to process concurrently on each connection.
     #[arg(
         long = "concurrent-requests",
@@ -162,7 +167,8 @@ impl ExecServerCommand {
         let runtime_paths = ExecServerRuntimePaths::new(
             codex_self_exe,
             arg0_paths.codex_linux_sandbox_exe.clone(),
-        )?;
+        )?
+        .with_linux_sandbox_pid_namespace(self.linux_sandbox_pid_namespace);
         if let Some(base_url) = self.remote.take() {
             let environment_id = self.environment_id.take().ok_or_else(|| {
                 anyhow::anyhow!("--environment-id is required when --remote is set")

@@ -1,3 +1,7 @@
+#[cfg(target_os = "linux")]
+#[path = "exec_server/pid_namespace_tests.rs"]
+mod pid_namespace_tests;
+
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::io::BufRead as _;

@@ -147,6 +147,11 @@ pub struct LandlockCommand {
     #[arg(long = "no-proc", default_value_t = false)]
     pub no_proc: bool,
 
+    /// Reuse the caller's PID namespace and `/proc` together.
+    /// Only trusted executor startup may select this mode.
+    #[arg(long = "inherit-pid-namespace", hide = true)]
+    pub inherit_pid_namespace: bool,
+
     /// Full command args to run under the Linux sandbox helper.
     #[arg(trailing_var_arg = true)]
     pub command: Vec<String>,
@@ -170,6 +175,7 @@ pub fn run_main() -> ! {
         proxy_route_spec,
         verify_fd_mounts,
         no_proc,
+        inherit_pid_namespace,
         command,
     } = LandlockCommand::parse();
     let allow_network_for_proxy = managed_network.is_some();
@@ -298,7 +304,8 @@ pub fn run_main() -> ! {
             (None, Vec::new())
         };
         let options = BwrapOptions {
-            mount_proc: !no_proc,
+            mount_proc: !no_proc && !inherit_pid_namespace,
+            inherit_pid_namespace,
             network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
             mask_wsl_interop: !file_system_sandbox_policy.has_full_disk_write_access()
                 && Path::new(WSL_INTEROP_DIR).is_dir(),

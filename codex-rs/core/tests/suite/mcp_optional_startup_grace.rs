@@ -226,8 +226,10 @@ async fn running_thread_uses_refreshed_optional_mcp_startup_grace(
     .await
     .context("optional MCP initialization should begin before the initial turn")?;
 
+    // Allow for turn setup on remote workers while still finishing before the
+    // five-second MCP startup timeout. The server remains gated throughout.
     tokio::time::timeout(
-        Duration::from_millis(500),
+        Duration::from_secs(2),
         fixture.submit_turn("show initial optional MCP tools"),
     )
     .await

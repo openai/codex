@@ -309,6 +309,147 @@ async fn namespace_reaper_collects_orphaned_descendants() {
 }
 
 #[tokio::test]
+async fn proc_mount_denial_preserves_legacy_fallback_and_explicit_pid_inheritance() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bubblewrap is unavailable");
+        return;
+    }
+
+    let Some(system_bwrap) = codex_sandboxing::find_system_bwrap_in_path() else {
+        eprintln!("skipping PID namespace test: no system bubblewrap is available");
+        return;
+    };
+    let tempdir = tempfile::tempdir().expect("create PID namespace fixture");
+    let wrapper = tempdir.path().join("bwrap");
+    std::fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+for arg in "$@"; do
+    [ "$arg" = "--" ] && break
+    if [ "$arg" = "--proc" ]; then
+        printf '%s\n' "bwrap: Can't mount proc on /newroot/proc: Operation not permitted" >&2
+        exit 1
+    fi
+done
+exec "$CODEX_TEST_REAL_BWRAP" "$@"
+"#,
+    )
+    .expect("write proc-denying bubblewrap wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .expect("make bubblewrap wrapper executable");
+    let protected_file = tempdir.path().join("protected");
+    std::fs::write(&protected_file, "original").expect("write protected file");
+    let pid_namespace = std::fs::read_link("/proc/self/ns/pid").expect("read caller PID namespace");
+    let probe = r#"
+set -eu
+printf 'command started\n'
+IFS=' ' read -r proc_pid rest < /proc/self/stat
+test "$$" = "$proc_pid"
+test "$(readlink /proc/self/ns/pid)" = "$CODEX_TEST_PID_NAMESPACE"
+sleep 30 &
+child=$!
+trap 'kill "$child"; wait "$child" || :' EXIT
+IFS=' ' read -r proc_pid rest < "/proc/$child/stat"
+test "$child" = "$proc_pid"
+if (printf changed > "$CODEX_TEST_PROTECTED_FILE") 2>/dev/null; then exit 1; fi
+test "$(readlink /proc/self/ns/user)" != "$CODEX_TEST_USER_NAMESPACE"
+test "$(readlink /proc/self/ns/ipc)" != "$CODEX_TEST_IPC_NAMESPACE"
+test "$(readlink /proc/self/ns/net)" != "$CODEX_TEST_NET_NAMESPACE"
+while read -r key value rest; do
+    case "$key" in
+        CapEff:) test "$value" = 0000000000000000 ;;
+        NoNewPrivs:) test "$value" = 1 ;;
+        Seccomp:) test "$value" = 2 ;;
+    esac
+done < /proc/self/status
+printf 'consistent PIDs; restrictions preserved\n'
+"#;
+
+    let legacy_probe = r#"
+set -eu
+printf 'command started\n'
+IFS=' ' read -r proc_pid rest < /proc/self/stat
+test "$$" != "$proc_pid"
+printf 'legacy proc fallback\n'
+"#;
+
+    // Both modes still run when proc mounts are denied. Only explicit inheritance
+    // makes process IDs match the inherited proc view.
+    for inherit_pid_namespace in [false, true] {
+        let mut env = create_env_from_core_vars();
+        strip_proxy_env(&mut env);
+        let original_path = env.get("PATH").cloned().unwrap_or_default();
+        env.insert(
+            "PATH".to_string(),
+            format!("{}:{original_path}", tempdir.path().display()),
+        );
+        env.insert(
+            "CODEX_TEST_REAL_BWRAP".to_string(),
+            system_bwrap.display().to_string(),
+        );
+        env.insert(
+            "CODEX_TEST_PID_NAMESPACE".to_string(),
+            pid_namespace.display().to_string(),
+        );
+        env.insert(
+            "CODEX_TEST_PROTECTED_FILE".to_string(),
+            protected_file.display().to_string(),
+        );
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"));
+        command
+            .arg("--sandbox-policy-cwd")
+            .arg(std::env::current_dir().expect("current directory should exist"))
+            .arg("--permission-profile")
+            .arg(serde_json::to_string(&PermissionProfile::read_only()).unwrap());
+        for namespace in ["user", "ipc", "net"] {
+            env.insert(
+                format!("CODEX_TEST_{}_NAMESPACE", namespace.to_uppercase()),
+                std::fs::read_link(format!("/proc/self/ns/{namespace}"))
+                    .unwrap()
+                    .display()
+                    .to_string(),
+            );
+        }
+        if inherit_pid_namespace {
+            command.arg("--inherit-pid-namespace");
+        }
+        let probe = if inherit_pid_namespace {
+            probe
+        } else {
+            legacy_probe
+        };
+        command
+            .args(["--", "/bin/sh", "-c", probe])
+            .env_clear()
+            .envs(env)
+            .kill_on_drop(true);
+        let output =
+            tokio::time::timeout(Duration::from_millis(NETWORK_TIMEOUT_MS), command.output())
+                .await
+                .expect("proc probe should not time out")
+                .expect("proc probe should execute");
+        assert!(
+            output.status.success(),
+            "stdout={}; stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            output.stdout,
+            if inherit_pid_namespace {
+                b"command started\nconsistent PIDs; restrictions preserved\n".as_slice()
+            } else {
+                b"command started\nlegacy proc fallback\n".as_slice()
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(&protected_file).unwrap(),
+            "original"
+        );
+    }
+}
+
+#[tokio::test]
 async fn unsupported_system_bwrap_falls_back_to_bundled_bwrap() {
     if option_env!("CODEX_BWRAP_SHA256")
         .is_some_and(|digest| digest.chars().any(|character| character != '0'))

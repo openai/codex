@@ -1,5 +1,6 @@
 ---
 source: cli/src/exec_server_args_tests.rs
+assertion_line: 36
 expression: help_text
 ---
 [EXPERIMENTAL] Run the standalone exec-server service
@@ -28,14 +29,21 @@ Options:
           Error out when config.toml contains fields that are not recognized by
           this version of Codex
 
+      --disable <FEATURE>
+          Disable a feature (repeatable). Equivalent to `-c
+          features.<name>=false`
+
+      --linux-sandbox-pid-namespace <MODE>
+          Linux PID namespace: isolate (default) or inherit. Inherit allows
+          signals to other same-UID processes; enable only when provisioning a
+          dedicated environment
+
+          [default: isolate]
+
       --concurrent-requests <COUNT>
           Maximum number of requests to process concurrently on each connection
 
           [default: 1]
-
-      --disable <FEATURE>
-          Disable a feature (repeatable). Equivalent to `-c
-          features.<name>=false`
 
       --listen <URL>
           Transport endpoint URL. Supported values: `ws://IP:PORT` (default),

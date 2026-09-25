@@ -150,7 +150,8 @@ impl FileSystemSandboxRunner {
         sandbox_context: &FileSystemSandboxContext,
     ) -> Result<SandboxExecRequest, JSONRPCErrorError> {
         let helper = &self.runtime_paths.codex_self_exe;
-        let sandbox_manager = SandboxManager::for_file_system_helpers();
+        let sandbox_manager = SandboxManager::for_file_system_helpers()
+            .with_linux_sandbox_pid_namespace(self.runtime_paths.linux_sandbox_pid_namespace);
         #[cfg(target_os = "macos")]
         let sandbox_manager = sandbox_manager.with_allowed_symlinked_codex_home(
             self.runtime_paths.allowed_symlinked_codex_home.clone(),
