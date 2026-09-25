@@ -1405,7 +1405,7 @@ async fn production_loader_refreshes_later_configs_and_preserves_failed_refreshe
 #[tokio::test(start_paused = true)]
 async fn each_loader_owns_refresh_until_its_last_clone_is_dropped() {
     let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
+    let fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(test_bundle()); 3]));
     let service = CloudConfigBundleService::new(
         auth_manager_with_plan("business").await,
         Arc::clone(&fetcher),
@@ -1416,21 +1416,17 @@ async fn each_loader_owns_refresh_until_its_last_clone_is_dropped() {
         crate::bundle_loader::cloud_config_bundle_loader_for_service(service);
     let cloned_loader = loader.clone();
     assert_eq!(loader.get().await, Ok(Some(test_bundle())));
-    tokio::task::yield_now().await;
+    fetcher.request_started.notified().await;
 
     drop(loader);
-    tokio::time::advance(CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL + Duration::from_millis(1))
-        .await;
-    let refresh_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while fetcher.request_count.load(Ordering::SeqCst) < 2 {
-        assert!(
-            std::time::Instant::now() < refresh_deadline,
-            "the refresh should remain active while another loader clone exists"
-        );
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(
+        CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL + Duration::from_millis(1),
+        fetcher.request_started.notified(),
+    )
+    .await
+    .expect("the refresh should remain active while another loader clone exists");
 
-    let replacement_fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
+    let replacement_fetcher = Arc::new(SequenceBundleClient::new(vec![Ok(test_bundle()); 2]));
     let replacement_service = CloudConfigBundleService::new(
         auth_manager_with_plan_and_identity(
             "business",
@@ -1442,24 +1438,22 @@ async fn each_loader_owns_refresh_until_its_last_clone_is_dropped() {
         codex_home.path().to_path_buf(),
         CLOUD_CONFIG_BUNDLE_TIMEOUT,
     );
-    let (replacement_loader, replacement_handle) =
+    let (replacement_loader, replacement_task) =
         crate::bundle_loader::cloud_config_bundle_loader_for_service(replacement_service);
-    let replacement_task = replacement_handle;
     assert_eq!(replacement_loader.get().await, Ok(Some(test_bundle())));
+    replacement_fetcher.request_started.notified().await;
 
-    tokio::task::yield_now().await;
-    tokio::time::advance(CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL + Duration::from_millis(1))
-        .await;
-    let refresh_deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while replacement_fetcher.request_count.load(Ordering::SeqCst) < 2
-        || fetcher.request_count.load(Ordering::SeqCst) < 3
-    {
-        assert!(
-            std::time::Instant::now() < refresh_deadline,
-            "both loader owners should keep refreshing"
-        );
-        tokio::task::yield_now().await;
-    }
+    tokio::time::timeout(
+        CLOUD_CONFIG_BUNDLE_CACHE_REFRESH_INTERVAL + Duration::from_millis(1),
+        async {
+            tokio::join!(
+                fetcher.request_started.notified(),
+                replacement_fetcher.request_started.notified(),
+            );
+        },
+    )
+    .await
+    .expect("both loader owners should keep refreshing");
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 3);
 
     drop(cloned_loader);
