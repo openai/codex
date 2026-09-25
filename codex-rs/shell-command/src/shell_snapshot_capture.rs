@@ -88,6 +88,13 @@ fn capture_script(
         script
             .replace("SNAPSHOT_OPTIONS_BEGIN", match replay { Replay::Eval => "", Replay::Source => "printf '{\\n'" })
             .replace("SNAPSHOT_ALIASES_END", match replay { Replay::Eval => "", Replay::Source => "printf \"case '' in '') ;; esac\\n}\\n\"" })
+            // The source group is parsed before its options take effect. Serialize
+            // aliases with the replay shell's initial quoting rules, not RC_QUOTES.
+            // setopt works without the optional zsh/parameter module.
+            .replace("SNAPSHOT_ZSH_ALIASES", match replay {
+                Replay::Eval => "\\alias -L",
+                Replay::Source => "(\\setopt NO_RC_QUOTES; \\alias -L)",
+            })
             .replace("SNAPSHOT_EXPORTS", &declarations)
             .replace(
                 "SNAPSHOT_DECLARATION_ENVIRONMENT",
@@ -133,7 +140,7 @@ print ''
 printf '\0'
 alias_count=$(\alias -L | __codex_snapshot_command wc -l | __codex_snapshot_command tr -d ' ')
 print "# aliases $alias_count"
-\alias -L
+SNAPSHOT_ZSH_ALIASES
 print ''
 SNAPSHOT_ALIASES_END
 printf '\0'

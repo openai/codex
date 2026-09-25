@@ -2236,50 +2236,72 @@ fn captured_script(shell_type: ShellType, source: &str) -> Result<String> {
 
 #[test]
 fn streamed_snapshot_preserves_alias_and_option_parse_order() -> Result<()> {
-    for (shell, shell_type, options) in [
-        ("/bin/bash", ShellType::Bash, "shopt -s expand_aliases"),
-        ("/bin/zsh", ShellType::Zsh, "setopt RC_QUOTES"),
+    for (shell, shell_type, options, expected) in [
+        (
+            "/bin/bash",
+            ShellType::Bash,
+            "shopt -s expand_aliases",
+            "onetwohelper",
+        ),
+        (
+            "/bin/zsh",
+            ShellType::Zsh,
+            "module_path=()\nsetopt RC_QUOTES",
+            "one'twohelper",
+        ),
+        (
+            "/bin/zsh",
+            ShellType::Zsh,
+            "module_path=()\nsetopt NO_RC_QUOTES",
+            "onetwohelper",
+        ),
     ] {
         if !std::path::Path::new(shell).exists() {
             continue;
         }
         let dir = tempdir()?;
-        let mut setup = format!(
+        let setup = format!(
             "{options}\nhelper() {{ printf helper; }}\nfunction : () {{ exit 41; }}\nalias snapshot_alias=\"printf 'one''two'\"\n"
         );
-        if shell_type == ShellType::Zsh {
-            setup.push_str("alias alias=false\n");
-        }
         let mut results = Vec::new();
-        for source in [false, true] {
-            let capture = if source {
+        // Cover V1's native source, V2's source, and V2's environment fallback.
+        for (source_capture, source_replay) in [(false, true), (true, true), (true, false)] {
+            let capture = if source_capture {
                 super::snapshot_source_capture_script(shell_type, CAPTURE_NON_INTERACTIVE)
             } else {
                 snapshot_capture_script(shell_type, CAPTURE_NON_INTERACTIVE)
             }
             .unwrap();
+            let shadow = if source_capture && shell_type == ShellType::Zsh {
+                "alias alias=false\n"
+            } else {
+                ""
+            };
             let output = Command::new(shell)
-                .args(["-c", &format!("{setup}{capture}")])
+                .args(["-c", &format!("{setup}{shadow}{capture}")])
                 .output()?;
             assert!(output.status.success(), "{shell}: {output:?}");
             let captured = CapturedSnapshot::parse(shell_type, &output.stdout).unwrap();
             let path = dir.path().join("state");
             std::fs::write(&path, captured.render_state())?;
-            let restore = if source {
+            let restore = if source_replay {
                 ". \"$1\""
             } else {
                 "eval \"$(cat \"$1\")\""
             };
-            let command = format!("{restore}\n\\alias snapshot_alias\nhelper\n");
+            let command =
+                format!("{restore}\n\\alias snapshot_alias\neval snapshot_alias\nhelper\n");
             let output = Command::new(shell)
                 .args(["-c", &command, "snapshot-test"])
                 .arg(&path)
                 .output()?;
             assert!(output.status.success(), "{shell}: {output:?}");
             assert!(String::from_utf8_lossy(&output.stdout).contains("snapshot_alias="));
+            assert!(String::from_utf8_lossy(&output.stdout).ends_with(expected));
             results.push((output.stdout, output.stderr));
         }
         assert_eq!(results[0], results[1], "{shell}");
+        assert_eq!(results[0], results[2], "{shell}");
     }
     Ok(())
 }
