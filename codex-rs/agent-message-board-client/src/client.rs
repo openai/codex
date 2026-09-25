@@ -1,5 +1,6 @@
 //! Typed remote implementation of the board contract. HTTP policy is supplied
 //! by the caller; reads and writes never fall back to a private local board.
+//! Live notification frames are bounded before SSE parsing.
 
 use crate::protocol::AccessToken;
 use crate::protocol::BoardNotification;
@@ -45,6 +46,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 use url::Url;
 
@@ -172,7 +174,67 @@ impl RemoteAgentMessageBoard {
                 .map_err(transport_error)??;
             return Err(transport_error("unexpected notification response"));
         }
-        let mut events = response.bytes_stream().eventsource();
+        // Count wire bytes before the parser buffers them, resetting at blank lines.
+        // Defer CR handling so CRLF counts as one line ending even across chunks.
+        let mut frame_bytes = 0;
+        let mut line_empty = true;
+        let mut previous_cr = false;
+        // Validate before the SSE decoder can retain malformed UTF-8 indefinitely.
+        // Only an incomplete code point (at most three bytes) carries across chunks.
+        let mut utf8 = [0; 4];
+        let mut utf8_len = 0;
+        let mut chunks = Some(response.bytes_stream());
+        let mut events = futures::stream::poll_fn(move |cx| {
+            let Some(source) = chunks.as_mut() else {
+                return Poll::Ready(None);
+            };
+            let Some(chunk) = std::task::ready!(source.poll_next_unpin(cx)) else {
+                chunks = None;
+                return Poll::Ready(None);
+            };
+            let result = chunk.map_err(transport_error).and_then(|chunk| {
+                for &byte in chunk.iter() {
+                    if !byte.is_ascii() || utf8_len > 0 {
+                        utf8[utf8_len] = byte;
+                        utf8_len += 1;
+                        match std::str::from_utf8(&utf8[..utf8_len]) {
+                            Ok(_) => utf8_len = 0,
+                            Err(error) if error.error_len().is_some() => {
+                                return Err(transport_error(error));
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    if previous_cr && byte != b'\n' {
+                        if line_empty {
+                            frame_bytes = 0;
+                        }
+                        line_empty = true;
+                    }
+                    frame_bytes += 1;
+                    if frame_bytes > MAX_BODY {
+                        return Err(transport_error("board SSE frame exceeds the service limit"));
+                    }
+                    match byte {
+                        b'\n' => {
+                            if line_empty {
+                                frame_bytes = 0;
+                            }
+                            line_empty = true;
+                        }
+                        b'\r' => {}
+                        _ => line_empty = false,
+                    }
+                    previous_cr = byte == b'\r';
+                }
+                Ok(chunk)
+            });
+            if result.is_err() {
+                chunks = None;
+            }
+            Poll::Ready(Some(result))
+        })
+        .eventsource();
         let ready = tokio::time::timeout_at(deadline, events.next())
             .await
             .map_err(transport_error)?
@@ -186,7 +248,7 @@ impl RemoteAgentMessageBoard {
         let stream = events
             .map(|event| {
                 let event = event.map_err(transport_error)?;
-                if event.event != "notification" || event.data.len() > MAX_BODY {
+                if event.event != "notification" {
                     return Err(transport_error("invalid board notification"));
                 }
                 serde_json::from_str(&event.data).map_err(CodexErr::from)

@@ -185,15 +185,15 @@ async fn remote_board_preserves_the_host_contract() -> anyhow::Result<()> {
             ))
         })
         .collect::<anyhow::Result<String>>()?;
+    // The limit is per frame, not per connection; support all SSE line endings.
+    let heartbeats = ": heartbeat\r\n\r\n: heartbeat\r\r: heartbeat\n\n".repeat(16 * 1024);
     Mock::given(method("POST"))
         .and(path(format!("{base}/notifications")))
         .and(body_json(json!({"caller": caller, "turn_id": "turn-1"})))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_string(format!(
-                    "event: ready\ndata: {{}}\n\n: heartbeat\n\n{events}"
-                )),
+                .set_body_string(format!("{heartbeats}event: ready\ndata: {{}}\n\n{events}")),
         )
         .expect(1)
         .mount(&server)
@@ -202,6 +202,38 @@ async fn remote_board_preserves_the_host_contract() -> anyhow::Result<()> {
     assert_eq!(receiver.next().await?, Some(notice));
     assert!(receiver.next().await.is_err());
     assert!(receiver.next().await.is_err());
+    for body in [
+        format!(
+            "event: ready\nid: {}\ndata: {{}}\n\n",
+            "x".repeat(512 * 1024)
+        ),
+        format!("event: ready\ndata: {{}}\n\nid: {}", "x".repeat(512 * 1024)),
+        format!(
+            "event: ready\ndata: {{}}\n\n{}",
+            "data: x\n".repeat(64 * 1024 + 1)
+        ),
+    ] {
+        let _response = Mock::given(method("POST"))
+            .and(path(format!("{base}/notifications")))
+            .and(body_json(json!({"caller": caller, "turn_id": "limit"})))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body),
+            )
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        let error = match client.notifications(caller, "limit".into()).await {
+            Ok(mut receiver) => receiver.next().await.unwrap_err(),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("board SSE frame exceeds the service limit")
+        );
+    }
     let invalid_response = Mock::given(method("DELETE"))
         .and(path(&base))
         .respond_with(ResponseTemplate::new(502).set_body_string("not JSON"))
