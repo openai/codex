@@ -49,6 +49,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::McpConfig;
 use crate::binding::McpBinding;
+use crate::binding::PreparedMcpCall;
 use crate::client_tool_catalog::CodexAppsToolSnapshot;
 use crate::connection_manager::BindingCatalogRevision;
 use crate::connection_manager::McpConnectionSet;
@@ -533,6 +534,16 @@ impl McpRuntime {
             .connections
             .wait_for_server_startup(server)
             .await;
+    }
+
+    /// Prepares one advertised tool against this publication's current client and policy.
+    /// Its model-visible name stays fixed while execution metadata comes from the live catalog.
+    pub async fn prepare_call(&self, advertised_tool: &ToolInfo) -> Option<PreparedMcpCall> {
+        let current = self.current.load_full();
+        current
+            .connections
+            .prepare_call_for_tool(Arc::clone(current.config.as_ref()?), advertised_tool)
+            .await
     }
 
     /// Captures the current runtime after its selected server has finished startup.

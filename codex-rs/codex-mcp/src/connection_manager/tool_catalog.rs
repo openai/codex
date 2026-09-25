@@ -447,6 +447,52 @@ impl McpConnectionSet {
         )
     }
 
+    #[instrument(level = "trace", skip_all)]
+    pub(crate) async fn prepare_call_for_tool(
+        self: &Arc<Self>,
+        config: Arc<crate::McpConfig>,
+        advertised_tool: &ToolInfo,
+    ) -> Option<PreparedMcpCall> {
+        let server_name = &advertised_tool.server_name;
+        let view = self.servers.get(server_name)?;
+        if !view.tool_filter.allows(&advertised_tool.tool.name) {
+            return None;
+        }
+        let mut client = view.connection.client().await.ok()?;
+        client.tool_timeout = view.tool_timeout;
+        let snapshot = client.tool_catalog.read(Arc::new).await;
+        let current_tool = snapshot.tools.iter().find(|tool| {
+            tool.server_name == *server_name
+                && tool.tool.name == advertised_tool.tool.name
+                && tool.connector_id == advertised_tool.connector_id
+        })?;
+        let mut tool_info = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+            prepare_codex_apps_tools_for_model(
+                vec![current_tool.clone()],
+                &self.tool_plugin_context,
+            )
+        } else {
+            crate::rmcp_client::prepare_regular_mcp_tools_for_model(
+                vec![current_tool.clone()],
+                &self.tool_plugin_context,
+            )
+        }
+        .pop()?;
+        if !tool_is_model_visible(&tool_info) {
+            return None;
+        }
+        tool_info = Self::with_server_metadata(tool_info, &view.metadata);
+        // Preserve the globally normalized identity advertised to the model, while
+        // taking schema, annotations, and approval metadata from the current catalog.
+        tool_info
+            .callable_namespace
+            .clone_from(&advertised_tool.callable_namespace);
+        tool_info
+            .callable_name
+            .clone_from(&advertised_tool.callable_name);
+        self.prepare_call(&tool_info, Arc::new(client), config, snapshot)
+    }
+
     fn prepare_call(
         self: &Arc<Self>,
         tool_info: &ToolInfo,
