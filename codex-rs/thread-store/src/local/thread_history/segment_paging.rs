@@ -19,6 +19,7 @@ use super::read::stored_turn_row;
 use super::thread_history_error;
 use crate::ItemSortKey;
 use crate::ListItemsParams;
+use crate::ListItemsPosition;
 use crate::SortDirection;
 use crate::StoredTurnItemsView;
 use crate::ThreadStoreError;
@@ -208,6 +209,20 @@ pub(super) async fn page_item_rows(
     lineage: &RolloutLineage,
     params: &ListItemsParams,
 ) -> ThreadStoreResult<SegmentPage<StoredThreadItemRow>> {
+    let (cursor, anchor_item_id) = match params.position.as_ref() {
+        Some(ListItemsPosition::Cursor(cursor)) => (Some(cursor.as_str()), None),
+        Some(ListItemsPosition::ItemAnchor { item_id }) => (None, Some(item_id.as_str())),
+        None => (None, None),
+    };
+    if anchor_item_id.is_some()
+        && (params.sort_key != ItemSortKey::CreatedAtOrdinal
+            || params.after_updated_at_ordinal.is_some())
+    {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: "item anchors require creation-order paging without an update watermark"
+                .to_string(),
+        });
+    }
     // Update ordinals are local to a rollout. Forked lineages need a structured
     // watermark before incremental replay can safely span their segments.
     if params.after_updated_at_ordinal.is_some() && lineage.segments().len() > 1 {
@@ -230,15 +245,55 @@ pub(super) async fn page_item_rows(
             pool,
             segment.rollout_id(),
             params,
+            cursor,
             after_updated_at_ordinal,
         )
         .await;
     }
-    let cursor = parse_cursor(
-        params.cursor.as_deref(),
-        params.thread_id,
-        CursorScope::ItemsByCreatedAtOrdinal,
-    )?;
+    let cursor = if let Some(anchor_item_id) = anchor_item_id {
+        let turn_id = params
+            .turn_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| ThreadStoreError::InvalidRequest {
+                message: "turnId is required when cursor is an item anchor".to_string(),
+            })?;
+        if anchor_item_id.is_empty() {
+            return Err(invalid_item_anchor());
+        }
+        let mut anchor = None;
+        for segment in lineage.segments() {
+            let mut query = QueryBuilder::<Sqlite>::new(
+                "SELECT rollout_ordinal FROM thread_items WHERE thread_id = ",
+            );
+            query.push_bind(segment.rollout_id().to_string());
+            query.push(" AND item_id = ").push_bind(anchor_item_id);
+            push_segment_range(&mut query, segment)?;
+            query.push(" AND turn_id = ").push_bind(turn_id);
+            if let Some(ordinal) = query
+                .build_query_scalar::<i64>()
+                .fetch_optional(pool)
+                .await
+                .map_err(thread_history_error)?
+            {
+                anchor = Some(ordinal);
+                break;
+            }
+        }
+        Some(HistoryCursor {
+            requested_thread_id: params.thread_id,
+            rollout_ordinal: u64::try_from(anchor.ok_or_else(invalid_item_anchor)?)
+                .map_err(thread_history_error)?,
+            include_anchor: false,
+            scope: CursorScope::ItemsByCreatedAtOrdinal,
+        })
+    } else {
+        parse_cursor(
+            cursor,
+            params.thread_id,
+            CursorScope::ItemsByCreatedAtOrdinal,
+        )?
+    };
     let mut rows = Vec::new();
     for (_, segment, segment_cursor) in
         segments_from_cursor(lineage, params.sort_direction, cursor.as_ref())?
@@ -289,10 +344,11 @@ async fn page_updated_item_rows(
     pool: &sqlx::SqlitePool,
     rollout_id: ThreadId,
     params: &ListItemsParams,
+    cursor: Option<&str>,
     after_updated_at_ordinal: u64,
 ) -> ThreadStoreResult<SegmentPage<StoredThreadItemRow>> {
     let cursor = parse_cursor(
-        params.cursor.as_deref(),
+        cursor,
         params.thread_id,
         CursorScope::ItemsByUpdatedAtOrdinal,
     )?;
@@ -502,5 +558,12 @@ fn sqlite_integer(value: u64) -> ThreadStoreResult<i64> {
 fn page_size_too_large() -> ThreadStoreError {
     ThreadStoreError::InvalidRequest {
         message: "page size is too large".to_string(),
+    }
+}
+
+fn invalid_item_anchor() -> ThreadStoreError {
+    ThreadStoreError::InvalidRequest {
+        message: "cursor.itemId does not identify an item in the requested history scope"
+            .to_string(),
     }
 }

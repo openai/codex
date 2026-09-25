@@ -17,6 +17,7 @@ use codex_app_server_protocol::SortDirection;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadHistoryMode;
+use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadItemsListParams;
 use codex_app_server_protocol::ThreadItemsListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -490,7 +491,7 @@ async fn thread_revert_replaces_paginated_history_before_turn() -> Result<()> {
             params: ThreadItemsListParams {
                 thread_id: thread.id.clone(),
                 turn_id: None,
-                cursor: items_backwards_cursor,
+                cursor: items_backwards_cursor.map(ThreadItemsListCursor::Opaque),
                 limit: None,
                 sort_direction: None,
             },

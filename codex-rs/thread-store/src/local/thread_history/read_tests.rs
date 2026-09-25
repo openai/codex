@@ -23,6 +23,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::ItemSortKey;
+use crate::ListItemsPosition;
 use crate::ListTimelineParams;
 use crate::SearchThreadOccurrencesParams;
 use crate::SortDirection;
@@ -230,6 +231,169 @@ async fn list_items_pages_whole_thread_and_per_turn_rows() {
         .await
         .expect("next turn item page");
     assert_eq!(item_ids(&next_turn_page), vec!["item-3"]);
+}
+
+#[tokio::test]
+async fn item_anchors_page_exclusively_while_the_turn_grows() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let db = history_db(&store).await;
+    insert_turn(
+        db,
+        thread_id,
+        "turn",
+        /*rollout_ordinal*/ 1,
+        "inProgress",
+        /*error_json*/ None,
+        /*first_user_item_id*/ None,
+        /*final_agent_item_id*/ None,
+    )
+    .await;
+    for (id, ordinal) in [
+        ("one", 2),
+        ("two", 3),
+        ("anchor", 4),
+        ("four", 5),
+        ("five", 6),
+    ] {
+        insert_item(db, thread_id, "turn", id, ordinal).await;
+    }
+    insert_item(
+        db,
+        thread_id,
+        "other-turn",
+        "anchor",
+        /*rollout_ordinal*/ 8,
+    )
+    .await;
+    for (direction, expected) in [
+        (SortDirection::Asc, vec!["four", "five", "new"]),
+        (SortDirection::Desc, vec!["two", "one"]),
+    ] {
+        let mut params = item_params(
+            thread_id,
+            Some("turn"),
+            /*cursor*/ None,
+            /*page_size*/ 1,
+            direction,
+        );
+        params.position = Some(ListItemsPosition::ItemAnchor {
+            item_id: "anchor".to_string(),
+        });
+        let first = store.list_items(params.clone()).await.expect("anchor page");
+        assert_eq!(item_ids(&first), vec![expected[0]]);
+        if direction == SortDirection::Asc {
+            insert_item(db, thread_id, "turn", "new", /*rollout_ordinal*/ 7).await;
+        }
+        let mut ids = vec![first.items[0].item_id.clone()];
+        params.position = first.next_cursor.map(ListItemsPosition::Cursor);
+        while params.position.is_some() {
+            let page = store
+                .list_items(params.clone())
+                .await
+                .expect("continuation");
+            ids.extend(page.items.into_iter().map(|item| item.item_id));
+            params.position = page.next_cursor.map(ListItemsPosition::Cursor);
+        }
+        assert_eq!(ids, expected);
+        params.position = first.backwards_cursor.map(ListItemsPosition::Cursor);
+        params.sort_direction = match direction {
+            SortDirection::Asc => SortDirection::Desc,
+            SortDirection::Desc => SortDirection::Asc,
+        };
+        let backwards = store.list_items(params).await.expect("reverse page");
+        assert_eq!(item_ids(&backwards), vec![expected[0]]);
+    }
+    for (id, direction) in [("one", SortDirection::Desc), ("new", SortDirection::Asc)] {
+        let mut params = item_params(
+            thread_id,
+            Some("turn"),
+            /*cursor*/ None,
+            /*page_size*/ 2,
+            direction,
+        );
+        params.position = Some(ListItemsPosition::ItemAnchor {
+            item_id: id.to_string(),
+        });
+        let page = store.list_items(params).await.expect("edge anchor");
+        assert!(page.items.is_empty());
+        assert_eq!((page.next_cursor, page.backwards_cursor), (None, None));
+    }
+}
+
+#[tokio::test]
+async fn item_anchors_require_creation_order_without_an_update_watermark() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    insert_item(
+        history_db(&store).await,
+        thread_id,
+        "turn",
+        "anchor",
+        /*rollout_ordinal*/ 1,
+    )
+    .await;
+    for (sort_key, after_updated_at_ordinal) in [
+        (ItemSortKey::UpdatedAtOrdinal, None),
+        (ItemSortKey::CreatedAtOrdinal, Some(0)),
+    ] {
+        let params = ListItemsParams {
+            position: Some(ListItemsPosition::ItemAnchor {
+                item_id: "anchor".to_string(),
+            }),
+            sort_key,
+            after_updated_at_ordinal,
+            ..item_params(
+                thread_id,
+                Some("turn"),
+                /*cursor*/ None,
+                /*page_size*/ 1,
+                SortDirection::Asc,
+            )
+        };
+        let error = store
+            .list_items(params)
+            .await
+            .expect_err("invalid anchor paging mode");
+        assert!(matches!(error, ThreadStoreError::InvalidRequest { message }
+            if message == "item anchors require creation-order paging without an update watermark"));
+    }
+}
+
+#[tokio::test]
+async fn item_anchors_reject_items_outside_the_requested_scope() {
+    let (_home, store, thread_id) = store_with_mode(ThreadHistoryMode::Paginated).await;
+    let db = history_db(&store).await;
+    insert_item(
+        db,
+        thread_id,
+        "other-turn",
+        "other-turn-item",
+        /*rollout_ordinal*/ 2,
+    )
+    .await;
+    insert_item(
+        db,
+        ThreadId::default(),
+        "turn",
+        "other-thread-item",
+        /*rollout_ordinal*/ 2,
+    )
+    .await;
+    for anchor in ["", "unknown", "other-turn-item", "other-thread-item"] {
+        let mut params = item_params(
+            thread_id,
+            Some("turn"),
+            /*cursor*/ None,
+            /*page_size*/ 1,
+            SortDirection::Asc,
+        );
+        params.position = Some(ListItemsPosition::ItemAnchor {
+            item_id: anchor.to_string(),
+        });
+        let error = store.list_items(params).await.expect_err("invalid anchor");
+        assert!(
+            matches!(error, ThreadStoreError::InvalidRequest { message } if message == "cursor.itemId does not identify an item in the requested history scope")
+        );
+    }
 }
 
 #[tokio::test]
@@ -676,7 +840,7 @@ async fn list_items_filters_exclusive_update_ordinals_across_pages_and_turns() {
     assert_eq!(first_page.items, vec![item_2.clone(), item_3.clone()]);
     for params in [
         ListItemsParams {
-            cursor: creation_page.next_cursor,
+            position: creation_page.next_cursor.map(ListItemsPosition::Cursor),
             ..updated_item_params(thread_id, /*after_updated_at_ordinal*/ 0)
         },
         item_params(
@@ -696,7 +860,7 @@ async fn list_items_filters_exclusive_update_ordinals_across_pages_and_turns() {
 
     let second_page = store
         .list_items(ListItemsParams {
-            cursor: first_page.next_cursor,
+            position: first_page.next_cursor.map(ListItemsPosition::Cursor),
             ..updated_item_params(thread_id, /*after_updated_at_ordinal*/ 0)
         })
         .await
@@ -723,7 +887,7 @@ async fn list_items_filters_exclusive_update_ordinals_across_pages_and_turns() {
     assert_eq!(descending_page.items, vec![item_1, item_3]);
     let descending_next_page = store
         .list_items(ListItemsParams {
-            cursor: descending_page.next_cursor,
+            position: descending_page.next_cursor.map(ListItemsPosition::Cursor),
             sort_direction: SortDirection::Desc,
             ..updated_item_params(thread_id, /*after_updated_at_ordinal*/ 0)
         })
@@ -990,6 +1154,29 @@ async fn lineage_reads_page_across_parent_and_child_segments() {
     assert_eq!(
         item_ids(&inherited_turn_items),
         vec!["root-user", "root-agent"]
+    );
+
+    let mut anchored = item_params(
+        child_id,
+        Some("root-1"),
+        /*cursor*/ None,
+        /*page_size*/ 2,
+        SortDirection::Desc,
+    );
+    anchored.position = Some(ListItemsPosition::ItemAnchor {
+        item_id: "root-agent".to_string(),
+    });
+    let page = store
+        .list_items(anchored.clone())
+        .await
+        .expect("inherited anchor");
+    assert_eq!(item_ids(&page), vec!["root-user"]);
+    anchored.turn_id = Some("excluded-root".to_string());
+    anchored.position = Some(ListItemsPosition::ItemAnchor {
+        item_id: "excluded-item".to_string(),
+    });
+    assert!(
+        matches!(store.list_items(anchored).await, Err(ThreadStoreError::InvalidRequest { message }) if message == "cursor.itemId does not identify an item in the requested history scope")
     );
 
     for sort_key in [ItemSortKey::CreatedAtOrdinal, ItemSortKey::UpdatedAtOrdinal] {
@@ -1498,7 +1685,7 @@ fn item_params(
         thread_id,
         turn_id: turn_id.map(str::to_owned),
         include_archived: false,
-        cursor,
+        position: cursor.map(ListItemsPosition::Cursor),
         page_size,
         sort_direction,
         sort_key: ItemSortKey::CreatedAtOrdinal,

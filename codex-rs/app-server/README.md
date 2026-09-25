@@ -454,3 +454,19 @@ credential discovery/signing, are disabled while restrictions apply. Supported
 HTTP, WebSocket, and code-mode gRPC requests use the shared destination checks.
 User-directed Git, SSH, shell, and other subprocess traffic retain their existing
 execution and sandbox policies.
+
+# Item history anchors
+
+`thread/items/list` accepts an optional nullable `cursor`: either an opaque string
+from a previous response or an item anchor such as
+`{"type":"item","itemId":"item-123"}`. An item anchor resumes exclusively after
+that item in the requested pagination order: ascending (the default) returns newer
+items, and descending returns older items. It requires a non-empty `turnId`;
+otherwise the request returns invalid params (`-32602`) with
+`turnId is required when cursor is an item anchor`.
+The item must belong to that turn in the thread's visible history. Empty, unknown,
+and out-of-scope item IDs return invalid params (`-32602`) with
+`cursor.itemId does not identify an item in the requested history scope`.
+Omitted or null cursors preserve normal first-page behavior. Continue anchored
+pages with the returned opaque string `nextCursor`; response fields and
+`backwardsCursor` semantics are unchanged.

@@ -77,6 +77,7 @@ pub use types::GitInfoPatch;
 pub use types::ItemPage;
 pub use types::ItemSortKey;
 pub use types::ListItemsParams;
+pub use types::ListItemsPosition;
 pub use types::ListThreadsParams;
 pub use types::ListTimelineParams;
 pub use types::ListTurnsParams;

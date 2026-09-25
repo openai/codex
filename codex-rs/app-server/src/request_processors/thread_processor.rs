@@ -14,6 +14,8 @@ use super::*;
 use crate::error_code::method_not_found;
 use codex_app_server_protocol::SelectedCapabilityRoot;
 use codex_app_server_protocol::ThreadHistoryMode as ApiThreadHistoryMode;
+use codex_app_server_protocol::ThreadItemsListAnchor;
+use codex_app_server_protocol::ThreadItemsListCursor;
 use codex_app_server_protocol::ThreadRevertParams;
 use codex_app_server_protocol::ThreadRevertResponse;
 use codex_app_server_protocol::ThreadRevertedNotification;
@@ -3289,7 +3291,7 @@ impl ThreadRequestProcessor {
                     thread_id,
                     turn_id: Some(turn_id.to_string()),
                     include_archived: true,
-                    cursor: cursor.clone(),
+                    position: cursor.clone().map(StoreListItemsPosition::Cursor),
                     page_size: THREAD_ITEMS_MAX_LIMIT,
                     sort_direction: StoreSortDirection::Asc,
                     sort_key: StoreItemSortKey::CreatedAtOrdinal,
@@ -3405,7 +3407,7 @@ impl ThreadRequestProcessor {
                 thread_id,
                 turn_id: None,
                 include_archived: true,
-                cursor: None,
+                position: None,
                 page_size: 1,
                 sort_direction: StoreSortDirection::Desc,
                 sort_key: StoreItemSortKey::CreatedAtOrdinal,
@@ -3427,6 +3429,18 @@ impl ThreadRequestProcessor {
             limit,
             sort_direction,
         } = params;
+        let position = cursor.map(|cursor| match cursor {
+            ThreadItemsListCursor::Opaque(cursor) => StoreListItemsPosition::Cursor(cursor),
+            ThreadItemsListCursor::Anchor(ThreadItemsListAnchor::Item { item_id }) => {
+                StoreListItemsPosition::ItemAnchor { item_id }
+            }
+        });
+        let has_anchor = matches!(position, Some(StoreListItemsPosition::ItemAnchor { .. }));
+        if has_anchor && turn_id.as_deref().is_none_or(str::is_empty) {
+            return Err(invalid_params(
+                "turnId is required when cursor is an item anchor",
+            ));
+        }
         let thread_id = ThreadId::from_string(&thread_id)
             .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
         let page_size = limit
@@ -3439,7 +3453,7 @@ impl ThreadRequestProcessor {
                 thread_id,
                 turn_id,
                 include_archived: true,
-                cursor,
+                position,
                 page_size,
                 sort_direction: match sort_direction.unwrap_or(SortDirection::Asc) {
                     SortDirection::Asc => StoreSortDirection::Asc,
@@ -3450,6 +3464,9 @@ impl ThreadRequestProcessor {
             })
             .await
             .map_err(|err| match err {
+                ThreadStoreError::InvalidRequest { message } if has_anchor => {
+                    invalid_params(message)
+                }
                 ThreadStoreError::InvalidRequest { message } => invalid_request(message),
                 ThreadStoreError::Unsupported { .. } => {
                     method_not_found("thread/items/list is not supported yet")
