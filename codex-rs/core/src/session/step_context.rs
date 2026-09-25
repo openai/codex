@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 /// Request-scoped state that may change between model sampling requests.
 pub(crate) struct StepContext {
     pub(crate) turn: Arc<TurnContext>,
-    /// Yields this request's code-mode observations when a user message arrives.
+    /// Preempts this request and yields its code-mode observations when user input arrives.
     pub(crate) preempt: Option<CancellationToken>,
     /// Realtime call activity and instructions captured for this sampling request.
     pub(crate) realtime: RealtimeConversationSnapshot,

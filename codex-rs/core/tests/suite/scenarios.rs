@@ -62,6 +62,8 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call_with_namespace;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -995,6 +997,126 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
             &ContextSnapshotOptions::default(),
         )
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn astra_continues_after_a_stream_is_interrupted() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Keep the first response unfinished until after the replacement request.
+    let (release_interrupted_response, interrupted_response_gate) = oneshot::channel();
+    let mut commentary = ev_assistant_message("commentary", "I will draft the update.");
+    commentary["item"]["phase"] = json!("commentary");
+    let (streaming, _completions) = start_streaming_sse_server(vec![
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![
+                    ev_response_created("interrupted-response"),
+                    commentary,
+                    ev_message_item_added("unfinished-message", ""),
+                    ev_output_text_delta("The launch is "),
+                ]),
+            },
+            StreamingSseChunk {
+                gate: Some(interrupted_response_gate),
+                body: sse(vec![
+                    ev_assistant_message("unfinished-message", "The launch is tomorrow."),
+                    ev_completed("interrupted-response"),
+                ]),
+            },
+        ],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("replacement-response"),
+                ev_assistant_message("final", "The customer update is ready."),
+                ev_completed("replacement-response"),
+            ]),
+        }],
+    ])
+    .await;
+    let config_server = start_mock_server().await;
+    let base_url = format!("{}/v1", streaming.uri());
+    let test = test_codex()
+        .with_model("gpt-6-astra")
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            configure_scenario_catalog(config);
+            config.model_provider.base_url = Some(base_url);
+            config.model_provider.supports_websockets = false;
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable instant interrupt");
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("disable compression for the streaming test server");
+        })
+        .build_with_auto_env(&config_server)
+        .await?;
+
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Draft a launch update.",
+        )]))
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        wait_for_event(&test.codex, |event| {
+            matches!(event, EventMsg::AgentMessageContentDelta(delta)
+                if delta.item_id == "unfinished-message" && delta.delta == "The launch is ")
+        }),
+    )
+    .await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![text(
+            "Make it a customer update.",
+        )]))
+        .await?;
+    // A replacement request must arrive while the original stream is still held open.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        streaming.wait_for_request_count(/*count*/ 2),
+    )
+    .await?;
+    let completed = tokio::time::timeout(
+        Duration::from_secs(10),
+        wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::TurnComplete(completed) => Some(completed.clone()),
+            _ => None,
+        }),
+    )
+    .await?;
+    assert!(
+        completed.error.is_none(),
+        "turn failed: {:?}",
+        completed.error
+    );
+
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice(body))
+        .collect::<serde_json::Result<Vec<serde_json::Value>>>()?;
+    assert_eq!(requests.len(), 2);
+    let replacement = serde_json::to_string(&requests[1])?;
+    assert!(replacement.contains("I will draft the update."));
+    assert!(replacement.contains("Make it a customer update."));
+    assert!(!replacement.contains("The launch is "));
+    let entries = requests.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
+    let snapshot = context_snapshot::format_context_snapshot(
+        "Astra receives new user input after its unfinished response is interrupted.",
+        &entries,
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    insta::assert_snapshot!("astra_input_interrupts_response", snapshot);
+    test.codex.shutdown_and_wait().await?;
+    drop(release_interrupted_response);
+    streaming.shutdown().await;
     Ok(())
 }
 

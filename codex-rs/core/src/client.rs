@@ -2265,6 +2265,11 @@ impl ModelClientSession {
         }
     }
 
+    /// Drops the cached WebSocket connection and its continuation state.
+    pub(crate) fn drop_connection(&mut self) {
+        self.websocket_session.reset(Some("other"));
+    }
+
     /// Permanently disables WebSockets for this Codex session and resets WebSocket state.
     ///
     /// This is used after exhausting the provider retry budget, to force subsequent requests onto

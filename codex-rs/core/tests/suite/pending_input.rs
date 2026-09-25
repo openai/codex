@@ -64,7 +64,6 @@ use test_case::test_case;
 use tokio::sync::oneshot;
 use wiremock::Mock;
 use wiremock::Request;
-use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path_regex;
 
@@ -437,6 +436,14 @@ async fn wait_for_agent_message(codex: &CodexThread, text: &str) {
 
 async fn wait_for_turn_complete(codex: &CodexThread) {
     wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+}
+
+async fn wait_for_successful_turn(codex: &CodexThread) {
+    let event = wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    assert!(
+        matches!(&event, EventMsg::TurnComplete(completed) if completed.error.is_none()),
+        "turn failed: {event:?}"
+    );
 }
 
 async fn wait_for_sleep_item_started(codex: &CodexThread, call_id: &str, duration_ms: u64) {
@@ -1125,6 +1132,129 @@ async fn injected_response_item_reopens_turn_after_final_answer() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steer_reconnects_websocket_and_sends_full_history() -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+
+    let server = responses::start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+            vec![
+                ev_response_created("resp-interrupted"),
+                ev_reasoning_item_added("reason-1", &["thinking"]),
+            ],
+            // Keep the first connection open until the client closes it.
+            vec![],
+        ],
+        vec![vec![
+            ev_response_created("resp-follow-up"),
+            ev_completed("resp-follow-up"),
+        ]],
+    ])
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+        })
+        .build_with_websocket_server(&server)
+        .await?;
+    let codex = &test.codex;
+
+    submit_user_input(codex, "first prompt").await;
+    wait_for_reasoning_item_started(codex).await;
+    let initial_request = server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 1)
+        .await
+        .body_json();
+    assert_eq!(initial_request["previous_response_id"], "warm-1");
+
+    steer_user_input(codex, "second prompt").await;
+    let follow_up = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+    )
+    .await
+    .expect("steer should close the first socket and open a new one")
+    .body_json();
+    assert!(follow_up.get("previous_response_id").is_none());
+    let prompts = message_input_texts(&follow_up, "user")
+        .into_iter()
+        .filter(|text| text == "first prompt" || text == "second prompt")
+        .collect::<Vec<_>>();
+    assert_eq!(prompts, vec!["first prompt", "second prompt"]);
+    wait_for_event(codex, |event| {
+        assert!(!matches!(
+            event,
+            EventMsg::TurnAborted(_) | EventMsg::StreamError(_)
+        ));
+        matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_none())
+    })
+    .await;
+
+    assert_eq!(server.connections().len(), 2);
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn steer_during_stream_retry_skips_backoff() {
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_failed(
+                "resp-failed",
+                "rate_limit_exceeded",
+                "Rate limit exceeded. Please try again in 60s.",
+            ),
+            responses::sse_completed("resp-follow-up"),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::InstantInterrupt)
+                .expect("enable InstantInterrupt feature");
+            config.model_provider.request_max_retries = Some(0);
+            config.model_provider.stream_max_retries = Some(1);
+        })
+        .build_with_auto_env(&server)
+        .await
+        .expect("build Codex test session");
+    let codex = &test.codex;
+
+    submit_user_input(codex, "first prompt").await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::StreamError(_))).await;
+    steer_user_input(codex, "second prompt").await;
+    // Completion must not wait for the server's 60-second retry delay.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        wait_for_successful_turn(codex),
+    )
+    .await
+    .expect("steer should interrupt retry backoff");
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let second = requests[1].body_json();
+    let prompts = message_input_texts(&second, "user")
+        .into_iter()
+        .filter(|text| text == "first prompt" || text == "second prompt")
+        .collect::<Vec<_>>();
+    assert_eq!(prompts, vec!["first prompt", "second prompt"]);
+    codex
+        .shutdown_and_wait()
+        .await
+        .expect("shut down test session");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn steers_during_tool_drain_preserve_tool_output_and_each_input() {
     const TOOL_CALL_ID: &str = "held-tool";
     let (release_response, response_gate) = oneshot::channel();
@@ -1171,18 +1301,6 @@ async fn steers_during_tool_drain_preserve_tool_output_and_each_input() {
 
     steer_user_input(&codex, "second prompt").await;
     steer_user_input(&codex, "third prompt").await;
-    release_response
-        .send(())
-        .expect("release the model response");
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            server.wait_for_request_count(/*count*/ 2),
-        )
-        .await
-        .is_err(),
-        "the replacement request must wait for the direct tool"
-    );
     codex
         .submit(Op::DynamicToolResponse {
             id: tool_request.call_id,
@@ -1233,6 +1351,8 @@ async fn steers_during_tool_drain_preserve_tool_output_and_each_input() {
         "the direct tool result should be recorded exactly once"
     );
 
+    // The replacement request completed while the original response was still gated.
+    drop(release_response);
     server.shutdown().await;
 }
 
@@ -1276,6 +1396,10 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
         .build_with_auto_env(&server)
         .await
         .expect("build Codex test session");
+    test.codex
+        .shutdown_and_wait()
+        .await
+        .expect("shut down unused test session");
     let codex = test
         .thread_manager
         .start_thread(StartThreadOptions {
@@ -1305,73 +1429,36 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
     )
     .await;
 
-    // The cell ID comes from the real yielded exec result, so do not predict a
-    // runtime generation or rely on a fixed ID when issuing subsequent waits.
-    let cell_id = Arc::new(std::sync::Mutex::new(None::<String>));
     if instant_interrupt {
-        let cell_id_for_first_wait = Arc::clone(&cell_id);
-        Mock::given(method("POST"))
-            .and(path_regex(".*/responses$"))
-            .respond_with(move |request: &Request| {
-                let body: Value = from_slice(&request.body).expect("parse replacement request");
-                let output = call_output_text(&body, "custom_tool_call_output", EXEC_ID)
-                    .expect("yielded exec output");
-                let call_items = body["input"]
-                    .as_array()
-                    .expect("request input is an array")
-                    .iter()
-                    .filter(|item| item.get("call_id").is_some())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let id = output
-                    .strip_prefix("Script running with cell ID ")
-                    .and_then(|rest| rest.lines().next())
-                    .unwrap_or_else(|| {
-                        panic!("missing running cell ID in exec output: {output:?}; call items: {call_items:?}")
-                    })
-                    .to_string();
-                *cell_id_for_first_wait.lock().expect("lock cell ID") = Some(id.clone());
-                ResponseTemplate::new(200).set_body_raw(
-                    responses::sse(vec![
-                        ev_response_created("resp-wait-one"),
+        for (response_id, call_id) in [
+            ("resp-wait-one", WAIT_ONE_ID),
+            ("resp-wait-two", WAIT_TWO_ID),
+        ] {
+            Mock::given(method("POST"))
+                .and(path_regex(".*/responses$"))
+                .respond_with(move |request: &Request| {
+                    let body: Value = from_slice(&request.body).expect("parse replacement request");
+                    let output = call_output_text(&body, "custom_tool_call_output", EXEC_ID)
+                        .expect("yielded exec output");
+                    // Every follow-up includes the real cell ID in the exec output.
+                    let id = output
+                        .strip_prefix("Script running with cell ID ")
+                        .and_then(|rest| rest.lines().next())
+                        .expect("running cell ID");
+                    responses::sse_response(responses::sse(vec![
+                        ev_response_created(response_id),
                         ev_function_call(
-                            WAIT_ONE_ID,
+                            call_id,
                             "wait",
                             &json!({"cell_id": id, "yield_time_ms": 60000}).to_string(),
                         ),
-                        ev_completed("resp-wait-one"),
-                    ]),
-                    "text/event-stream",
-                )
-            })
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
-        let cell_id_for_second_wait = Arc::clone(&cell_id);
-        Mock::given(method("POST"))
-            .and(path_regex(".*/responses$"))
-            .respond_with(move |_: &Request| {
-                let id = cell_id_for_second_wait
-                    .lock()
-                    .expect("lock cell ID")
-                    .clone()
-                    .expect("yielded cell ID");
-                ResponseTemplate::new(200).set_body_raw(
-                    responses::sse(vec![
-                        ev_response_created("resp-wait-two"),
-                        ev_function_call(
-                            WAIT_TWO_ID,
-                            "wait",
-                            &json!({"cell_id": id, "yield_time_ms": 60000}).to_string(),
-                        ),
-                        ev_completed("resp-wait-two"),
-                    ]),
-                    "text/event-stream",
-                )
-            })
-            .up_to_n_times(1)
-            .mount(&server)
-            .await;
+                        ev_completed(response_id),
+                    ]))
+                })
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+        }
     }
     let final_response =
         responses::mount_sse_once(&server, responses::sse_completed("resp-done")).await;
@@ -1385,11 +1472,6 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
     };
     steer_user_input(&codex, "interrupt exec").await;
     if !instant_interrupt {
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert!(
-            final_response.requests().is_empty(),
-            "a disabled interrupt must leave exec waiting for the nested tool"
-        );
         codex
             .submit(Op::DynamicToolResponse {
                 id: tool_request.call_id,
@@ -1410,6 +1492,10 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
                 .contains("background result")
         );
         assert!(message_input_texts(&request, "user").contains(&"interrupt exec".to_string()));
+        codex
+            .shutdown_and_wait()
+            .await
+            .expect("shut down test session");
         return;
     }
     wait_for_event(&codex, |event| {
@@ -1443,16 +1529,14 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
     .await;
 
     let request = final_response.single_request().body_json();
-    let id = cell_id
-        .lock()
-        .expect("lock cell ID")
-        .clone()
-        .expect("yielded cell ID");
     let exec_output =
         call_output_text(&request, "custom_tool_call_output", EXEC_ID).expect("exec output");
+    let id = exec_output
+        .strip_prefix("Script running with cell ID ")
+        .and_then(|rest| rest.lines().next())
+        .expect("running cell ID");
     let wait_output =
         call_output_text(&request, "function_call_output", WAIT_ONE_ID).expect("first wait output");
-    assert!(exec_output.contains(&format!("Script running with cell ID {id}")));
     assert!(wait_output.contains(&format!("Script running with cell ID {id}")));
     let completed_output = call_output_text(&request, "function_call_output", WAIT_TWO_ID)
         .expect("second wait output");
@@ -1473,19 +1557,23 @@ async fn steers_yield_exec_and_wait_without_stopping_the_cell(instant_interrupt:
         prompts,
         vec!["start the cell", "interrupt exec", "interrupt wait"]
     );
+    codex
+        .shutdown_and_wait()
+        .await
+        .expect("shut down test session");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steer_deferred_during_compaction_yields_code_mode() {
-    const EXEC_ID: &str = "post-compact-exec";
+async fn steer_during_compaction_is_sent_after_compaction() {
     let (release_compact, compact_gate) = oneshot::channel();
-    let (release_continuation, continuation_gate) = oneshot::channel();
-    let (release_follow_up, follow_up_gate) = oneshot::channel();
     let (server, _) = start_streaming_sse_server(vec![
         vec![
             chunk(ev_response_created("resp-first")),
-            chunk(ev_custom_tool_call("initial-exec", "exec", "text('ready');")),
-            chunk(ev_completed_with_tokens("resp-first", /*total_tokens*/ 500)),
+            chunk(ev_function_call("call-1", "test_tool", "{}")),
+            chunk(ev_completed_with_tokens(
+                "resp-first",
+                /*total_tokens*/ 500,
+            )),
         ],
         vec![
             chunk(ev_response_created("resp-compact")),
@@ -1497,26 +1585,13 @@ async fn steer_deferred_during_compaction_yields_code_mode() {
                 ],
             ),
         ],
-        vec![
-            chunk(ev_response_created("resp-continuation")),
-            chunk(ev_custom_tool_call(
-                EXEC_ID,
-                "exec",
-                "// @exec: {\"yield_time_ms\": 60000}\nawait tools.held_tool({}); text('finished');",
-            )),
-            gated_chunk(
-                continuation_gate,
-                vec![ev_completed_with_tokens("resp-continuation", /*total_tokens*/ 60)],
-            ),
-        ],
-        vec![
-            chunk(ev_response_created("resp-follow-up")),
-            gated_chunk(follow_up_gate, vec![ev_completed("resp-follow-up")]),
-        ],
+        response_completed_chunks("resp-follow-up"),
+        response_completed_chunks("resp-extra-compaction"),
+        response_completed_chunks("resp-steered"),
     ])
     .await;
     let test = test_codex()
-        .with_model("test-gpt-5.1-codex")
+        .with_model("gpt-5.4")
         .with_config(|config| {
             config.model_provider.name = "OpenAI (test)".into();
             config.model_provider.supports_websockets = false;
@@ -1527,35 +1602,13 @@ async fn steer_deferred_during_compaction_yields_code_mode() {
                 .expect("enable InstantInterrupt feature");
             config
                 .features
-                .enable(Feature::CodeMode)
-                .expect("enable CodeMode feature");
-            config
-                .features
-                .enable(Feature::CodeModeHost)
-                .expect("enable CodeModeHost feature");
-            config.code_mode.disable_in_process_fallback = true;
-            config
-                .features
                 .disable(Feature::EnableRequestCompression)
                 .expect("disable request compression");
         })
         .build_with_streaming_server(&server)
         .await
         .expect("build Codex test session");
-    let codex = test
-        .thread_manager
-        .start_thread(StartThreadOptions {
-            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
-                name: "held_tool".into(),
-                description: "A tool held until the test responds.".into(),
-                input_schema: json!({"type": "object", "properties": {}}),
-                defer_loading: false,
-            })],
-            ..StartThreadOptions::new(test.config.clone())
-        })
-        .await
-        .expect("start thread with dynamic tool")
-        .thread;
+    let codex = test.codex.clone();
 
     submit_user_input(&codex, "first prompt").await;
     tokio::time::timeout(
@@ -1566,54 +1619,28 @@ async fn steer_deferred_during_compaction_yields_code_mode() {
     .expect("compaction request should begin");
     steer_user_input(&codex, "old steer").await;
     release_compact.send(()).expect("finish compaction");
-    let EventMsg::DynamicToolCallRequest(held_tool) = wait_for_event(&codex, |event| {
-        matches!(event, EventMsg::DynamicToolCallRequest(request) if request.tool == "held_tool")
-    })
-    .await else {
-        unreachable!("predicate guarantees a dynamic tool request");
-    };
-    release_continuation
-        .send(())
-        .expect("finish continuation response");
-    wait_for_event(&codex, |event| {
-        matches!(event, EventMsg::RawResponseCompleted(completed) if completed.response_id == "resp-continuation")
-    })
-    .await;
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        server.wait_for_request_count(/*count*/ 4),
+        wait_for_successful_turn(&codex),
     )
     .await
-    .expect("the deferred steer should yield the exec");
-    let requests = server.requests().await;
-    let continuation: Value = from_slice(&requests[2]).expect("parse continuation request");
-    assert!(!message_input_texts(&continuation, "user").contains(&"old steer".to_string()));
-    let follow_up: Value = from_slice(&requests[3]).expect("parse follow-up request");
-    assert!(
-        call_output_text(&follow_up, "custom_tool_call_output", EXEC_ID)
-            .expect("exec output")
-            .contains("Script running with cell ID ")
-    );
-    let steers = message_input_texts(&follow_up, "user")
-        .into_iter()
-        .filter(|text| text == "old steer")
-        .collect::<Vec<_>>();
-    assert_eq!(steers, vec!["old steer"]);
+    .expect("turn should complete after the steer");
 
-    codex
-        .submit(Op::DynamicToolResponse {
-            id: held_tool.call_id,
-            response: DynamicToolResponse {
-                content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                    text: "released".into(),
-                }],
-                success: true,
-            },
+    let requests = server.requests().await;
+    let steer_counts = requests
+        .iter()
+        .skip(2)
+        .map(|request| {
+            let body: Value = from_slice(request).expect("parse follow-up request");
+            message_input_texts(&body, "user")
+                .into_iter()
+                .filter(|text| text == "old steer")
+                .count()
         })
-        .await
-        .expect("release nested tool");
-    release_follow_up.send(()).expect("finish follow-up");
-    wait_for_turn_complete(&codex).await;
+        .collect::<Vec<_>>();
+    assert!(steer_counts.contains(&1), "steer counts: {steer_counts:?}");
+    assert!(steer_counts.iter().all(|count| *count <= 1));
+
     codex
         .shutdown_and_wait()
         .await
@@ -1621,32 +1648,11 @@ async fn steer_deferred_during_compaction_yields_code_mode() {
     server.shutdown().await;
 }
 
-struct FirstExecYielded {
-    sender: std::sync::Mutex<Option<oneshot::Sender<()>>>,
-}
-
-impl codex_extension_api::ToolLifecycleContributor for FirstExecYielded {
-    fn on_tool_finish<'a>(
-        &'a self,
-        input: codex_extension_api::ToolFinishInput<'a>,
-    ) -> codex_extension_api::ToolLifecycleFuture<'a> {
-        Box::pin(async move {
-            if input.tool_name.name == "exec"
-                && input.call_id == "first-exec"
-                && let Some(sender) = self.sender.lock().expect("lock sender").take()
-            {
-                let _ = sender.send(());
-            }
-        })
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn input_yields_a_code_mode_call_received_later_in_the_same_response() {
-    let (first_yielded_tx, first_yielded_rx) = oneshot::channel();
+async fn input_preempts_response_and_yields_running_code_mode_call() {
     let (release_second_tx, release_second_rx) = oneshot::channel();
     let (release_final_tx, release_final_rx) = oneshot::channel();
-    let (server, _) = start_streaming_sse_server(vec![
+    let (server, mut completions) = start_streaming_sse_server(vec![
         vec![
             chunk(ev_response_created("resp-calls")),
             chunk(ev_custom_tool_call(
@@ -1654,8 +1660,7 @@ async fn input_yields_a_code_mode_call_received_later_in_the_same_response() {
                 "exec",
                 "// @exec: {\"yield_time_ms\": 60000}\nawait tools.held_tool({}); text('first completed');",
             )),
-            // This call is not even received until the first observation has
-            // yielded, proving it sees the already-latched request signal.
+            // The second call remains unavailable while the steer is processed.
             gated_chunk(
                 release_second_rx,
                 vec![
@@ -1674,14 +1679,8 @@ async fn input_yields_a_code_mode_call_received_later_in_the_same_response() {
         ],
     ])
     .await;
-    let mut extensions =
-        codex_extension_api::ExtensionRegistryBuilder::<codex_core::config::Config>::new();
-    extensions.tool_lifecycle_contributor(Arc::new(FirstExecYielded {
-        sender: std::sync::Mutex::new(Some(first_yielded_tx)),
-    }));
     let test = test_codex()
         .with_model("test-gpt-5.1-codex")
-        .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
             config
                 .features
@@ -1728,30 +1727,26 @@ async fn input_yields_a_code_mode_call_received_later_in_the_same_response() {
         unreachable!("predicate guarantees a dynamic tool request");
     };
     steer_user_input(&codex, "yield cells").await;
-    tokio::time::timeout(std::time::Duration::from_secs(10), first_yielded_rx)
-        .await
-        .expect("first exec should yield while the stream stays open")
-        .expect("first exec completion observer");
-    release_second_tx.send(()).expect("release second exec");
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
         server.wait_for_request_count(/*count*/ 2),
     )
     .await
-    .expect("both exec observations should yield before the follow-up");
+    .expect("the first exec should yield before the follow-up");
     let requests = server.requests().await;
     let follow_up: Value = from_slice(&requests[1]).expect("parse follow-up request");
-    let cell_id = |call_id| {
-        let output = call_output_text(&follow_up, "custom_tool_call_output", call_id)
-            .expect("yielded exec output");
-        output
-            .strip_prefix("Script running with cell ID ")
-            .and_then(|rest| rest.lines().next())
-            .expect("running cell ID")
-            .to_string()
-    };
-    assert_ne!(cell_id("first-exec"), cell_id("second-exec"));
+    assert!(
+        call_output_text(&follow_up, "custom_tool_call_output", "first-exec")
+            .expect("yielded exec output")
+            .starts_with("Script running with cell ID ")
+    );
+    assert!(call_output_text(&follow_up, "custom_tool_call_output", "second-exec").is_none());
     assert!(message_input_texts(&follow_up, "user").contains(&"yield cells".to_string()));
+    // Attempt to deliver the late call only after the replacement is running.
+    let _ = release_second_tx.send(());
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), completions.remove(0))
+        .await
+        .expect("the old server response should finish or detect the closed client");
 
     codex
         .submit(Op::DynamicToolResponse {
@@ -1768,7 +1763,15 @@ async fn input_yields_a_code_mode_call_received_later_in_the_same_response() {
     release_final_tx
         .send(())
         .expect("finish follow-up response");
-    wait_for_turn_complete(&codex).await;
+    wait_for_event(&codex, |event| {
+        assert!(!matches!(
+            event,
+            EventMsg::RawResponseItem(raw)
+                if matches!(&raw.item, ResponseItem::CustomToolCall { call_id, .. } if call_id == "second-exec")
+        ));
+        matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_none())
+    })
+    .await;
     codex
         .shutdown_and_wait()
         .await

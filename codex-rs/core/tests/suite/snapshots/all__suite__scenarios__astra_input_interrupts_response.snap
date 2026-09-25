@@ -1,0 +1,41 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: snapshot
+---
+Scenario: Astra receives new user input after its unfinished response is interrupted.
+
+## Window 1
+-- request 1 (request) --
+00:additional_tools/developer (3; hash=32be5470c6e39932):
+        - namespace/functions; hash=e7db0a45c4ec3157
+          - custom/exec
+          - function/wait
+          - function/request_user_input
+          - function/request_user_input_async
+        - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
+          - function/sleep
+        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=fd994b11525da73c
+          - function/followup_task
+          - function/interrupt_agent
+          - function/list_agents
+          - function/send_message
+          - function/spawn_agent
+          - function/wait_agent
+01:message/developer:
+    <MODEL_INSTRUCTIONS>
+02:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <COLLABORATION_MODE>
+03:message/developer:
+    <MULTI_AGENT_ROLE>
+04:message/developer:
+    <MULTI_AGENT_MODE>
+05:message/user:
+    <ENVIRONMENT_CONTEXT>
+06:message/user:
+    Draft a launch update.
+-- request 2 (request) --
+07:message/assistant:
+    I will draft the update.
+08:message/user:
+    Make it a customer update.

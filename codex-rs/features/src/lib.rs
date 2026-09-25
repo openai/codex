@@ -208,7 +208,7 @@ pub enum Feature {
     /// Keep sampling through reasoning and commentary boundaries when agent mail arrives.
     /// Pending mail is delivered at the next normal input boundary instead.
     DeferMailboxPreemption,
-    /// Yield foreground code-mode observations when new user input arrives.
+    /// Preempt responses and yield foreground code-mode observations on new user input.
     InstantInterrupt,
     /// Enable shared discussion tools for an agent tree.
     AgentMessageBoard,
