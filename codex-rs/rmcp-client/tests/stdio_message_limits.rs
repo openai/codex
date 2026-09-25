@@ -136,6 +136,90 @@ async fn stdio_message_limits_preserve_legacy_local_compatibility() -> anyhow::R
 
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_stdio_initializes_without_a_console_directly_and_through_cmd() -> anyhow::Result<()>
+{
+    let server = codex_utils_cargo_bin::cargo_bin("test_stdio_server")?;
+    let temp_dir = tempfile::tempdir()?;
+    let console_state_file = temp_dir.path().join("console-state");
+    let server_pid_file = temp_dir.path().join("server.pid");
+    std::fs::write(
+        temp_dir.path().join("launch.cmd"),
+        "@echo off\r\n\"%MCP_TEST_SERVER_BINARY%\"\r\n",
+    )?;
+    let env = HashMap::from([
+        (
+            OsString::from("MCP_TEST_CONSOLE_STATE_FILE"),
+            console_state_file.clone().into_os_string(),
+        ),
+        (
+            OsString::from("MCP_TEST_PID_FILE"),
+            server_pid_file.clone().into_os_string(),
+        ),
+        (
+            OsString::from("MCP_TEST_SERVER_BINARY"),
+            server.clone().into(),
+        ),
+    ]);
+
+    for (program, args) in [
+        (server.into(), Vec::new()),
+        (
+            OsString::from("cmd.exe"),
+            ["/d", "/s", "/c", "call", ".\\launch.cmd"]
+                .map(OsString::from)
+                .to_vec(),
+        ),
+    ] {
+        let client = RmcpClient::new_stdio_client(
+            program,
+            args,
+            Some(env.clone()),
+            &[],
+            Some(temp_dir.path().to_string_lossy().into_owned()),
+            Arc::new(LocalStdioServerLauncher::new(temp_dir.path().to_path_buf())),
+        )
+        .await?;
+        client
+            .initialize(
+                InitializeRequestParams::new(
+                    ClientCapabilities::default(),
+                    Implementation::new("stdio-console-test", "1.0.0"),
+                )
+                .with_protocol_version(ProtocolVersion::V_2025_06_18),
+                Some(Duration::from_secs(10)),
+                Box::new(|_, _| {
+                    async {
+                        Ok(ElicitationResponse {
+                            action: ElicitationAction::Decline,
+                            content: None,
+                            meta: None,
+                        })
+                    }
+                    .boxed()
+                }),
+            )
+            .await?;
+        let console_state = std::fs::read_to_string(&console_state_file)?;
+        let server_pid = std::fs::read_to_string(&server_pid_file)?
+            .trim()
+            .parse::<u32>()?;
+        let server_process = open_process_for_wait(server_pid)?;
+        let tools = client
+            .list_tools(/*params*/ None, Some(Duration::from_secs(10)))
+            .await;
+        client.shutdown().await;
+        wait_for_process_exit(&server_process)?;
+
+        pretty_assertions::assert_eq!(console_state, "false");
+        assert!(!tools?.tools.is_empty());
+        std::fs::remove_file(&console_state_file)?;
+        std::fs::remove_file(&server_pid_file)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn local_stdio_shutdown_terminates_descendants_after_server_exit() -> anyhow::Result<()> {
     let server = codex_utils_cargo_bin::cargo_bin("test_stdio_server")?;
 

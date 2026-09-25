@@ -1003,6 +1003,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(pid_file, std::process::id().to_string())?;
     }
     #[cfg(windows)]
+    if let Ok(console_state_file) = std::env::var("MCP_TEST_CONSOLE_STATE_FILE") {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetConsoleWindow() -> *mut std::ffi::c_void;
+        }
+        let has_console = unsafe { !GetConsoleWindow().is_null() };
+        std::fs::write(console_state_file, has_console.to_string())?;
+    }
+    #[cfg(windows)]
     if let Ok(marker_file) = std::env::var("MCP_TEST_BREAKAWAY_DENIED_FILE") {
         use std::os::windows::process::CommandExt;
 
