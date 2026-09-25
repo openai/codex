@@ -235,7 +235,11 @@ impl PidBackend {
             }
         }
 
-        let child = match command.spawn() {
+        #[cfg(windows)]
+        let child = super::super::windows::spawn_without_inheriting_stdio(&mut command);
+        #[cfg(not(windows))]
+        let child = command.spawn().map_err(anyhow::Error::from);
+        let child = match child {
             Ok(child) => child,
             Err(err) => {
                 if replacement.is_none() {
