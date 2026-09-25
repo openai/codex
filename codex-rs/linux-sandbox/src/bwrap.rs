@@ -2038,6 +2038,7 @@ mod tests {
                 workspace.join(".git"),
                 workspace.join(".agents"),
                 workspace.join(".codex"),
+                workspace.join(".aws"),
             ]
         );
         assert!(
@@ -2075,6 +2076,7 @@ mod tests {
                 dot_git.clone(),
                 workspace.join(".agents"),
                 workspace.join(".codex"),
+                workspace.join(".aws"),
             ]
         );
         assert!(
@@ -2116,7 +2118,12 @@ mod tests {
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(
             synthetic_mount_target_paths(&args),
-            vec![workspace.join(".codex"), dot_git, workspace.join(".agents")],
+            vec![
+                workspace.join(".codex"),
+                dot_git,
+                workspace.join(".agents"),
+                workspace.join(".aws"),
+            ],
         );
         assert!(
             protected_create_target_paths(&args).is_empty(),
@@ -2153,7 +2160,12 @@ mod tests {
         assert_empty_directory_mounted_read_only(&args.args, &workspace.join(".codex"));
         assert_eq!(
             synthetic_mount_target_paths(&args),
-            vec![workspace.join(".codex"), dot_git, workspace.join(".agents")],
+            vec![
+                workspace.join(".codex"),
+                dot_git,
+                workspace.join(".agents"),
+                workspace.join(".aws"),
+            ],
         );
         assert!(
             protected_create_target_paths(&args).is_empty(),
@@ -2313,12 +2325,14 @@ mod tests {
         assert_eq!(
             synthetic_mount_target_paths(&args),
             vec![
+                PathBuf::from("/.aws"),
                 PathBuf::from("/.git"),
                 PathBuf::from("/.agents"),
                 PathBuf::from("/.codex"),
                 PathBuf::from("/dev/.git"),
                 PathBuf::from("/dev/.agents"),
                 PathBuf::from("/dev/.codex"),
+                PathBuf::from("/dev/.aws"),
             ]
         );
         let dev_mounts = args
@@ -2542,7 +2556,7 @@ mod tests {
             FileSystemSandboxEntry::new(docs.clone().into(), FileSystemAccessMode::Read),
             FileSystemSandboxEntry::new(docs_public.clone().into(), FileSystemAccessMode::Write),
         ];
-        for name in [".git", ".agents", ".codex"] {
+        for name in [".git", ".agents", ".codex", ".aws"] {
             entries.push(FileSystemSandboxEntry::skip_missing_path(
                 docs_public.join(name).into(),
                 FileSystemAccessMode::Read,
@@ -2572,7 +2586,7 @@ mod tests {
             "expected read-only parent remount before nested writable bind: {:#?}",
             args.args
         );
-        for name in [".git", ".agents", ".codex"] {
+        for name in [".git", ".agents", ".codex", ".aws"] {
             let metadata_path = path_to_string(docs_public.join(name).as_path());
             let mount_indices = args
                 .args

@@ -61,7 +61,7 @@ async fn sandbox_starts_with_nested_writable_metadata(layout: RootLayout, relati
     ];
     // Remote clients expand generated workspace metadata rules to concrete
     // paths, including paths that do not yet exist on the executor.
-    for name in [".git", ".agents", ".codex"] {
+    for name in [".git", ".agents", ".codex", ".aws"] {
         entries.push(FileSystemSandboxEntry::skip_missing_path(
             visualization.join(name).into(),
             FileSystemAccessMode::Read,
@@ -86,7 +86,7 @@ fi
 if (touch "$workspace/.codex/forbidden.txt") 2>/dev/null; then
     exit 11
 fi
-for name in .git .agents .codex; do
+for name in .git .agents .codex .aws; do
     test -d "$visualization/$name"
     if (touch "$visualization/$name/forbidden.txt") 2>/dev/null; then
         exit 12
@@ -125,7 +125,7 @@ printf nested-metadata-protected
     ] {
         assert_eq!(std::fs::read_to_string(path).expect("read file"), expected);
     }
-    for name in [".git", ".agents", ".codex"] {
+    for name in [".git", ".agents", ".codex", ".aws"] {
         assert!(
             !visualization.join(name).exists(),
             "temporary {name} mountpoint should be cleaned up"
