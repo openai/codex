@@ -3978,7 +3978,86 @@ async fn reasoning_shortcut_is_ignored_with_model_popup_open() {
 }
 
 #[tokio::test]
-async fn reasoning_up_shortcut_does_not_silently_enter_advanced_effort() {
+async fn reasoning_up_shortcuts_reach_max_in_default_and_plan_modes() {
+    for plan_mode in [false, true] {
+        for key in [
+            KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+        ] {
+            let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
+            chat.thread_id = Some(ThreadId::new());
+            chat.show_welcome_banner = false;
+            chat.local_settings.tui.status_line = Some(vec!["model-with-reasoning".to_string()]);
+            let mut preset = get_available_model(&chat, "gpt-5.5");
+            preset
+                .supported_reasoning_efforts
+                .push(ReasoningEffortPreset {
+                    effort: ReasoningEffortConfig::Max,
+                    description: "Maximum reasoning".to_string(),
+                });
+            if plan_mode {
+                chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+                let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+                    .expect("expected plan collaboration mode");
+                chat.set_collaboration_mask(plan_mask);
+            }
+            chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
+            if plan_mode {
+                chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+            } else {
+                chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+            }
+
+            chat.handle_key_event(key);
+
+            let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+            let update = events
+                .into_iter()
+                .find(|event| {
+                    matches!(
+                        (plan_mode, event),
+                        (
+                            false,
+                            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Max))
+                        ) | (
+                            true,
+                            AppEvent::UpdatePlanModeReasoningEffort(Some(
+                                ReasoningEffortConfig::Max
+                            ))
+                        )
+                    )
+                })
+                .expect("expected max reasoning update");
+            match update {
+                AppEvent::UpdateReasoningEffort(effort) => chat.set_reasoning_effort(effort),
+                AppEvent::UpdatePlanModeReasoningEffort(effort) => {
+                    chat.set_plan_mode_reasoning_effort(effort)
+                }
+                _ => unreachable!(),
+            }
+
+            if key.code == KeyCode::Char('.') {
+                let width = 80;
+                let height = chat.desired_height(width);
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                        .expect("create terminal");
+                terminal
+                    .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+                    .expect("draw footer");
+                let snapshot = normalized_backend_snapshot(terminal.backend());
+                if plan_mode {
+                    assert_chatwidget_snapshot!("reasoning_shortcut_max_plan_footer", snapshot);
+                } else {
+                    assert_chatwidget_snapshot!("reasoning_shortcut_max_footer", snapshot);
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn reasoning_up_shortcut_does_not_silently_enter_ultra() {
     for (model, model_path) in [
         ("gpt-5.5", "All models → gpt-5.5"),
         ("codex-auto-test", "codex-auto-test"),
@@ -4002,29 +4081,27 @@ async fn reasoning_up_shortcut_does_not_silently_enter_advanced_effort() {
         chat.model_catalog = std::sync::Arc::new(ModelCatalog::new(vec![preset]));
         chat.set_model(model);
 
-        for effort in [ReasoningEffortConfig::XHigh, ReasoningEffortConfig::Max] {
-            chat.set_reasoning_effort(Some(effort));
-            chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+        chat.set_reasoning_effort(Some(ReasoningEffortConfig::Max));
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
 
-            let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-            assert!(events.iter().all(|event| !matches!(
-                event,
-                AppEvent::UpdateReasoningEffort(_) | AppEvent::ApplyAdvancedReasoning { .. }
-            )));
-            let messages = events
-                .into_iter()
-                .filter_map(|event| match event {
-                    AppEvent::InsertHistoryCell(cell) => {
-                        Some(lines_to_single_string(&cell.display_lines(/*width*/ 140)))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(
-                messages,
-                vec![format!(
-                    "• Max and Ultra are available under /model → {model_path} → More reasoning…\n"
-                )]
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            AppEvent::UpdateReasoningEffort(_) | AppEvent::ApplyAdvancedReasoning { .. }
+        )));
+        let messages = events
+            .into_iter()
+            .filter_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    Some(lines_to_single_string(&cell.display_lines(/*width*/ 140)))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(
+                messages.join("").replace(model_path, "<model path>"),
+                @"• Ultra is available under /model → <model path> → More reasoning…"
             );
         }
     }
