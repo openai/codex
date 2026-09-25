@@ -14,8 +14,12 @@ use codex_network_proxy::NetworkProxyConfig;
 #[cfg(unix)]
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
+#[cfg(unix)]
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+#[cfg(unix)]
+use codex_protocol::config_types::ShellEnvironmentPolicy;
 #[cfg(unix)]
 use codex_protocol::config_types::TrustLevel;
 #[cfg(unix)]
@@ -59,7 +63,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -749,6 +753,104 @@ async fn shell_snapshot_v2_guardian_uses_its_resolved_permissions_and_tools(
         !profile_home.path().join(guardian_id).exists(),
         "Guardian profile must not inherit writable owner permissions"
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_snapshot_omits_filtered_and_overridden_exports() -> Result<()> {
+    skip_if_remote!(Ok(()), "legacy snapshots require a local environment");
+    let home = tempfile::tempdir()?;
+    let shell_path = home.path().join("bash");
+    // Seed the capture shell without changing the test process environment. Replay uses -c.
+    fs::write(
+        &shell_path,
+        r#"#!/bin/sh
+if [ "$1" = -lc ]; then
+  export HOME="${0%/*}"
+  export PROFILE_ALLOWED='first
+second'
+  export PROFILE_TOKEN=token-sentinel
+  export PROFILE_DENIED=denied-sentinel
+  export OTHER=other-sentinel
+  export PROFILE_SECRET=original-secret-sentinel
+fi
+exec /bin/bash --noprofile --norc "$@"
+"#,
+    )
+    .await?;
+    fs::set_permissions(&shell_path, std::fs::Permissions::from_mode(/*mode*/ 0o755)).await?;
+    let builder = test_codex()
+        .with_user_shell(
+            codex_shell_command::shell_detect::DetectedShell {
+                shell_type: codex_shell_command::shell_detect::ShellType::Bash,
+                shell_path,
+            }
+            .into(),
+        )
+        .with_config(|config| {
+            config.features.enable(Feature::ShellSnapshot).unwrap();
+            config.features.enable(Feature::UnifiedExec).unwrap();
+            config.features.disable(Feature::ShellSnapshotV2).unwrap();
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .unwrap();
+            config.permissions.shell_environment_policy = ShellEnvironmentPolicy {
+                ignore_default_excludes: false,
+                exclude: vec![EnvironmentVariablePattern::new_case_insensitive(
+                    "PROFILE_DENIED",
+                )],
+                include_only: ["PATH", "PROFILE_*"]
+                    .map(EnvironmentVariablePattern::new_case_insensitive)
+                    .to_vec(),
+                r#set: HashMap::from([("PROFILE_SECRET".to_string(), "dummy".to_string())]),
+                ..Default::default()
+            };
+        });
+    let harness = TestCodexHarness::with_auto_env_builder(builder).await?;
+    let snapshot_path = wait_for_snapshot(harness.test().home.path()).await?;
+    let snapshot = fs::read_to_string(&snapshot_path).await?;
+    for sentinel in [
+        "token-sentinel",
+        "denied-sentinel",
+        "other-sentinel",
+        "original-secret-sentinel",
+    ] {
+        assert!(!snapshot.contains(sentinel));
+    }
+    let snapshot_path = shlex::try_quote(snapshot_path.to_str().unwrap())?;
+    let args = json!({
+        "cmd": format!("printf '%s|%s|%s|%s|%s' \"$PROFILE_ALLOWED\" \"${{PROFILE_TOKEN-missing}}\" \"${{PROFILE_DENIED-missing}}\" \"${{OTHER-missing}}\" \"$PROFILE_SECRET\"; . {snapshot_path}; printf '|%s' \"$PROFILE_SECRET\""),
+        "shell": "/bin/bash",
+        "yield_time_ms": 1_000,
+    });
+    mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                ev_function_call("snapshot-policy", "exec_command", &args.to_string()),
+                ev_completed("tool"),
+            ]),
+            sse(vec![ev_completed("done")]),
+        ],
+    )
+    .await;
+    // Keep the environment selection unchanged so the readiness wait refers to this turn's snapshot.
+    harness
+        .test()
+        .submit_text_turn("verify snapshot filtering")
+        .await?;
+    let output = harness.function_call_stdout("snapshot-policy").await;
+    assert_eq!(
+        normalize_newlines(&output)
+            .split_once("Output:\n")
+            .unwrap()
+            .1
+            .trim(),
+        "first\nsecond|missing|missing|missing|dummy|dummy"
+    );
+    harness.test().codex.shutdown_and_wait().await?;
     Ok(())
 }
 

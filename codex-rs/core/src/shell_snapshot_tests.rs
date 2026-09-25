@@ -154,6 +154,7 @@ async fn get_snapshot(shell_type: ShellType) -> Result<String> {
         &shell,
         &path.abs(),
         &dir.path().abs(),
+        &ShellEnvironmentPolicy::default(),
         /*credential_broker*/ None,
         /*sandbox*/ None,
     )
@@ -728,6 +729,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
         &shell,
         &path,
         &dir.path().abs(),
+        &credential_broker.shell_environment_policy,
         Some(&credential_broker),
         /*sandbox*/ None,
     )
@@ -825,6 +827,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
         &shell,
         &filtered_startup_path,
         &dir.path().abs(),
+        &filtered_startup_broker.shell_environment_policy,
         Some(&filtered_startup_broker),
         /*sandbox*/ None,
     )
@@ -847,6 +850,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
     let (_, excluded_credentials) = capture_snapshot(
         &shell,
         &dir.path().abs(),
+        &excluded_credential_broker.shell_environment_policy,
         Some(&excluded_credential_broker),
         /*sandbox*/ None,
     )
@@ -916,7 +920,11 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
     );
     assert!(!inherited_snapshot.contains(inherited_secret));
 
-    let snapshot_file = ShellSnapshotFile { path, credentials };
+    let snapshot_file = ShellSnapshotFile {
+        path,
+        credentials,
+        shell_environment_policy: ShellEnvironmentPolicy::default(),
+    };
     let unset_credential_keys = snapshot_file
         .credentials
         .as_ref()
@@ -1212,6 +1220,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
             &shell,
             &partially_filtered_path,
             &dir.path().abs(),
+            &partially_filtered_credential_broker.shell_environment_policy,
             Some(&partially_filtered_credential_broker),
             /*sandbox*/ None,
         )
@@ -1230,6 +1239,7 @@ async fn snapshot_discovers_and_redacts_shell_initialized_credentials() -> Resul
             "Bearer ghp_filtered_dummy\nunset"
         );
         let filtered_snapshot = ShellSnapshotFile {
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             path: partially_filtered_path,
             credentials: filtered_credentials,
         };
@@ -1270,6 +1280,7 @@ async fn snapshot_protects_posix_startup_only_when_it_contains_credentials() -> 
         &posix_shell,
         &posix_snapshot_path,
         &dir.path().abs(),
+        &posix_credential_broker.shell_environment_policy,
         Some(&posix_credential_broker),
         /*sandbox*/ None,
     )
@@ -1293,6 +1304,7 @@ async fn snapshot_protects_posix_startup_only_when_it_contains_credentials() -> 
         &posix_shell,
         &application_snapshot_path,
         &dir.path().abs(),
+        &posix_credential_broker.shell_environment_policy,
         Some(&posix_credential_broker),
         /*sandbox*/ None,
     )
@@ -1344,6 +1356,7 @@ async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Resul
         &shell,
         &inherited_path,
         &dir.path().abs(),
+        &inherited_credential_broker.shell_environment_policy,
         Some(&inherited_credential_broker),
         /*sandbox*/ None,
     )
@@ -1366,6 +1379,7 @@ async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Resul
     );
 
     let snapshot_file = ShellSnapshotFile {
+        shell_environment_policy: ShellEnvironmentPolicy::default(),
         path: inherited_path,
         credentials: inherited_credentials,
     };
@@ -1434,6 +1448,7 @@ async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Resul
     let residual_credential = capture_snapshot(
         &shell,
         &dir.path().abs(),
+        &inherited_credential_broker.shell_environment_policy,
         Some(&inherited_credential_broker),
         /*sandbox*/ None,
     )
@@ -1450,6 +1465,7 @@ async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Resul
     let (unset_path_snapshot, _) = capture_snapshot(
         &shell,
         &dir.path().abs(),
+        &inherited_credential_broker.shell_environment_policy,
         Some(&inherited_credential_broker),
         /*sandbox*/ None,
     )
@@ -1471,12 +1487,14 @@ async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Resul
         let (snapshot, credentials) = capture_snapshot(
             &shell,
             &dir.path().abs(),
+            &inherited_credential_broker.shell_environment_policy,
             Some(&inherited_credential_broker),
             /*sandbox*/ None,
         )
         .await?;
         assert!(!snapshot.contains(real));
         let snapshot_file = ShellSnapshotFile {
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
             path: dir.path().join("hostless-snapshot.sh").abs(),
             credentials,
         };
@@ -1527,12 +1545,14 @@ async fn snapshot_discovers_and_restores_inherited_credential_aliases() -> Resul
             let (snapshot, credentials) = capture_snapshot(
                 &shell,
                 &dir.path().abs(),
+                &broker.shell_environment_policy,
                 Some(&broker),
                 /*sandbox*/ None,
             )
             .await?;
             assert!(!snapshot.contains(real));
             let snapshot_file = ShellSnapshotFile {
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
                 path: dir.path().join("hostless-alias-snapshot.sh").abs(),
                 credentials,
             };
@@ -1587,6 +1607,7 @@ async fn try_create_creates_and_deletes_snapshot_file() -> Result<()> {
         &dir.path().abs(),
         ThreadId::new(),
         &dir.path().abs(),
+        &ShellEnvironmentPolicy::default(),
         &shell,
         /*state_db*/ None,
         /*credential_broker*/ None,
@@ -1618,6 +1639,7 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         &dir.path().abs(),
         session_id,
         &dir.path().abs(),
+        &ShellEnvironmentPolicy::default(),
         &shell,
         /*state_db*/ None,
         /*credential_broker*/ None,
@@ -1629,6 +1651,7 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         &dir.path().abs(),
         session_id,
         &dir.path().abs(),
+        &ShellEnvironmentPolicy::default(),
         &shell,
         /*state_db*/ None,
         /*credential_broker*/ None,

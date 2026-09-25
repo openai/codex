@@ -2231,7 +2231,7 @@ fn rewrite_snapshot_credentials(
 fn captured_script(shell_type: ShellType, source: &str) -> Result<String> {
     let captured =
         CapturedSnapshot::parse(shell_type, source.as_bytes()).context("invalid native capture")?;
-    Ok(captured.render_script())
+    Ok(captured.render_script(&codex_protocol::config_types::ShellEnvironmentPolicy::default()))
 }
 
 #[test]

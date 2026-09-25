@@ -17,7 +17,6 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
-use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::PermissionProfile;
@@ -344,18 +343,22 @@ impl ThreadEnvironments {
         environment: Arc<Environment>,
         cwd: PathUri,
         shell: Option<Shell>,
+        config: &EnvironmentConfigState,
     ) -> ShellSnapshotTask {
         // Protected snapshots require the command's sandbox and are captured lazily.
         if shell_snapshot.should_rebuild_inherited() {
             return futures::future::ready(None).boxed().shared();
         }
+        let EnvironmentConfigState::Ready(config) = config else {
+            return futures::future::ready(None).boxed().shared();
+        };
         let shell_snapshot = shell_snapshot
             .build(
                 environment,
                 cwd,
                 shell,
                 /*allow_login_shell*/ true,
-                ShellEnvironmentPolicy::default(),
+                config.shell_environment_policy.clone(),
                 /*sandbox*/ None,
             )
             .boxed()
@@ -610,6 +613,7 @@ impl ThreadEnvironments {
             Arc::clone(&resolved.environment),
             selected.selection.cwd.clone(),
             resolved.shell.clone(),
+            &selected.selection.config,
         );
         selected.resolution = futures::future::ready(Ok(ResolvedEnvironment {
             shell_snapshot,
@@ -803,11 +807,16 @@ impl ThreadEnvironments {
             )
         };
         let shell_snapshot_builder = shell_snapshot.clone();
+        let snapshot_config = installed_config
+            .clone()
+            .map(EnvironmentConfigState::Ready)
+            .unwrap_or(selection.config);
         let task = Self::start_shell_snapshot_task(
             shell_snapshot,
             Arc::clone(&environment),
             selection.cwd,
             shell.clone(),
+            &snapshot_config,
         );
         let shell_snapshot_v2_supported = snapshot_v2
             && (environment.is_remote() || !shell_snapshot_builder.should_rebuild_inherited());

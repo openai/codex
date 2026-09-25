@@ -72,6 +72,7 @@ pub(crate) enum SnapshotCredentialBrokerState {
 pub(crate) struct ShellSnapshotFile {
     path: AbsolutePathBuf,
     credentials: Option<SnapshotCredentials>,
+    pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
 }
 
 struct SnapshotCredentials {
@@ -205,7 +206,7 @@ impl ShellSnapshot {
                     SnapshotCredentialBrokerState::Ready(network_proxy) if sandbox.is_some() => {
                         Some(SnapshotCredentialBroker {
                             network_proxy,
-                            shell_environment_policy,
+                            shell_environment_policy: shell_environment_policy.clone(),
                             allow_login_shell,
                         })
                     }
@@ -221,6 +222,7 @@ impl ShellSnapshot {
                 &config.codex_home,
                 config.session_id,
                 &cwd,
+                &shell_environment_policy,
                 &shell,
                 config.state_db.clone(),
                 credential_broker,
@@ -242,10 +244,12 @@ impl ShellSnapshot {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn try_create(
         codex_home: &AbsolutePathBuf,
         session_id: ThreadId,
         session_cwd: &AbsolutePathBuf,
+        shell_environment_policy: &ShellEnvironmentPolicy,
         shell: &Shell,
         state_db: Option<StateDbHandle>,
         credential_broker: Option<SnapshotCredentialBroker>,
@@ -283,6 +287,7 @@ impl ShellSnapshot {
             shell,
             &temp_path,
             session_cwd,
+            shell_environment_policy,
             credential_broker.as_ref(),
             sandbox,
         )
@@ -319,7 +324,11 @@ impl ShellSnapshot {
             return Err("write_failed");
         }
 
-        Ok(ShellSnapshotFile { path, credentials })
+        Ok(ShellSnapshotFile {
+            path,
+            credentials,
+            shell_environment_policy: shell_environment_policy.clone(),
+        })
     }
 }
 
@@ -531,6 +540,7 @@ async fn write_shell_snapshot(
     shell: &Shell,
     output_path: &AbsolutePathBuf,
     cwd: &AbsolutePathBuf,
+    shell_environment_policy: &ShellEnvironmentPolicy,
     credential_broker: Option<&SnapshotCredentialBroker>,
     sandbox: Option<&ShellSnapshotSandbox>,
 ) -> Result<Option<SnapshotCredentials>> {
@@ -538,7 +548,14 @@ async fn write_shell_snapshot(
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
-    let (snapshot, credentials) = capture_snapshot(shell, cwd, credential_broker, sandbox).await?;
+    let (snapshot, credentials) = capture_snapshot(
+        shell,
+        cwd,
+        shell_environment_policy,
+        credential_broker,
+        sandbox,
+    )
+    .await?;
 
     if let Some(parent) = output_path.parent() {
         let parent_display = parent.display();
@@ -558,6 +575,7 @@ async fn write_shell_snapshot(
 async fn capture_snapshot(
     shell: &Shell,
     cwd: &AbsolutePathBuf,
+    shell_environment_policy: &ShellEnvironmentPolicy,
     credential_broker: Option<&SnapshotCredentialBroker>,
     sandbox: Option<&ShellSnapshotSandbox>,
 ) -> Result<(String, Option<SnapshotCredentials>)> {
@@ -597,7 +615,7 @@ async fn capture_snapshot(
     let capture = CapturedSnapshot::parse(shell_type, raw_snapshot.as_bytes())
         .ok_or_else(|| anyhow!("invalid shell snapshot capture"))?;
     let Some(credential_broker) = credential_broker else {
-        return Ok((capture.render_script(), None));
+        return Ok((capture.render_script(shell_environment_policy), None));
     };
 
     let original_env = std::str::from_utf8(capture.environment)?

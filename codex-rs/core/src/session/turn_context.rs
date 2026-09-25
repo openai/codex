@@ -196,7 +196,9 @@ impl TurnEnvironment {
             }
             None
         } else {
-            self.shell_snapshot.peek()?.clone()
+            self.shell_snapshot.peek()?.clone().filter(|snapshot| {
+                &snapshot.shell_environment_policy == self.shell_environment_policy()
+            })
         }
     }
 
