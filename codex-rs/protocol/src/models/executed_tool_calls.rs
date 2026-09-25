@@ -581,6 +581,7 @@ impl ToolResultMetadata {
         }
     }
 
+    /// Whether there is no captured result metadata.
     fn is_none(&self) -> bool {
         self.0.is_none()
     }
@@ -673,6 +674,11 @@ impl ExecutedToolCall {
     /// Returns the raw arguments or locally generated truncation payload.
     pub fn arguments(&self) -> &ExecutedToolCallArguments {
         &self.arguments
+    }
+
+    /// Whether this call has result metadata or an omission marker.
+    pub fn has_tool_result_metadata(&self) -> bool {
+        self.tool_result_metadata.is_some()
     }
 
     /// Replaces this invocation's capture outcome, including clearing omitted evidence.

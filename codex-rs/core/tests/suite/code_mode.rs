@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -2962,6 +2963,168 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
         terminal_output["internal_chat_message_metadata_passthrough"]["tool_calls_complete"],
         true
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let metadata = serde_json::json!({
+        "openai/resource_access": {"resource_coverage": "incomplete"},
+        "provider": {"id": "accepted"},
+    });
+    let apps_server =
+        mount_result_metadata_app(&server, Some(metadata.clone()), /*is_error*/ false).await?;
+    let (reached_tx, reached_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let control = Arc::new(ResultMetadataTestControl {
+        server: Mutex::new(McpServerContribution::HostedApps {
+            config: Box::new(codex_apps_mcp_server_config(
+                &apps_server.chatgpt_base_url,
+                /*apps_mcp_product_sku*/ None,
+                /*originator*/ None,
+            )),
+            protocol_mode: None,
+        }),
+        gate: Mutex::new(Some((reached_tx, release_rx))),
+    });
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.tool_lifecycle_contributor(control);
+    let builder = result_metadata_apps_builder(apps_server.chatgpt_base_url, "user@example.com")
+        .with_extensions(Arc::new(extensions.build()))
+        .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
+        .with_config(|config| {
+            config.features.enable(Feature::CodeModeHost).unwrap();
+            config.code_mode.disable_in_process_fallback = true;
+        });
+    let arguments = serde_json::json!({ "query": "x".repeat(9_000) });
+    let later_arguments = serde_json::json!({ "query": "later" });
+    let code = format!(
+        "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
+         const pending = tools[tool.name]({arguments}); yield_control(); await pending; \
+         await tools[tool.name]({later_arguments}); text(\"accepted\"); \
+         yield_control(); await new Promise(() => {{}});"
+    );
+    let (test, first_response) =
+        run_code_mode_turn_with_builder(&server, "Search a connected app", &code, builder).await?;
+    let first_items = custom_tool_output_items(&first_response.single_request(), "call-1");
+    assert!(
+        text_item(&first_items, /*index*/ 0).starts_with("Script running with cell ID "),
+        "expected a running cell: {first_items:?}"
+    );
+    let cell_id = extract_running_cell_id(text_item(&first_items, /*index*/ 0));
+    tokio::time::timeout(Duration::from_secs(10), reached_rx)
+        .await
+        .context("first call did not reach the result gate")??;
+
+    // The call may be dispatched after the first yield. Wait while its result is held so
+    // the request has already recorded the truncated call before accepting its metadata.
+    let held = responses::mount_function_call_agent_response(
+        &server,
+        "call-2",
+        &serde_json::json!({"cell_id": cell_id, "yield_time_ms": 1}).to_string(),
+        "wait",
+    )
+    .await;
+    test.submit_turn("Read the pending call inventory").await?;
+    let held_request = held.completion.single_request();
+    let held_input = held_request.input();
+    let held_calls = result_metadata_fixture_calls(&held_input).collect::<Vec<_>>();
+    assert_eq!(held_calls.len(), 1);
+    let original_output = held_calls[0];
+    let original_id = original_output["call_id"].as_str().unwrap().to_string();
+    let original_type = original_output["type"].as_str().unwrap().to_string();
+    let truncated =
+        &original_output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0];
+    assert!(
+        truncated["name"]
+            .as_str()
+            .unwrap()
+            .ends_with(RESULT_METADATA_TOOL)
+    );
+    assert!(truncated["arguments"]["_codex_executed_tool_call_truncated"].is_object());
+    assert!(truncated.get("tool_result_metadata").is_none());
+
+    release_tx.send(()).unwrap();
+    let resumed = responses::mount_function_call_agent_response(
+        &server,
+        "call-3",
+        &serde_json::json!({"cell_id": cell_id, "yield_time_ms": 10_000}).to_string(),
+        "wait",
+    )
+    .await;
+    test.submit_turn("Wait for the accepted results").await?;
+    let resumed_request = resumed.completion.single_request();
+    assert!(
+        function_tool_output_items(&resumed_request, "call-3")
+            .iter()
+            .any(|item| item["text"] == "accepted")
+    );
+    let calls = recorded_apps_tool_calls(&server).await;
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["params"]["arguments"], arguments);
+    assert_eq!(calls[1]["params"]["arguments"], later_arguments);
+    let resumed_input = resumed_request.input();
+    assert_eq!(result_metadata_fixture_calls(&resumed_input).count(), 2);
+    assert_result_metadata_call(
+        &resumed_request.function_call_output("call-3"),
+        &later_arguments,
+        /*expected_metadata*/ None,
+    );
+
+    // The custom inference endpoint strips raw result metadata. Inspect both the actual
+    // request inventory and the recorder's unfiltered capture, including after another wait.
+    for phase in 0..2 {
+        let captured = codex_core::test_support::history_with_tool_call_metadata(&test.codex).await;
+        let captured = serde_json::to_value(captured)?;
+        let captured_output = captured
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == original_type && item["call_id"] == original_id)
+            .expect("captured original output");
+        let captured_calls =
+            &captured_output["internal_chat_message_metadata_passthrough"]["executed_tool_calls"];
+        assert_eq!(captured_calls.as_array().unwrap().len(), 1);
+        assert_eq!(captured_calls[0]["arguments"], truncated["arguments"]);
+        assert_eq!(captured_calls[0]["tool_result_metadata"], metadata);
+        assert_ne!(
+            captured_output["internal_chat_message_metadata_passthrough"]["tool_calls_complete"],
+            true
+        );
+        let later_output = captured
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["type"] == "function_call_output" && item["call_id"] == "call-3")
+            .expect("captured later wait output");
+        assert_result_metadata_call(later_output, &later_arguments, Some(metadata.clone()));
+        if phase == 0 {
+            let terminal = responses::mount_function_call_agent_response(
+                &server,
+                "call-4",
+                &serde_json::json!({"cell_id": cell_id, "terminate": true}).to_string(),
+                "wait",
+            )
+            .await;
+            test.submit_turn("Finish the cell").await?;
+            let terminal_request = terminal.completion.single_request();
+            let terminal_input = terminal_request.input();
+            assert_eq!(result_metadata_fixture_calls(&terminal_input).count(), 2);
+            let original = terminal_request.call_output(&original_id, &original_type);
+            assert_eq!(
+                original["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["arguments"],
+                truncated["arguments"]
+            );
+            assert!(
+                original["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
+                    .get("tool_result_metadata")
+                    .is_none()
+            );
+        }
+    }
+    test.codex.shutdown_and_wait().await?;
     Ok(())
 }
 
