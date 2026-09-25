@@ -1054,6 +1054,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
             kind: ConversationTranscriptEntryKind::ProtectedAssistant,
             text: "hello".to_string(),
             original_bytes: "hello".len(),
+            retained_source: None,
         }
     );
 }
@@ -1109,6 +1110,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             kind: ConversationTranscriptEntryKind::ToolCall("tool read_file call".to_string()),
             text: "{\"path\":\"README.md\"}".to_string(),
             original_bytes: "{\"path\":\"README.md\"}".len(),
+            retained_source: None,
         }
     );
     assert_eq!(
@@ -1117,6 +1119,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             kind: ConversationTranscriptEntryKind::ToolOutput("tool read_file result".to_string()),
             text: "repo is public".to_string(),
             original_bytes: "repo is public".len(),
+            retained_source: None,
         }
     );
     if let ResponseItem::FunctionCall { namespace, .. } = &mut items[1] {
@@ -1145,6 +1148,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
                 ),
                 text: guardian_truncate_text(&oversized_result, token_cap).0,
                 original_bytes: oversized_result.len(),
+                retained_source: None,
             }
         );
         assert_eq!(entries.len(), 4);

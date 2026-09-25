@@ -75,6 +75,18 @@ async fn recorded_questions_share_queued_input_order_across_resume() {
             ],
         )
         .await;
+    let sources = |items: &[ResponseItemEnvelope]| {
+        items
+            .iter()
+            .map(|item| {
+                item.metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.retained_source.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_sources = sources(session.clone_history().await.annotated_items());
+    assert!(original_sources.iter().any(Option::is_some));
     let saved = session
         .clone_history()
         .await
@@ -91,6 +103,7 @@ async fn recorded_questions_share_queued_input_order_across_resume() {
         }))
         .await;
     let history = session.clone_history().await;
+    assert_eq!(sources(history.annotated_items()), original_sources);
     assert_eq!(
         history
             .annotated_items()

@@ -45,6 +45,7 @@ fn section(label: &str, history_len: usize) -> ContextSection {
         items: vec![ConversationTranscriptEntry {
             kind: ConversationTranscriptEntryKind::User,
             original_bytes: text.len(),
+            retained_source: None,
             text,
         }],
     }
@@ -278,6 +279,7 @@ fn reused_registry_preserves_section_identity_and_source_roles() {
                 kind: ConversationTranscriptEntryKind::User,
                 text: "Inspect the workspace.".into(),
                 original_bytes: "Inspect the workspace.".len(),
+                retained_source: None,
             }],
         }];
         if target == ContextTarget::Sync {

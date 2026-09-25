@@ -150,7 +150,14 @@ impl SectionHistory for SnapshotHistory<'_> {
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        self.0.review_items()
+        Box::new(self.items_with_sources().map(|(item, _)| item))
+    }
+
+    fn items_with_sources(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
+    {
+        self.0.review_items_with_sources()
     }
 }
 

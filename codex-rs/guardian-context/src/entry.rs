@@ -49,4 +49,13 @@ pub struct ConversationTranscriptEntry {
     pub text: String,
     /// Size before truncation, retained for omission and truncation accounting.
     pub original_bytes: usize,
+    /// Original source revision and display order, established from host metadata.
+    pub retained_source: Option<RetainedTranscriptSource>,
+}
+
+/// Display ordering is separate from source identity and cannot establish delivery.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetainedTranscriptSource {
+    pub order: String,
+    pub source: codex_history::RetainedSource,
 }

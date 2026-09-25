@@ -240,10 +240,11 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
         let latest = groups.last().context("current review input")?;
         assert_eq!(
             latest
-                .iter()
-                .any(|text| text.starts_with(">>> RETAINED USER INSTRUCTIONS START\n")),
-            environment_id == secondary_id,
-            "unchanged instructions are sent only with the first review"
+                .concat()
+                .matches("user: Review each action on its requested environment.")
+                .count(),
+            usize::from(environment_id == secondary_id),
+            "the transcript delivers the instruction once, only in the first review"
         );
         let start = latest
             .iter()

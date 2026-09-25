@@ -44,6 +44,15 @@ pub trait ConversationHistorySnapshot: Send + Sync {
         self.items()
     }
 
+    /// Original source metadata stays attached to the exact unshortened history item.
+    /// Legacy providers cannot establish completeness from a message ID alone.
+    fn review_items_with_sources(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
+    {
+        Box::new(self.review_items().map(|item| (item, None)))
+    }
+
     /// Changes whenever offsets into the retained review evidence become invalid.
     fn review_history_version(&self) -> u64 {
         self.history_version()

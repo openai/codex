@@ -30,6 +30,7 @@ pub use section::ContextSection;
 
 pub use entry::ConversationTranscriptEntry;
 pub use entry::ConversationTranscriptEntryKind;
+pub use entry::RetainedTranscriptSource;
 pub use history::TranscriptHistory;
 pub use transcript::ConversationTranscriptConfig;
 pub use transcript::ConversationTranscriptOptions;
@@ -171,6 +172,15 @@ pub struct SectionInput<'a> {
 pub trait SectionHistory: Send + Sync {
     /// Returns borrowed response items in their original conversation order.
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_>;
+
+    /// Original source metadata stays attached to the exact unshortened history item.
+    /// Legacy providers cannot establish completeness from a message ID alone.
+    fn items_with_sources(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
+    {
+        Box::new(self.items().map(|item| (item, None)))
+    }
 
     /// Bounded host-owned facts from the same snapshot as the current items.
     fn retained_context(&self) -> Option<&codex_history::RetainedContext> {

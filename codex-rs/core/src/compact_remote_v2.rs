@@ -1110,7 +1110,31 @@ mod tests {
             ),
         };
 
-        let truncated = truncate_without_metadata(vec![item], /*max_tokens*/ 3);
+        let source = codex_history::RetainedSource {
+            id: codex_history::RetainedSourceId {
+                message_id: "original".to_owned(),
+                turn_id: "parent".to_owned(),
+                role: codex_history::RetainedSourceRole::User,
+            },
+            revision: codex_protocol::ResponseItemId::from_server("revision-1".to_owned()),
+            complete: true,
+        };
+        let mut metadata = CodexHarnessMetadata {
+            retained_source: Some(source.clone()),
+            guardian_sources: vec![source],
+            ..Default::default()
+        };
+        let truncated = truncate_message_text_to_token_budget(
+            ResponseItemEnvelope {
+                item,
+                metadata: Some(metadata.clone()),
+            },
+            /*max_tokens*/ 3,
+        )
+        .unwrap();
+        metadata.mark_retained_sources_incomplete();
+        assert_eq!(truncated.metadata, Some(metadata));
+        let truncated = vec![truncated.item];
 
         assert_eq!(
             truncated,

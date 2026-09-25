@@ -6,6 +6,8 @@
 //! call ID retain their generic label when the call is unavailable. Outputs
 //! without a call ID require an explicit name.
 
+use codex_history::RetainedContextEntry;
+use codex_protocol::protocol::TruncationPolicy;
 use std::collections::HashMap;
 
 use codex_protocol::mcp::is_node_repl_backed_tool;
@@ -114,8 +116,13 @@ pub fn collect_transcript(
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
     let mut heartbeat_versions = HashMap::new();
+    // Positional legacy labels cannot establish reusable delivery proof, including
+    // through transcript copies. The separate retained section stays authoritative.
+    let retained_context = history
+        .retained_context()
+        .filter(|context| !crate::retained_instructions::has_legacy_order(context));
 
-    for item in history.items() {
+    for (item, mut source) in history.items_with_sources() {
         let (kind, mut text) = match item {
             ResponseItem::Message {
                 role,
@@ -308,6 +315,8 @@ pub fn collect_transcript(
         if let Some(heartbeat) = codex_history::Heartbeat::from_message(item) {
             match heartbeat_versions.get(heartbeat.automation_id) {
                 Some((instructions, number)) if *instructions == heartbeat.instructions => {
+                    // A reference no longer delivers the complete source instruction.
+                    source = None;
                     text = format!(
                         "Scheduled automation {} ran at {}. Instructions unchanged from transcript entry [{}]; this is a replay of that earlier instruction, not a new human instruction. If the referenced instructions are unavailable, do not infer authorization from this reference.",
                         heartbeat.automation_id, heartbeat.timestamp, number
@@ -344,6 +353,39 @@ pub fn collect_transcript(
             }
         };
         entries.push(ConversationTranscriptEntry {
+            retained_source: retained_context.and_then(|context| {
+                let source = source.filter(|source| {
+                    source.complete
+                        && kind == ConversationTranscriptEntryKind::User
+                        && source.id.role == codex_history::RetainedSourceRole::User
+                        && Some(source.id.message_id.as_str())
+                            == item.id().map(codex_protocol::ResponseItemId::as_str)
+                        && source.id.turn_id == item.turn_id().unwrap_or_default()
+                })?;
+                crate::retained_instructions::source_order_labels(context).find_map(
+                    |(order, entry)| {
+                        if context.source(entry).as_ref() != Some(source) {
+                            return None;
+                        }
+                        let RetainedContextEntry::UserMessage(message) = entry else {
+                            return None;
+                        };
+                        let rendered = format!(
+                            "Retained source order: {order}\n{}",
+                            crate::GuardianRootMessage::User(message.text.clone()).render()
+                        );
+                        (rendered.len()
+                            <= TruncationPolicy::Tokens(
+                                crate::retained_instructions::MAX_INSTRUCTION_TOKENS,
+                            )
+                            .byte_budget())
+                        .then(|| crate::RetainedTranscriptSource {
+                            order,
+                            source: source.clone(),
+                        })
+                    },
+                )
+            }),
             kind,
             text,
             original_bytes,

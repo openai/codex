@@ -287,23 +287,37 @@ impl SectionHistory for GuardianReviewHistory<'_> {
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        self.0.review_items()
+        Box::new(self.items_with_sources().map(|(item, _)| item))
+    }
+
+    fn items_with_sources(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
+    {
+        self.0.review_items_with_sources()
     }
 }
 
 struct FilteredGuardianHistory<'a>(&'a dyn SectionHistory);
 
 impl SectionHistory for FilteredGuardianHistory<'_> {
+    fn items_with_sources(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
+    {
+        Box::new(
+            self.0
+                .items_with_sources()
+                .filter(|(item, _)| !is_guardian_context_message(item)),
+        )
+    }
+
     fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
         self.0.retained_context()
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        Box::new(
-            self.0
-                .items()
-                .filter(|item| !is_guardian_context_message(item)),
-        )
+        Box::new(self.items_with_sources().map(|(item, _)| item))
     }
 }
 

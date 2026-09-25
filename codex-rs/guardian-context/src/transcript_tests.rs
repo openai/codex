@@ -90,6 +90,7 @@ fn entry(kind: ConversationTranscriptEntryKind, text: &str) -> ConversationTrans
         kind,
         text: text.to_string(),
         original_bytes: text.len(),
+        retained_source: None,
     }
 }
 
@@ -429,6 +430,7 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
                 kind: ConversationTranscriptEntryKind::User,
                 text: text.clone(),
                 original_bytes: text.len(),
+                retained_source: None,
             }]
         );
     }
@@ -466,6 +468,7 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
             kind: ConversationTranscriptEntryKind::User,
             text: text.clone(),
             original_bytes: text.len(),
+            retained_source: None,
         }];
         if include_tool_calls {
             expected.push(ConversationTranscriptEntry {
@@ -474,6 +477,7 @@ fn reused_registry_applies_current_history_sources_and_entry_limits() {
                 ),
                 text: truncate_text(&text, /*max_tokens*/ 30),
                 original_bytes: text.len(),
+                retained_source: None,
             });
         }
         assert_eq!(transcript_items(&sections[0]), expected);

@@ -13,6 +13,7 @@ fn delta_cursor_tracks_collected_entries_across_sliding_window_retention() {
             kind: ConversationTranscriptEntryKind::Assistant,
             text: text.to_owned(),
             original_bytes: text.len(),
+            retained_source: None,
         })
         .collect::<Vec<_>>();
     let mut profile = ContextProfile::asynchronous();

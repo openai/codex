@@ -13,6 +13,7 @@ use crate::ConversationTranscriptConfig;
 use crate::ConversationTranscriptEntry;
 use crate::ConversationTranscriptEntryKind;
 use crate::ConversationTranscriptOptions;
+use crate::GuardianRootMessage;
 use crate::RenderedTranscript;
 use crate::Retention;
 use crate::TranscriptEntryLimits;
@@ -49,6 +50,7 @@ struct TranscriptEntry {
     tokens: usize,
     original_bytes: usize,
     retained_bytes: usize,
+    source: Option<codex_history::RetainedSource>,
 }
 
 impl ContextProfile {
@@ -136,13 +138,27 @@ impl ContextProfile {
                     ContextTarget::Sync => "",
                     ContextTarget::Async => "\n",
                 };
-                let text = format!("[{number}] {role}: {}{suffix}", entry.text);
+                let retained_source = entry.retained_source.as_ref().filter(|_| {
+                    self.target == ContextTarget::Sync
+                        && entry.kind == ConversationTranscriptEntryKind::User
+                });
+                let text = if let Some(retained) = retained_source {
+                    let order = &retained.order;
+                    let message = GuardianRootMessage::User(entry.text.clone());
+                    format!(
+                        "[{number}] Retained source order: {order}\n{}",
+                        message.render()
+                    )
+                } else {
+                    format!("[{number}] {role}: {}{suffix}", entry.text)
+                };
                 TranscriptEntry {
                     kind,
                     tokens: TruncationPolicy::Bytes(text.len()).token_budget(),
                     text,
                     original_bytes: entry.original_bytes,
                     retained_bytes: entry.text.len(),
+                    source: retained_source.map(|retained| retained.source.clone()),
                 }
             })
             .collect::<Vec<_>>();
@@ -229,7 +245,13 @@ impl ContextProfile {
                 if included[index] {
                     Some(match entry.kind {
                         TranscriptEntryKind::User | TranscriptEntryKind::ManualApproval => {
-                            Budgeted::historical(entry.text)
+                            if let Some(source) = entry.source {
+                                let mut item = Budgeted::required(entry.text);
+                                item.source = Some(source);
+                                item
+                            } else {
+                                Budgeted::historical(entry.text)
+                            }
                         }
                         TranscriptEntryKind::ProtectedMessage => Budgeted::required(entry.text),
                         TranscriptEntryKind::Message => {

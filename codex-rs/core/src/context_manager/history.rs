@@ -141,12 +141,21 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
     }
 
     fn review_items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        if self.guardian_review_mode == GuardianContextMode::Legacy
-            && let Some(history) = &self.review_history
-        {
-            return history.items();
+        Box::new(self.review_items_with_sources().map(|(item, _)| item))
+    }
+
+    fn review_items_with_sources(
+        &self,
+    ) -> Box<dyn Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_>
+    {
+        if self.guardian_review_mode == GuardianContextMode::Legacy {
+            let items = self
+                .review_history
+                .as_ref()
+                .map_or_else(|| self.items(), SectionHistory::items);
+            return Box::new(items.map(|item| (item, None)));
         }
-        self.items()
+        Box::new(self.items_with_sources())
     }
 
     fn review_history_version(&self) -> u64 {
@@ -168,12 +177,27 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
     }
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
-        Box::new(
-            self.items
-                .iter()
-                .map(|envelope| &envelope.item)
-                .filter(|item| !is_guardian_context_message(item)),
-        )
+        Box::new(self.items_with_sources().map(|(item, _)| item))
+    }
+}
+
+impl SharedConversationHistory {
+    fn items_with_sources(
+        &self,
+    ) -> impl Iterator<Item = (&ResponseItem, Option<&codex_history::RetainedSource>)> + Send + '_
+    {
+        self.items
+            .iter()
+            .filter(|envelope| !is_guardian_context_message(&envelope.item))
+            .map(|envelope| {
+                (
+                    &envelope.item,
+                    envelope
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.retained_source.as_ref()),
+                )
+            })
     }
 }
 

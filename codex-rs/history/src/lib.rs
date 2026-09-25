@@ -65,6 +65,10 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guardian_sources: Vec<RetainedSource>,
 
+    /// This complete message delivered the meaning of retained source-order labels.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub guardian_source_order_guidance: bool,
+
     /// Original retained evidence represented by this exact history item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retained_source: Option<RetainedSource>,
@@ -141,6 +145,7 @@ where
 impl CodexHarnessMetadata {
     /// Shortened messages no longer prove delivery of complete original instructions.
     pub fn mark_retained_sources_incomplete(&mut self) {
+        self.guardian_source_order_guidance = false;
         if let Some(source) = &mut self.retained_source {
             source.complete = false;
         }

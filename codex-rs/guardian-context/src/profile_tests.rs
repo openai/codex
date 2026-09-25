@@ -18,6 +18,7 @@ fn profiles_preserve_distinct_retention_and_original_numbering() {
         kind,
         text: text.to_owned(),
         original_bytes: text.len(),
+        retained_source: None,
     })
     .collect::<Vec<_>>();
     let mut sync = ContextProfile::synchronous();
@@ -70,6 +71,7 @@ fn profiles_reserve_the_newest_five_tool_entries_for_aggregate_enforcement() {
             kind: ConversationTranscriptEntryKind::ToolOutput("tool result".to_owned()),
             text: format!("result {index}"),
             original_bytes: 8,
+            retained_source: None,
         })
         .collect::<Vec<_>>();
     for profile in [
