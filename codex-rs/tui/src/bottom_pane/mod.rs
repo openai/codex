@@ -445,6 +445,32 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn agents_navigation_key_available(&self) -> bool {
+        let left = KeyEvent::from(KeyCode::Left);
+        self.composer.agents_navigation_key_available()
+            && !crate::keymap::keymap_action_ids()
+                .filter(|action| {
+                    matches!(
+                        action.context,
+                        KeymapContext::Global | KeymapContext::Chat | KeymapContext::Voice
+                    )
+                })
+                .any(|action| {
+                    crate::keymap::bindings_for_action(
+                        &self.keymap,
+                        action.context.config_name(),
+                        action.action,
+                    )
+                    .is_some_and(|bindings| bindings.is_pressed(left))
+                })
+            && !self.keymap.chords.bindings.iter().any(|binding| {
+                matches!(
+                    binding.action.context,
+                    KeymapContext::Global | KeymapContext::Chat | KeymapContext::Voice
+                ) && binding.chord.prefix.is_press(left)
+            })
+    }
+
     pub(crate) fn set_task_mentions_enabled(&mut self, enabled: bool) {
         self.composer.set_task_mentions_enabled(enabled);
         self.request_redraw();

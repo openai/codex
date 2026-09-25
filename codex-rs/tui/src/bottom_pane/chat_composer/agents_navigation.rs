@@ -10,14 +10,18 @@ impl ChatComposer {
         self.agents_navigation_enabled = enabled;
     }
 
-    pub(super) fn agents_navigation_available(&self) -> bool {
+    pub(crate) fn agents_navigation_key_available(&self) -> bool {
         let move_left = if self.draft.textarea.is_vim_normal_mode() {
             &self.vim_normal_keymap.move_left
         } else {
             &self.editor_keymap.move_left
         };
+        move_left.is_pressed(KeyCode::Left.into())
+    }
+
+    pub(super) fn agents_navigation_available(&self) -> bool {
         self.agents_navigation_enabled
-            && move_left.is_pressed(KeyCode::Left.into())
+            && self.agents_navigation_key_available()
             && self.has_focus
             && self.draft.input_enabled
             && self.slash_commands_enabled()

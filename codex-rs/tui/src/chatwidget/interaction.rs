@@ -49,6 +49,10 @@ impl ChatWidget {
         self.bottom_pane.set_agents_navigation_enabled(enabled);
     }
 
+    pub(crate) fn agents_navigation_key_available(&self) -> bool {
+        self.bottom_pane.agents_navigation_key_available()
+    }
+
     pub(crate) fn keymap_contexts(&self) -> crate::keymap::KeymapContextSet {
         self.bottom_pane.keymap_contexts()
     }

@@ -14,6 +14,7 @@ use std::cell::Cell;
 
 struct ExternalWriterNotice {
     command_center_available: bool,
+    agents_navigation_key_available: bool,
     transcript_hint: Option<crate::key_hint::ShortcutHint>,
 }
 
@@ -98,7 +99,13 @@ impl ExternalWriterNotice {
             crate::key_hint::plain(KeyCode::Char('q')).display_label(),
         ];
         if self.command_center_available {
-            items.push((escape, "command center".to_string()));
+            let key = if self.agents_navigation_key_available {
+                let left = crate::key_hint::plain(KeyCode::Left).display_label();
+                format!("{left}/{escape}")
+            } else {
+                escape
+            };
+            items.push((key, "command center".to_string()));
         } else {
             quit_keys.insert(/*index*/ 0, escape);
         }
@@ -221,6 +228,7 @@ impl ChatWidget {
         } else if self.external_writer_view && !self.bottom_pane.has_active_view() {
             RenderableItem::Owned(Box::new(ExternalWriterNotice {
                 command_center_available: self.remote_connection.is_some(),
+                agents_navigation_key_available: self.agents_navigation_key_available(),
                 transcript_hint: self.bottom_pane.transcript_shortcut_hint(),
             }))
         } else {

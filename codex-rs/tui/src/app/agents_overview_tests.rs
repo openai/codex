@@ -2439,22 +2439,22 @@ async fn command_center_attach_conflict_opens_read_only_and_retries() -> Result<
         insta::assert_snapshot!("agents_overview_attach_conflict", render_bottom_popup(&app.chat_widget, /*width*/ 96));
     });
 
-    app.handle_key_event(&mut tui, &mut server, KeyCode::Esc.into())
-        .await;
+    for key in [KeyCode::Left, KeyCode::Esc] {
+        Box::pin(app.handle_tui_event(&mut tui, &mut server, TuiEvent::Key(key.into()))).await?;
+        assert_eq!(
+            app.chat_widget
+                .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID),
+            selection
+        );
 
-    assert_eq!(
-        app.chat_widget
-            .selected_index_for_present_view(AGENTS_OVERVIEW_VIEW_ID),
-        selection
-    );
-
-    // Opening the displayed task returns to the same frozen snapshot without retrying.
-    Box::pin(app.handle_event(
-        &mut tui,
-        &mut server,
-        AppEvent::SelectAgentsOverviewThread { thread_id },
-    ))
-    .await?;
+        // Opening the displayed task returns to the same frozen snapshot without retrying.
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::SelectAgentsOverviewThread { thread_id },
+        ))
+        .await?;
+    }
     assert!(app.chat_widget.no_modal_or_popup_active());
     assert!(app.chat_widget.is_external_writer_view());
     app.chat_widget.handle_paste(" should be ignored".into());

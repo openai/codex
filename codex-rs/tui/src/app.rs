@@ -1025,7 +1025,9 @@ impl App {
             if self.overlay.is_none()
                 && self.chat_widget.no_modal_or_popup_active()
                 && self.chat_widget.is_external_writer_view()
-                && crate::key_hint::plain(KeyCode::Esc).is_press(*key)
+                && (crate::key_hint::plain(KeyCode::Esc).is_press(*key)
+                    || (crate::key_hint::plain(KeyCode::Left).is_press(*key)
+                        && self.chat_widget.agents_navigation_key_available()))
             {
                 self.open_agents_overview(app_server);
             } else if self.reconnect.presentation == reconnect::ReconnectPresentation::Overview {
