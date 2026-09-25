@@ -3,6 +3,158 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn history_text(events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) if !cell.as_any().is::<FinalMessageSeparator>() => {
+                Some(cell.display_lines(/*width*/ 80))
+            }
+            _ => None,
+        })
+        .flatten()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn paraphrased_voice_answers_do_not_reappear_on_overflow_or_stop() {
+    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+    let thread_id = activate_voice(&mut chat);
+    let mut last_exchange = String::new();
+    for index in 0..=super::super::MAX_PENDING_SPEECH_DELIVERIES {
+        let turn_id = format!("turn-{index}");
+        let question = format!("Question {index}");
+        chat.on_realtime_transcript_delta("user".into(), question.clone());
+        chat.on_realtime_transcript_done("user".into(), question.clone());
+        start_item(
+            &mut chat,
+            thread_id,
+            &turn_id,
+            user_item(&format!(
+                "<realtime_delegation><input>{question}</input></realtime_delegation>"
+            )),
+        );
+        let answer = agent_item(
+            &format!("answer-{index}"),
+            &format!("Backend answer {index}"),
+            Some(MessagePhase::FinalAnswer),
+        );
+        start_item(&mut chat, thread_id, &turn_id, answer.clone());
+        complete_item(&mut chat, thread_id, &turn_id, answer.clone());
+        finish_turn(
+            &mut chat,
+            thread_id,
+            &turn_id,
+            vec![answer],
+            TurnStatus::Completed,
+        );
+        let AppCommand::RealtimeConversationSpeech { delivery_id, .. } = ops.try_recv().unwrap()
+        else {
+            panic!("completed voice turn should queue speech");
+        };
+        chat.accept_realtime_speech(delivery_id);
+        let spoken = format!("Spoken paraphrase {index}");
+        chat.on_realtime_transcript_delta("assistant".into(), spoken.clone());
+        chat.on_realtime_transcript_done("assistant".into(), spoken);
+        commit_realtime_history_events(&mut chat, &mut events);
+        last_exchange = history_text(&mut events);
+        assert!(
+            !last_exchange.contains("Backend answer"),
+            "old backend answer appeared during turn {index}"
+        );
+    }
+    chat.on_realtime_transcript_done("user".into(), "Next question".into());
+    chat.stop_realtime_conversation();
+    commit_realtime_history_events(&mut chat, &mut events);
+    let rendered = format!("{last_exchange}\n{}", history_text(&mut events));
+    insta::assert_snapshot!("paraphrased_voice_recovery", rendered);
+}
+
+#[tokio::test]
+async fn failed_speech_recovers_only_for_the_current_input() {
+    for superseded in [false, true] {
+        let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+        let thread_id = activate_voice(&mut chat);
+        let turn_id = "voice-turn";
+        start_item(
+            &mut chat,
+            thread_id,
+            turn_id,
+            user_item("<realtime_delegation><input>question</input></realtime_delegation>"),
+        );
+        let answer = agent_item(
+            "answer",
+            "Undelivered answer",
+            Some(MessagePhase::FinalAnswer),
+        );
+        start_item(&mut chat, thread_id, turn_id, answer.clone());
+        complete_item(&mut chat, thread_id, turn_id, answer.clone());
+        finish_turn(
+            &mut chat,
+            thread_id,
+            turn_id,
+            vec![answer],
+            TurnStatus::Completed,
+        );
+        let AppCommand::RealtimeConversationSpeech { delivery_id, .. } = ops.try_recv().unwrap()
+        else {
+            panic!("completed voice turn should queue speech");
+        };
+        if superseded {
+            chat.note_realtime_typed_input("New task");
+        }
+        while events.try_recv().is_ok() {}
+        chat.restore_undelivered_realtime_speech(delivery_id);
+        chat.restore_undelivered_realtime_speech(delivery_id);
+        assert_eq!(
+            history_text(&mut events),
+            if superseded {
+                ""
+            } else {
+                "• Undelivered answer"
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn delayed_voice_transcript_preserves_unspoken_text_fallback() {
+    for completed_before_transcript in [false, true] {
+        let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
+        let thread_id = activate_voice(&mut chat);
+        let turn_id = "voice-turn";
+        start_item(
+            &mut chat,
+            thread_id,
+            turn_id,
+            user_item("<realtime_delegation><input>question</input></realtime_delegation>"),
+        );
+        let answer = agent_item("answer", "Current answer", Some(MessagePhase::FinalAnswer));
+        start_item(&mut chat, thread_id, turn_id, answer.clone());
+        if completed_before_transcript {
+            complete_item(&mut chat, thread_id, turn_id, answer.clone());
+        }
+        chat.on_realtime_transcript_done("user".into(), "question".into());
+        commit_realtime_history_events(&mut chat, &mut events);
+        while events.try_recv().is_ok() {}
+        if !completed_before_transcript {
+            complete_item(&mut chat, thread_id, turn_id, answer.clone());
+        }
+        finish_turn(
+            &mut chat,
+            thread_id,
+            turn_id,
+            vec![answer],
+            TurnStatus::Completed,
+        );
+        insta::allow_duplicates! {
+            insta::assert_snapshot!(history_text(&mut events), @"• Current answer");
+        }
+        assert!(ops.try_recv().is_err());
+    }
+}
+
 #[tokio::test]
 async fn queued_voice_answers_return_to_history_once_if_voice_closes_before_delivery() {
     let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
@@ -70,7 +222,7 @@ async fn queued_voice_answers_return_to_history_once_if_voice_closes_before_deli
 }
 
 #[tokio::test]
-async fn hidden_and_queued_voice_answers_share_a_lossless_sixteen_item_cap() {
+async fn pending_voice_answers_stay_bounded_without_restoring_old_inputs() {
     let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
     let thread_id = activate_voice(&mut chat);
     let mut oldest_delivery_id = None;
@@ -79,6 +231,7 @@ async fn hidden_and_queued_voice_answers_share_a_lossless_sixteen_item_cap() {
             chat.park_voice();
         }
         let turn_id = format!("turn-{index}");
+        chat.on_realtime_transcript_done("user".into(), format!("Question {index}"));
         start_item(
             &mut chat,
             thread_id,
@@ -92,19 +245,18 @@ async fn hidden_and_queued_voice_answers_share_a_lossless_sixteen_item_cap() {
         );
         start_item(&mut chat, thread_id, &turn_id, answer.clone());
         complete_item(&mut chat, thread_id, &turn_id, answer.clone());
+        finish_turn(
+            &mut chat,
+            thread_id,
+            &turn_id,
+            vec![answer],
+            TurnStatus::Completed,
+        );
+        let AppCommand::RealtimeConversationSpeech { delivery_id, .. } = ops.try_recv().unwrap()
+        else {
+            panic!("completed voice turn should queue speech");
+        };
         if index == 0 {
-            finish_turn(
-                &mut chat,
-                thread_id,
-                &turn_id,
-                vec![answer],
-                TurnStatus::Completed,
-            );
-            let AppCommand::RealtimeConversationSpeech { delivery_id, .. } =
-                ops.try_recv().unwrap()
-            else {
-                panic!("first voice answer should queue speech");
-            };
             oldest_delivery_id = Some(delivery_id);
         }
     }
@@ -124,13 +276,22 @@ async fn hidden_and_queued_voice_answers_share_a_lossless_sixteen_item_cap() {
             restored += 1;
         }
     }
-    assert_eq!(restored, 1);
+    assert_eq!(restored, 0);
     assert!(ops.try_recv().is_err());
     chat.stop_realtime_conversation();
     chat.reset_realtime_conversation();
+    let last = 2 * super::super::MAX_PENDING_SPEECH_DELIVERIES;
     assert_eq!(
-        chat.take_undelivered_realtime_speech_for_replay().len(),
-        super::super::MAX_PENDING_SPEECH_DELIVERIES
+        chat.take_undelivered_realtime_speech_for_replay(),
+        vec![(
+            thread_id,
+            format!("turn-{last}"),
+            agent_item(
+                &format!("answer-{last}"),
+                &format!("Answer number {last}"),
+                Some(MessagePhase::FinalAnswer),
+            ),
+        )]
     );
 }
 
