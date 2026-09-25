@@ -1,6 +1,7 @@
 use super::*;
 use crate::unified_exec::clamp_yield_time;
 use codex_network_proxy::ManagedNetworkSandboxContext;
+use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
 use tokio::time::Duration;
@@ -249,7 +250,11 @@ fn exec_server_params_use_path_uri_and_env_policy_overlay_contract() {
     };
     let params = params_for_request(&request);
 
-    assert_eq!(params.process_id.as_str(), "123");
+    assert_regex_match(
+        r"^123-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+        params.process_id.as_str(),
+    );
+    assert_ne!(params.process_id, params_for_request(&request).process_id);
     assert_eq!(params.metadata, None);
     assert_eq!(params.cwd, request.cwd);
     assert!(params.enforce_managed_network);
