@@ -4,10 +4,132 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
 use std::os::windows::process::CommandExt;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+use windows_sys::Win32::Foundation::SetHandleInformation;
 use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
 use windows_sys::Win32::System::Threading::TerminateProcess;
+
+#[tokio::test]
+async fn captured_stdio_closes_while_child_is_alive() {
+    const TEST: &str = "backend::windows::tests::captured_stdio_closes_while_child_is_alive";
+    const ROLE: &str = "CODEX_TEST_STDIO_ROLE";
+    const HOME: &str = "CODEX_TEST_STDIO_HOME";
+    let executable = std::env::current_exe().expect("test executable");
+
+    if let Ok(role) = std::env::var(ROLE) {
+        let home = std::path::PathBuf::from(std::env::var_os(HOME).expect("test home"));
+        if role == "child" {
+            eprintln!("child stderr");
+            std::fs::write(home.join("ready"), []).unwrap();
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            return;
+        }
+
+        let handles = [
+            std::io::stdout().as_raw_handle() as _,
+            std::io::stderr().as_raw_handle() as _,
+        ];
+        for handle in handles {
+            assert_ne!(
+                unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) },
+                0
+            );
+        }
+        let mut command = tokio::process::Command::new(executable);
+        command
+            .args(["--exact", TEST, "--nocapture"])
+            .env(ROLE, "child")
+            // The CI job may forbid breakaway; it does not affect stdio inheritance.
+            .creation_flags(DETACHED_PROCESS)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(std::fs::File::create(home.join("child.log")).unwrap());
+        let child = super::spawn_without_inheriting_stdio(&mut command).unwrap();
+        let pid = child.id().unwrap();
+        let started = Process::open(pid).unwrap().unwrap().start_time().unwrap();
+        std::fs::write(
+            home.join("pid"),
+            serde_json::to_vec(&(pid, started)).unwrap(),
+        )
+        .unwrap();
+        println!("launcher stdout");
+        eprintln!("launcher stderr");
+        return;
+    }
+
+    let home = tempfile::tempdir().unwrap();
+    let mut launcher = tokio::process::Command::new(executable)
+        .args(["--exact", TEST, "--nocapture"])
+        .env(ROLE, "launcher")
+        .env(HOME, home.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let status = tokio::time::timeout(Duration::from_secs(10), launcher.wait())
+        .await
+        .expect("launcher exit")
+        .unwrap();
+    let (pid, started): (u32, String) =
+        serde_json::from_slice(&std::fs::read(home.path().join("pid")).unwrap()).unwrap();
+    let child = Process::open(pid).unwrap().expect("live child");
+    assert_eq!(
+        child.start_time().unwrap(),
+        started,
+        "fixture PID was reused"
+    );
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let captured = tokio::time::timeout(Duration::from_secs(5), async {
+        let ready = home.path().join("ready");
+        while !ready.exists() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        tokio::try_join!(
+            launcher
+                .stdout
+                .as_mut()
+                .unwrap()
+                .read_to_string(&mut stdout),
+            launcher
+                .stderr
+                .as_mut()
+                .unwrap()
+                .read_to_string(&mut stderr),
+        )
+    })
+    .await;
+    let still_running = child.is_running();
+    child.terminate().expect("cleanup child");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while child.is_running().unwrap() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("child exit after cleanup");
+
+    captured.expect("launcher output must close").unwrap();
+    assert!(status.success(), "{stderr}");
+    assert!(
+        still_running.unwrap(),
+        "child exited before its launcher output closed"
+    );
+    assert!(stdout.contains("launcher stdout"));
+    assert!(stderr.contains("launcher stderr"));
+    assert!(
+        std::fs::read_to_string(home.path().join("child.log"))
+            .unwrap()
+            .contains("child stderr")
+    );
+}
 
 #[test]
 fn detached_launch_preflight_rejects_restrictive_job() {
