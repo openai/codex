@@ -1,3 +1,6 @@
+#[path = "support/executable.rs"]
+mod executable;
+
 #[cfg(target_os = "linux")]
 #[path = "exec_server/pid_namespace_tests.rs"]
 mod pid_namespace_tests;
@@ -33,6 +36,7 @@ use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::ProcessId;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
+use executable::copy_executable;
 use futures::SinkExt;
 use futures::StreamExt;
 use predicates::prelude::PredicateBooleanExt;
@@ -185,7 +189,7 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
     let bin_dir = package.path().join("bin");
     std::fs::create_dir(&bin_dir)?;
     let executable = bin_dir.join(format!("codex{}", std::env::consts::EXE_SUFFIX));
-    std::fs::copy(codex_utils_cargo_bin::cargo_bin("codex")?, &executable)?;
+    copy_executable(&codex_utils_cargo_bin::cargo_bin("codex")?, &executable)?;
     let manifest = package.path().join("codex-package.json");
     std::fs::write(&manifest, r#"{"version":"1.2.3-alpha.4"}"#)?;
 

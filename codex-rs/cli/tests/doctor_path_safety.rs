@@ -1,5 +1,8 @@
 //! Black-box coverage for safe diagnostic execution and config error reporting.
 
+#[path = "support/executable.rs"]
+mod executable;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,6 +15,7 @@ use codex_app_server_protocol::RequestId;
 use codex_config::loader::project_trust_key;
 use codex_state::SqliteConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use executable::copy_executable;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -45,7 +49,7 @@ impl Fixture {
         // Hard-link setup and teardown invalidate other tests' Rosetta translations.
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
-            std::fs::copy(&source, &program)?;
+            copy_executable(&source, &program)?;
             // Translate the fixture before the timed diagnostic command.
             anyhow::ensure!(
                 std::process::Command::new(&program)
@@ -59,7 +63,7 @@ impl Fixture {
         }
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
         if std::fs::hard_link(&source, &program).is_err() {
-            std::fs::copy(&source, &program)?;
+            copy_executable(&source, &program)?;
         }
         let workspace = root.path().join("workspace");
         let bin = workspace.join("node_modules/.bin");
