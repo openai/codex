@@ -308,6 +308,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     owner.allow_upstream_proxy = false;
     owner.dangerously_allow_all_unix_sockets = Some(false);
     owner.allow_local_binding = Some(true);
+    owner.enabled = true;
     assert_eq!(
         restricted.environment_policy(),
         EnvironmentNetworkPolicy::from_config(&owner, /*managed_allowed_domains_only*/ false)
@@ -320,6 +321,7 @@ fn environment_policy_replaces_soft_controller_allowlist_and_preserves_denials()
     assert_eq!(
         external_rootless.environment_policy(),
         EnvironmentNetworkPolicy {
+            requires_proxy: true,
             managed_allowed_domains_only: true,
             ..owner_policy.clone()
         }
@@ -864,6 +866,7 @@ async fn environment_local_binding_preserves_explicit_denials_and_inherits_omitt
             assert_eq!(
                 composed.environment_policy(),
                 EnvironmentNetworkPolicy {
+                    requires_proxy: true,
                     allow_local_binding: Some(expected),
                     ..owner.clone()
                 },

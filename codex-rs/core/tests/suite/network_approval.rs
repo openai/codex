@@ -2520,6 +2520,10 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
         ("USER_DENIED", true, Some(false)),
     ] {
         let mut builder = test_codex().with_config(move |config| {
+            config
+                .features
+                .disable(Feature::NetworkProxy)
+                .expect("test config should allow feature update");
             for feature in [Feature::UnifiedExec, Feature::ExecPermissionApprovals] {
                 config
                     .features
@@ -2551,6 +2555,7 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
         });
         let test = builder.build_with_remote_and_local_env(&server).await?;
         assert!(!test.config.managed_network_requirements_enabled());
+        assert!(!test.config.features.enabled(Feature::NetworkProxy));
         assert_eq!(
             test.session_configured.network_proxy.is_some(),
             configured_controller
@@ -2593,6 +2598,8 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             ("DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             ("REVIEWED", "owner-only.invalid", "HTTP/1.1 502"),
             ("OFFLINE", "owner-only.invalid", "ROOTLESS_OWNER_OFFLINE"),
+            ("REQUIRED_ALLOWED", NETWORK_TEST_HOST, "HTTP/1.1 502"),
+            ("REQUIRED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             ("GRANTED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             (
                 "LOCAL_GRANTED",
@@ -2623,12 +2630,14 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 suffix,
                 "ESCALATED" | "ESCALATION_DENIED" | "ESCALATED_DENY_READ"
             );
-            let restricted = matches!(suffix, "OFFLINE" | "GRANTED_DENIED");
+            let requires_proxy = matches!(suffix, "REQUIRED_ALLOWED" | "REQUIRED_DENIED");
+            let restricted = requires_proxy || matches!(suffix, "OFFLINE" | "GRANTED_DENIED");
             if scenario != "ROOTLESS" && restricted {
                 continue;
             }
             let marker = format!("{scenario}_OWNER_{suffix}");
             let mut proxy_config = NetworkProxyConfig {
+                enabled: requires_proxy,
                 allow_local_binding: match suffix {
                     "LOCAL_DENIED" => Some(false),
                     "LOCAL_OMITTED" => None,
@@ -2689,10 +2698,27 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             });
             remote.config = EnvironmentConfigState::Ready(owner_config);
 
-            // Restricted owners run offline until an approved grant enables their filtered proxy.
+            // Traffic policy alone leaves restricted owners offline. Required proxies and
+            // approved network grants activate the filtered route without a controller proxy.
             let command = if suffix == "OFFLINE" {
                 format!(
                     "python3 -c \"import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.connect(('198.51.100.1', 9))\" 2>/dev/null || printf {marker}"
+                )
+            } else if requires_proxy {
+                let direct_probe = r#"python3 - <<'PYTHON'
+import errno, socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    sock.connect(('198.51.100.1', 9))
+except OSError as error:
+    assert error.errno in (errno.ENETUNREACH, errno.EACCES, errno.EPERM), error
+    print('OWNER_DIRECT_NETWORK_BLOCKED')
+else:
+    raise AssertionError('direct network unexpectedly allowed')
+PYTHON"#;
+                format!(
+                    "{direct_probe}\n{}",
+                    remote_network_proxy_request_command(&marker)
                 )
             } else if suffix == "ESCALATED_DENY_READ" {
                 let read_probe = r#"python3 - <<'PYTHON'
@@ -2721,6 +2747,7 @@ PYTHON"#;
                 remote_network_proxy_request_command(&marker)
             };
             let mut args = network_exec_args(&command);
+            args.as_object_mut().unwrap().remove("shell");
             args["environment_id"] = json!(REMOTE_ENVIRONMENT_ID);
             if escalated {
                 args["sandbox_permissions"] = json!("require_escalated");
@@ -2818,6 +2845,9 @@ PYTHON"#;
                 output.contains(expected),
                 "unexpected network output for {marker}: {output}"
             );
+            if requires_proxy {
+                assert!(output.contains("OWNER_DIRECT_NETWORK_BLOCKED"), "{output}");
+            }
             if suffix == "ESCALATION_DENIED" {
                 assert!(!output.contains(":unproxied"));
             } else if suffix == "ESCALATED_DENY_READ" {

@@ -245,7 +245,7 @@ impl NetworkProxySpec {
         )
     }
 
-    /// Returns the effective traffic policy without exposing controller-owned proxy settings.
+    /// Returns proxy activation and traffic policy without controller-owned runtime settings.
     pub fn environment_policy(&self) -> EnvironmentNetworkPolicy {
         EnvironmentNetworkPolicy::from_config(&self.config, self.hard_deny_allowlist_misses)
     }

@@ -189,6 +189,7 @@ action = ['redact']
             policy,
             EnvironmentNetworkPolicy::from_config(
                 &NetworkProxyConfig {
+                    enabled: true,
                     unix_sockets: Some(Default::default()),
                     ..Default::default()
                 },
