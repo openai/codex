@@ -92,6 +92,45 @@ impl KeyboardScreens {
     }
 }
 
+#[test]
+fn editor_handoff_balances_keyboard_stacks_if_editor_leaves_the_screen() {
+    if keyboard_modes::keyboard_enhancement_disabled() {
+        return;
+    }
+    for editor_leaves in [false, true] {
+        let screen = AlternateScreen::default();
+        let mut output = Vec::new();
+        let mut keyboard = KeyboardScreens::default();
+        execute!(
+            output,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .unwrap();
+        keyboard_modes::enable_keyboard_enhancement(&mut output);
+        screen.enter(&mut output, /*capture_mouse*/ true).unwrap();
+        screen.leave(&mut output).unwrap();
+        screen
+            .restore(&mut output, KeyboardRestore::PopStack)
+            .unwrap();
+        screen.enter(&mut output, /*capture_mouse*/ true).unwrap();
+        screen.release_input(&mut output).unwrap();
+        keyboard.process(&std::mem::take(&mut output));
+        assert_eq!(keyboard.state(), (true, &[1][..], &[][..]));
+
+        if editor_leaves {
+            execute!(output, LeaveAlternateScreen).unwrap();
+        }
+        screen.leave(&mut output).unwrap();
+        keyboard_modes::enable_keyboard_enhancement(&mut output);
+        screen.enter(&mut output, /*capture_mouse*/ true).unwrap();
+        screen
+            .restore(&mut output, KeyboardRestore::PopStack)
+            .unwrap();
+        keyboard.process(&output);
+        assert_eq!(keyboard.state(), (false, &[1][..], &[][..]));
+    }
+}
+
 // Capture-specific tests must not inherit the tmux session running the test binary.
 fn enter_with_mouse_enabled(
     screen: &AlternateScreen,

@@ -261,7 +261,7 @@ impl App {
         let config = self.chat_widget.config_ref();
         let file_system_policy = config.permissions.file_system_sandbox_policy();
         let editor_result = tui
-            .with_restored(|| async {
+            .with_restored(tui::TerminalHandoff::KeepScreen, || async {
                 external_editor::run_editor(
                     &seed,
                     &editor_cmd,

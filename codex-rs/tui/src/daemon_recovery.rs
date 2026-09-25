@@ -94,7 +94,7 @@ pub(super) async fn check(
             issue.reason
         ))),
         (Some(1), Some(features)) if managed_daemon => {
-            tui.with_restored(|| async {
+            tui.with_restored(crate::tui::TerminalHandoff::Restore, || async {
                 crossterm::terminal::disable_raw_mode()?;
                 codex_app_server_daemon::restart_with_features(features)
                     .await

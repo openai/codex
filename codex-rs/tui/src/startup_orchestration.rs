@@ -388,7 +388,7 @@ pub(super) async fn run_main_inner(
                     startup_draft.flush_pending_events().await?;
                     startup_draft
                         .tui_mut()
-                        .with_restored(|| {
+                        .with_restored(crate::tui::TerminalHandoff::Restore, || {
                             oss_selection::select_oss_provider(lmstudio_status, ollama_status)
                         })
                         .await?
@@ -526,7 +526,7 @@ pub(super) async fn run_main_inner(
         startup_draft.flush_pending_events().await?;
         let output = startup_draft
             .tui_mut()
-            .with_restored(|| async {
+            .with_restored(crate::tui::TerminalHandoff::Restore, || async {
                 // Package installation may print progress; keep ordinary Ctrl+C handling.
                 crossterm::terminal::disable_raw_mode()?;
                 let result = codex_app_server_daemon::start_with_features(&daemon_features).await;
@@ -602,7 +602,7 @@ pub(super) async fn run_main_inner(
             startup_draft.flush_pending_events().await?;
             startup_draft
                 .tui_mut()
-                .with_restored(|| async {
+                .with_restored(crate::tui::TerminalHandoff::Restore, || async {
                     #[allow(clippy::print_stderr)]
                     {
                         eprintln!("Could not create otel exporter: {e}");
@@ -815,7 +815,7 @@ pub(super) async fn run_main_inner(
         startup_draft.flush_pending_events().await?;
         startup_draft
             .tui_mut()
-            .with_restored(|| async {
+            .with_restored(crate::tui::TerminalHandoff::Restore, || async {
                 // Provider setup may print progress or block in an external downloader.
                 // Restore ordinary signal handling so Ctrl+C can interrupt that process.
                 crossterm::terminal::disable_raw_mode()?;

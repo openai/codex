@@ -337,7 +337,7 @@ impl Command for EnableModifyOtherKeys {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableModifyOtherKeys;
+pub(super) struct DisableModifyOtherKeys;
 
 impl Command for DisableModifyOtherKeys {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {

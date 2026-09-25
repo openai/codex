@@ -1,9 +1,9 @@
 //! Pair alternate-screen transitions with that screen's independent keyboard-mode stack.
 //!
-//! Push only on entry and pop before leaving; the main screen keeps its own TUI mode until
-//! terminal handoff. Transcript surfaces retain pointer reporting across overlays and disable it
-//! before yielding to the shell. Promoting an overlay must not push another keyboard frame.
-//! Refresh tmux's input policy on entry and apply it to every mouse-capture request.
+//! Push only on entry and pop before leaving or yielding input to an editor. The main screen
+//! keeps its own TUI mode until the handoff returns to it. Transcript surfaces retain pointer
+//! reporting across overlays and disable it before yielding. Promoting an overlay must not push
+//! another keyboard frame. Refresh tmux's input policy on entry for mouse-capture requests.
 
 use std::io::Result;
 use std::io::Write;
@@ -32,6 +32,7 @@ pub(super) static ALTERNATE_SCREEN: AlternateScreen = AlternateScreen {
     mouse_active: AtomicBool::new(/*v*/ false),
     mouse_capture_disabled: AtomicBool::new(/*v*/ false),
     input_configured: AtomicBool::new(/*v*/ false),
+    keyboard_active: AtomicBool::new(/*v*/ false),
 };
 
 #[derive(Default)]
@@ -42,6 +43,8 @@ pub(super) struct AlternateScreen {
     mouse_capture_disabled: AtomicBool,
     // A cleanup/setup error must not make the next identical request look already applied.
     input_configured: AtomicBool,
+    // An editor can take over the screen after Codex has popped its keyboard mode.
+    keyboard_active: AtomicBool,
 }
 
 /// Report pointer motion so the owned transcript can update its return-to-bottom hover state.
@@ -74,6 +77,10 @@ impl AlternateScreen {
         self.active.store(/*val*/ true, Ordering::Relaxed);
         writer.flush()?;
         let mouse_capture = keyboard_modes::enable_keyboard_enhancement(writer);
+        self.keyboard_active.store(
+            !cfg!(windows) && !keyboard_modes::keyboard_enhancement_disabled(),
+            Ordering::Relaxed,
+        );
         self.mouse_capture_disabled.store(
             mouse_capture == MouseCapture::DisabledByTmux,
             Ordering::Relaxed,
@@ -127,29 +134,36 @@ impl AlternateScreen {
         Ok(())
     }
 
-    pub(super) fn leave(&self, writer: &mut impl Write) -> Result<()> {
+    /// Release input modes without changing the screen, so an editor can take it over.
+    pub(super) fn release_input(&self, writer: &mut impl Write) -> Result<()> {
         self.input_configured
             .store(/*val*/ false, Ordering::Relaxed);
         let mouse_result = self.disable_mouse(writer);
         // Crossterm never pushes a keyboard stack on native Windows: its input-record API
         // already reports enhanced keys, and its push/pop commands return Unsupported.
-        let keyboard_result = if cfg!(windows) || keyboard_modes::keyboard_enhancement_disabled() {
-            Ok(())
-        } else {
+        let keyboard_result = if self.keyboard_active.load(Ordering::Relaxed) {
             // modifyOtherKeys is not stacked per screen; keep the main screen's fallback enabled
             // until terminal handoff restores its keyboard modes too.
-            execute!(writer, PopKeyboardEnhancementFlags)
+            let result = execute!(writer, PopKeyboardEnhancementFlags);
+            if result.is_ok() {
+                self.keyboard_active.store(/*val*/ false, Ordering::Relaxed);
+            }
+            result
+        } else {
+            Ok(())
         };
         let scroll_result = execute!(writer, DisableAlternateScroll);
+        mouse_result.and(keyboard_result).and(scroll_result)
+    }
+
+    pub(super) fn leave(&self, writer: &mut impl Write) -> Result<()> {
+        let input_result = self.release_input(writer);
         // A failed earlier cleanup write must not prevent the actual screen transition.
         let screen_result = execute!(writer, LeaveAlternateScreen);
         if screen_result.is_ok() {
             self.active.store(/*val*/ false, Ordering::Relaxed);
         }
-        mouse_result
-            .and(keyboard_result)
-            .and(scroll_result)
-            .and(screen_result)
+        input_result.and(screen_result)
     }
 
     pub(super) fn restore(
