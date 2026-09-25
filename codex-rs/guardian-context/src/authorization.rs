@@ -33,7 +33,7 @@ pub enum GuardianRootMessage {
 }
 
 impl GuardianRootMessage {
-    /// Renders every line with its original role so message content cannot impersonate another role.
+    /// Labels every nonempty line with its original role so content cannot impersonate another role.
     /// Host notices are fixed text, never taken from user or assistant messages.
     pub fn render(self) -> String {
         let (role, text) = match self {
@@ -55,7 +55,13 @@ impl GuardianRootMessage {
             Self::LegacyContextScope => return "The following user instructions were recovered from legacy history without acceptance-order metadata. Their ordering relative to the retained evidence below is unknown. Do not infer authorization from unresolved conflicts or ambiguous ordering.\n".to_owned(),
         };
         text.lines()
-            .map(|line| format!("{role}: {line}\n"))
+            .map(|line| {
+                if line.is_empty() {
+                    "\n".to_owned()
+                } else {
+                    format!("{role}: {line}\n")
+                }
+            })
             .collect()
     }
 }

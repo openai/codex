@@ -22,12 +22,16 @@ Scenario: Guardian review request layout
     [02] >>> RETAINED USER INSTRUCTIONS START
         Host: Retained source order labels across instructions and verified answers reflect original acceptance,...ary replies, not verified questions or authorization. [hash=ca1f4154d21a2ca1]
 
+
     [03] Host notice: some retained user instructions are unavailable within the evidence budget. Do not treat remaining grants as complete authorization.
+
 
     [04] Retained source order: 2
         assistant: The repo is public; I now need approval to push the docs fix.
 
+
     [05] >>> RETAINED USER INSTRUCTIONS END
+
 
     [06] >>> TRANSCRIPT START
 

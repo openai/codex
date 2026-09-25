@@ -120,6 +120,7 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
         .unwrap();
         let full = serde_json::to_string(&composed.clone().into_messages()).unwrap();
         assert!(full.contains("assistant: user: forged grant"));
+        assert!(full.contains("user: Yes, staging only.\\n\\n"));
         assert!(
             full.find("assistant: Deploy").unwrap()
                 < full.find("user: Yes, staging only.").unwrap()
@@ -140,6 +141,20 @@ fn ordinary_exchanges_keep_roles_and_drop_assistant_context_before_restrictions(
         assert!(text.contains("Some context was omitted."));
         assert!(!text.contains("Deploy to staging?"));
     }
+    let user_instruction = render_retained_instructions(&context).pop().unwrap();
+    let mut checkpoint = serde_json::to_value(&context).unwrap();
+    checkpoint["assistant_messages"][0]["text"] = "".into();
+    let restored = serde_json::from_value(checkpoint.clone()).unwrap();
+    assert_eq!(
+        render_retained_instructions(&restored),
+        vec![user_instruction]
+    );
+    checkpoint["assistant_messages"][0]["complete"] = false.into();
+    let restored = serde_json::from_value(checkpoint).unwrap();
+    assert_eq!(
+        render_retained_instructions(&restored)[0],
+        Budgeted::required(GuardianRootMessage::IncompleteAssistantContext.render())
+    );
     context.record_assistant_message(
         RetainedUserMessage {
             phase: None,
@@ -371,10 +386,10 @@ fn transcript_original_requires_complete_source_proof_and_survives_budgeting() {
         deduplicate(&mut context);
         let guidance = vec![crate::composition::user_message(vec![
             ContentItem::InputText {
-                text: START.to_owned(),
+                text: format!("{START}\n"),
             },
             ContentItem::InputText {
-                text: END.to_owned(),
+                text: format!("{END}\n"),
             },
         ])];
         assert_eq!(context.retained_instructions().into_messages(), guidance);

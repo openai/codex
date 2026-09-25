@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/scenarios_guardian_heartbeat.rs
-assertion_line: 141
 expression: snapshot
 ---
 Scenario: Three scheduled runs share one instruction body, a human overrides its restriction between runs, and the last scheduled run steers the active human turn. Guardian reviews the later action with the override intact. The assessment is mocked.
@@ -73,19 +72,25 @@ Scenario: Three scheduled runs share one instruction body, a human overrides its
     [02] >>> RETAINED USER INSTRUCTIONS START
         Host: Retained source order labels across instructions and verified answers reflect original acceptance,...ary replies, not verified questions or authorization. [hash=ca1f4154d21a2ca1]
 
+
     [03] Retained source order: 1
         assistant: Recorded this input.
+
 
     [04] Retained source order: 3
         assistant: Recorded this input.
 
+
     [05] Retained source order: 6
         assistant: Recorded this input.
+
 
     [06] Retained source order: 7
         assistant: Recorded this input.
 
+
     [07] >>> RETAINED USER INSTRUCTIONS END
+
 
     [08] >>> TRANSCRIPT START
 

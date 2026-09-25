@@ -150,7 +150,9 @@ impl CollectedContext {
                         items
                             .into_iter()
                             .map(|item| Budgeted {
-                                content: ContentItem::InputText { text: item.content },
+                                content: ContentItem::InputText {
+                                    text: format!("{}\n", item.content),
+                                },
                                 retention: item.retention,
                                 source: item.source,
                             })
@@ -390,7 +392,7 @@ impl SectionOutput {
         if let SectionDelivery::UserContent(items) = &self.delivery {
             metadata.guardian_source_order_guidance |= self.id == "retained_user_instructions"
                 && items.iter().any(|item| matches!(&item.content, ContentItem::InputText { text }
-                    if text == crate::retained_instructions::START || text == crate::retained_instructions::LEGACY_START));
+                    if text.strip_suffix('\n').is_some_and(|text| text == crate::retained_instructions::START || text == crate::retained_instructions::LEGACY_START)));
             metadata.guardian_sources.extend(
                 items
                     .iter()

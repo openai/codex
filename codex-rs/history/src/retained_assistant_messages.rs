@@ -45,12 +45,14 @@ impl RetainedContext {
             return None;
         }
         message.bound();
+        let empty = message.complete && message.text.is_empty();
         let inherited = source == RetainedInputSource::Inherited;
         if let Some(index) = self.assistant_messages.iter().position(|entry| {
             message.message_id.is_some() && entry.value.message_id == message.message_id
         }) {
             if self.assistant_messages[index].value == message
                 && self.assistant_messages[index].inherited == inherited
+                && !empty
             {
                 return self.assistant_messages[index].source(RetainedSourceRole::Assistant);
             }
@@ -61,6 +63,9 @@ impl RetainedContext {
         } else {
             self.record_order(source.acceptance_order())
         };
+        if empty {
+            return None;
+        }
         let revision = message
             .message_id
             .as_ref()
