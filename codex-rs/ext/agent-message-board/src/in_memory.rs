@@ -326,6 +326,9 @@ impl InMemoryAgentMessageBoard {
                 }
             }
             state.subscribe(SubscriptionTarget::Thread(root), caller);
+            if recipients.is_empty() {
+                return Ok(metadata);
+            }
             (metadata, state.posts[index].preview(/*max_chars*/ 150))
         };
         futures::stream::iter(recipients).for_each_concurrent(/*limit*/ 16, |recipient| {

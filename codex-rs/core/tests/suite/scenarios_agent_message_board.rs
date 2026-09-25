@@ -131,8 +131,12 @@ async fn board_requires_persistent_v2_runtime(
     Ok(())
 }
 
+#[test_case::test_case(false; "disk")]
+#[test_case::test_case(true; "in_memory")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn board_post_and_reads_reach_model_context_without_self_notices() -> anyhow::Result<()> {
+async fn board_post_and_reads_reach_model_context_without_self_notices(
+    in_memory: bool,
+) -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mock = responses::mount_sse_sequence(&server, vec![
         tool("post-decision", "post", json!({"new_channel_name":"design", "text":"A shared decision.", "agents_to_notify":["/root"]})),
@@ -140,8 +144,9 @@ async fn board_post_and_reads_reach_model_context_without_self_notices() -> anyh
         done(),
     ]).await;
     let test = test_codex()
-        .with_config(|config| {
+        .with_config(move |config| {
             configure(config);
+            config.multi_agent_v2.message_board_in_memory = in_memory;
             config.current_time_reminder = Some(codex_core::config::CurrentTimeReminderConfig {
                 clock_source: codex_features::CurrentTimeSource::External,
                 ..Default::default()
