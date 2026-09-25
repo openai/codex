@@ -14,6 +14,9 @@ use test_case::test_case;
 const SERVER_NAME: &str = "optional_startup";
 const TOOL_NAMESPACE: &str = "mcp__optional_startup";
 const TOOL_NAME: &str = "calendar_create_event";
+// Allow the whole turn to finish on slow runners without reaching the server's own timeout.
+const TURN_TIMEOUT: Duration = Duration::from_secs(5);
+const PENDING_SERVER_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 enum StartupGraceScenario {
@@ -46,9 +49,9 @@ async fn optional_mcp_startup_grace_controls_initial_turn_tool_catalog(
         | StartupGraceScenario::DisabledGraceRespectsStartupTimeout => Duration::ZERO,
     };
     let startup_timeout = match scenario {
+        StartupGraceScenario::ShortGraceOmitsPending => PENDING_SERVER_TIMEOUT,
         StartupGraceScenario::DisabledGraceRespectsStartupTimeout => Duration::from_millis(250),
-        StartupGraceScenario::ShortGraceOmitsPending
-        | StartupGraceScenario::CustomGraceIncludesReady
+        StartupGraceScenario::CustomGraceIncludesReady
         | StartupGraceScenario::DisabledGraceWaitsForStartup => Duration::from_secs(1),
     };
     let responses_server = responses::start_mock_server().await;
@@ -101,7 +104,7 @@ async fn optional_mcp_startup_grace_controls_initial_turn_tool_catalog(
     let mut turn = Box::pin(fixture.submit_turn("show optional MCP tools"));
     match scenario {
         StartupGraceScenario::ShortGraceOmitsPending => {
-            tokio::time::timeout(Duration::from_millis(500), &mut turn)
+            tokio::time::timeout(TURN_TIMEOUT, &mut turn)
                 .await
                 .context("the configured grace should omit the pending server")??;
             release_startup
@@ -206,7 +209,7 @@ async fn running_thread_uses_refreshed_optional_mcp_startup_grace(
                     "url": server_url,
                     "http_headers": { "Authorization": "Bearer synthetic-test-token" },
                     "enabled_tools": [TOOL_NAME],
-                    "startup_timeout_sec": 5,
+                    "startup_timeout_sec": PENDING_SERVER_TIMEOUT.as_secs(),
                 }))
                 .expect("synthetic optional MCP server configuration"),
             );
@@ -226,8 +229,10 @@ async fn running_thread_uses_refreshed_optional_mcp_startup_grace(
     .await
     .context("optional MCP initialization should begin before the initial turn")?;
 
+    // Allow for turn setup on remote workers while still finishing before the
+    // pending MCP startup timeout. The server remains gated throughout.
     tokio::time::timeout(
-        Duration::from_millis(500),
+        TURN_TIMEOUT,
         fixture.submit_turn("show initial optional MCP tools"),
     )
     .await
