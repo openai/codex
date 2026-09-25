@@ -28,7 +28,6 @@ use windows_sys::Win32::Storage::FileSystem::LOCKFILE_FAIL_IMMEDIATELY;
 use windows_sys::Win32::Storage::FileSystem::LockFileEx;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
-use windows_sys::Win32::System::JobObjects::IsProcessInJob;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_BREAKAWAY_OK;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
@@ -77,8 +76,9 @@ pub(crate) fn ensure_not_elevated() -> Result<()> {
     Ok(())
 }
 
-// Probe the actual child association: escaping an inner job can leave an outer
-// job attached. Suspend the image so no application code runs before cleanup.
+// Check that breakaway launch is permitted before stopping an existing daemon.
+// An outer system job may remain attached; membership alone does not establish
+// whether it will terminate the daemon. Suspend the probe before cleanup.
 pub(crate) fn ensure_detached_launch(executable: &Path) -> Result<()> {
     let mut child = Command::new(executable)
         .creation_flags(CREATE_SUSPENDED | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB)
@@ -87,30 +87,13 @@ pub(crate) fn ensure_detached_launch(executable: &Path) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("cannot launch detached daemon; existing daemon was not stopped")?;
-    let mut in_job = 0;
-    let result = if unsafe {
-        IsProcessInJob(
-            child.as_raw_handle() as _,
-            /*jobhandle*/ 0,
-            &mut in_job,
-        )
-    } == 0
-    {
-        Err(io::Error::last_os_error()).context("failed to verify daemon launch capability")
-    } else if in_job != 0 {
-        Err(anyhow::anyhow!(
-            "host Job Object prevents daemon detachment; start from a host that allows breakaway"
-        ))
-    } else {
-        Ok(())
-    };
     child
         .kill()
         .context("failed to terminate suspended launch probe")?;
     child
         .wait()
         .context("failed to reap suspended launch probe")?;
-    result
+    Ok(())
 }
 
 pub(super) struct Process(OwnedHandle);
@@ -168,29 +151,6 @@ impl Process {
             WAIT_OBJECT_0 => Ok(false),
             _ => Err(io::Error::last_os_error()).context("failed to wait for daemon process"),
         }
-    }
-
-    pub(super) fn ensure_detached(&self) -> Result<()> {
-        let mut in_job = 0;
-        if unsafe {
-            IsProcessInJob(
-                self.0.as_raw_handle() as _,
-                /*jobhandle*/ 0,
-                &mut in_job,
-            )
-        } == 0
-        {
-            let error = io::Error::last_os_error();
-            self.terminate()?;
-            return Err(error).context("failed to verify daemon detachment");
-        }
-        if in_job != 0 {
-            self.terminate()?;
-            anyhow::bail!(
-                "host Job Object prevents daemon detachment; start from a host that allows breakaway"
-            );
-        }
-        Ok(())
     }
 
     pub(super) fn terminate(&self) -> Result<()> {
