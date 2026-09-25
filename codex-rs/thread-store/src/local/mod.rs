@@ -34,6 +34,9 @@ mod daybreak_metadata_tests;
 #[path = "pending_thread_metadata_tests.rs"]
 mod pending_thread_metadata_tests;
 #[cfg(test)]
+#[path = "read_thread_tests.rs"]
+mod read_thread_tests;
+#[cfg(test)]
 mod test_support;
 
 use codex_protocol::ThreadId;

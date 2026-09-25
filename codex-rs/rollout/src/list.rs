@@ -280,6 +280,7 @@ impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
             self.provider_matcher,
             self.cwd_filters,
             updated_at,
+            PreviewFilter::RequirePreview,
         )
         .await
         {
@@ -597,6 +598,7 @@ async fn traverse_directories_for_paths_updated(
             provider_matcher,
             cwd_filters,
             updated_at_fallback,
+            PreviewFilter::RequirePreview,
         )
         .await
         {
@@ -654,6 +656,7 @@ async fn traverse_flat_paths_created(
             provider_matcher,
             cwd_filters,
             updated_at,
+            PreviewFilter::IncludeEmpty,
         )
         .await
         {
@@ -715,6 +718,7 @@ async fn traverse_flat_paths_updated(
             provider_matcher,
             cwd_filters,
             updated_at_fallback,
+            PreviewFilter::IncludeEmpty,
         )
         .await
         {
@@ -784,12 +788,18 @@ fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cu
     }
 }
 
+enum PreviewFilter {
+    RequirePreview,
+    IncludeEmpty,
+}
+
 async fn build_thread_item(
     path: PathBuf,
     allowed_sources: &[SessionSource],
     provider_matcher: Option<&ProviderMatcher<'_>>,
     cwd_filters: Option<&[PathBuf]>,
     updated_at: Option<String>,
+    preview_filter: PreviewFilter,
 ) -> Option<ThreadItem> {
     // Read head and detect preview-bearing events; goal previews can appear before
     // the first normal user message.
@@ -818,8 +828,9 @@ async fn build_thread_item(
     {
         return None;
     }
-    // Apply filters: must have session meta and a discoverable preview.
-    if summary.saw_session_meta && summary.preview.is_some() {
+    if summary.saw_session_meta
+        && (matches!(preview_filter, PreviewFilter::IncludeEmpty) || summary.preview.is_some())
+    {
         let HeadTailSummary {
             originator,
             thread_id,
@@ -885,6 +896,7 @@ pub async fn read_thread_item_from_rollout(path: PathBuf) -> Option<ThreadItem> 
         /*provider_matcher*/ None,
         /*cwd_filters*/ None,
         /*updated_at*/ None,
+        PreviewFilter::RequirePreview,
     )
     .await
 }

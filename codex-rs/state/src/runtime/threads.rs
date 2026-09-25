@@ -1433,7 +1433,7 @@ fn push_thread_filters_with_preview<'a>(
     } else {
         builder.push(" AND threads.archived = 0");
     }
-    if !include_empty_preview && !matches!(section, Some(Some(_))) {
+    if !archived_only && !include_empty_preview && !matches!(section, Some(Some(_))) {
         builder.push(" AND threads.preview <> ''");
     }
     match section {
@@ -1691,6 +1691,62 @@ mod tests {
                 .history_mode,
             ThreadHistoryMode::Paginated
         );
+    }
+
+    #[tokio::test]
+    async fn archived_threads_without_previews_remain_listed() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .unwrap();
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000045").unwrap();
+        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+        metadata.preview = Some(String::new());
+        metadata.first_user_message = None;
+        runtime.upsert_thread(&metadata).await.unwrap();
+        let filters = |archived_only| ThreadFilterOptions {
+            archived_only,
+            allowed_sources: &[],
+            model_providers: None,
+            cwd_filters: None,
+            section: None,
+            project_id: None,
+            anchor: None,
+            sort_key: SortKey::CreatedAt,
+            sort_direction: SortDirection::Desc,
+            search_term: None,
+        };
+        let active = runtime
+            .list_threads(/*page_size*/ 10, filters(/*archived_only*/ false))
+            .await
+            .unwrap();
+        assert!(active.items.is_empty());
+
+        runtime
+            .mark_archived(thread_id, &metadata.rollout_path, Utc::now())
+            .await
+            .unwrap();
+        let archived = runtime
+            .list_threads(/*page_size*/ 10, filters(/*archived_only*/ true))
+            .await
+            .unwrap();
+        assert_eq!(
+            archived
+                .items
+                .iter()
+                .map(|thread| thread.id)
+                .collect::<Vec<_>>(),
+            vec![thread_id]
+        );
+        assert_eq!(archived.next_anchor, None);
+        let active = runtime
+            .list_threads(/*page_size*/ 10, filters(/*archived_only*/ false))
+            .await
+            .unwrap();
+        assert!(active.items.is_empty());
     }
 
     #[tokio::test]
@@ -2373,6 +2429,65 @@ mod tests {
                     expect_temp_sort,
                     "unexpected sorting plan: {plan_details:?}"
                 );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn archived_thread_pages_use_ordered_indexes_without_sorting() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(
+            crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
+            "test-provider".to_string(),
+        )
+        .await
+        .expect("state db should initialize");
+        let anchor = Anchor {
+            ts: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+            id: Some(ThreadId::new()),
+        };
+        for (sort_key, expected_index) in [
+            (SortKey::CreatedAt, "idx_threads_archive_created_at_ms"),
+            (SortKey::UpdatedAt, "idx_threads_archive_updated_at_ms"),
+            (SortKey::RecencyAt, "idx_threads_archive_recency_at_ms"),
+        ] {
+            for sort_direction in [SortDirection::Asc, SortDirection::Desc] {
+                for anchor in [None, Some(&anchor)] {
+                    let mut builder = QueryBuilder::<Sqlite>::new("EXPLAIN QUERY PLAN ");
+                    push_list_threads_query(
+                        &mut builder,
+                        ThreadFilterOptions {
+                            archived_only: true,
+                            allowed_sources: &[],
+                            model_providers: None,
+                            cwd_filters: None,
+                            section: None,
+                            project_id: None,
+                            anchor,
+                            sort_key,
+                            sort_direction,
+                            search_term: None,
+                        },
+                        /*relation_filter*/ None,
+                        /*limit*/ 2,
+                    );
+                    let details = builder
+                        .build()
+                        .fetch_all(runtime.pool.as_ref())
+                        .await
+                        .expect("load archive query plan")
+                        .into_iter()
+                        .map(|row| row.get::<String, _>("detail"))
+                        .collect::<Vec<_>>();
+                    assert!(
+                        details.iter().any(|detail| detail.contains(expected_index)),
+                        "archive page did not use {expected_index}: {details:?}"
+                    );
+                    assert!(
+                        !details.iter().any(|detail| detail.contains("TEMP B-TREE")),
+                        "archive page needed a temporary sort: {details:?}"
+                    );
+                }
             }
         }
     }

@@ -2611,6 +2611,68 @@ async fn thread_list_archived_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_keeps_archived_threads_without_previews() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let mut archived_ids = Vec::new();
+    for (timestamp, metadata_timestamp) in [
+        ("2025-03-01T09-00-00", "2025-03-01T09:00:00Z"),
+        ("2025-03-01T10-00-00", "2025-03-01T10:00:00Z"),
+    ] {
+        archived_ids.push(create_fake_rollout(
+            codex_home.path(),
+            timestamp,
+            metadata_timestamp,
+            "",
+            Some("mock_provider"),
+            /*git_info*/ None,
+        )?);
+    }
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    for thread_id in &archived_ids {
+        let _: codex_app_server_protocol::ThreadArchiveResponse = mcp
+            .request(|request_id| ClientRequest::ThreadArchive {
+                request_id,
+                params: codex_app_server_protocol::ThreadArchiveParams {
+                    thread_id: thread_id.clone(),
+                },
+            })
+            .await?;
+    }
+    archived_ids.reverse();
+    for use_state_db_only in [true, false] {
+        let mut cursor = None;
+        let mut found_ids = Vec::new();
+        loop {
+            let page: ThreadListResponse = mcp
+                .request(|request_id| ClientRequest::ThreadList {
+                    request_id,
+                    params: serde_json::from_value(json!({
+                        "archived": true,
+                        "modelProviders": [],
+                        "limit": 1,
+                        "cursor": cursor,
+                        "useStateDbOnly": use_state_db_only,
+                    }))
+                    .expect("valid list params"),
+                })
+                .await?;
+            for thread in page.data {
+                assert_eq!(thread.preview, "");
+                found_ids.push(thread.id);
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+            assert!(found_ids.len() <= archived_ids.len());
+        }
+        assert_eq!(found_ids, archived_ids);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_rejects_originator_filter_but_accepts_empty_allowlist() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
