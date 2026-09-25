@@ -5,6 +5,8 @@ use crate::events::shared::log_event;
 use crate::events::shared::trace_event;
 use crate::metrics::API_CALL_COUNT_METRIC;
 use crate::metrics::API_CALL_DURATION_METRIC;
+use crate::metrics::MULTI_AGENT_SPAWN_FAILURE_METRIC;
+use crate::metrics::MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
@@ -152,7 +154,7 @@ impl SessionTelemetry {
         self
     }
 
-    /// Attributes tool telemetry without turning arbitrary configuration into metric labels.
+    /// Attributes bounded telemetry without turning arbitrary configuration into metric labels.
     pub fn with_product_sku(mut self, product_sku: Option<&str>) -> Self {
         const KNOWN_PRODUCT_SKUS: &[&str] = &["codex"];
 
@@ -259,6 +261,53 @@ impl SessionTelemetry {
         if let Err(e) = res {
             tracing::warn!("metrics duration [{name}] failed: {e}");
         }
+    }
+
+    /// Records one successful multi-agent spawn phase with bounded spawn dimensions.
+    pub fn record_multi_agent_spawn_phase(
+        &self,
+        phase: &'static str,
+        duration: Duration,
+        fork_mode: &'static str,
+        history_mode: &'static str,
+        multi_agent_version: &'static str,
+    ) {
+        let Some(metrics) = &self.metrics else {
+            return;
+        };
+        let mut tags = self.multi_agent_spawn_tags(fork_mode, multi_agent_version);
+        tags.push(("history_mode", history_mode));
+        tags.push(("phase", phase));
+        let _ = metrics.record_duration(MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC, duration, &tags);
+    }
+
+    /// Records one failed multi-agent spawn after request validation has completed.
+    pub fn record_multi_agent_spawn_failure(
+        &self,
+        reason: &'static str,
+        fork_mode: &'static str,
+        multi_agent_version: &'static str,
+    ) {
+        let Some(metrics) = &self.metrics else {
+            return;
+        };
+        let mut tags = self.multi_agent_spawn_tags(fork_mode, multi_agent_version);
+        tags.push(("reason", reason));
+        let _ = metrics.counter(MULTI_AGENT_SPAWN_FAILURE_METRIC, /*inc*/ 1, &tags);
+    }
+
+    fn multi_agent_spawn_tags(
+        &self,
+        fork_mode: &'static str,
+        multi_agent_version: &'static str,
+    ) -> Vec<(&'static str, &'static str)> {
+        let mut tags = Vec::with_capacity(5);
+        tags.push(("fork_mode", fork_mode));
+        tags.push(("multi_agent_version", multi_agent_version));
+        if let Some(product_sku) = self.metadata.product_sku {
+            tags.push(("product_sku", product_sku));
+        }
+        tags
     }
 
     fn record_duration_ms_f64(&self, name: &str, duration_ms: f64, tags: &[(&str, &str)]) {
