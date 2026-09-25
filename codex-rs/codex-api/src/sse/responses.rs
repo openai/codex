@@ -1,3 +1,4 @@
+use super::responses_error::parse_failed_response;
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
@@ -9,10 +10,8 @@ use crate::safety_buffering::treatment_from_headers;
 use crate::telemetry::SseTelemetry;
 use codex_client::ByteStream;
 use codex_client::StreamResponse;
-use codex_http_client::RetryAfter;
 use codex_protocol::ResponseUsageMetadata;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::MisalignmentErrorDetails;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnModerationMetadataEvent;
@@ -101,18 +100,6 @@ pub fn spawn_response_stream(
         rx_event,
         upstream_request_id,
     }
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct Error {
-    r#type: Option<String>,
-    code: Option<String>,
-    message: Option<String>,
-    plan_type: Option<String>,
-    resets_at: Option<i64>,
-    #[serde(default)]
-    misalignment: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -423,75 +410,8 @@ pub fn process_responses_event(
             }
         }
         "response.failed" => {
-            if let Some(resp_val) = event.response {
-                let mut response_error = ApiError::Stream("response.failed event received".into());
-                if let Some(error) = resp_val.get("error").and_then(parse_flex_unavailable) {
-                    return Err(ResponsesEventError::Api(error));
-                }
-                if let Some(error) = resp_val.get("error")
-                    && let Ok(error) = serde_json::from_value::<Error>(error.clone())
-                {
-                    if is_context_window_error(&error) {
-                        response_error = ApiError::ContextWindowExceeded;
-                    } else if is_quota_exceeded_error(&error) {
-                        response_error = ApiError::QuotaExceeded;
-                    } else if is_usage_not_included(&error) {
-                        response_error = ApiError::UsageNotIncluded;
-                    } else if is_cyber_policy_error(&error) {
-                        let message = cyber_policy_message(error.message);
-                        response_error = ApiError::CyberPolicy { message };
-                    } else if error.code.as_deref() == Some("bio_policy") {
-                        let message = error
-                            .message
-                            .filter(|message| !message.trim().is_empty())
-                            .unwrap_or_else(|| {
-                                "This content was flagged for possible biological risk.".to_string()
-                            });
-                        response_error = ApiError::BioPolicy { message };
-                    } else if error.code.as_deref() == Some("misalignment_policy_violation") {
-                        let message = error
-                            .message
-                            .filter(|message| !message.trim().is_empty())
-                            .unwrap_or_else(|| {
-                                "This request was blocked due to a misalignment policy violation."
-                                    .to_string()
-                            });
-                        response_error = ApiError::MisalignmentPolicyViolation {
-                            message,
-                            misalignment: error.misalignment.and_then(|details| {
-                                serde_json::from_value::<MisalignmentErrorDetails>(details).ok()
-                            }),
-                        };
-                    } else if error.code.as_deref() == Some("invalid_prompt") {
-                        let message = error
-                            .message
-                            .unwrap_or_else(|| "Invalid request.".to_string());
-                        response_error = ApiError::InvalidPrompt { message };
-                    } else if is_server_overloaded_error(&error) {
-                        response_error = ApiError::ServerOverloaded { retry_after: None };
-                    } else {
-                        let retry_after =
-                            try_parse_retry_delay(&error).and_then(RetryAfter::from_delay);
-                        let message = error.message.unwrap_or_default();
-                        response_error = match error.code.as_deref() {
-                            Some("rate_limit_exceeded" | "slow_down") => {
-                                ApiError::RateLimitExceeded {
-                                    message,
-                                    retry_after,
-                                }
-                            }
-                            _ => ApiError::Retryable {
-                                message,
-                                retry_after,
-                            },
-                        };
-                    }
-                }
-                return Err(ResponsesEventError::Api(response_error));
-            }
-
-            return Err(ResponsesEventError::Api(ApiError::Stream(
-                "response.failed event received".into(),
+            return Err(ResponsesEventError::Api(parse_failed_response(
+                event.response,
             )));
         }
         "response.incomplete" => {
@@ -718,81 +638,6 @@ async fn process_sse_with_treatment(
     }
 }
 
-fn try_parse_retry_delay(err: &Error) -> Option<Duration> {
-    if !matches!(
-        err.code.as_deref(),
-        Some("rate_limit_exceeded" | "slow_down")
-    ) {
-        return None;
-    }
-
-    let re = rate_limit_regex();
-    if let Some(message) = &err.message
-        && let Some(captures) = re.captures(message)
-    {
-        let seconds = captures.get(1);
-        let unit = captures.get(2);
-
-        if let (Some(value), Some(unit)) = (seconds, unit) {
-            let value = value.as_str().parse::<f64>().ok()?;
-            let unit = unit.as_str().to_ascii_lowercase();
-
-            if unit == "s" || unit.starts_with("second") {
-                return Some(Duration::from_secs_f64(value));
-            } else if unit == "ms" {
-                return Some(Duration::from_millis(value as u64));
-            }
-        }
-    }
-    None
-}
-
-fn is_context_window_error(error: &Error) -> bool {
-    error.code.as_deref() == Some("context_length_exceeded")
-}
-
-fn is_quota_exceeded_error(error: &Error) -> bool {
-    matches!(
-        error.code.as_deref(),
-        Some(
-            "insufficient_quota"
-                | "credit_balance_exhausted"
-                | "organization_spend_limit_exceeded"
-                | "project_spend_limit_exceeded"
-        )
-    )
-}
-
-fn is_usage_not_included(error: &Error) -> bool {
-    error.code.as_deref() == Some("usage_not_included")
-}
-
-fn is_cyber_policy_error(error: &Error) -> bool {
-    error.code.as_deref() == Some("cyber_policy")
-}
-
-fn is_server_overloaded_error(error: &Error) -> bool {
-    error.code.as_deref() == Some("server_is_overloaded")
-}
-
-fn cyber_policy_fallback_message() -> String {
-    "This request has been flagged for possible cybersecurity risk.".to_string()
-}
-
-fn cyber_policy_message(message: Option<String>) -> String {
-    message
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or_else(cyber_policy_fallback_message)
-}
-
-fn rate_limit_regex() -> &'static regex_lite::Regex {
-    static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
-    #[expect(clippy::unwrap_used)]
-    RE.get_or_init(|| {
-        regex_lite::Regex::new(r"(?i)try again in\s*(\d+(?:\.\d+)?)\s*(s|ms|seconds?)").unwrap()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,8 +645,10 @@ mod tests {
     use bytes::Bytes;
     use codex_client::StreamResponse;
     use codex_client::TransportError;
+    use codex_http_client::RetryAfter;
     use codex_protocol::models::MessagePhase;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::MisalignmentErrorDetails;
     use futures::TryStreamExt;
     use futures::stream;
     use http::HeaderMap;
@@ -1204,6 +1051,28 @@ mod tests {
                     assert_eq!((actual.as_str(), *retry_after), (message, None));
                 }
                 _ => panic!("unexpected events for {code}: {events:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_failed_responses_use_stream_error() {
+        for event in [
+            json!({"type": "response.failed"}),
+            json!({"type": "response.failed", "response": null}),
+            json!({"type": "response.failed", "response": []}),
+            json!({"type": "response.failed", "response": {}}),
+            json!({"type": "response.failed", "response": {"error": null}}),
+            json!({"type": "response.failed", "response": {"error": {"code": 42}}}),
+            json!({"type": "response.failed", "response": {"error": {"code": "server_is_overloaded", "plan_type": 42}}}),
+        ] {
+            let sse = format!("event: response.failed\ndata: {event}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+            match events.as_slice() {
+                [Err(ApiError::Stream(message))] => {
+                    assert_eq!(message, "response.failed event received");
+                }
+                _ => panic!("unexpected events: {events:?}"),
             }
         }
     }
@@ -2104,49 +1973,6 @@ mod tests {
             serde_json::from_value(event).expect("expected event to deserialize");
 
         assert_eq!(event.model_verifications(), None);
-    }
-
-    #[test]
-    fn test_try_parse_retry_delay() {
-        let err = Error {
-            r#type: None,
-            message: Some("Rate limit reached for gpt-5.1 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
-            code: Some("rate_limit_exceeded".to_string()),
-            plan_type: None,
-            resets_at: None,
-            misalignment: None,
-        };
-
-        let delay = try_parse_retry_delay(&err);
-        assert_eq!(delay, Some(Duration::from_millis(28)));
-    }
-
-    #[test]
-    fn test_try_parse_retry_delay_no_delay() {
-        let err = Error {
-            r#type: None,
-            message: Some("Rate limit reached for gpt-5.1 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
-            code: Some("rate_limit_exceeded".to_string()),
-            plan_type: None,
-            resets_at: None,
-            misalignment: None,
-        };
-        let delay = try_parse_retry_delay(&err);
-        assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
-    }
-
-    #[test]
-    fn test_try_parse_retry_delay_azure() {
-        let err = Error {
-            r#type: None,
-            message: Some("Rate limit exceeded. Try again in 35 seconds.".to_string()),
-            code: Some("rate_limit_exceeded".to_string()),
-            plan_type: None,
-            resets_at: None,
-            misalignment: None,
-        };
-        let delay = try_parse_retry_delay(&err);
-        assert_eq!(delay, Some(Duration::from_secs(35)));
     }
 
     const CYBER_RESTRICTED_MODEL_FOR_TESTS: &str = "gpt-5.3-codex";
