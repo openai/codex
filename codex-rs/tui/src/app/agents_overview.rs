@@ -378,7 +378,9 @@ impl App {
         if self.reject_pending_permission_root_switch() {
             return Ok(AppRunControl::Continue);
         }
-        loading::draw(tui)?;
+        if startup_draft.is_none() {
+            loading::draw(tui)?;
+        }
         if self.primary_thread_id != Some(root_thread_id) {
             let previous_displayed_thread_id = self.current_displayed_thread_id();
             if let Some(id) = previous_displayed_thread_id
@@ -505,7 +507,9 @@ impl App {
                 local_settings = self.local_settings.reloaded(&resume_config);
             }
             // Folder selection and trust prompts can replace or clear the loading frame.
-            loading::draw(tui)?;
+            if startup_draft.is_none() {
+                loading::draw(tui)?;
+            }
             let baseline_approval = resume_config.permissions.approval_policy.value();
             let baseline_permissions =
                 RuntimePermissionProfileOverride::from_config(&resume_config);
@@ -542,7 +546,9 @@ impl App {
                 }
             };
             let mut history_notice = None;
-            let presentation = if started.is_some() {
+            let presentation = if startup_draft.is_some() {
+                ThreadAttachPresentation::FreshWithDraft
+            } else if started.is_some() {
                 ThreadAttachPresentation::Fresh
             } else {
                 ThreadAttachPresentation::SessionLineage
@@ -691,7 +697,9 @@ impl App {
                 return Ok(AppRunControl::Continue);
             }
             // Replacing the widget clears the terminal before the remaining server requests.
-            loading::draw(tui)?;
+            if startup_draft.is_none() {
+                loading::draw(tui)?;
+            }
             if read_only {
                 self.ensure_thread_channel(root_thread_id)
                     .mark_external_writer();

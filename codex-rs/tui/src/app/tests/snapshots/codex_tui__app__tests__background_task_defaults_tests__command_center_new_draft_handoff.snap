@@ -1,0 +1,30 @@
+---
+source: tui/src/app/tests/background_task_defaults_tests.rs
+expression: "snapshots.join(\"\\n\\n\")"
+---
+owned=false
+startup:
+
+
+› draft during startup
+
+
+attached:
+
+
+› draft during startup
+
+  GPT-6-Astra default · /tmp/project
+
+owned=true
+startup:
+
+› draft during startup
+
+
+
+attached:
+
+› draft during startup
+
+  GPT-6-Astra default · /tmp/project

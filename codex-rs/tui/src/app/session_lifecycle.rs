@@ -4,8 +4,6 @@
 //! resuming/forking saved sessions, replacing ChatWidget instances, and maintaining the agent picker
 //! cache used for multi-agent navigation.
 
-use std::io;
-
 use super::agent_picker::AGENT_PICKER_VIEW_ID;
 use super::app_server_event_targets::ServerNotificationThreadTarget;
 use super::app_server_event_targets::server_notification_thread_target;
@@ -20,6 +18,8 @@ use std::collections::HashSet;
 pub(super) enum ThreadAttachPresentation {
     /// A primary thread created by thread/start, without inherited history.
     Fresh,
+    /// A fresh thread whose startup composer is already visible.
+    FreshWithDraft,
     SessionLineage,
 }
 
@@ -775,32 +775,9 @@ impl App {
     }
 
     pub(super) fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if tui.is_alt_screen_active() {
-            tui.leave_alt_screen()?;
-        }
         self.reset_transcript_state_after_clear();
         tui.clear_pending_history_lines();
-        if tui.is_owned_screen() {
-            tui.terminal.clear()?;
-        } else {
-            Self::clear_terminal_for_thread_switch(&mut tui.terminal)?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn clear_terminal_for_thread_switch<B>(
-        terminal: &mut crate::custom_terminal::Terminal<B>,
-    ) -> Result<()>
-    where
-        B: Backend<Error = io::Error> + Write,
-    {
-        terminal.clear_scrollback_and_visible_screen_ansi()?;
-        let mut area = terminal.viewport_area;
-        if area.y > 0 {
-            area.y = 0;
-            terminal.set_viewport_area(area);
-        }
-        Ok(())
+        Ok(tui.clear_for_thread_switch()?)
     }
 
     pub(super) async fn reset_thread_event_state(&mut self) {
@@ -1092,10 +1069,21 @@ impl App {
             self.active_thread_rx = Some(receiver);
         }
         self.store_active_thread_receiver().await;
-        self.reset_for_thread_switch(tui)?;
+        if matches!(presentation, ThreadAttachPresentation::FreshWithDraft) {
+            self.reset_transcript_state_after_clear();
+            tui.clear_pending_history_lines();
+            tui.defer_thread_switch_clear();
+        } else {
+            self.reset_for_thread_switch(tui)?;
+        }
         self.pending_thread_switch_resets += 1;
-        self.app_event_tx
-            .send(AppEvent::ResetTranscriptForThreadSwitch);
+        self.app_event_tx.send(
+            if matches!(presentation, ThreadAttachPresentation::FreshWithDraft) {
+                AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
+            } else {
+                AppEvent::ResetTranscriptForThreadSwitch
+            },
+        );
         self.reset_thread_event_state().await;
         let init = self.chatwidget_init_for_forked_or_resumed_thread(
             tui,
@@ -1104,7 +1092,10 @@ impl App {
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
         self.chat_widget.prompt_suggestion_summary = started.reasoning_summary;
-        if matches!(presentation, ThreadAttachPresentation::Fresh) {
+        if matches!(
+            presentation,
+            ThreadAttachPresentation::Fresh | ThreadAttachPresentation::FreshWithDraft
+        ) {
             self.chat_widget.mark_fresh_task_for_sparkle(&started);
             self.chat_widget
                 .empty_state_animation

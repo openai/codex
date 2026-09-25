@@ -290,7 +290,7 @@ impl App {
     }
 
     fn clear_terminal_for_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if tui.is_owned_screen() {
+        if tui.is_owned_screen() || tui.has_deferred_thread_switch_clear() {
             return Ok(());
         }
         if tui.is_alt_screen_active() {

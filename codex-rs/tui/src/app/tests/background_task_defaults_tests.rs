@@ -43,6 +43,82 @@ fn trust_launch_folder(app: &mut App) {
 }
 
 #[tokio::test]
+async fn command_center_new_keeps_startup_draft_visible_through_handoff() -> Result<()> {
+    use crate::custom_terminal::test_support::last_rendered_buffer;
+
+    let mut snapshots = Vec::new();
+    for owned in [false, true] {
+        let (mut app, mut events, _) = make_test_app_with_channels().await;
+        trust_launch_folder(&mut app);
+        app.cli_kv_overrides
+            .push(("tui.animations".into(), TomlValue::Boolean(false)));
+        let mut server = start_config_write_test_app_server(&app).await?;
+        let mut tui = make_test_tui()?;
+        tui.pause_events();
+        tui.set_owned_screen(owned)?;
+        app.agents_overview.rendered_full_screen = true;
+        app.agents_overview.new_session_draft = Some(Box::new(
+            crate::startup_draft::tests::startup_test_pump_with_input("draft during startup"),
+        ));
+
+        app.new_agents_overview_session(&mut tui, &mut server, /*cwd*/ None)
+            .await?;
+        let frame = last_rendered_buffer(&tui.terminal).clone();
+        let screen_text: String = frame
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(screen_text.contains("draft during startup"));
+        assert!(!screen_text.contains("Loading task"));
+        assert_eq!(
+            app.chat_widget.composer_text_with_pending(),
+            "draft during startup"
+        );
+
+        while let Ok(event) = events.try_recv() {
+            Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;
+            assert_eq!(last_rendered_buffer(&tui.terminal), &frame);
+        }
+
+        let size = tui.terminal.last_known_screen_size;
+        app.render_chat_widget_frame(&mut tui, size)?;
+        let final_frame = last_rendered_buffer(&tui.terminal);
+        let footer = |buffer: &ratatui::buffer::Buffer| {
+            buffer
+                .content
+                .chunks(usize::from(buffer.area.width))
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .map(|row| {
+                    row.iter()
+                        .map(ratatui::buffer::Cell::symbol)
+                        .collect::<String>()
+                        .trim_end()
+                        .to_string()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        snapshots.push(format!(
+            "owned={owned}\nstartup:\n{}\nattached:\n{}",
+            footer(&frame),
+            footer(final_frame)
+        ));
+        tui.set_owned_screen(/*owned*/ false)?;
+        server.shutdown().await?;
+    }
+    insta::assert_snapshot!(
+        "command_center_new_draft_handoff",
+        crate::chatwidget::tests::helpers::normalize_snapshot_paths(snapshots.join("\n\n"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn review_regression_agents_overview_creation_is_fresh_but_returning_is_not() -> Result<()> {
     let render = |chat: &ChatWidget| {
         crate::terminal_palette::with_test_default_colors(

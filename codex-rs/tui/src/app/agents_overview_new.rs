@@ -62,7 +62,7 @@ impl App {
             display_config.cwd = cwd.clone();
         }
         draft.apply_config(&display_config);
-        tui.terminal.clear()?;
+        draft.show(tui)?;
         // Keep the large session-start future off the TUI's stack in dev builds.
         let result = Box::pin(self.start_agents_overview_session(
             tui,

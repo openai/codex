@@ -47,6 +47,7 @@ impl App {
                     | AppEvent::InsertHistoryCell(_)
                     | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::ResetTranscriptForThreadSwitch
+                    | AppEvent::ResetTranscriptForThreadSwitchPreservingScreen
                     | AppEvent::FinishPromptRevert { .. }
                     | AppEvent::PromptSuggestionStarted { .. }
                     | AppEvent::PromptSuggestionFinished { .. }
@@ -798,6 +799,12 @@ impl App {
             }
             AppEvent::ResetTranscriptForThreadSwitch => {
                 self.reset_for_thread_switch(tui)?;
+                self.pending_thread_switch_resets -= 1;
+            }
+            AppEvent::ResetTranscriptForThreadSwitchPreservingScreen => {
+                self.reset_transcript_state_after_clear();
+                tui.clear_pending_history_lines();
+                tui.defer_thread_switch_clear();
                 self.pending_thread_switch_resets -= 1;
             }
             AppEvent::CommitRealtimeTranscriptHistory => {
