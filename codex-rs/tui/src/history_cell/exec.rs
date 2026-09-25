@@ -159,17 +159,17 @@ impl HistoryCell for UnifiedExecProcessesCell {
             }
             let command = &process.command_display;
             let (snippet, snippet_truncated) = {
-                let (first_line, has_more_lines) = match command.split_once('\n') {
-                    Some((first, _)) => (first, true),
-                    None => (command.as_str(), false),
-                };
                 let max_graphemes = 80;
-                let mut graphemes = first_line.grapheme_indices(true);
-                if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
-                    (first_line[..byte_index].to_string(), true)
-                } else {
-                    (first_line.to_string(), has_more_lines)
-                }
+                let mut graphemes = command.graphemes(true);
+                let snippet: String = graphemes
+                    .by_ref()
+                    .take(max_graphemes)
+                    .map(|grapheme| match grapheme {
+                        "\n" | "\r\n" => "↵",
+                        _ => grapheme,
+                    })
+                    .collect();
+                (snippet, graphemes.next().is_some())
             };
             if wrap_width <= prefix_width {
                 out.push(Line::from(prefix.dim()));
