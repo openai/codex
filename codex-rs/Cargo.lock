@@ -1939,6 +1939,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agent-message-board-client"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-agent-message-board-extension",
+ "codex-http-client",
+ "codex-protocol",
+ "eventsource-stream",
+ "futures",
+ "http 1.4.0",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-agent-message-board-extension"
 version = "0.0.0"
 dependencies = [

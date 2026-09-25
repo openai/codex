@@ -3,6 +3,7 @@ members = [
     "aws-auth",
     "analytics",
     "agent-graph-store",
+    "agent-message-board-client",
     "agent-identity",
     "agent-roles",
     "backend-client",
