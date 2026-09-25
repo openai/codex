@@ -89,6 +89,7 @@ impl CellHost for RecordingHost {
 struct CellActorHarness {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     handle: CellHandle,
+    yield_signal: CancellationToken,
     initial_event_rx: oneshot::Receiver<Result<CellEvent, CellError>>,
     task: tokio::task::JoinHandle<()>,
     runtime_control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
@@ -136,6 +137,7 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
     let (runtime_control_tx, runtime_control_rx) = std_mpsc::channel();
     let cell_state = Arc::new(CellState::new(CancellationToken::new()));
     let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
+    let yield_signal = CancellationToken::new();
     let task = tokio::spawn(run_cell(
         host,
         CellContext {
@@ -147,7 +149,7 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
         event_rx,
         command_rx,
         Observer {
-            observation: initial_observe_mode.into(),
+            observation: initial_observe_mode.with_yield_signal(yield_signal.clone()),
             response_tx: initial_event_tx,
         },
         task_failure_handler,
@@ -156,6 +158,7 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
     CellActorHarness {
         event_tx,
         handle,
+        yield_signal,
         initial_event_rx,
         task,
         runtime_control_rx,
@@ -256,7 +259,17 @@ async fn yield_timer_preempts_buffered_runtime_output() {
 
 #[tokio::test]
 async fn queued_termination_preempts_unobserved_runtime_completion() {
-    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::from_secs(60)));
+    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::ZERO));
+    harness.event_tx.send(RuntimeEvent::Started).unwrap();
+    harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
+    harness
+        .event_tx
+        .send(RuntimeEvent::ContentItem(
+            FunctionCallOutputContentItem::InputText {
+                text: "queued output".to_string(),
+            },
+        ))
+        .unwrap();
     harness
         .event_tx
         .send(RuntimeEvent::Result {
@@ -264,10 +277,13 @@ async fn queued_termination_preempts_unobserved_runtime_completion() {
             error_text: None,
         })
         .unwrap();
+    harness.yield_signal.cancel();
     let termination = harness.handle.terminate();
 
     let terminated = Ok(CellEvent::Terminated {
-        content_items: Vec::new(),
+        content_items: vec![OutputItem::Text {
+            text: "queued output".to_string(),
+        }],
     });
     assert_eq!(termination.await, terminated.clone());
     assert_eq!(harness.initial_event_rx.await.unwrap(), terminated);
