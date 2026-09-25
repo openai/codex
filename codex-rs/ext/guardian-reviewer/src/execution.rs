@@ -109,7 +109,7 @@ pub async fn wait_for_guardian_review(
             event = runtime.next_event() => {
                 match event {
                     Ok(event) if !event_matches_turn(&event, expected_turn_id) => {}
-                    Ok(event) if matches!(&event.msg, EventMsg::ItemCompleted(_)) => {
+                    Ok(event) if matches!(&event.msg, EventMsg::ItemCompleted(_) | EventMsg::RawResponseItem(_)) => {
                         runtime.admit_context(&event).await;
                     }
                     Ok(event) => match event.msg {

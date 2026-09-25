@@ -34,6 +34,7 @@ pub(crate) enum BudgetPriority {
 #[derive(Clone, PartialEq)]
 pub struct Budgeted<T> {
     pub content: T,
+    pub(crate) source: Option<codex_history::RetainedSource>,
     pub(crate) retention: Retention,
 }
 
@@ -41,6 +42,7 @@ impl<T> Budgeted<T> {
     pub fn required(content: T) -> Self {
         Self {
             content,
+            source: None,
             retention: Retention::Required,
         }
     }
@@ -48,6 +50,7 @@ impl<T> Budgeted<T> {
     pub(crate) fn historical(content: T) -> Self {
         Self {
             content,
+            source: None,
             retention: Retention::Historical,
         }
     }
@@ -55,6 +58,7 @@ impl<T> Budgeted<T> {
     pub(crate) fn optional(content: T, priority: BudgetPriority) -> Self {
         Self {
             content,
+            source: None,
             retention: Retention::Optional(priority),
         }
     }

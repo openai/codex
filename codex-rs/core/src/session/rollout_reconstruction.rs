@@ -414,8 +414,8 @@ impl Session {
                     history.record_retained_context(event);
                 }
                 RolloutItem::ResponseItem(response_item) => {
-                    history.record_annotated_items(
-                        std::slice::from_ref(response_item),
+                    history.replay_annotated_item(
+                        response_item,
                         turn_context.model_info().truncation_policy.into(),
                     );
                 }

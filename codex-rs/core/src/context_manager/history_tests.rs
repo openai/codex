@@ -716,7 +716,7 @@ fn retains_only_harness_authored_configuration_updates() {
     };
 
     history.record_annotated_items(
-        &[
+        &mut [
             ResponseItemEnvelope::new(update.clone()),
             ResponseItemEnvelope {
                 item: update,
@@ -772,7 +772,7 @@ fn drop_last_n_user_turns_removes_post_input_configuration_update_with_its_turn(
         updates[1].clone(),
         ResponseItemEnvelope::new(assistant_msg("removed answer")),
     ]);
-    history.record_annotated_items(&items, TruncationPolicy::Tokens(10_000));
+    history.record_annotated_items(&mut items, TruncationPolicy::Tokens(10_000));
 
     history.drop_last_n_user_turns(/*num_turns*/ 1);
 
@@ -908,7 +908,7 @@ fn record_annotated_items_preserves_metadata_while_processing_item(
     expected_token_limit: usize,
     expected_truncation: bool,
 ) {
-    let envelope = ResponseItemEnvelope {
+    let mut envelope = ResponseItemEnvelope {
         item: ResponseItem::FunctionCallOutput {
             id: None,
             call_id: Some("call-1".to_string()),
@@ -927,7 +927,10 @@ fn record_annotated_items_preserves_metadata_while_processing_item(
     };
     let mut history = ContextManager::new();
 
-    history.record_annotated_items(std::slice::from_ref(&envelope), TruncationPolicy::Tokens(4));
+    history.record_annotated_items(
+        std::slice::from_mut(&mut envelope),
+        TruncationPolicy::Tokens(4),
+    );
 
     assert_eq!(history.annotated_items().len(), 1);
     assert_eq!(history.annotated_items()[0].metadata, envelope.metadata);
@@ -1575,7 +1578,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
 fn rollback_removes_assistant_sources_recorded_ahead_of_queued_input() {
     let mut history = ContextManager::for_session(&codex_protocol::protocol::SessionSource::Exec);
     let original = user_msg("Staging only.");
-    let items = [
+    let mut items = [
         (original.clone(), 0),
         (assistant_msg("Deploy staging?"), 2),
         (user_msg("Also run tests."), 1),
@@ -1587,7 +1590,7 @@ fn rollback_removes_assistant_sources_recorded_ahead_of_queued_input() {
             ..Default::default()
         }),
     });
-    history.record_annotated_items(&items, TruncationPolicy::Tokens(10_000));
+    history.record_annotated_items(&mut items, TruncationPolicy::Tokens(10_000));
     history.drop_last_n_user_turns(/*num_turns*/ 1);
     assert_eq!(raw_items(&history), vec![original]);
     assert!(

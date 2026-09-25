@@ -774,6 +774,9 @@ fn truncate_message_text_to_token_budget(
     }
 
     set_annotated_content(&mut envelope.item, truncated_content)?;
+    if let Some(metadata) = &mut envelope.metadata {
+        metadata.mark_retained_sources_incomplete();
+    }
     Some(envelope)
 }
 

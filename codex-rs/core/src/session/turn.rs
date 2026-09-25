@@ -1619,7 +1619,7 @@ async fn run_sampling_request(
         sess.services
             .executed_tool_calls
             .attach_to_prompt(&mut prompt_input, &mut executed_tool_calls_by_output);
-        let prompt = build_prompt(
+        let mut prompt = build_prompt(
             prompt_input,
             step_context.as_ref(),
             base_instructions.clone(),
@@ -1628,13 +1628,13 @@ async fn run_sampling_request(
             .responses_metadata(step_context.as_ref(), CodexResponsesRequestKind::Turn)
             .await;
         if crate::guardian::is_basic_session_source(&turn_context.session_source) {
-            crate::guardian::check_guardian_prompt_budget(
+            crate::guardian::prepare_guardian_prompt(
                 &sess,
-                &prompt,
-                &turn_context.config,
-                &step_context.settings.model_info,
+                &mut prompt,
+                step_context.as_ref(),
                 &responses_metadata,
-            )?;
+            )
+            .await?;
         }
         let err = match try_run_sampling_request(
             tool_runtime.clone(),

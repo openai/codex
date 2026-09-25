@@ -122,7 +122,7 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
             receiver_message_id: format!("delivery-{index}"),
             text: format!("Sender context {index}"),
         };
-        let input = [
+        let mut input = [
             ResponseItemEnvelope {
                 item: serde_json::from_value::<ResponseItem>(json!({
                     "type": "function_call_output", "id": snapshot.receiver_message_id,
@@ -143,7 +143,10 @@ async fn sender_context_follows_its_delivery_through_checkpoint_and_rollback() {
                 }),
             },
         ];
-        live.record_annotated_items(&input, turn_context.model_info().truncation_policy.into());
+        live.record_annotated_items(
+            &mut input,
+            turn_context.model_info().truncation_policy.into(),
+        );
         items.extend(input.into_iter().map(RolloutItem::ResponseItem));
         snapshots.push(snapshot);
     }

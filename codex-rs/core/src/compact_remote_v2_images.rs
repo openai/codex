@@ -96,5 +96,8 @@ pub(super) fn truncate_message_to_token_budget(
     }
     retained.reverse();
     set_annotated_content(&mut envelope.item, retained)?;
+    if let Some(metadata) = &mut envelope.metadata {
+        metadata.mark_retained_sources_incomplete();
+    }
     Some(envelope)
 }

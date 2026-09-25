@@ -552,6 +552,12 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
         }
     }
     let history = thread.conversation_history_snapshot().await;
+    let retained = history.retained_context().context("retained originals")?;
+    let revisions = retained
+        .ordered_entries()
+        .filter_map(|(_, entry)| retained.source(entry))
+        .map(|source| (source.id.message_id, source.revision))
+        .collect::<std::collections::HashMap<_, _>>();
     // Shared order: initial input, ordinary question, first tool call, steer, first
     // answer, second tool call, second answer. Recording the queued steer later must not move it.
     let user_messages = [(0, initial.as_str()), (3, STEER)]
@@ -574,7 +580,7 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
                 .expect("original user-message identity");
             json!({
                 "order": order, "turn_id": answers[index].turn_id,
-                "message_id": message_id.as_str(),
+                "message_id": message_id.as_str(), "revision": revisions[message_id.as_str()],
                 "text": codex_guardian_context::truncate_text(text, /*max_tokens*/ 900),
                 "complete": index != 0 || matches!(instruction_size, InstructionSize::Normal),
             })
@@ -593,7 +599,8 @@ async fn retained_instructions_keep_identity_across_compaction_and_resume(
     let expected = json!({
         "user_messages": user_messages, "user_messages_incomplete": false,
         "assistant_messages": [{"order": 1, "turn_id": answers[0].turn_id,
-            "message_id": "ordinary-question", "text": QUESTION, "complete": true}],
+            "message_id": "ordinary-question", "revision": revisions["ordinary-question"],
+            "text": QUESTION, "complete": true}],
         "assistant_messages_incomplete": false,
         "verified_answers": ordered_answers, "incomplete": false, "next_order": next_order,
     });

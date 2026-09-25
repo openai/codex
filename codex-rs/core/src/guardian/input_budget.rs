@@ -26,6 +26,12 @@ use crate::session::turn_context::TurnContext;
 #[derive(Clone)]
 pub(crate) struct PendingReviewContext(pub ComposedContext);
 
+/// Frozen originals for this review, restored only if its live history is compacted.
+pub(super) struct RetainedReviewContext {
+    pub context: ComposedContext,
+    pub history_version: u64,
+}
+
 /// Reject inputs that cannot fit even without history or tools before Core tries
 /// pre-turn compaction. This is only a feasibility check; its selected copy is
 /// discarded. Actual selection waits for the complete first-step overhead.
@@ -42,10 +48,15 @@ pub(crate) async fn check_pending(session: &Session, turn: &TurnContext) -> Code
         codex_protocol::protocol::TruncationPolicy::Bytes(base.text.len()).token_budget();
     let maximum = effective_input_token_limit(turn.model_info(), turn.config.model_context_window)
         .saturating_sub(super::request_budget::INPUT_TOKEN_MARGIN);
-    if pending.0.estimated_tokens().saturating_add(minimum_prefix) > maximum {
-        pending
-            .0
-            .clone()
+    let mut context = pending.0.clone();
+    context.retain_new_instructions(
+        &session
+            .clone_history()
+            .await
+            .for_prompt_annotated(&turn.model_info().input_modalities),
+    );
+    if context.estimated_tokens().saturating_add(minimum_prefix) > maximum {
+        context
             .enforce_budget(
                 RequestBudget {
                     max_input_tokens: maximum,
@@ -83,11 +94,19 @@ pub(crate) async fn finalize(
             "Guardian expects one review input".to_owned(),
         ));
     };
-    let context = pending.0.clone();
+    let mut context = pending.0.clone();
     let model = &step.settings.model_info;
     let history = session.clone_history().await;
+    let history_version = history.history_version();
+    let history = history.for_prompt_annotated(&model.input_modalities);
+    // Use the history that will actually reach the model. Recompute after every
+    // compaction retry; evidence removed by compaction must be delivered again.
+    context.retain_new_instructions(&history);
     let prompt = build_prompt(
-        history.for_prompt(&model.input_modalities),
+        history
+            .into_iter()
+            .map(codex_history::ResponseItemEnvelope::into_item)
+            .collect(),
         step,
         session.get_prompt_base_instructions().await,
     );
@@ -179,9 +198,21 @@ pub(crate) async fn finalize(
                 );
         }
     }
-    *content = context
-        .into_user_inputs()
+    let (user_input, metadata) = context
+        .into_annotated_user_inputs()
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+    if metadata.is_some() {
+        input[0] = TurnInput::ResponseItem(codex_history::ResponseItemEnvelope {
+            item: session.response_item_from_user_input(user_input),
+            metadata,
+        });
+    } else {
+        *content = user_input;
+    }
+    step.turn.extension_data.insert(RetainedReviewContext {
+        context: pending.0.retained_instructions(),
+        history_version,
+    });
     session
         .services
         .thread_extension_data

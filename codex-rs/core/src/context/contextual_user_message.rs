@@ -6,6 +6,7 @@ use codex_protocol::models::ResponseItem;
 use super::AdditionalContextUserFragment;
 use super::AgentMessageBoardNotification;
 use super::ContextualUserFragment;
+use super::GuardianRetainedInstructions;
 use super::InternalModelContextFragment;
 use super::LegacyApplyPatchExecCommandWarning;
 use super::LegacyModelMismatchWarning;
@@ -37,9 +38,13 @@ const CONTEXTUAL_USER_FRAGMENT_MATCHERS: &[fn(&str) -> bool] = &[
 
 /// Hidden runtime context is not user authorization. Explicit user goal edits are.
 pub(crate) fn is_guardian_context_message(item: &ResponseItem) -> bool {
-    matches!(item, ResponseItem::Message { role, content, .. }
+    matches!(item, ResponseItem::Message { role, content, internal_chat_message_metadata_passthrough, .. }
         if role == "user"
-            && content.iter().any(is_contextual_user_fragment)
+            && (content.iter().any(is_contextual_user_fragment)
+                || internal_chat_message_metadata_passthrough.as_ref()
+                    .and_then(|metadata| metadata.content_item_kinds.as_ref())
+                    .is_some_and(|kinds| !kinds.is_empty() && kinds.len() == content.len()
+                        && kinds.iter().all(|kind| kind.0 == GuardianRetainedInstructions::KIND)))
             && UserGoalUpdate::message_text(item).is_none())
 }
 

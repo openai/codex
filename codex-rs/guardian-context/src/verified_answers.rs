@@ -6,6 +6,7 @@ use codex_history::RetainedContextEntry;
 use codex_history::VerifiedAnswer;
 
 use crate::GuardianRootMessage;
+use crate::retained_instructions::source_order_labels;
 use codex_protocol::protocol::TruncationPolicy;
 
 const MAX_ANSWER_TOKENS: usize = 900;
@@ -20,7 +21,7 @@ pub struct RenderedVerifiedAnswers {
 pub fn render_verified_answers(context: &RetainedContext) -> RenderedVerifiedAnswers {
     let mut complete = context.verified_answers_complete();
     let mut fragments = Vec::new();
-    for (order, (_, entry)) in context.ordered_entries().enumerate() {
+    for (order, entry) in source_order_labels(context) {
         let RetainedContextEntry::VerifiedAnswer(answer) = entry else {
             continue;
         };

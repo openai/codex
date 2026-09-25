@@ -5,6 +5,8 @@
 use super::Ordered;
 use super::RetainedContext;
 use super::RetainedInputSource;
+use super::RetainedSource;
+use super::RetainedSourceRole;
 use super::RetainedUserMessage;
 use super::bound_family;
 
@@ -31,15 +33,16 @@ impl RetainedContext {
 
     /// Records original assistant text without interpreting it as a question or grant.
     /// Older unsequenced sources cannot establish order relative to queued user replies.
+    /// Returns the captured source for the original envelope, independently of buffer eviction.
     pub fn record_assistant_message(
         &mut self,
         mut message: RetainedUserMessage,
         source: RetainedInputSource,
-    ) {
+    ) -> Option<RetainedSource> {
         if source == RetainedInputSource::Local(None) {
             // Leave unsequenced sources to legacy transcript selection. Missing
             // ordering alone does not establish an omission from reviewer context.
-            return;
+            return None;
         }
         message.bound();
         let inherited = source == RetainedInputSource::Inherited;
@@ -49,7 +52,7 @@ impl RetainedContext {
             if self.assistant_messages[index].value == message
                 && self.assistant_messages[index].inherited == inherited
             {
-                return;
+                return self.assistant_messages[index].source(RetainedSourceRole::Assistant);
             }
             self.assistant_messages.remove(index);
         }
@@ -58,14 +61,22 @@ impl RetainedContext {
         } else {
             self.record_order(source.acceptance_order())
         };
-        self.assistant_messages.push_back(Ordered {
+        let revision = message
+            .message_id
+            .as_ref()
+            .map(|_| codex_protocol::ResponseItemId::new("retained"));
+        let entry = Ordered {
+            revision,
             inherited,
             order,
             value: message,
-        });
+        };
+        let source = entry.source(RetainedSourceRole::Assistant);
+        self.assistant_messages.push_back(entry);
         bound_family(
             &mut self.assistant_messages,
             &mut self.assistant_messages_incomplete,
         );
+        source
     }
 }

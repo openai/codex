@@ -238,6 +238,13 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
     for (review, environment_id) in reviews.iter().zip(targets) {
         let groups = review.message_input_text_groups("user");
         let latest = groups.last().context("current review input")?;
+        assert_eq!(
+            latest
+                .iter()
+                .any(|text| text.starts_with(">>> RETAINED USER INSTRUCTIONS START\n")),
+            environment_id == secondary_id,
+            "unchanged instructions are sent only with the first review"
+        );
         let start = latest
             .iter()
             .position(|text| text == "\n>>> PARENT TURN PERMISSION CONTEXT START\n")

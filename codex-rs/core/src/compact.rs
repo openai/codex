@@ -684,13 +684,17 @@ fn build_compacted_history_with_limit(
             } else {
                 let truncated =
                     truncate_text(&message.message, TruncationPolicy::Tokens(remaining));
+                let mut harness_metadata = message.harness_metadata.clone();
+                if let Some(metadata) = &mut harness_metadata {
+                    metadata.mark_retained_sources_incomplete();
+                }
                 selected_messages.push(CompactedUserMessage {
                     id: message.id.clone(),
                     message: truncated,
                     internal_chat_message_metadata_passthrough: message
                         .internal_chat_message_metadata_passthrough
                         .clone(),
-                    harness_metadata: message.harness_metadata.clone(),
+                    harness_metadata,
                 });
                 break;
             }

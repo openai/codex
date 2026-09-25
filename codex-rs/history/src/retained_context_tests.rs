@@ -323,6 +323,21 @@ fn accepted_order_survives_delayed_recording_and_checkpoint_replay() {
     let mut resumed = RetainedContext::default();
     resumed.restore(Some(&checkpoint), &[]);
     resumed.record_user_message(instruction, RetainedInputSource::Local(Some(steer_order)));
+    // This suffix has no captured version metadata, so replay creates a fresh revision.
+    // Its original contents and acceptance order still reconstruct identically.
+    let mut expected = context.clone();
+    assert_ne!(
+        resumed.user_messages[0].revision,
+        expected.user_messages[0].revision
+    );
+    expected.user_messages[0].revision = resumed.user_messages[0].revision.clone();
+    assert_eq!(resumed, expected);
+    let source = context
+        .source(RetainedContextEntry::UserMessage(
+            &context.user_messages[0].value,
+        ))
+        .unwrap();
+    assert!(resumed.restore_source_revision(&source));
     assert_eq!(resumed, context);
     assert_eq!(
         resumed

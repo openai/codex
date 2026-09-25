@@ -137,7 +137,7 @@ impl Session {
         .await;
     }
 
-    pub(super) async fn prepare_annotated_conversation_items_for_history(
+    pub(crate) async fn prepare_annotated_conversation_items_for_history(
         &self,
         turn_context: &TurnContext,
         model_info: &ModelInfo,
