@@ -20,7 +20,7 @@ use ratatui::crossterm::execute;
 const DISABLE_KEYBOARD_ENHANCEMENT_ENV_VAR: &str = "CODEX_TUI_DISABLE_KEYBOARD_ENHANCEMENT";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum VscodeDetection {
+pub(crate) enum VscodeDetection {
     VsCode,
     Other,
     Unknown,
@@ -84,7 +84,7 @@ pub(super) fn running_in_vscode_terminal() -> bool {
     detect_vscode_terminal() == VscodeDetection::VsCode
 }
 
-fn detect_vscode_terminal() -> VscodeDetection {
+pub(crate) fn detect_vscode_terminal() -> VscodeDetection {
     if term_program_is_vscode(std::env::var("TERM_PROGRAM").ok().as_deref()) {
         return VscodeDetection::VsCode;
     }

@@ -792,6 +792,9 @@ pub struct Config {
     /// Override the terminal-specific default for copying transcript mouse selections.
     pub tui_copy_on_select: codex_config::types::CopyOnSelect,
 
+    /// Right-click text paste fallback for the fullscreen TUI.
+    pub tui_right_click_paste: codex_config::types::RightClickPaste,
+
     /// Start the TUI in the specified collaboration mode (plan/default).
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
@@ -4497,6 +4500,11 @@ impl Config {
                 .tui
                 .as_ref()
                 .map(|tui| tui.copy_on_select)
+                .unwrap_or_default(),
+            tui_right_click_paste: cfg
+                .tui
+                .as_ref()
+                .map(|tui| tui.right_click_paste)
                 .unwrap_or_default(),
             tui_alternate_screen: cfg
                 .tui

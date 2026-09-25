@@ -1364,6 +1364,16 @@ async fn fullscreen_composer_mouse_copy_and_input_ownership() -> Result<()> {
         assert!(app.handle_owned_transcript_event(&mut tui, &mut server, &event)?);
     }
     assert!(!app.transcript_view.has_active_interaction());
+    app.start_right_click_paste(
+        &mut tui,
+        crossterm::event::MouseEvent {
+            kind: Down(Right),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        },
+    );
+    assert!(!tui.clipboard.is_busy());
     app.render_owned_transcript(&mut tui, size)?;
     let cursor = tui.terminal.last_known_cursor_pos;
     let draft = app.chat_widget.capture_thread_input_state();

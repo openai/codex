@@ -5,6 +5,10 @@
 //! bursts, especially on Windows. Paste timing uses Tokio's clock so asynchronous flush deadlines
 //! and input classification share a clock, including in paused-time tests. Copy shortcuts and right
 //! clicks preserve selected draft text.
+//! When enabled, fullscreen right-click paste requires an editable composer without a selection,
+//! search, or blocking view. The app reads clipboard text asynchronously and delivers a normal
+//! paste only while the same thread, draft, and cursor remain eligible. Intervening input or focus
+//! loss cancels the pending paste; a late clipboard result cannot overwrite newer input.
 //! The live voice strip renders after effort ignition, followed by the Astra sparkle when eligible.
 //! Owned transcripts keep persistent status below the composer and hints on a separate final row.
 //! Shortcut help expands above the composer, with its close hint replacing the final shortcuts row

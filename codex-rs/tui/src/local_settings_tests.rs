@@ -2,6 +2,7 @@ use super::*;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use codex_config::LoaderOverrides;
+use codex_config::types::RightClickPaste;
 use codex_config::types::SessionPickerViewMode;
 use codex_terminal_detection::Multiplexer;
 use pretty_assertions::assert_eq;
@@ -19,6 +20,7 @@ async fn launch_screen_mode_survives_configuration_reload() -> anyhow::Result<()
         .await?;
     config.tui_fullscreen_transcript = true;
     config.tui_copy_on_select = CopyOnSelect::Always;
+    config.tui_right_click_paste = RightClickPaste::On;
     config.tui_alternate_screen = AltScreenMode::Auto;
 
     for (alternate_screen, owned, expected_mode, expected_alt) in [
@@ -38,11 +40,13 @@ async fn launch_screen_mode_survives_configuration_reload() -> anyhow::Result<()
         let mut reloaded_config = config.clone();
         reloaded_config.tui_fullscreen_transcript = false;
         reloaded_config.tui_copy_on_select = CopyOnSelect::Never;
+        reloaded_config.tui_right_click_paste = RightClickPaste::Off;
         reloaded_config.tui_alternate_screen = AltScreenMode::Never;
         reloaded_config.tui_theme = Some("nord".into());
         let mut expected = LocalSettings::from(&reloaded_config);
         expected.transcript_mode = expected_mode;
         expected.tui.alternate_screen = expected_alt;
+        expected.tui.right_click_paste = RightClickPaste::Off;
         assert_eq!(local.reloaded(&reloaded_config), expected);
         assert_eq!(LocalSettings::for_tui(&reloaded_config, &tui), expected);
         tui.set_owned_screen(/*owned*/ false)?;
@@ -102,6 +106,7 @@ show_server_version_notice = false
 auto_recap = false
 fullscreen_transcript = true
 copy_on_select = "never"
+right_click_paste = "off"
 vim_mode_default = true
 terminal_resize_reflow_max_rows = 0
 session_picker_view = "comfortable"
@@ -130,6 +135,7 @@ fast_default_opt_out = true
             })
             .cli_overrides(vec![
                 ("tui.disable_paste_burst".into(), true.into()),
+                ("tui.right_click_paste".into(), "on".into()),
                 // The deprecated flag must not override or migrate into the TUI preference.
                 (
                     "features.transcript_v2".into(),
@@ -142,6 +148,7 @@ fast_default_opt_out = true
         let local = LocalSettings::from(&config);
         let mut expected: Tui = toml::from_str("")?;
         expected.disable_paste_burst = Some(true);
+        expected.right_click_paste = RightClickPaste::On;
         expected.session_picker_view = Some(SessionPickerViewMode::Dense);
         if !config_text.is_empty() {
             expected.animations = false;

@@ -11,6 +11,14 @@ use crossterm::event::MouseEvent;
 use crossterm::event::MouseEventKind;
 
 impl ChatComposer {
+    pub(crate) fn can_paste_on_right_click(&self) -> bool {
+        self.draft.input_enabled
+            && !self.blocks_direct_input
+            && self.history_search.is_none()
+            && self.draft.textarea.vim_query().is_none()
+            && self.draft.textarea.mouse_selection_range().is_none()
+    }
+
     pub(in crate::bottom_pane) fn finish_copy(
         &mut self,
         completion: &(u64, crate::clipboard_copy::worker::CopyResult),

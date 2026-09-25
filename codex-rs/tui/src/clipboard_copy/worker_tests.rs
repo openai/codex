@@ -20,12 +20,16 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
     let (started, start_rx) = mpsc::channel();
     let (release, released) = mpsc::channel();
     tui.clipboard
-        .start(frames.clone(), move |text, format, setup| {
-            setup.begin_delivery().unwrap();
-            started.send((text.to_owned(), format)).unwrap();
-            released.recv().unwrap();
-            (Ok(CopyOutcome::Copied(Some(ClipboardLease::test()))), None)
-        })
+        .start(
+            frames.clone(),
+            move |text, format, setup| {
+                setup.begin_delivery().unwrap();
+                started.send((text.to_owned(), format)).unwrap();
+                released.recv().unwrap();
+                (Ok(CopyOutcome::Copied(Some(ClipboardLease::test()))), None)
+            },
+            |_| unreachable!("copy-only backend"),
+        )
         .unwrap();
     let mut app = Box::new(crate::app::test_support::make_test_app().await);
     let (mut chat, tx, mut events, _ops) =
@@ -69,12 +73,10 @@ async fn blocked_copy_allows_overlay_exit_rejects_backlog_and_wakes_completion()
             .unwrap(),
         ("café\nsecond line".into(), CopyFormat::Markdown)
     );
-    for _ in 0..100 {
-        assert_eq!(
-            tui.copy_transcript_selection("newer", CopyFormat::PlainText),
-            Ok(CopyStatus::Busy)
-        );
-    }
+    assert_eq!(
+        tui.copy_transcript_selection("newer", CopyFormat::PlainText),
+        Ok(CopyStatus::Busy)
+    );
     assert!(tui.clipboard.poll().is_none());
     let mut overlay = Overlay::new_transcript(
         vec![Arc::new(PlainHistoryCell::new(vec!["selected".into()]))],
@@ -126,12 +128,16 @@ fn dropping_worker_does_not_wait_for_blocked_backend() {
     let (release, released) = mpsc::channel();
     let (finished, finish_rx) = mpsc::channel();
     worker
-        .start(FrameRequester::test_dummy(), move |_, _, _| {
-            started.send(()).unwrap();
-            released.recv().unwrap();
-            finished.send(()).unwrap();
-            (Err("unavailable".into()), None)
-        })
+        .start(
+            FrameRequester::test_dummy(),
+            move |_, _, _| {
+                started.send(()).unwrap();
+                released.recv().unwrap();
+                finished.send(()).unwrap();
+                (Err("unavailable".into()), None)
+            },
+            |_| unreachable!("copy-only backend"),
+        )
         .unwrap();
     worker
         .copy(
@@ -160,15 +166,19 @@ async fn expired_setup_discards_delivery_and_keeps_worker_busy_until_it_returns(
         let (release, released) = mpsc::channel();
         let (writes, write_rx) = mpsc::channel();
         worker
-            .start(frames.clone(), move |text, _, setup| {
-                started.send(()).unwrap();
-                released.recv().unwrap();
-                let outcome = setup.begin_delivery().map(|()| {
-                    writes.send(text.to_owned()).unwrap();
-                    CopyOutcome::Copied(None)
-                });
-                (outcome, None)
-            })
+            .start(
+                frames.clone(),
+                move |text, _, setup| {
+                    started.send(()).unwrap();
+                    released.recv().unwrap();
+                    let outcome = setup.begin_delivery().map(|()| {
+                        writes.send(text.to_owned()).unwrap();
+                        CopyOutcome::Copied(None)
+                    });
+                    (outcome, None)
+                },
+                |_| unreachable!("copy-only backend"),
+            )
             .unwrap();
         worker
             .copy("abandoned".into(), CopyFormat::PlainText, frames.clone())
@@ -224,13 +234,9 @@ async fn expired_setup_discards_delivery_and_keeps_worker_busy_until_it_returns(
 fn drop_waits_for_response_channel_disconnect() {
     let (requests, _incoming) = mpsc::channel();
     let (outgoing, responses) = mpsc::sync_channel(/*bound*/ 0);
-    let mut worker = ClipboardWorker {
-        requests: Some(requests),
-        responses: Some(responses),
-        pending: None,
-        next_id: 0,
-        completed: None,
-    };
+    let mut worker = ClipboardWorker::default();
+    worker.requests = Some(requests);
+    worker.responses = Some(responses);
     worker
         .copy(
             "text".into(),
@@ -270,4 +276,134 @@ fn delivery_claim_cannot_be_abandoned() {
     );
     // Backend fallback checks cannot revoke a delivery that already began.
     assert_eq!(setup.begin_delivery(), Ok(()));
+}
+
+#[tokio::test]
+async fn right_click_paste_uses_normal_input_and_discards_stale_reads() {
+    use codex_config::types::RightClickPaste;
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
+    let mut tui = crate::tui::test_support::make_test_tui().unwrap();
+    let (started, start_rx) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    tui.clipboard
+        .start(
+            tui.frame_requester(),
+            |_, _, _| unreachable!("no selection"),
+            move |_| {
+                started.send(()).unwrap();
+                released.recv().unwrap();
+                Ok("café\r\nsecond line\n".into())
+            },
+        )
+        .unwrap();
+    let mut app = Box::new(crate::app::test_support::make_test_app().await);
+    app.local_settings.tui.right_click_paste = RightClickPaste::On;
+    let mut server = crate::start_embedded_app_server_for_picker(&app.config)
+        .await
+        .unwrap();
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: 1,
+        row: 1,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_tui_event(&mut tui, &mut server, TuiEvent::Mouse(click))
+        .await
+        .unwrap();
+    assert!(!tui.clipboard.is_busy());
+    tui.set_owned_screen(/*owned*/ true).unwrap();
+    for (change, expected) in [
+        ("none", "draft café\nsecond line\n"),
+        ("native", "draft native"),
+        ("edit", "replacement"),
+        ("disable", "draft "),
+    ] {
+        app.local_settings.tui.right_click_paste = RightClickPaste::On;
+        app.chat_widget.apply_external_edit("draft ".into());
+        app.handle_tui_event(&mut tui, &mut server, TuiEvent::Mouse(click))
+            .await
+            .unwrap();
+        start_rx.recv_timeout(SETUP_TIMEOUT).unwrap();
+        if change == "none" {
+            app.handle_tui_event(&mut tui, &mut server, TuiEvent::Mouse(click))
+                .await
+                .unwrap();
+            assert!(start_rx.try_recv().is_err());
+            assert_eq!(
+                tui.clipboard
+                    .copy("copy".into(), CopyFormat::PlainText, tui.frame_requester()),
+                Ok(CopyStatus::Busy)
+            );
+            app.handle_tui_event(
+                &mut tui,
+                &mut server,
+                TuiEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Right),
+                    ..click
+                }),
+            )
+            .await
+            .unwrap();
+        } else if change == "native" {
+            app.handle_tui_event(&mut tui, &mut server, TuiEvent::Paste("native".into()))
+                .await
+                .unwrap();
+        } else if change == "edit" {
+            app.chat_widget.apply_external_edit("replacement".into());
+        } else if change == "disable" {
+            app.local_settings.tui.right_click_paste = RightClickPaste::Off;
+        }
+        release.send(()).unwrap();
+        tokio::time::timeout(SETUP_TIMEOUT, async {
+            while tui.clipboard.is_busy() {
+                app.handle_tui_event(&mut tui, &mut server, TuiEvent::Draw)
+                    .await
+                    .unwrap();
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(app.chat_widget.composer_text_with_pending(), expected);
+    }
+}
+
+#[test]
+fn expired_text_read_rejects_backlog_and_discards_late_completion() {
+    let mut worker = ClipboardWorker::default();
+    let (release, released) = mpsc::channel();
+    worker
+        .start(
+            FrameRequester::test_dummy(),
+            |_, _, _| unreachable!(),
+            move |_| {
+                released.recv().unwrap();
+                Ok("late".into())
+            },
+        )
+        .unwrap();
+    assert!(worker.read_text(FrameRequester::test_dummy()).unwrap());
+    worker.pending_read.as_mut().unwrap().deadline = Instant::now();
+    worker.poll();
+    assert_eq!(
+        worker.take_text_result(),
+        Some(Err("clipboard read timed out".into()))
+    );
+    assert!(!worker.read_text(FrameRequester::test_dummy()).unwrap());
+    release.send(()).unwrap();
+    let deadline = Instant::now() + SETUP_TIMEOUT;
+    while worker.is_busy() && Instant::now() < deadline {
+        worker.poll();
+        std::thread::yield_now();
+    }
+    assert!(!worker.is_busy());
+    assert_eq!(worker.take_text_result(), None);
+    // A completion harvested by a non-draw event must retain its acceptance deadline.
+    worker.read_result = Some((Instant::now(), Ok("completed but no longer current".into())));
+    assert_eq!(
+        worker.take_text_result(),
+        Some(Err("clipboard read timed out".into()))
+    );
 }

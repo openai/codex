@@ -1,7 +1,8 @@
 //! One session-lived worker owns blocking clipboard operations and native leases.
 //! Setup has a five-second budget, but abandoning it cannot interrupt an OS call.
 //! There is no backlog: the worker stays busy until that call returns. Once delivery
-//! starts it must finish. Terminal escape sequences are emitted by the UI.
+//! starts it must finish. Text reads have the same budget for the whole operation; late
+//! results are discarded. Terminal escape sequences are emitted by the UI.
 
 use super::ClipboardLease;
 use super::CopyFormat;
@@ -68,10 +69,23 @@ impl CopySetup {
 
 pub(crate) type CopyResult = Result<CopyStatus, String>;
 
-struct Request {
-    text: Arc<str>,
-    format: CopyFormat,
-    setup: Arc<CopySetup>,
+enum Request {
+    Copy {
+        text: Arc<str>,
+        format: CopyFormat,
+        setup: Arc<CopySetup>,
+    },
+    Read {
+        deadline: Instant,
+        response: mpsc::Sender<Result<String, String>>,
+    },
+}
+
+struct PendingRead {
+    frames: FrameRequester,
+    deadline: Instant,
+    response: mpsc::Receiver<Result<String, String>>,
+    expired: bool,
 }
 
 struct Response {
@@ -86,11 +100,13 @@ pub(crate) struct ClipboardWorker {
     pending: Option<(u64, Arc<CopySetup>)>,
     next_id: u64,
     completed: Option<(u64, CopyResult)>,
+    pending_read: Option<PendingRead>,
+    read_result: Option<(Instant, Result<String, String>)>,
 }
 
 impl ClipboardWorker {
     pub(crate) fn is_busy(&self) -> bool {
-        self.pending.is_some()
+        self.pending.is_some() || self.pending_read.is_some()
     }
 
     pub(crate) fn copy(
@@ -105,23 +121,7 @@ impl ClipboardWorker {
         if text.is_empty() {
             return Err("nothing to copy: the selected content is empty".into());
         }
-        if self.requests.is_none() {
-            self.start(frames.clone(), |text, format, setup| {
-                let terminal_text = Cell::new(/*value*/ None);
-                let result = super::copy_to_clipboard(
-                    text,
-                    format,
-                    || setup.begin_delivery(),
-                    |text| {
-                        // Validate the limit before accepting a deferred terminal send.
-                        super::osc52_sequence(text, std::env::var_os("TMUX").is_some())?;
-                        terminal_text.set(Some(text.to_owned()));
-                        Ok(())
-                    },
-                );
-                (result, terminal_text.into_inner())
-            })?;
-        }
+        self.ensure_started(frames.clone())?;
         self.next_id += 1;
         let id = self.next_id;
         let setup = Arc::new(CopySetup {
@@ -131,7 +131,7 @@ impl ClipboardWorker {
         self.requests
             .as_ref()
             .ok_or("clipboard worker stopped")?
-            .send(Request {
+            .send(Request::Copy {
                 text,
                 format,
                 setup: Arc::clone(&setup),
@@ -144,6 +144,65 @@ impl ClipboardWorker {
         Ok(CopyStatus::Pending(id))
     }
 
+    fn ensure_started(&mut self, frames: FrameRequester) -> Result<(), String> {
+        if self.requests.is_none() {
+            self.start(
+                frames,
+                |text, format, setup| {
+                    let terminal_text = Cell::new(/*value*/ None);
+                    let result = super::copy_to_clipboard(
+                        text,
+                        format,
+                        || setup.begin_delivery(),
+                        |text| {
+                            // Validate the limit before accepting a deferred terminal send.
+                            super::osc52_sequence(text, std::env::var_os("TMUX").is_some())?;
+                            terminal_text.set(Some(text.to_owned()));
+                            Ok(())
+                        },
+                    );
+                    (result, terminal_text.into_inner())
+                },
+                crate::clipboard_paste::text::read,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Start one text read. A timed-out native call keeps the shared worker occupied.
+    pub(crate) fn read_text(&mut self, frames: FrameRequester) -> Result<bool, String> {
+        if self.is_busy() {
+            return Ok(false);
+        }
+        self.ensure_started(frames.clone())?;
+        let deadline = Instant::now() + SETUP_TIMEOUT;
+        let (response, receiver) = mpsc::channel();
+        self.requests
+            .as_ref()
+            .ok_or("clipboard worker stopped")?
+            .send(Request::Read { deadline, response })
+            .map_err(|_| "clipboard worker stopped".to_string())?;
+        self.pending_read = Some(PendingRead {
+            frames: frames.clone(),
+            deadline,
+            response: receiver,
+            expired: false,
+        });
+        self.read_result = None;
+        frames.schedule_frame_in(SETUP_TIMEOUT);
+        Ok(true)
+    }
+
+    pub(crate) fn take_text_result(&mut self) -> Option<Result<String, String>> {
+        self.read_result.take().map(|(deadline, result)| {
+            if Instant::now() >= deadline {
+                Err("clipboard read timed out".into())
+            } else {
+                result
+            }
+        })
+    }
+
     fn start(
         &mut self,
         frames: FrameRequester,
@@ -154,6 +213,7 @@ impl ClipboardWorker {
         ) -> (Result<super::CopyOutcome, String>, Option<String>)
         + Send
         + 'static,
+        mut read: impl FnMut(Instant) -> Result<String, String> + Send + 'static,
     ) -> Result<(), String> {
         let (requests, incoming) = mpsc::channel::<Request>();
         let (outgoing, responses) = mpsc::channel();
@@ -163,8 +223,18 @@ impl ClipboardWorker {
             .spawn(move || {
                 let mut lease: Option<ClipboardLease> = None;
                 while let Ok(request) = incoming.recv() {
-                    let (outcome, terminal_text) =
-                        copy(&request.text, request.format, &request.setup);
+                    let (outcome, terminal_text) = match request {
+                        Request::Copy {
+                            text,
+                            format,
+                            setup,
+                        } => copy(&text, format, &setup),
+                        Request::Read { deadline, response } => {
+                            let _ = response.send(read(deadline));
+                            frames.schedule_frame();
+                            continue;
+                        }
+                    };
                     let result = outcome.map(|outcome| outcome.store(&mut lease));
                     if outgoing
                         .send(Response {
@@ -190,6 +260,34 @@ impl ClipboardWorker {
 
     /// Poll only while the UI owns the terminal. Retain one result for its original consumer.
     pub(crate) fn poll(&mut self) -> Option<&(u64, CopyResult)> {
+        if let Some(read) = &mut self.pending_read {
+            if !read.expired && Instant::now() >= read.deadline {
+                read.expired = true;
+                self.read_result = Some((read.deadline, Err("clipboard read timed out".into())));
+            }
+            match read.response.try_recv() {
+                Ok(result) => {
+                    if !read.expired {
+                        self.read_result = Some((read.deadline, result));
+                    }
+                    self.pending_read = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    if !read.expired {
+                        self.read_result =
+                            Some((read.deadline, Err("clipboard worker stopped".into())));
+                    }
+                    self.pending_read = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    if !read.expired {
+                        read.frames.schedule_frame_in(
+                            read.deadline.saturating_duration_since(Instant::now()),
+                        );
+                    }
+                }
+            }
+        }
         if let Some((id, setup)) = &self.pending {
             let id = *id;
             if !matches!(self.completed, Some((completed_id, _)) if completed_id == id)

@@ -1,6 +1,6 @@
 ---
 source: tui/src/clipboard_copy/worker_tests.rs
-assertion_line: 82
+assertion_line: 112
 expression: "feedback.join(\"\\n\")"
 ---
-• Copy already in progress; try image paste after it finishes
+• Clipboard busy; try image paste after it finishes

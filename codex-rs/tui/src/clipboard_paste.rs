@@ -1,3 +1,7 @@
+//! Read clipboard images and text on the TUI host. Text reads run on the clipboard worker.
+
+pub(crate) mod text;
+
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;

@@ -22,7 +22,7 @@ impl App {
                 // Finish paste before the next key, but never wait on the copy worker's lock.
                 if tui.clipboard.is_busy() {
                     self.chat_widget.add_info_message(
-                        "Copy already in progress; try image paste after it finishes".into(),
+                        "Clipboard busy; try image paste after it finishes".into(),
                         /*hint*/ None,
                     );
                 } else {
