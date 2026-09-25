@@ -147,7 +147,7 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
         event_rx,
         command_rx,
         Observer {
-            mode: initial_observe_mode,
+            observation: initial_observe_mode.into(),
             response_tx: initial_event_tx,
         },
         task_failure_handler,

@@ -61,6 +61,7 @@ text(JSON.stringify([3, 1, 2].sort((a, b) => a - b)));
                 max_output_tokens: None,
             },
             Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
         )
         .await
         .expect("start code-mode cell");

@@ -29,6 +29,10 @@ service CodeModeHost {
   rpc Execute(ExecuteRequest) returns (stream ExecuteEvent);
   rpc Wait(WaitRequest) returns (WaitResponse);
 
+  // Ends the current observation early without stopping its cell. The
+  // corresponding Execute or Wait still returns its ordinary outcome.
+  rpc YieldObservation(YieldObservationRequest) returns (YieldObservationResponse);
+
   // Acknowledges that a canceled wait has retired before another wait starts.
   rpc CancelWait(CancelWaitRequest) returns (CancelWaitResponse);
   rpc Terminate(TerminateRequest) returns (WaitResponse);
@@ -188,6 +192,16 @@ message CancelWaitRequest {
 }
 
 message CancelWaitResponse {}
+
+message YieldObservationRequest {
+  string session_id = 1;
+  oneof observation {
+    string execution_id = 2;
+    string wait_id = 3;
+  }
+}
+
+message YieldObservationResponse {}
 
 message TerminateRequest {
   string session_id = 1;

@@ -122,6 +122,7 @@ impl ConnectionDriver {
             DriverEvent::HostMessage(message) => self.handle_host_message(message),
             DriverEvent::DelegateCompleted { id, result } => self.complete_delegate(id, result),
             DriverEvent::RequestCancelled(id) => self.cancel_request(id),
+            DriverEvent::YieldRequest(id) => self.yield_request(id),
             DriverEvent::Failed(reason) => {
                 self.fail(reason);
                 false

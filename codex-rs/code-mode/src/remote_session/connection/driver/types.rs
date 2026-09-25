@@ -18,6 +18,7 @@ use codex_code_mode_protocol::host::WireWaitRequest;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 
 use super::cleanup::SessionCleanup;
 
@@ -40,12 +41,14 @@ pub(in crate::remote_session::connection) enum DriverCommand {
         delegate: Arc<dyn CodeModeSessionDelegate>,
         request: ExecuteRequest,
         caller_cancellation: CancellationToken,
+        yield_signal: Option<CancellationToken>,
         response_tx: oneshot::Sender<Result<DeliveredExecute, String>>,
     },
     Wait {
         session: RemoteSession,
         request: WaitRequest,
         caller_cancellation: CancellationToken,
+        yield_signal: Option<CancellationToken>,
         response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
     },
     Terminate {
@@ -66,6 +69,7 @@ pub(in crate::remote_session::connection) enum DriverEvent {
         result: Result<DelegateResponse, String>,
     },
     RequestCancelled(RequestId),
+    YieldRequest(RequestId),
     Failed(String),
 }
 
@@ -116,10 +120,36 @@ impl Drop for CancellableRequest {
     }
 }
 
+/// Owns the watcher until an observation's final response is received.
+pub(super) struct ObservationYield {
+    signal: Option<CancellationToken>,
+    watcher: Option<AbortOnDropHandle<()>>,
+}
+
+impl ObservationYield {
+    pub(super) fn new(signal: Option<CancellationToken>) -> Self {
+        Self {
+            signal,
+            watcher: None,
+        }
+    }
+
+    pub(super) fn spawn_watcher(&mut self, id: RequestId, event_tx: mpsc::Sender<DriverEvent>) {
+        let Some(signal) = self.signal.take() else {
+            return;
+        };
+        self.watcher = Some(AbortOnDropHandle::new(tokio::spawn(async move {
+            signal.cancelled().await;
+            let _ = event_tx.send(DriverEvent::YieldRequest(id)).await;
+        })));
+    }
+}
+
 pub(super) struct InitialResponse {
     pub(super) generation: u64,
     pub(super) cell_id: WireCellId,
     pub(super) response_tx: oneshot::Sender<Result<RuntimeResponse, String>>,
+    pub(super) _yield_observation: ObservationYield,
 }
 
 pub(in crate::remote_session::connection) struct DeliveredExecute {
@@ -147,11 +177,13 @@ pub(super) enum PendingRequest {
         initial_response_tx: oneshot::Sender<Result<RuntimeResponse, String>>,
         initial_response_rx: oneshot::Receiver<Result<RuntimeResponse, String>>,
         cancellation: CancellableRequest,
+        yield_observation: ObservationYield,
     },
     Wait {
         session: RemoteSession,
         cell_id: WireCellId,
         cancellation: CancellableRequest,
+        yield_observation: ObservationYield,
         response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
     },
     Terminate {
@@ -169,6 +201,7 @@ pub(super) struct DeferredWait {
     pub(super) session: RemoteSession,
     pub(super) request: WireWaitRequest,
     pub(super) caller_cancellation: CancellationToken,
+    pub(super) yield_signal: Option<CancellationToken>,
     pub(super) response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
 }
 
@@ -179,6 +212,18 @@ impl PendingRequest {
             | Self::Execute { cancellation, .. }
             | Self::Wait { cancellation, .. } => Some(cancellation),
             Self::Terminate { .. } | Self::ShutdownSession { .. } => None,
+        }
+    }
+
+    pub(super) fn yield_observation(&mut self) -> Option<&mut ObservationYield> {
+        match self {
+            Self::Execute {
+                yield_observation, ..
+            }
+            | Self::Wait {
+                yield_observation, ..
+            } => Some(yield_observation),
+            _ => None,
         }
     }
 

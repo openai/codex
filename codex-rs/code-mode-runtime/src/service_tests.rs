@@ -18,6 +18,7 @@ use crate::ExecuteRequest;
 use crate::ExecuteToPendingOutcome;
 use crate::FunctionCallOutputContentItem;
 use crate::ToolDefinition;
+use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::NotificationFuture;
 use codex_code_mode_protocol::ToolInvocationFuture;
@@ -58,6 +59,95 @@ fn resolve_yield_timeout_applies_grace_before_session_limits() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn interrupt_yields_execute_and_wait_without_stopping_the_cell() {
+    let delegate = Arc::new(ReleasableToolDelegate::default());
+    let service: Arc<dyn CodeModeSession> = Arc::new(InProcessCodeModeSession::new());
+    let execute_signal = CancellationToken::new();
+    let started = service
+        .execute(
+            ExecuteRequest {
+                enabled_tools: vec![echo_tool()],
+                source: r#"await tools.echo({}); text("done");"#.to_string(),
+                yield_time_ms: Some(60_000),
+                ..execute_request("")
+            },
+            delegate.clone(),
+            Some(execute_signal.clone()),
+        )
+        .await
+        .unwrap();
+    let response = tokio::spawn(started.initial_response());
+    wait_until_tool_started(&delegate).await;
+    execute_signal.cancel();
+    wait_until_finished(&response).await;
+    assert_eq!(
+        response.await.unwrap().unwrap(),
+        RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        }
+    );
+
+    let wait_signal = CancellationToken::new();
+    let response = tokio::spawn({
+        let service = Arc::clone(&service);
+        let wait_signal = wait_signal.clone();
+        async move {
+            service
+                .wait(
+                    WaitRequest {
+                        cell_id: cell_id("1"),
+                        yield_time_ms: 60_000,
+                    },
+                    Some(wait_signal),
+                )
+                .await
+        }
+    });
+    tokio::task::yield_now().await;
+    assert!(!response.is_finished());
+    wait_signal.cancel();
+    wait_until_finished(&response).await;
+    assert_eq!(
+        response.await.unwrap().unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Yielded {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: Vec::new(),
+        })
+    );
+
+    delegate.release_tool();
+    let response = tokio::spawn({
+        let service = Arc::clone(&service);
+        async move {
+            service
+                .wait(
+                    WaitRequest {
+                        cell_id: cell_id("1"),
+                        yield_time_ms: 60_000,
+                    },
+                    /*preempt*/ None,
+                )
+                .await
+        }
+    });
+    wait_until_finished(&response).await;
+    assert_eq!(
+        response.await.unwrap().unwrap(),
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: vec![FunctionCallOutputContentItem::InputText {
+                text: "done".to_string(),
+            }],
+            error_text: None,
+        })
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn execute_waits_for_nested_tool_during_yield_grace() {
     let delegate = Arc::new(ReleasableToolDelegate::default());
     let service = InProcessCodeModeSession::new();
@@ -67,7 +157,10 @@ async fn execute_waits_for_nested_tool_during_yield_grace() {
         yield_time_ms: Some(10_000),
         ..execute_request("")
     };
-    let started = service.execute(request, delegate.clone()).await.unwrap();
+    let started = service
+        .execute(request, delegate.clone(), /*preempt*/ None)
+        .await
+        .unwrap();
     let response = tokio::spawn(started.initial_response());
     wait_until_tool_started(&delegate).await;
     tokio::time::advance(Duration::from_millis(10_500)).await;
@@ -104,6 +197,7 @@ async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
                 ..execute_request("")
             },
             delegate.clone(),
+            /*preempt*/ None,
         )
         .await
         .unwrap();
@@ -124,10 +218,13 @@ async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
     );
 
     let wait_response = service
-        .begin_wait(WaitRequest {
-            cell_id: cell_id("1"),
-            yield_time_ms: 10_000,
-        })
+        .begin_wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 10_000,
+            },
+            /*preempt*/ None,
+        )
         .await;
     let wait_response = tokio::spawn(wait_response);
     tokio::task::yield_now().await;
@@ -144,10 +241,13 @@ async fn execute_and_wait_clamp_yield_grace_without_stopping_the_cell() {
 
     delegate.release_tool();
     let completion = service
-        .begin_wait(WaitRequest {
-            cell_id: cell_id("1"),
-            yield_time_ms: 10_000,
-        })
+        .begin_wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 10_000,
+            },
+            /*preempt*/ None,
+        )
         .await;
     let completion = tokio::spawn(completion);
     wait_until_finished(&completion).await;
@@ -188,10 +288,13 @@ async fn wait_waits_for_nested_tool_during_yield_grace() {
         }
     );
     let response = service
-        .begin_wait(WaitRequest {
-            cell_id: cell_id("1"),
-            yield_time_ms: 10_000,
-        })
+        .begin_wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 10_000,
+            },
+            /*preempt*/ None,
+        )
         .await;
     let response = tokio::spawn(response);
     tokio::task::yield_now().await;
@@ -233,11 +336,15 @@ async fn zero_yield_limit_is_immediate_and_scoped_to_its_session() {
         ..execute_request("")
     };
     let zero_started = zero_session
-        .execute(request.clone(), zero_delegate.clone())
+        .execute(
+            request.clone(),
+            zero_delegate.clone(),
+            /*preempt*/ None,
+        )
         .await
         .unwrap();
     let limited_started = limited_session
-        .execute(request, limited_delegate.clone())
+        .execute(request, limited_delegate.clone(), /*preempt*/ None)
         .await
         .unwrap();
     let zero_response = tokio::spawn(zero_started.initial_response());
@@ -256,10 +363,13 @@ async fn zero_yield_limit_is_immediate_and_scoped_to_its_session() {
     );
 
     let zero_wait = zero_session
-        .begin_wait(WaitRequest {
-            cell_id: cell_id("1"),
-            yield_time_ms: 60_000,
-        })
+        .begin_wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 60_000,
+            },
+            /*preempt*/ None,
+        )
         .await;
     let zero_wait = tokio::spawn(zero_wait);
     wait_until_finished(&zero_wait).await;
@@ -375,7 +485,11 @@ fn echo_tool() -> ToolDefinition {
 
 async fn execute(service: &InProcessCodeModeSession, request: ExecuteRequest) -> RuntimeResponse {
     service
-        .execute(request, Arc::new(NoopCodeModeSessionDelegate))
+        .execute(
+            request,
+            Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
+        )
         .await
         .unwrap()
         .initial_response()
@@ -530,6 +644,7 @@ async fn shutdown_interrupts_cpu_bound_cells() {
                 ..execute_request("")
             },
             Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
         )
         .await
         .unwrap();
@@ -557,6 +672,7 @@ async fn start_cell_rejects_new_cell_after_shutdown_begins() {
         .execute(
             execute_request("text('late');"),
             Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
         )
         .await
         .err()
@@ -1618,10 +1734,13 @@ async fn wait_reports_missing_cell_separately_from_runtime_results() {
     let service = InProcessCodeModeSession::new();
 
     let response = service
-        .wait(WaitRequest {
-            cell_id: cell_id("missing"),
-            yield_time_ms: 1,
-        })
+        .wait(
+            WaitRequest {
+                cell_id: cell_id("missing"),
+                yield_time_ms: 1,
+            },
+            /*preempt*/ None,
+        )
         .await
         .unwrap();
 

@@ -22,6 +22,7 @@ async fn code_mode_runs_with_jit_disabled() {
                 max_output_tokens: None,
             },
             Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
         )
         .await
         .expect("start code-mode cell");

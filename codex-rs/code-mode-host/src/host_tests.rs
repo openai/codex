@@ -595,6 +595,7 @@ async fn active_cell_limit_rejects_execute_without_disconnecting() {
                 request: execute_request("text(\"hello\");"),
             },
             CancellationToken::new(),
+            CancellationToken::new(),
             Instant::now(),
         )
         .await;

@@ -10,6 +10,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::session_runtime::CellEvent;
+use crate::session_runtime::Observation;
 use crate::session_runtime::ObserveMode;
 use crate::session_runtime::OutputItem;
 use crate::session_runtime::ToolKind;
@@ -76,14 +77,17 @@ impl CellHandle {
         Self { command_tx, state }
     }
 
-    pub(crate) fn observe(&self, mode: ObserveMode) -> CellEventFuture {
+    pub(crate) fn observe(&self, observation: impl Into<Observation>) -> CellEventFuture {
         if !self.state.accepting_observations() {
             return closed_event();
         }
         let (response_tx, response_rx) = oneshot::channel();
         if self
             .command_tx
-            .send(CellCommand::Observe { mode, response_tx })
+            .send(CellCommand::Observe {
+                observation: observation.into(),
+                response_tx,
+            })
             .is_err()
         {
             return closed_event();
@@ -426,7 +430,7 @@ fn prepend_initial_yield(
 
 pub(super) enum CellCommand {
     Observe {
-        mode: ObserveMode,
+        observation: Observation,
         response_tx: oneshot::Sender<Result<CellEvent, CellError>>,
     },
 }

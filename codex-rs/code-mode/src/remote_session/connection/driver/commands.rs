@@ -21,6 +21,7 @@ use super::types::CancellableRequest;
 use super::types::DeferredWait;
 use super::types::DeliveredExecute;
 use super::types::DriverCommand;
+use super::types::ObservationYield;
 use super::types::PendingRequest;
 use super::types::RemoteSession;
 
@@ -39,14 +40,29 @@ impl ConnectionDriver {
                 request,
                 delegate,
                 caller_cancellation,
+                yield_signal,
                 response_tx,
-            } => self.execute(session, request, delegate, caller_cancellation, response_tx),
+            } => self.execute(
+                session,
+                request,
+                delegate,
+                caller_cancellation,
+                yield_signal,
+                response_tx,
+            ),
             DriverCommand::Wait {
                 session,
                 request,
                 caller_cancellation,
+                yield_signal,
                 response_tx,
-            } => self.wait(session, request, caller_cancellation, response_tx),
+            } => self.wait(
+                session,
+                request,
+                caller_cancellation,
+                yield_signal,
+                response_tx,
+            ),
             DriverCommand::Terminate {
                 session,
                 cell_id,
@@ -127,6 +143,7 @@ impl ConnectionDriver {
         request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
         caller_cancellation: CancellationToken,
+        yield_signal: Option<CancellationToken>,
         response_tx: oneshot::Sender<Result<DeliveredExecute, String>>,
     ) -> bool {
         if let Err(err) = self.sessions.require_ready(&session) {
@@ -176,6 +193,7 @@ impl ConnectionDriver {
                 initial_response_tx,
                 initial_response_rx,
                 cancellation,
+                yield_observation: ObservationYield::new(yield_signal),
             },
             &self.event_tx,
         );
@@ -187,6 +205,7 @@ impl ConnectionDriver {
         session: RemoteSession,
         request: WaitRequest,
         caller_cancellation: CancellationToken,
+        yield_signal: Option<CancellationToken>,
         response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
     ) -> bool {
         if let Err(err) = self.sessions.require_ready(&session) {
@@ -205,11 +224,18 @@ impl ConnectionDriver {
                 session,
                 request,
                 caller_cancellation,
+                yield_signal,
                 response_tx,
             });
             return true;
         }
-        self.start_wait(session, request, caller_cancellation, response_tx)
+        self.start_wait(
+            session,
+            request,
+            caller_cancellation,
+            yield_signal,
+            response_tx,
+        )
     }
 
     pub(super) fn start_wait(
@@ -217,6 +243,7 @@ impl ConnectionDriver {
         session: RemoteSession,
         request: WireWaitRequest,
         caller_cancellation: CancellationToken,
+        yield_signal: Option<CancellationToken>,
         response_tx: oneshot::Sender<Result<WaitOutcome, String>>,
     ) -> bool {
         let cell_id = request.cell_id.clone();
@@ -229,6 +256,7 @@ impl ConnectionDriver {
                 session,
                 cell_id,
                 cancellation: CancellableRequest::new(caller_cancellation),
+                yield_observation: ObservationYield::new(yield_signal),
                 response_tx,
             },
         )

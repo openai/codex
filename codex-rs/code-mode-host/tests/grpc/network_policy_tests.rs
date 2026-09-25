@@ -60,7 +60,11 @@ async fn account_change_revokes_active_rpc_and_renews_the_cached_client() -> Res
     let mut pending = request("await new Promise(() => {});");
     pending.yield_time_ms = Some(60_000);
     let started = session
-        .execute(pending, Arc::new(NoopCodeModeSessionDelegate))
+        .execute(
+            pending,
+            Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
+        )
         .await
         .map_err(anyhow::Error::msg)?;
 

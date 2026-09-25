@@ -32,6 +32,27 @@ pub(crate) enum ObserveMode {
     PendingFrontier,
 }
 
+/// A signal may end an observation early without cancelling the cell.
+pub(crate) struct Observation {
+    pub(crate) mode: ObserveMode,
+    pub(crate) yield_signal: CancellationToken,
+}
+
+impl ObserveMode {
+    pub(crate) fn with_yield_signal(self, yield_signal: CancellationToken) -> Observation {
+        Observation {
+            mode: self,
+            yield_signal,
+        }
+    }
+}
+
+impl From<ObserveMode> for Observation {
+    fn from(mode: ObserveMode) -> Self {
+        mode.with_yield_signal(CancellationToken::new())
+    }
+}
+
 /// An observable cell lifecycle event.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CellEvent {

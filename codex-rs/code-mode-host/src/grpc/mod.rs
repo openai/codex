@@ -139,7 +139,7 @@ impl GrpcCodeModeHost {
         let execution_id = request.execution_id.clone();
         let request = conversions::execute_request(request)?;
         let cell_permit = self.state.cell_permit()?;
-        session.reserve_execution(&execution_id)?;
+        let yield_signal = session.reserve_execution(&execution_id)?;
         let mut admission = ExecutionAdmission {
             session: Arc::clone(&session),
             execution_id: Some(execution_id.clone()),
@@ -148,7 +148,7 @@ impl GrpcCodeModeHost {
             _ = session.closed.cancelled() => {
                 return Err(Status::cancelled("code-mode session is closed"));
             }
-            result = session.runtime.execute(request, Arc::new(delegate::GrpcDelegate::new(Arc::downgrade(&session)))) => {
+            result = session.runtime.execute(request, Arc::new(delegate::GrpcDelegate::new(Arc::downgrade(&session))), Some(yield_signal)) => {
                 result.map_err(Status::failed_precondition)?
             }
         };
@@ -243,7 +243,7 @@ impl GrpcCodeModeHost {
             _ = session.closed.cancelled() => {
                 return Err(Status::cancelled("code-mode session is closed"));
             }
-            outcome = session.runtime.wait(request) => {
+            outcome = session.runtime.wait(request, Some(registration.yield_signal())) => {
                 outcome.map_err(Status::failed_precondition)?
             }
         };
@@ -262,6 +262,24 @@ impl GrpcCodeModeHost {
         validation::identifier(&request.wait_id, "wait ID")?;
         session.cancel_wait(&request.wait_id).await?;
         Ok(Response::new(proto::CancelWaitResponse {}))
+    }
+
+    async fn yield_observation_request(
+        &self,
+        request: proto::YieldObservationRequest,
+    ) -> Result<Response<proto::YieldObservationResponse>, Status> {
+        let _permit = self.state.control_permit()?;
+        let session = self.state.session(&request.session_id)?;
+        match request.observation {
+            Some(proto::yield_observation_request::Observation::ExecutionId(id)) => {
+                session.yield_execution(&id)?;
+            }
+            Some(proto::yield_observation_request::Observation::WaitId(id)) => {
+                session.yield_wait(&id)?;
+            }
+            None => return Err(Status::invalid_argument("missing code-mode observation ID")),
+        }
+        Ok(Response::new(proto::YieldObservationResponse {}))
     }
 
     async fn terminate_request(
@@ -405,6 +423,17 @@ impl CodeModeHost for GrpcCodeModeHost {
         Box::pin(self.cancel_wait_request(request.into_inner()))
     }
 
+    fn yield_observation<'a, 'async_trait>(
+        &'a self,
+        request: Request<proto::YieldObservationRequest>,
+    ) -> GrpcFuture<'async_trait, proto::YieldObservationResponse>
+    where
+        'a: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(self.yield_observation_request(request.into_inner()))
+    }
+
     fn terminate<'a, 'async_trait>(
         &'a self,
         request: Request<proto::TerminateRequest>,
@@ -424,7 +453,9 @@ struct ExecutionAdmission {
 
 impl ExecutionAdmission {
     fn disarm(&mut self) {
-        self.execution_id = None;
+        if let Some(execution_id) = self.execution_id.take() {
+            self.session.retire_execution_observation(&execution_id);
+        }
     }
 }
 

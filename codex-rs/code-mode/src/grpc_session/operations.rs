@@ -16,6 +16,8 @@ use codex_code_mode_protocol::grpc;
 use codex_protocol::protocol::W3cTraceContext;
 use tokio::sync::OwnedMutexGuard;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 use tracing::debug;
 use uuid::Uuid;
@@ -70,6 +72,7 @@ impl SessionInner {
         self: &Arc<Self>,
         request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        preempt: Option<CancellationToken>,
     ) -> Result<StartedCell, String> {
         self.require_open()?;
         let execution_id = Uuid::new_v4().to_string();
@@ -87,12 +90,18 @@ impl SessionInner {
             .begin_execution(&request, delegate)?;
         let ownership = ExecutionOwnership {
             session: Arc::clone(self),
-            execution_id,
+            execution_id: execution_id.clone(),
             armed: true,
         };
         let (started_tx, started_rx) = oneshot::channel();
         let inner = Arc::clone(self);
         self.stream_tasks.spawn(async move {
+            let _watcher = preempt.map(|signal| {
+                inner.watch_yield(
+                    signal,
+                    grpc::yield_observation_request::Observation::ExecutionId(execution_id),
+                )
+            });
             inner
                 .drive_execution(request, ownership, started_tx, trace)
                 .instrument(execute_span)
@@ -249,6 +258,7 @@ impl SessionInner {
     pub(super) async fn wait(
         self: &Arc<Self>,
         request: WaitRequest,
+        preempt: Option<CancellationToken>,
     ) -> Result<WaitOutcome, String> {
         self.require_open()?;
         let slot = {
@@ -297,15 +307,45 @@ impl SessionInner {
         let request = grpc::WaitRequest {
             session_id: self.id.clone(),
             cell_id: expected_cell_id.as_str().to_string(),
-            wait_id,
+            wait_id: wait_id.clone(),
             yield_time_ms: request.yield_time_ms,
         };
         let mut client = self.client();
+        let watcher = preempt.map(|signal| {
+            self.watch_yield(
+                signal,
+                grpc::yield_observation_request::Observation::WaitId(wait_id),
+            )
+        });
         let response = deadline::request(self, "wait", runtime_timeout, client.wait(request)).await;
+        drop(watcher);
         cancellation.disarm();
         self.prune_wait_slots();
         let outcome = conversion::wait_outcome(response?.into_inner())?;
         self.validate_wait_cell(&expected_cell_id, outcome).await
+    }
+
+    fn watch_yield(
+        &self,
+        yield_signal: CancellationToken,
+        observation: grpc::yield_observation_request::Observation,
+    ) -> AbortOnDropHandle<()> {
+        let mut client = self.client();
+        let request = grpc::YieldObservationRequest {
+            session_id: self.id.clone(),
+            observation: Some(observation),
+        };
+        AbortOnDropHandle::new(tokio::spawn(async move {
+            yield_signal.cancelled().await;
+            if let Err(error) = deadline::startup("yield observation", async move {
+                client.yield_observation(request).await.map(|_| ())
+            })
+            .await
+            {
+                // An older host may not implement this RPC; the normal timeout still applies.
+                debug!("could not yield code-mode observation early: {error}");
+            }
+        }))
     }
 
     pub(super) async fn terminate(&self, cell_id: CellId) -> Result<WaitOutcome, String> {

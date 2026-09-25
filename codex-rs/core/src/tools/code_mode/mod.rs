@@ -137,14 +137,17 @@ impl CodeModeService {
             broker: Arc::clone(&self.dispatch_broker),
             step_context,
         });
-        self.session().await?.execute(request, delegate).await
+        self.session()
+            .await?
+            .execute(request, delegate, /*preempt*/ None)
+            .await
     }
 
     pub(crate) async fn wait(
         &self,
         request: codex_code_mode::WaitRequest,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session().await?.wait(request).await
+        self.session().await?.wait(request, /*preempt*/ None).await
     }
 
     pub(crate) async fn terminate(

@@ -85,6 +85,7 @@ async fn shutdown_before_open_does_not_spawn_the_host() {
                 max_output_tokens: None,
             },
             Arc::new(NoopCodeModeSessionDelegate),
+            /*preempt*/ None,
         )
         .await
         .err()

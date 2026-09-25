@@ -369,6 +369,28 @@ async fn cancellation_before_wait_admission_is_preserved() {
 }
 
 #[tokio::test]
+async fn yield_before_observation_registration_is_remembered() {
+    let host = GrpcCodeModeHost::new();
+    let (session_id, _events) = open_session(&host).await;
+    let session = host.state.session(&session_id).unwrap();
+    for observation in [
+        proto::yield_observation_request::Observation::ExecutionId("exec".to_string()),
+        proto::yield_observation_request::Observation::WaitId("wait".to_string()),
+    ] {
+        host.yield_observation(Request::new(proto::YieldObservationRequest {
+            session_id: session_id.clone(),
+            observation: Some(observation),
+        }))
+        .await
+        .unwrap();
+    }
+
+    assert!(session.reserve_execution("exec").unwrap().is_cancelled());
+    let wait = super::waits::WaitRegistration::new(session, "wait".to_string()).unwrap();
+    assert!(wait.yield_signal().is_cancelled());
+}
+
+#[tokio::test]
 async fn notifications_do_not_delay_cell_completion() {
     let host = GrpcCodeModeHost::new();
     let (session_id, mut session_events) = open_session(&host).await;

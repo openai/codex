@@ -180,7 +180,7 @@ async fn execute(
     delegate: Arc<dyn CodeModeSessionDelegate>,
 ) -> RuntimeResponse {
     session
-        .execute(request, delegate.clone())
+        .execute(request, delegate.clone(), /*preempt*/ None)
         .await
         .expect("start execution")
         .initial_response()
@@ -194,7 +194,7 @@ async fn execute_to_terminal(
     delegate: Arc<dyn CodeModeSessionDelegate>,
 ) -> RuntimeResponse {
     let started = session
-        .execute(request, delegate.clone())
+        .execute(request, delegate.clone(), /*preempt*/ None)
         .await
         .expect("start execution");
     let mut response = started.initial_response().await.expect("initial response");
@@ -202,10 +202,13 @@ async fn execute_to_terminal(
         match response {
             RuntimeResponse::Yielded { cell_id, .. } => {
                 response = match session
-                    .wait(WaitRequest {
-                        cell_id,
-                        yield_time_ms: 60_000,
-                    })
+                    .wait(
+                        WaitRequest {
+                            cell_id,
+                            yield_time_ms: 60_000,
+                        },
+                        /*preempt*/ None,
+                    )
                     .await
                     .expect("wait for terminal response")
                 {
@@ -226,6 +229,79 @@ async fn next_callback_event(
         .await
         .expect("callback event timeout")
         .expect("callback event stream closed")
+}
+
+#[tokio::test]
+async fn interrupt_yields_observations_without_stopping_the_cell() {
+    let provider = ProcessOwnedCodeModeSessionProvider::with_host_program(
+        codex_utils_cargo_bin::cargo_bin("codex-code-mode-host").expect("host binary"),
+    );
+    let session = provider.create_session().await.expect("create session");
+    let (delegate, mut events) = CancellationDelegate::new();
+    let mut request = execute_request("await tools.block({}); text('done');");
+    request.yield_time_ms = Some(60_000);
+    request.enabled_tools = vec![ToolDefinition {
+        name: "block".to_string(),
+        tool_name: ToolName::plain("block"),
+        description: String::new(),
+        kind: CodeModeToolKind::Function,
+        input_schema: None,
+        output_schema: None,
+    }];
+    let signal = CancellationToken::new();
+    let started = session
+        .execute(request, delegate.clone(), Some(signal.clone()))
+        .await
+        .expect("start execution");
+    let cell_id = started.cell_id.clone();
+    assert_eq!(
+        next_callback_event(&mut events).await,
+        CallbackEvent::Started("block".to_string())
+    );
+    signal.cancel();
+    let initial = tokio::time::timeout(Duration::from_secs(5), started.initial_response())
+        .await
+        .expect("yield initial observation")
+        .expect("initial response");
+    assert!(matches!(initial, RuntimeResponse::Yielded { .. }));
+    let signal = CancellationToken::new();
+    signal.cancel(); // The interrupt may precede host admission.
+    let request = WaitRequest {
+        cell_id: cell_id.clone(),
+        yield_time_ms: 60_000,
+    };
+    let response =
+        tokio::time::timeout(Duration::from_secs(5), session.wait(request, Some(signal)))
+            .await
+            .expect("yield wait observation")
+            .expect("wait response");
+    assert!(matches!(
+        response,
+        WaitOutcome::LiveCell(RuntimeResponse::Yielded { .. })
+    ));
+
+    delegate.fast_tool_release.add_permits(1);
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        session.wait(
+            WaitRequest {
+                cell_id,
+                yield_time_ms: 60_000,
+            },
+            /*preempt*/ None,
+        ),
+    )
+    .await
+    .expect("cell completes")
+    .expect("completion response");
+    assert!(matches!(
+        response,
+        WaitOutcome::LiveCell(RuntimeResponse::Result {
+            error_text: None,
+            ..
+        })
+    ));
+    session.shutdown().await.expect("shutdown session");
 }
 
 #[tokio::test]
@@ -269,10 +345,13 @@ async fn session_execution_limits_are_isolated_on_a_shared_process_host() {
     );
     let actual = tokio::time::timeout(
         Duration::from_secs(5),
-        limited.wait(WaitRequest {
-            cell_id: cell_id("1"),
-            yield_time_ms: 60_000,
-        }),
+        limited.wait(
+            WaitRequest {
+                cell_id: cell_id("1"),
+                yield_time_ms: 60_000,
+            },
+            /*preempt*/ None,
+        ),
     )
     .await
     .expect("session limit should bound explicit waits")
@@ -382,10 +461,13 @@ text(result.value);
         }
     );
     let actual = session
-        .wait(WaitRequest {
-            cell_id: cell_id("3"),
-            yield_time_ms: 1,
-        })
+        .wait(
+            WaitRequest {
+                cell_id: cell_id("3"),
+                yield_time_ms: 1,
+            },
+            /*preempt*/ None,
+        )
         .await
         .expect("wait for cell");
     assert_eq!(
@@ -435,7 +517,11 @@ async fn dropping_long_wait_releases_observer_before_next_wait() {
     let mut request = execute_request("await new Promise(() => {});");
     request.yield_time_ms = Some(1);
     let started = session
-        .execute(request, Arc::new(RecordingDelegate::default()))
+        .execute(
+            request,
+            Arc::new(RecordingDelegate::default()),
+            /*preempt*/ None,
+        )
         .await
         .expect("start execution");
     let running_cell_id = started.cell_id.clone();
@@ -453,10 +539,13 @@ async fn dropping_long_wait_releases_observer_before_next_wait() {
     let wait_cell_id = running_cell_id.clone();
     let first_wait = tokio::spawn(async move {
         wait_session
-            .wait(WaitRequest {
-                cell_id: wait_cell_id,
-                yield_time_ms: 60_000,
-            })
+            .wait(
+                WaitRequest {
+                    cell_id: wait_cell_id,
+                    yield_time_ms: 60_000,
+                },
+                /*preempt*/ None,
+            )
             .await
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -465,10 +554,13 @@ async fn dropping_long_wait_releases_observer_before_next_wait() {
 
     let actual = tokio::time::timeout(
         Duration::from_secs(2),
-        session.wait(WaitRequest {
-            cell_id: running_cell_id.clone(),
-            yield_time_ms: 1,
-        }),
+        session.wait(
+            WaitRequest {
+                cell_id: running_cell_id.clone(),
+                yield_time_ms: 1,
+            },
+            /*preempt*/ None,
+        ),
     )
     .await
     .expect("second wait timeout")
@@ -533,7 +625,7 @@ return;
     .collect();
 
     let started = session
-        .execute(request, delegate.clone())
+        .execute(request, delegate.clone(), /*preempt*/ None)
         .await
         .expect("start execution");
     let running_cell_id = started.cell_id.clone();
@@ -553,10 +645,13 @@ return;
     let wait_cell_id = running_cell_id.clone();
     let wait_task = tokio::spawn(async move {
         wait_session
-            .wait(WaitRequest {
-                cell_id: wait_cell_id,
-                yield_time_ms: 60_000,
-            })
+            .wait(
+                WaitRequest {
+                    cell_id: wait_cell_id,
+                    yield_time_ms: 60_000,
+                },
+                /*preempt*/ None,
+            )
             .await
     });
 
@@ -621,6 +716,7 @@ async fn oversized_execute_request_does_not_close_the_shared_host() {
         .execute(
             execute_request(&"x".repeat(MAX_FRAME_BYTES)),
             Arc::new(RecordingDelegate::default()),
+            /*preempt*/ None,
         )
         .await
         .err()
@@ -760,6 +856,7 @@ async fn oversized_initial_response_does_not_close_the_shared_host() {
         .execute(
             execute_request(&format!(r#"text("x".repeat({MAX_FRAME_BYTES}));"#)),
             Arc::new(RecordingDelegate::default()),
+            /*preempt*/ None,
         )
         .await
         .expect("start oversized response");
@@ -840,7 +937,7 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
         output_schema: None,
     }];
     let started_a = session_a
-        .execute(request_a, delegate_a.clone())
+        .execute(request_a, delegate_a.clone(), /*preempt*/ None)
         .await
         .expect("start first cell");
     let cell_a = started_a.cell_id.clone();
@@ -864,7 +961,7 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
     let mut request_b = execute_request("await new Promise(() => {});");
     request_b.yield_time_ms = Some(1);
     let started_b = session_b
-        .execute(request_b, delegate_b.clone())
+        .execute(request_b, delegate_b.clone(), /*preempt*/ None)
         .await
         .expect("start second cell");
     let cell_b = started_b.cell_id.clone();
@@ -885,20 +982,26 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
     let wait_a_cell = cell_a.clone();
     let wait_a = tokio::spawn(async move {
         wait_a_session
-            .wait(WaitRequest {
-                cell_id: wait_a_cell,
-                yield_time_ms: 60_000,
-            })
+            .wait(
+                WaitRequest {
+                    cell_id: wait_a_cell,
+                    yield_time_ms: 60_000,
+                },
+                /*preempt*/ None,
+            )
             .await
     });
     let wait_b_session = Arc::clone(&session_b);
     let wait_b_cell = cell_b.clone();
     let wait_b = tokio::spawn(async move {
         wait_b_session
-            .wait(WaitRequest {
-                cell_id: wait_b_cell,
-                yield_time_ms: 60_000,
-            })
+            .wait(
+                WaitRequest {
+                    cell_id: wait_b_cell,
+                    yield_time_ms: 60_000,
+                },
+                /*preempt*/ None,
+            )
             .await
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -975,10 +1078,13 @@ async fn child_process_loss_cleans_up_and_rebuilds_the_shared_host() {
         }
     );
     let stale_error = session_b
-        .wait(WaitRequest {
-            cell_id: cell_b.clone(),
-            yield_time_ms: 1,
-        })
+        .wait(
+            WaitRequest {
+                cell_id: cell_b.clone(),
+                yield_time_ms: 1,
+            },
+            /*preempt*/ None,
+        )
         .await
         .expect_err("stale cell should be rejected");
     assert!(stale_error.contains("stale code-mode host generation"));

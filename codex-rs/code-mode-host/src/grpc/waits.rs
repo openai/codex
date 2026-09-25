@@ -9,6 +9,7 @@ use super::validation;
 
 pub(super) struct ActiveWait {
     pub(super) cancellation: CancellationToken,
+    pub(super) yield_signal: CancellationToken,
     retired: CancellationToken,
 }
 
@@ -16,6 +17,7 @@ pub(super) struct WaitRegistration {
     session: Arc<GrpcSession>,
     id: String,
     cancellation: CancellationToken,
+    yield_signal: CancellationToken,
     retired: CancellationToken,
 }
 
@@ -23,6 +25,7 @@ impl WaitRegistration {
     pub(super) fn new(session: Arc<GrpcSession>, id: String) -> Result<Self, Status> {
         validation::identifier(&id, "wait ID")?;
         let cancellation = CancellationToken::new();
+        let yield_signal = CancellationToken::new();
         let retired = CancellationToken::new();
         let mut state = session.state.lock().unwrap_or_else(PoisonError::into_inner);
         if session.closed.is_cancelled() {
@@ -34,12 +37,17 @@ impl WaitRegistration {
             )));
         }
         if state.cancelled_waits.remove(&id) {
+            state.yielded_waits.remove(&id);
             return Err(Status::cancelled("code-mode wait was cancelled"));
+        }
+        if state.yielded_waits.remove(&id) {
+            yield_signal.cancel();
         }
         state.waits.insert(
             id.clone(),
             ActiveWait {
                 cancellation: cancellation.clone(),
+                yield_signal: yield_signal.clone(),
                 retired: retired.clone(),
             },
         );
@@ -48,12 +56,17 @@ impl WaitRegistration {
             session,
             id,
             cancellation,
+            yield_signal,
             retired,
         })
     }
 
     pub(super) fn cancellation(&self) -> &CancellationToken {
         &self.cancellation
+    }
+
+    pub(super) fn yield_signal(&self) -> CancellationToken {
+        self.yield_signal.clone()
     }
 }
 
@@ -70,6 +83,36 @@ impl Drop for WaitRegistration {
 }
 
 impl GrpcSession {
+    pub(super) fn yield_execution(&self, id: &str) -> Result<(), Status> {
+        validation::identifier(id, "execution ID")?;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(signal) = state.execution_yields.get(id) {
+            signal.cancel();
+        } else if !state.seen_executions.contains(id) {
+            state.yielded_executions.remember(id.to_string());
+        }
+        Ok(())
+    }
+
+    pub(super) fn yield_wait(&self, id: &str) -> Result<(), Status> {
+        validation::identifier(id, "wait ID")?;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(wait) = state.waits.get(id) {
+            wait.yield_signal.cancel();
+        } else if !state.seen_waits.contains(id) {
+            state.yielded_waits.remember(id.to_string());
+        }
+        Ok(())
+    }
+
+    pub(super) fn retire_execution_observation(&self, id: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .execution_yields
+            .remove(id);
+    }
+
     pub(super) async fn cancel_wait(&self, id: &str) -> Result<(), Status> {
         validation::identifier(id, "wait ID")?;
         let active = {

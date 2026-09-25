@@ -73,6 +73,7 @@ impl CodeModeSession for ReconnectableSession {
         &'a self,
         request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        preempt: Option<CancellationToken>,
     ) -> CodeModeSessionResultFuture<'a, StartedCell> {
         Box::pin(async move {
             let binding = self.inner.get_or_open_binding().await?;
@@ -80,19 +81,23 @@ impl CodeModeSession for ReconnectableSession {
                 delegate,
                 generation: binding.generation,
             });
-            let started = binding.session.execute(request, delegate).await?;
+            let started = binding.session.execute(request, delegate, preempt).await?;
             Ok(generation::public_started_cell(binding.generation, started))
         })
     }
 
-    fn wait<'a>(&'a self, request: WaitRequest) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
+    fn wait<'a>(
+        &'a self,
+        request: WaitRequest,
+        preempt: Option<CancellationToken>,
+    ) -> CodeModeSessionResultFuture<'a, WaitOutcome> {
         Box::pin(async move {
             let binding = self.inner.get_or_open_binding().await?;
             let request = WaitRequest {
                 cell_id: generation::remote_cell_id(binding.generation, &request.cell_id)?,
                 yield_time_ms: request.yield_time_ms,
             };
-            let outcome = binding.session.wait(request).await?;
+            let outcome = binding.session.wait(request, preempt).await?;
             Ok(generation::public_wait_outcome(binding.generation, outcome))
         })
     }

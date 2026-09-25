@@ -15,6 +15,9 @@ pub const MAX_PENDING_DELEGATE_CALLS: usize = 1_024;
 /// Negotiated support for cell execution resource limits on `session/open`.
 pub const SESSION_RESOURCE_LIMITS_CAPABILITY: &str = "session-cell-execution-resource-limits";
 
+/// Support for yielding an in-flight execute or wait observation.
+pub const YIELD_OBSERVATION_CAPABILITY: &str = "yield-observation";
+
 pub use codec::EncodedFrame;
 pub use codec::FramedReader;
 pub use codec::FramedWriter;

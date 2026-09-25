@@ -140,6 +140,7 @@ impl DriverHarness {
                     max_output_tokens: None,
                 },
                 caller_cancellation: CancellationToken::new(),
+                yield_signal: None,
                 response_tx,
             })
             .await
@@ -190,6 +191,85 @@ impl Drop for DriverHarness {
     fn drop(&mut self) {
         self.cancellation.cancel();
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn old_host_does_not_receive_yield_frames() {
+    let mut harness = DriverHarness::start();
+    let session = remote_session();
+    let _cleanup = harness.open(session.clone()).await;
+    let _started = harness
+        .start_cell(
+            session.clone(),
+            /*request_id*/ 2,
+            "1",
+            Arc::new(RecordingDelegate::default()),
+        )
+        .await;
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::InitialResponse {
+            id: RequestId::new(/*value*/ 2),
+            result: WireResult::Ok {
+                value: WireRuntimeResponse::Yielded {
+                    cell_id: CellId::new("1".to_string()).into(),
+                    content_items: Vec::new(),
+                    code_mode_host_duration_ns: 1,
+                },
+            },
+        }))
+        .await
+        .unwrap();
+    let connection = Connection {
+        command_tx: harness.command_tx.clone(),
+        execute_claim_tx: harness.execute_claim_tx.clone(),
+        alive: Arc::clone(&harness.alive),
+        failure: Arc::clone(&harness.failure),
+        cancellation: harness.cancellation.clone(),
+        capabilities: CapabilitySet::empty(),
+    };
+    let signal = CancellationToken::new();
+    signal.cancel();
+    let wait = tokio::spawn(async move {
+        connection
+            .wait(
+                session,
+                WaitRequest {
+                    cell_id: CellId::new("1".to_string()),
+                    yield_time_ms: 60_000,
+                },
+                Some(signal),
+            )
+            .await
+    });
+    let frame = harness.outgoing_rx.recv().await.unwrap();
+    assert!(
+        matches!(EncodedFrame::decode_framed::<ClientToHost>(&frame.into_framed_bytes()).unwrap(), ClientToHost::Request { id, request: HostRequest::Wait { .. } } if id == RequestId::new(/*value*/ 3))
+    );
+    // Let any yield watcher run while the wait is still active. A response would
+    // drop the watcher and could otherwise hide an incorrectly sent yield frame.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), harness.outgoing_rx.recv())
+            .await
+            .is_err()
+    );
+    harness
+        .event_tx
+        .send(DriverEvent::HostMessage(HostToClient::Response {
+            id: RequestId::new(/*value*/ 3),
+            result: WireResult::Ok {
+                value: HostResponse::WaitCompleted {
+                    outcome: WireWaitOutcome::LiveCell(WireRuntimeResponse::Yielded {
+                        cell_id: CellId::new("1".to_string()).into(),
+                        content_items: Vec::new(),
+                        code_mode_host_duration_ns: 1,
+                    }),
+                },
+            },
+        }))
+        .await
+        .unwrap();
+    wait.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -409,6 +489,7 @@ async fn deferred_delegates_follow_cell_readiness_and_cancellation() {
                     max_output_tokens: None,
                 },
                 caller_cancellation: CancellationToken::new(),
+                yield_signal: None,
                 response_tx,
             })
             .await
@@ -597,6 +678,7 @@ async fn dropped_open_waiter_shuts_down_committed_session() {
                 max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx: execute_tx,
         })
         .await
@@ -1195,6 +1277,7 @@ async fn mismatched_wait_response_fails_connection() {
                 yield_time_ms: 1,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx,
         })
         .await
@@ -1298,6 +1381,7 @@ async fn remote_wait_accepts_durations_longer_than_five_minutes() {
                 yield_time_ms: 300_001,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx,
         })
         .await
@@ -1365,6 +1449,7 @@ async fn queued_remote_wait_times_out_and_invalidates_the_connection() {
                     cell_id: CellId::new("1".to_string()),
                     yield_time_ms: 1,
                 },
+                /*yield_signal*/ None,
             )
             .await;
         (connection, result)
@@ -1451,6 +1536,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
                 yield_time_ms: 60_000,
             },
             caller_cancellation: first_cancellation.clone(),
+            yield_signal: None,
             response_tx: first_tx,
         })
         .await
@@ -1469,6 +1555,7 @@ async fn cancelled_wait_is_retired_before_next_wait_is_sent() {
                 yield_time_ms: 1,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx: second_tx,
         })
         .await
@@ -1544,6 +1631,7 @@ async fn abandoned_execute_is_tracked_and_terminated_after_admission() {
                 max_output_tokens: None,
             },
             caller_cancellation: cancellation.clone(),
+            yield_signal: None,
             response_tx: execute_tx,
         })
         .await
@@ -1642,6 +1730,7 @@ async fn delivered_but_unclaimed_execute_is_terminated_when_the_caller_is_cancel
                 max_output_tokens: None,
             },
             caller_cancellation: cancellation.clone(),
+            yield_signal: None,
             response_tx: execute_tx,
         })
         .await
@@ -1806,6 +1895,7 @@ async fn connection_failure_closes_every_live_cell_once() {
                 max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx: execute_tx,
         })
         .await
@@ -1917,6 +2007,7 @@ async fn aborting_driver_marks_connection_dead_and_closes_cells() {
                 yield_time_ms: 60_000,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx: wait_tx,
         })
         .await
@@ -1983,6 +2074,7 @@ async fn dropped_shutdown_waiter_does_not_abort_remote_cleanup() {
                 max_output_tokens: None,
             },
             caller_cancellation: CancellationToken::new(),
+            yield_signal: None,
             response_tx: execute_tx,
         })
         .await

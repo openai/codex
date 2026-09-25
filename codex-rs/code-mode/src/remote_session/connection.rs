@@ -28,6 +28,7 @@ use codex_code_mode_protocol::host::ProtocolVersion;
 use codex_code_mode_protocol::host::RequestId;
 use codex_code_mode_protocol::host::SESSION_RESOURCE_LIMITS_CAPABILITY;
 use codex_code_mode_protocol::host::SupportedProtocolVersions;
+use codex_code_mode_protocol::host::YIELD_OBSERVATION_CAPABILITY;
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
@@ -204,8 +205,11 @@ impl Connection {
         let handshake = async {
             let session_limits_capability = Capability::new(SESSION_RESOURCE_LIMITS_CAPABILITY)
                 .map_err(|error| error.to_string())?;
-            let optional_capabilities = CapabilitySet::try_new([session_limits_capability])
-                .map_err(|error| error.to_string())?;
+            let yield_capability =
+                Capability::new(YIELD_OBSERVATION_CAPABILITY).map_err(|error| error.to_string())?;
+            let optional_capabilities =
+                CapabilitySet::try_new([session_limits_capability, yield_capability])
+                    .map_err(|error| error.to_string())?;
             let hello = ClientHello::new(
                 SupportedProtocolVersions::try_new([ProtocolVersion::V1])
                     .map_err(|err| err.to_string())?,
@@ -357,7 +361,9 @@ impl Connection {
         session: RemoteSession,
         request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
+        yield_signal: Option<CancellationToken>,
     ) -> Result<StartedCell, String> {
+        let yield_signal = self.supported_yield_signal(yield_signal);
         let cancellation = CallerCancellation::new();
         let (response_tx, response_rx) = oneshot::channel();
         self.send(DriverCommand::Execute {
@@ -365,6 +371,7 @@ impl Connection {
             request,
             delegate,
             caller_cancellation: cancellation.token(),
+            yield_signal,
             response_tx,
         })
         .await?;
@@ -386,7 +393,9 @@ impl Connection {
         &self,
         session: RemoteSession,
         request: WaitRequest,
+        yield_signal: Option<CancellationToken>,
     ) -> Result<WaitOutcome, String> {
+        let yield_signal = self.supported_yield_signal(yield_signal);
         // Account for the runtime's one-second yield grace separately from transport.
         let runtime_timeout =
             Duration::from_millis(request.yield_time_ms).saturating_add(Duration::from_secs(1));
@@ -398,6 +407,7 @@ impl Connection {
                     session,
                     request,
                     caller_cancellation: cancellation.token(),
+                    yield_signal,
                     response_tx,
                 })
                 .await?;
@@ -406,6 +416,17 @@ impl Connection {
             .await;
         cancellation.disarm();
         result
+    }
+
+    fn supported_yield_signal(
+        &self,
+        signal: Option<CancellationToken>,
+    ) -> Option<CancellationToken> {
+        self.capabilities
+            .iter()
+            .any(|capability| capability.as_str() == YIELD_OBSERVATION_CAPABILITY)
+            .then_some(signal)
+            .flatten()
     }
 
     pub(super) async fn terminate(

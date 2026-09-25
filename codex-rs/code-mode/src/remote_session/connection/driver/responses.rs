@@ -42,6 +42,7 @@ impl ConnectionDriver {
                 wait.session,
                 wait.request,
                 wait.caller_cancellation,
+                wait.yield_signal,
                 wait.response_tx,
             ) {
                 for wait in deferred {
@@ -182,6 +183,7 @@ impl ConnectionDriver {
                 initial_response_tx,
                 initial_response_rx,
                 cancellation,
+                yield_observation,
             } => match result {
                 Ok(HostResponse::ExecutionStarted { cell_id }) => {
                     // The host owns a checked, never-reused ID sequence. Retain only live
@@ -211,6 +213,7 @@ impl ConnectionDriver {
                             generation: session.generation,
                             cell_id: remote_cell_id.clone(),
                             response_tx: initial_response_tx,
+                            _yield_observation: yield_observation,
                         },
                     );
                     let started = StartedCell::from_result_receiver(public_id, initial_response_rx);
@@ -247,6 +250,7 @@ impl ConnectionDriver {
                 session,
                 cell_id,
                 cancellation: _,
+                yield_observation: _,
                 response_tx,
             } => {
                 let result = match result {
@@ -360,6 +364,17 @@ impl ConnectionDriver {
                 self.terminate_abandoned_cell(execute.session, execute.cell_id)
             }
         }
+    }
+
+    pub(super) fn yield_request(&mut self, id: RequestId) -> bool {
+        let frame = match EncodedFrame::encode(&ClientToHost::YieldRequest { id }) {
+            Ok(frame) => frame,
+            Err(err) => {
+                self.fail(format!("failed to encode code-mode yield request: {err}"));
+                return false;
+            }
+        };
+        self.queue_frame(frame)
     }
 
     fn send_cancel_request(&mut self, id: RequestId) -> bool {

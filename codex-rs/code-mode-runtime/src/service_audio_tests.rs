@@ -147,10 +147,13 @@ async fn audio_helper_bounds_wav_data_and_preserves_outputs_after_yield() {
     });
     assert_eq!(
         service
-            .wait(WaitRequest {
-                cell_id: cell_id("1"),
-                yield_time_ms: 60_000,
-            })
+            .wait(
+                WaitRequest {
+                    cell_id: cell_id("1"),
+                    yield_time_ms: 60_000,
+                },
+                /*preempt*/ None,
+            )
             .await
             .unwrap(),
         WaitOutcome::LiveCell(RuntimeResponse::Result {
