@@ -398,6 +398,7 @@ async fn thread_originator_overrides_shared_connection_across_thread_events() {
                     status: CompactionStatus::Completed,
                     codex_error_kind: None,
                     codex_error_http_status_code: None,
+                    usage_limit_window_minutes: None,
                     active_context_tokens_before: 131_000,
                     active_context_tokens_after: 64_000,
                     retained_image_count: None,

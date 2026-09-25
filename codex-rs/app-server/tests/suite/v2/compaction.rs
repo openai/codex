@@ -34,9 +34,14 @@ use codex_utils_absolute_path::test_support::PathExt;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 use test_case::test_case;
 use tokio::time::timeout;
+use wiremock::ResponseTemplate;
+
+use super::analytics::mount_analytics_capture;
+use super::analytics::wait_for_matching_analytics_event;
 
 // macOS and Windows Bazel CI can spend tens of seconds starting app-server
 // subprocesses or processing test RPCs under load.
@@ -52,6 +57,96 @@ const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 enum CompactionRoute {
     Local,
     Remote,
+}
+
+#[test_case(CompactionRoute::Local, Some(300), 429, "usage_limit_reached"; "local five hour")]
+#[test_case(CompactionRoute::Remote, Some(10_080), 429, "usage_limit_reached"; "remote weekly")]
+#[test_case(CompactionRoute::Local, None, 429, "usage_limit_reached"; "missing window")]
+#[test_case(CompactionRoute::Remote, Some(300), 400, "invalid_request"; "other error")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compaction_error_window_reaches_analytics(
+    route: CompactionRoute,
+    window: Option<u16>,
+    status: u16,
+    expected_error: &str,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let seed = responses::sse(vec![
+        responses::ev_assistant_message("seed", "FIRST_REPLY"),
+        responses::ev_completed_with_tokens("seed", /*total_tokens*/ 120),
+    ]);
+    let mut error = json!({
+        "type": if status == 429 { "usage_limit_reached" } else { "invalid_request_error" },
+        "message": "request failed",
+    });
+    if let Some(window) = window {
+        error["limit_window_minutes"] = json!(window);
+    }
+    let _requests = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(seed),
+            ResponseTemplate::new(status).set_body_json(json!({ "error": error })),
+        ],
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    let mut config = compaction_config(&server.uri(), /*auto_compact_limit*/ 1_000_000)
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()));
+    if let CompactionRoute::Remote = route {
+        config = config
+            .with_provider_name("OpenAI")
+            .with_provider_config("requires_openai_auth = true");
+    }
+    config.write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .without_managed_config()
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread_id = start_thread(&mut mcp).await?;
+    send_turn_and_wait(&mut mcp, &thread_id, "seed history").await?;
+    let compact_id = mcp
+        .send_thread_compact_start_request(ThreadCompactStartParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    let _: ThreadCompactStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(compact_id)).await??;
+
+    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
+        event["event_type"] == "codex_compaction_event"
+            && event["event_params"]["thread_id"] == thread_id
+    })
+    .await?;
+    let params = &event["event_params"];
+    let implementation = match route {
+        CompactionRoute::Local => "responses",
+        CompactionRoute::Remote => "responses_compaction_v2",
+    };
+    let expected_window = if status == 429 { window } else { None };
+    assert_eq!(
+        json!([
+            params["implementation"],
+            params["phase"],
+            params["status"],
+            params["codex_error_kind"],
+            params["usage_limit_window_minutes"],
+        ]),
+        json!([
+            implementation,
+            "standalone_turn",
+            "failed",
+            expected_error,
+            expected_window
+        ])
+    );
+    Ok(())
 }
 
 #[test_case(CompactionRoute::Local; "local")]

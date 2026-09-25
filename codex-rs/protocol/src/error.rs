@@ -676,6 +676,8 @@ impl std::fmt::Display for RetryLimitReachedError {
 pub struct UsageLimitReachedError {
     pub plan_type: Option<PlanType>,
     pub resets_at: Option<DateTime<Utc>>,
+    /// Server-selected window responsible for the limit, in minutes.
+    pub limit_window_minutes: Option<u16>,
     pub rate_limits: Option<Box<RateLimitSnapshot>>,
     pub promo_message: Option<String>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,

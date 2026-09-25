@@ -475,6 +475,10 @@ impl CompactionAnalyticsAttempt {
                 codex_error_kind: codex_error.map(Into::into),
                 codex_error_http_status_code: codex_error
                     .and_then(CodexErr::http_status_code_value),
+                usage_limit_window_minutes: codex_error.and_then(|error| match error.details() {
+                    CodexErrorDetails::UsageLimitReached(error) => error.limit_window_minutes,
+                    _ => None,
+                }),
                 active_context_tokens_before,
                 active_context_tokens_after,
                 retained_image_count,

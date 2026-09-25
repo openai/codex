@@ -38,6 +38,7 @@ use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::WebSearchItem;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::UsageLimitReachedError;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::ThreadSource;
 use pretty_assertions::assert_eq;
@@ -148,6 +149,7 @@ fn turn_event_serializes_expected_shape() {
             turn_error: None,
             codex_error_kind: None,
             codex_error_http_status_code: None,
+            usage_limit_window_minutes: None,
             steer_count: Some(0),
             total_tool_call_count: None,
             shell_command_count: None,
@@ -238,6 +240,7 @@ fn turn_event_serializes_expected_shape() {
                 "turn_error": null,
                 "codex_error_kind": null,
                 "codex_error_http_status_code": null,
+                "usage_limit_window_minutes": null,
                 "steer_count": 0,
                 "total_tool_call_count": null,
                 "shell_command_count": null,
@@ -811,6 +814,97 @@ async fn turn_lifecycle_emits_failed_turn_event() {
         payload["event_params"]["codex_error_http_status_code"],
         json!(null)
     );
+    assert_eq!(
+        payload["event_params"]["usage_limit_window_minutes"],
+        json!(null)
+    );
+}
+
+#[tokio::test]
+async fn turn_event_reports_decisive_usage_limit_window() {
+    let usage_limit = |limit_window_minutes| {
+        CodexErr::UsageLimitReached(UsageLimitReachedError {
+            plan_type: None,
+            resets_at: None,
+            rate_limits: None,
+            promo_message: None,
+            rate_limit_reached_type: None,
+            limit_window_minutes,
+        })
+    };
+    let cases = [
+        (
+            usage_limit(Some(300)),
+            codex_app_server_protocol::CodexErrorInfo::UsageLimitExceeded,
+            json!(["usageLimitExceeded", "usage_limit_reached", 300]),
+        ),
+        (
+            usage_limit(Some(10_080)),
+            codex_app_server_protocol::CodexErrorInfo::UsageLimitExceeded,
+            json!(["usageLimitExceeded", "usage_limit_reached", 10080]),
+        ),
+        (
+            usage_limit(None),
+            codex_app_server_protocol::CodexErrorInfo::UsageLimitExceeded,
+            json!(["usageLimitExceeded", "usage_limit_reached", null]),
+        ),
+        (
+            CodexErr::InvalidRequest("invalid request".to_string()),
+            codex_app_server_protocol::CodexErrorInfo::BadRequest,
+            json!(["badRequest", "invalid_request", null]),
+        ),
+    ];
+
+    for (error, error_info, expected) in cases {
+        let mut reducer = AnalyticsReducer::default();
+        let mut out = Vec::new();
+        ingest_turn_prerequisites(
+            &mut reducer,
+            &mut out,
+            /*include_initialize*/ true,
+            /*include_resolved_config*/ true,
+            /*include_started*/ true,
+            /*include_token_usage*/ false,
+        )
+        .await;
+        reducer
+            .ingest(
+                AnalyticsFact::Custom(CustomAnalyticsFact::TurnCodexError(Box::new(
+                    TurnCodexErrorFact::from_codex_err(
+                        "thread-2".to_string(),
+                        "turn-2".to_string(),
+                        &error,
+                    ),
+                ))),
+                &mut out,
+            )
+            .await;
+        reducer
+            .ingest(
+                AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                    "thread-2",
+                    "turn-2",
+                    AppServerTurnStatus::Failed,
+                    Some(error_info),
+                ))),
+                &mut out,
+            )
+            .await;
+
+        let [event] = out.as_slice() else {
+            panic!("expected one turn event");
+        };
+        let payload = serde_json::to_value(event).expect("serialize turn event");
+        let params = &payload["event_params"];
+        assert_eq!(
+            json!([
+                params["turn_error"],
+                params["codex_error_kind"],
+                params["usage_limit_window_minutes"],
+            ]),
+            expected
+        );
+    }
 }
 
 #[tokio::test]

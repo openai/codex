@@ -60,6 +60,71 @@ use wiremock::matchers::path_regex;
 const SERVICE_VERSION: &str = "0.0.0-test";
 
 #[tokio::test]
+async fn usage_limit_window_reaches_turn_analytics() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/responses$"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "message": "usage limit reached",
+                "plan_type": "pro",
+                "limit_window_minutes": 300
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
+        .with_provider_config("supports_websockets = false")
+        .write(codex_home.path())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut app_server = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_managed_config()
+        .build_initialized()
+        .await?;
+    let thread = app_server
+        .start_thread(ThreadStartParams::default())
+        .await?
+        .thread;
+    let completed = app_server
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+
+    let event = wait_for_matching_analytics_event(&server, Duration::from_secs(30), |event| {
+        event["event_type"] == "codex_turn_event"
+            && event["event_params"]["turn_id"] == completed.turn.id
+    })
+    .await?;
+    let params = &event["event_params"];
+    assert_eq!(
+        json!([
+            params["status"],
+            params["turn_error"],
+            params["codex_error_kind"],
+            params["usage_limit_window_minutes"],
+        ]),
+        json!(["failed", "usageLimitExceeded", "usage_limit_reached", 300])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn guardian_review_turns_and_tools_reach_analytics() -> Result<()> {
     skip_if_no_network!(Ok(()));
     const PRIVATE: &str = "guardian-private-content";

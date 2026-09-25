@@ -18,6 +18,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::error::CodexErr;
 pub use codex_protocol::error::CodexErrKind;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
@@ -280,6 +281,7 @@ impl TurnCodexErrorFact {
 pub(crate) struct TurnCodexError {
     pub(crate) kind: CodexErrKind,
     pub(crate) http_status_code: Option<u16>,
+    pub(crate) usage_limit_window_minutes: Option<u16>,
 }
 
 impl TurnCodexError {
@@ -287,6 +289,10 @@ impl TurnCodexError {
         Self {
             kind: error.into(),
             http_status_code: error.http_status_code_value(),
+            usage_limit_window_minutes: match error.details() {
+                CodexErrorDetails::UsageLimitReached(error) => error.limit_window_minutes,
+                _ => None,
+            },
         }
     }
 }
@@ -498,6 +504,7 @@ pub struct CodexCompactionEvent {
     pub status: CompactionStatus,
     pub codex_error_kind: Option<CodexErrKind>,
     pub codex_error_http_status_code: Option<u16>,
+    pub usage_limit_window_minutes: Option<u16>,
     pub active_context_tokens_before: i64,
     pub active_context_tokens_after: i64,
     pub retained_image_count: Option<usize>,

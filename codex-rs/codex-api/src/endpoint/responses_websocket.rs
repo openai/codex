@@ -1058,6 +1058,33 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_websocket_usage_limit_preserves_optional_window() {
+        for (window, expected) in [(Some(10080), Some(10080)), (None, None)] {
+            let mut payload = json!({
+                "type": "error",
+                "status": 429,
+                "error": {
+                    "type": "usage_limit_reached",
+                    "plan_type": "pro"
+                }
+            });
+            if let Some(window) = window {
+                payload["error"]["limit_window_minutes"] = json!(window);
+            }
+            let payload = payload.to_string();
+            let wrapped = parse_wrapped_websocket_error_event(&payload).expect("websocket error");
+            let api_error = map_wrapped_websocket_error_event(wrapped, payload).expect("API error");
+            let err = crate::api_bridge::map_api_error(api_error);
+            let codex_protocol::error::CodexErrorDetails::UsageLimitReached(usage_limit) =
+                err.details()
+            else {
+                panic!("expected usage-limit error, got {err:?}");
+            };
+            assert_eq!(usage_limit.limit_window_minutes, expected);
+        }
+    }
+
+    #[test]
     fn parse_wrapped_websocket_error_event_ignores_non_error_payloads() {
         let payload = json!({
             "type": "response.created",
