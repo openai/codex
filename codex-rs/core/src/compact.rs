@@ -277,6 +277,7 @@ async fn run_compact_task_inner_impl(
         let prompt = Prompt {
             input: turn_input,
             base_instructions: sess.get_prompt_base_instructions().await,
+            cyber_access_program: turn_context.cyber_access_program,
             ..Default::default()
         };
         let responses_metadata = sess
