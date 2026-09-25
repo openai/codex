@@ -35,11 +35,14 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_wine_exec;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
@@ -49,6 +52,7 @@ use serde_json::Value;
 use serde_json::json;
 use test_case::test_case;
 use tokio::sync::Notify;
+use tokio::sync::oneshot;
 
 #[path = "guardian_heartbeat_authorization.rs"]
 mod heartbeat;
@@ -439,17 +443,26 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     if messaging_case && !cancel_call {
         mount_completion(&server, root_thread_id, MESSAGE_CALL_ID).await;
     }
-    mount_sse_once_match(
+    // Keep the worker's completion notice from interrupting the root's one-shot
+    // question response before the messaging call reaches its cancellation point.
+    let (worker_completion, worker_gate) = oneshot::channel();
+    let (worker_server, _) = start_streaming_sse_server(vec![vec![StreamingSseChunk {
+        gate: Some(worker_gate),
+        body: sse(vec![
+            ev_assistant_message("worker-initial", "Waiting for user authorization."),
+            ev_completed("worker-initial-response"),
+        ]),
+    }]])
+    .await;
+    mount_response_once_match(
         &server,
         move |request: &wiremock::Request| {
             is_worker_request(request, root_thread_id)
                 && contains_text(request, INITIAL_TASK)
                 && !contains_text(request, FORWARDED_AGENT_MESSAGE)
         },
-        sse(vec![
-            ev_assistant_message("worker-initial", "Waiting for user authorization."),
-            ev_completed("worker-initial-response"),
-        ]),
+        wiremock::ResponseTemplate::new(/*s*/ 307)
+            .insert_header("location", format!("{}/v1/responses", worker_server.uri())),
     )
     .await;
 
@@ -478,12 +491,16 @@ async fn guardian_subagent_review_preserves_late_root_user_authorization(
     } else {
         test.submit_text_turn(INITIAL_PROMPT).await?;
     }
+    worker_completion
+        .send(())
+        .expect("worker should wait until the root question turn finishes");
     let worker_thread_id = created_threads.recv().await?;
     let worker_thread = test.thread_manager.get_thread(worker_thread_id).await?;
     wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    worker_server.shutdown().await;
     // Exceed both the retained-record storage cap and the reviewer text budget.
     let oversized_instruction = "Root instruction 0. ".repeat(1_000);
     // Streaming commentary could be preempted by the worker's completion notice
