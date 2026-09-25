@@ -167,7 +167,6 @@ mod tests {
 
     fn plugin_summary(name: &str) -> PluginSummary {
         PluginSummary {
-            extensions: None,
             id: format!("{name}@server-marketplace"),
             remote_plugin_id: Some(format!("plugins~{name}")),
             version: None,

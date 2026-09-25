@@ -1451,7 +1451,6 @@ pub(super) fn plugins_test_summary(
     install_policy: PluginInstallPolicy,
 ) -> PluginSummary {
     PluginSummary {
-        extensions: None,
         id: id.to_string(),
         remote_plugin_id: None,
         version: None,
@@ -1488,7 +1487,6 @@ pub(super) fn plugins_test_remote_summary(
     installed: bool,
 ) -> PluginSummary {
     PluginSummary {
-        extensions: None,
         id: remote_plugin_id.to_string(),
         remote_plugin_id: Some(remote_plugin_id.to_string()),
         version: None,

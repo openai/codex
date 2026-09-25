@@ -635,7 +635,6 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
         vec![
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    extensions: None,
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: "plugins_123".to_string(),
                     version: Some("0.1.0".to_string()),
@@ -683,7 +682,6 @@ async fn list_remote_plugin_shares_fetches_created_workspace_plugins() {
             },
             RemotePluginShareSummary {
                 summary: RemotePluginSummary {
-                    extensions: None,
                     id: "demo-plugin@workspace-shared-with-me".to_string(),
                     remote_plugin_id: "plugins_456".to_string(),
                     version: Some("0.1.0".to_string()),

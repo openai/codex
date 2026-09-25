@@ -151,11 +151,11 @@ async fn remote_installed_plugins_paginate_across_all_scopes_without_download_ur
         recorded_http_client_urls(&selected_urls),
         vec![
             format!(
-                "{}/backend-api/ps/plugins/installed?includeExtensions=true&limit=200",
+                "{}/backend-api/ps/plugins/installed?limit=200",
                 server.uri()
             ),
             format!(
-                "{}/backend-api/ps/plugins/installed?includeExtensions=true&limit=200&pageToken=next+page%2F%2B",
+                "{}/backend-api/ps/plugins/installed?limit=200&pageToken=next+page%2F%2B",
                 server.uri()
             ),
         ]
@@ -333,7 +333,6 @@ fn build_remote_marketplace_preserves_directory_order_and_appends_installed_only
         directory_plugin("plugin-m", "mike"),
     ];
     let installed_plugins = vec![RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin("plugin-a", "alpha"),
         installed_at: None,
         enabled: true,
@@ -366,7 +365,6 @@ fn installation_policy_source_is_preserved_across_remote_summary_paths() {
     directory_plugin.installation_policy_source =
         Some(RemotePluginInstallPolicySource::ImplicitCanonicalApp);
     let installed_plugin = RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin.clone(),
         installed_at: None,
         enabled: true,
@@ -422,7 +420,6 @@ fn plan_eligibility_is_preserved_across_remote_summary_paths() {
         "enterprise_cbp_automation".to_string(),
     ]);
     let installed_plugin = RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin.clone(),
         installed_at: None,
         enabled: false,
@@ -516,7 +513,6 @@ fn installation_interstitial_requirement_is_preserved_across_remote_summary_path
 
     directory_plugin.must_show_installation_interstitial = Some(false);
     let installed_plugin = remote_installed_plugin_to_cache_entry(&RemotePluginInstalledItem {
-        extensions: None,
         plugin: directory_plugin,
         installed_at: None,
         enabled: true,

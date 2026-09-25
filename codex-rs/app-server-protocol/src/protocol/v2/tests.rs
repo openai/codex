@@ -4472,7 +4472,6 @@ fn plugin_share_list_response_serializes_share_items() {
         serde_json::to_value(PluginShareListResponse {
             data: vec![PluginShareListItem {
                 plugin: PluginSummary {
-                    extensions: None,
                     id: "gmail@openai-curated-remote".to_string(),
                     remote_plugin_id: Some(
                         "plugins~Plugin_00000000000000000000000000000000".to_string(),
@@ -4502,7 +4501,6 @@ fn plugin_share_list_response_serializes_share_items() {
         json!({
             "data": [{
                 "plugin": {
-                    "extensions": null,
                     "id": "gmail@openai-curated-remote",
                     "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
                     "version": null,
@@ -4555,7 +4553,6 @@ fn plugin_summary_defaults_missing_availability_to_available() {
 #[test]
 fn plugin_summary_round_trips_plan_eligibility_metadata() {
     let value = json!({
-        "extensions": null,
         "id": "gmail@openai-curated-remote",
         "remotePluginId": "plugins~Plugin_00000000000000000000000000000000",
         "version": null,
