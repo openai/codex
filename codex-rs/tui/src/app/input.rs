@@ -99,12 +99,13 @@ impl App {
         let was_pending = self.key_chord_matcher.is_pending();
         if !was_pending
             && contexts.is_warnings()
-            && !crate::key_hint::is_plain_text_key_event(key_event)
-            && self
-                .keymap
-                .list
-                .action_for(key_event)
-                .is_some_and(|action| action != crate::keymap::ListAction::Accept)
+            && (crate::key_hint::plain(KeyCode::Char('k')).is_press(key_event)
+                || (!crate::key_hint::is_plain_text_key_event(key_event)
+                    && self
+                        .keymap
+                        .list
+                        .action_for(key_event)
+                        .is_some_and(|action| action != crate::keymap::ListAction::Accept)))
         {
             return Some(key_event);
         }

@@ -133,3 +133,39 @@ fn warnings_dismiss_only_drawn_pages_after_navigation_skips_a_frame() {
         ]
     );
 }
+
+#[test]
+fn warnings_keep_current_and_next_without_dismissing_unvisited_pages() {
+    let (tx, mut rx) = unbounded_channel();
+    let mut data = entries();
+    data.push(WarningEntry {
+        id: WarningId::Message("later".into()),
+        source: "Startup".into(),
+        details: "Not yet viewed".into(),
+    });
+    let expected = vec![data[1].clone()];
+    // Keep owns k in this viewer even when a list action is remapped to it.
+    let keymap = RuntimeKeymap::from_config(
+        &toml::from_str("[list]\nmove_up = 'up'\ncancel = 'k'").unwrap(),
+    )
+    .unwrap();
+    let mut view = WarningsView::new(data, Arc::default(), keymap, AppEventSender::new(tx));
+    assert!(!key(&mut view, KeyCode::Char('k')));
+    let screen = draw(&view, /*width*/ 80, /*height*/ 12);
+    assert!(screen.contains("2 of 3"));
+    assert!(screen.contains("ctrl+c dismiss & close"));
+    let repeat =
+        KeyEvent::new_with_kind(KeyCode::Char('k'), KeyModifiers::NONE, KeyEventKind::Repeat);
+    assert!(!view.handle_key(repeat));
+    assert!(draw(&view, /*width*/ 80, /*height*/ 12).contains("2 of 3"));
+    key(&mut view, KeyCode::Left);
+    assert!(key(&mut view, KeyCode::F(2)));
+    view.close();
+    let Ok(AppEvent::UpdateWarnings {
+        dismissed, kept, ..
+    }) = rx.try_recv()
+    else {
+        panic!("expected warning decisions");
+    };
+    assert_eq!((dismissed, kept), (expected, vec![entries()[0].clone()]));
+}

@@ -13,4 +13,4 @@ expression: "super::helpers::render_bottom_popup(&chat, 80)"
 
 
 
-  esc dismiss & close · ctrl+o copy · ←/→ warning · ↓ scroll
+  k keep & next · esc dismiss & close · ctrl+o copy · ←/→ warning · ↓ scroll

@@ -67,10 +67,15 @@ async fn warnings_hide_and_restore_draft_and_freeze_until_reopened() -> Result<(
     app.handle_tui_event(
         &mut tui,
         &mut app_server,
-        TuiEvent::Key(KeyCode::Esc.into()),
+        TuiEvent::Key(KeyCode::Char('k').into()),
     )
     .await?;
     assert!(!app.chat_widget.keymap_contexts().is_warnings());
+    let repeat =
+        KeyEvent::new_with_kind(KeyCode::Char('k'), KeyModifiers::NONE, KeyEventKind::Repeat);
+    app.handle_tui_event(&mut tui, &mut app_server, TuiEvent::Key(repeat))
+        .await?;
+    assert_eq!(app.chat_widget.composer_text_with_pending(), "/m");
     app.render_owned_transcript(&mut tui, size)?;
     assert_eq!(
         crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
@@ -90,11 +95,11 @@ async fn warnings_hide_and_restore_draft_and_freeze_until_reopened() -> Result<(
         .map(ratatui::buffer::Cell::symbol)
         .collect::<String>();
     assert!(frozen.contains("1 of 1"));
-    // The first close's queued update may arrive while the frozen viewer is reopened.
-    let first_dismissal = std::iter::from_fn(|| events.try_recv().ok())
-        .find(|event| matches!(event, AppEvent::UpdateWarnings { dismissed, .. } if !dismissed.is_empty()))
-        .expect("the first close queued a dismissal");
-    app.handle_event(&mut tui, &mut app_server, first_dismissal)
+    // The first keep's queued update may arrive while the frozen viewer is reopened.
+    let first_keep = std::iter::from_fn(|| events.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::UpdateWarnings { kept, .. } if !kept.is_empty()))
+        .expect("the first keep queued a decision");
+    app.handle_event(&mut tui, &mut app_server, first_keep)
         .await?;
     app.chat_widget.handle_key_event(KeyCode::Esc.into());
     assert_eq!(app.chat_widget.composer_text_with_pending(), "/m");
@@ -216,7 +221,7 @@ async fn warnings_badge_and_pages_work_with_terminal_scrollback() -> Result<()> 
         assert!(screen.contains(text));
     }
     assert!(!screen.contains("fallback draft"));
-    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.chat_widget.handle_key_event(KeyCode::Char('k').into());
     app.render_chat_widget_frame(&mut tui, size)?;
     assert_eq!(
         crate::custom_terminal::test_support::last_rendered_buffer(&tui.terminal),
@@ -272,6 +277,18 @@ async fn warnings_changed_details_reappear_and_clear_resets_dismissal() -> Resul
     app.chat_widget.handle_key_event(KeyCode::Esc.into());
     app.reset_app_ui_state_after_clear();
     app.insert_history_cell(&mut tui, Box::new(original.clone()));
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), before);
+    // Terminal input can win the race with queued app events in embedded mode.
+    // Reopen before applying the prior dismissal; keep must be the final decision.
+    app.chat_widget.handle_key_event(KeyCode::Esc.into());
+    app.chat_widget.open_warnings(&app.transcript_cells);
+    app.chat_widget.handle_key_event(KeyCode::Char('k').into());
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, AppEvent::UpdateWarnings { .. }) {
+            app.handle_event(&mut tui, &mut app_server, event).await?;
+        }
+    }
     app.chat_widget.open_warnings(&app.transcript_cells);
     assert_eq!(render_bottom_popup(&app.chat_widget, /*width*/ 80), before);
     // Clear before the queued dismissal arrives, then deliver the same warning again.

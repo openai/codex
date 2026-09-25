@@ -84,6 +84,16 @@ impl super::ChatWidget {
         cells: &[Arc<dyn HistoryCell>],
     ) -> bool {
         if let TuiEvent::Key(key) = event
+            && self.bottom_pane.suppress_warning_keep_repeat
+        {
+            if key.kind == crossterm::event::KeyEventKind::Repeat
+                && crate::key_hint::plain(crossterm::event::KeyCode::Char('k')).is_press(*key)
+            {
+                return true;
+            }
+            self.bottom_pane.suppress_warning_keep_repeat = false;
+        }
+        if let TuiEvent::Key(key) = event
             && self.bottom_pane.warnings_active()
             && matches!(
                 key.kind,
