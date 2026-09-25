@@ -28,11 +28,8 @@ use codex_analytics::CompactionStatus;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::now_unix_seconds;
-use codex_context_fragments::AnnotatedContent;
-use codex_context_fragments::set_annotated_content;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -41,7 +38,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::models::InternalChatMessageMetadataPassthrough;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -529,17 +525,17 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct CompactedUserMessage {
-    // Keep source identity even when compaction shortens the text, so rollback can
-    // correlate the rebuilt message with thread-owned retained evidence.
-    id: Option<ResponseItemId>,
+pub(crate) struct CompactedUserMessage<'a> {
+    // Flattened text is only for the existing budget and truncation policy.
+    // Whole text messages retain their exact content parts and annotations.
+    // Borrow from the history snapshot until selected output is materialized.
     message: String,
-    internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
-    harness_metadata: Option<CodexHarnessMetadata>,
+    original: &'a ResponseItem,
+    harness_metadata: Option<&'a CodexHarnessMetadata>,
 }
 
 #[cfg(test)]
-pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUserMessage> {
+pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUserMessage<'_>> {
     items
         .iter()
         .filter_map(|item| compacted_user_message(item, /*harness_metadata*/ None))
@@ -548,33 +544,27 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<CompactedUser
 
 pub(crate) fn collect_annotated_user_messages(
     items: &[ResponseItemEnvelope],
-) -> Vec<CompactedUserMessage> {
+) -> Vec<CompactedUserMessage<'_>> {
     items
         .iter()
-        .filter_map(|envelope| compacted_user_message(&envelope.item, envelope.metadata.clone()))
+        .filter_map(|envelope| compacted_user_message(&envelope.item, envelope.metadata.as_ref()))
         .collect()
 }
 
-fn compacted_user_message(
-    item: &ResponseItem,
-    harness_metadata: Option<CodexHarnessMetadata>,
-) -> Option<CompactedUserMessage> {
+fn compacted_user_message<'a>(
+    item: &'a ResponseItem,
+    harness_metadata: Option<&'a CodexHarnessMetadata>,
+) -> Option<CompactedUserMessage<'a>> {
     let Some(TurnItem::UserMessage(user)) = crate::event_mapping::parse_turn_item(item) else {
         return None;
     };
-    if is_summary_message(&user.message()) {
+    let message = user.message();
+    if is_summary_message(&message) {
         return None;
     }
     Some(CompactedUserMessage {
-        id: item.id().cloned(),
-        message: user.message(),
-        internal_chat_message_metadata_passthrough: match item {
-            ResponseItem::Message {
-                internal_chat_message_metadata_passthrough,
-                ..
-            } => internal_chat_message_metadata_passthrough.clone(),
-            _ => None,
-        },
+        message,
+        original: item,
         harness_metadata,
     })
 }
@@ -653,7 +643,7 @@ pub(crate) fn insert_initial_context_before_last_real_user_or_summary(
 
 pub(crate) fn build_compacted_history(
     initial_context: Vec<ResponseItemEnvelope>,
-    user_messages: &[CompactedUserMessage],
+    user_messages: &[CompactedUserMessage<'_>],
     summary_text: &str,
 ) -> Vec<ResponseItemEnvelope> {
     build_compacted_history_with_limit(
@@ -666,11 +656,11 @@ pub(crate) fn build_compacted_history(
 
 fn build_compacted_history_with_limit(
     mut history: Vec<ResponseItemEnvelope>,
-    user_messages: &[CompactedUserMessage],
+    user_messages: &[CompactedUserMessage<'_>],
     summary_text: &str,
     max_tokens: usize,
 ) -> Vec<ResponseItemEnvelope> {
-    let mut selected_messages: Vec<CompactedUserMessage> = Vec::new();
+    let mut selected_messages = Vec::new();
     if max_tokens > 0 {
         let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {
@@ -678,61 +668,58 @@ fn build_compacted_history_with_limit(
                 break;
             }
             let tokens = approx_token_count(&message.message);
-            if tokens <= remaining {
-                selected_messages.push(message.clone());
-                remaining = remaining.saturating_sub(tokens);
+            let ResponseItem::Message {
+                id,
+                content,
+                internal_chat_message_metadata_passthrough,
+                ..
+            } = message.original
+            else {
+                continue;
+            };
+            let mut passthrough = internal_chat_message_metadata_passthrough.clone();
+            let mut harness_metadata = message.harness_metadata.cloned();
+            let content = if tokens <= remaining
+                && content
+                    .iter()
+                    .all(|part| matches!(part, ContentItem::InputText { .. }))
+            {
+                content.clone()
             } else {
-                let truncated =
-                    truncate_text(&message.message, TruncationPolicy::Tokens(remaining));
-                let mut harness_metadata = message.harness_metadata.clone();
-                if let Some(metadata) = &mut harness_metadata {
-                    metadata.mark_retained_sources_incomplete();
+                // Rebuild only the text fallback; never clone discarded media.
+                if let Some(kinds) = passthrough
+                    .as_mut()
+                    .and_then(|metadata| metadata.content_item_kinds.as_mut())
+                {
+                    *kinds = vec![ContentItemKind("user.text".to_owned())];
                 }
-                selected_messages.push(CompactedUserMessage {
-                    id: message.id.clone(),
-                    message: truncated,
-                    internal_chat_message_metadata_passthrough: message
-                        .internal_chat_message_metadata_passthrough
-                        .clone(),
-                    harness_metadata,
-                });
+                vec![ContentItem::InputText {
+                    text: truncate_text(&message.message, TruncationPolicy::Tokens(remaining)),
+                }]
+            };
+            if tokens > remaining
+                && let Some(metadata) = &mut harness_metadata
+            {
+                metadata.mark_retained_sources_incomplete();
+            }
+            selected_messages.push(ResponseItemEnvelope {
+                item: ResponseItem::Message {
+                    id: id.clone(),
+                    role: "user".to_owned(),
+                    content,
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: passthrough,
+                },
+                metadata: harness_metadata,
+            });
+            if tokens > remaining {
                 break;
             }
+            remaining = remaining.saturating_sub(tokens);
         }
         selected_messages.reverse();
     }
-
-    for message in &selected_messages {
-        let mut item = ResponseItem::Message {
-            id: message.id.clone(),
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: message.message.clone(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: message
-                .internal_chat_message_metadata_passthrough
-                .clone(),
-        };
-        if message
-            .internal_chat_message_metadata_passthrough
-            .as_ref()
-            .and_then(|metadata| metadata.content_item_kinds.as_ref())
-            .is_some()
-        {
-            let _ = set_annotated_content(
-                &mut item,
-                vec![AnnotatedContent::input_text(
-                    &message.message,
-                    ContentItemKind("user.text".to_string()),
-                )],
-            );
-        }
-        history.push(ResponseItemEnvelope {
-            item,
-            metadata: message.harness_metadata.clone(),
-        });
-    }
+    history.extend(selected_messages);
 
     let summary_text = if summary_text.is_empty() {
         "(no summary available)".to_string()

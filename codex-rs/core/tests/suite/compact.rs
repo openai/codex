@@ -526,6 +526,8 @@ async fn summarize_context_three_requests_and_instructions(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     const CUSTOM_INSTRUCTIONS: &str = "## Plan tool\nNever deploy without explicit approval.\n";
+    const ORIGINAL_FIRST_PART: &str =
+        "Example from our runbook:\n```sh\ndeploy --environment production";
 
     // Set up a mock server that we can inspect after the run.
     let server = start_mock_server().await;
@@ -569,11 +571,15 @@ async fn summarize_context_three_requests_and_instructions(
     codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![
             UserInput::Text {
-                text: "hello world".into(),
+                text: ORIGINAL_FIRST_PART.into(),
                 text_elements: Vec::new(),
             },
             UserInput::Text {
-                text: " second fragment".into(),
+                text: String::new(),
+                text_elements: Vec::new(),
+            },
+            UserInput::Text {
+                text: "```\nDo not deploy to production. Only inspect the configuration.".into(),
                 text_elements: Vec::new(),
             },
         ]))
@@ -603,6 +609,11 @@ async fn summarize_context_three_requests_and_instructions(
     assert_eq!(requests.len(), 3, "expected exactly three requests");
     let body2 = requests[1].body_json();
     let body3 = requests[2].body_json();
+    let original_user_message = requests[0]
+        .input()
+        .into_iter()
+        .find(|item| item["role"] == "user" && item["content"][0]["text"] == ORIGINAL_FIRST_PART)
+        .expect("original multipart user message");
 
     // Manual compact should keep the baseline developer instructions.
     let instr1 = requests[0].instructions_text();
@@ -678,9 +689,7 @@ async fn summarize_context_three_requests_and_instructions(
         "third request should include the new user message"
     );
     assert!(
-        messages
-            .iter()
-            .any(|(r, t)| r == "user" && t == "hello world second fragment"),
+        input3.contains(&original_user_message),
         "third request should include the original user message"
     );
     assert!(
@@ -704,7 +713,7 @@ async fn summarize_context_three_requests_and_instructions(
         .expect("local compaction should persist replacement history");
     let compacted_user_message = replacement_history
         .iter()
-        .find(|item| item["content"][0]["text"] == "hello world second fragment")
+        .find(|item| item["content"][0]["text"] == ORIGINAL_FIRST_PART)
         .expect("persisted replacement history should contain the compacted user message");
     assert_eq!(
         json!({
@@ -717,8 +726,8 @@ async fn summarize_context_three_requests_and_instructions(
         json!({
             "type": "message",
             "role": "user",
-            "content": [{"type": "input_text", "text": "hello world second fragment"}],
-            "content_item_kinds": ["user.text"],
+            "content": original_user_message["content"],
+            "content_item_kinds": ["user.text", "user.text", "user.text"],
         }),
     );
 

@@ -222,11 +222,10 @@ fn user_message(text: &str) -> ResponseItem {
     }
 }
 
-fn compacted_user_message(text: &str) -> CompactedUserMessage {
+fn compacted_user_message<'a>(text: &str, original: &'a ResponseItem) -> CompactedUserMessage<'a> {
     CompactedUserMessage {
-        id: None,
         message: text.to_string(),
-        internal_chat_message_metadata_passthrough: None,
+        original,
         harness_metadata: None,
     }
 }
@@ -290,35 +289,70 @@ fn collect_user_messages_extracts_user_text_only() {
 
     let collected = collect_user_messages(&items);
 
-    assert_eq!(
-        vec![CompactedUserMessage {
-            id: Some(ResponseItemId::with_suffix("msg", "user")),
-            ..compacted_user_message("first")
-        }],
-        collected,
-    );
+    assert_eq!(vec![compacted_user_message("first", &items[1])], collected,);
 }
 
-#[test]
-fn collect_annotated_user_messages_extracts_user_text_only() {
+#[test_case(json!([{"type": "input_text", "text": "first"}]), "first", true; "unchanged text")]
+#[test_case(json!([
+    {"type": "input_text", "text": "first"},
+    {"type": "input_text", "text": ""},
+    {"type": "input_text", "text": "second"}
+]), "firstsecond", true; "text boundaries")]
+#[test_case(json!([
+    {"type": "input_text", "text": "first"},
+    {"type": "input_image", "image_url": "file://image.png"}
+]), "first", false; "omitted media")]
+fn collect_annotated_user_messages_extracts_user_text_only(
+    input_content: serde_json::Value,
+    expected_text: &str,
+    preserve_content: bool,
+) {
+    let source = json!({
+        "id": {"message_id": "source", "turn_id": "turn", "role": "user"},
+        "revision": "retained_revision", "complete": true,
+    });
+    let metadata: CodexHarnessMetadata = serde_json::from_value(json!({
+        "retained_source": source, "guardian_sources": [source],
+        "guardian_source_order_guidance": true, "user_input_order": 7,
+    }))
+    .unwrap();
+    let mut item = user_message("first");
+    if let ResponseItem::Message { content, .. } = &mut item {
+        *content = serde_json::from_value(input_content).unwrap();
+    }
     let items = vec![
         ResponseItemEnvelope {
-            item: user_message("first"),
-            metadata: Some(CodexHarnessMetadata::default()),
+            item: item.clone(),
+            metadata: Some(metadata.clone()),
         },
         ResponseItemEnvelope::new(ResponseItem::Other),
     ];
 
     let collected = collect_annotated_user_messages(&items);
 
+    if !preserve_content {
+        item = user_message(expected_text);
+    }
+    let expected = ResponseItemEnvelope {
+        item,
+        metadata: Some(metadata),
+    };
     assert_eq!(
+        collected,
         vec![CompactedUserMessage {
-            id: None,
-            message: "first".to_string(),
-            internal_chat_message_metadata_passthrough: None,
-            harness_metadata: Some(CodexHarnessMetadata::default()),
-        }],
-        collected
+            message: expected_text.to_owned(),
+            original: &items[0].item,
+            harness_metadata: items[0].metadata.as_ref(),
+        }]
+    );
+    assert_eq!(
+        build_compacted_history(Vec::new(), &collected, "summary"),
+        vec![
+            expected,
+            ResponseItemEnvelope::new(ContextualUserFragment::into(CompactionSummary::new(
+                "summary"
+            ))),
+        ],
     );
 }
 
@@ -361,7 +395,10 @@ do things
 
     let collected = collect_user_messages(&items);
 
-    assert_eq!(vec![compacted_user_message("real user message")], collected);
+    assert_eq!(
+        vec![compacted_user_message("real user message", &items[2])],
+        collected
+    );
 }
 
 #[test]
@@ -381,7 +418,10 @@ fn collect_user_messages_filters_legacy_warnings() {
 
     let collected = collect_user_messages(&items);
 
-    assert_eq!(vec![compacted_user_message("real user message")], collected);
+    assert_eq!(
+        vec![compacted_user_message("real user message", &items[3])],
+        collected
+    );
 }
 
 #[test]
@@ -390,15 +430,14 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
     // that oversized user content is truncated.
     let max_tokens = 16;
     let big = "word ".repeat(200);
-    let user_message = CompactedUserMessage {
-        id: Some(ResponseItemId::with_suffix("msg", "long-user")),
-        message: big.clone(),
-        internal_chat_message_metadata_passthrough: None,
-        harness_metadata: Some(CodexHarnessMetadata::default()),
-    };
+    let mut original = ResponseItemEnvelope::new(user_message(&big));
+    original
+        .item
+        .set_id(Some(ResponseItemId::with_suffix("msg", "long-user")));
+    original.metadata = Some(CodexHarnessMetadata::default());
     let history = super::build_compacted_history_with_limit(
         Vec::new(),
-        std::slice::from_ref(&user_message),
+        &collect_annotated_user_messages(std::slice::from_ref(&original)),
         "SUMMARY",
         max_tokens,
     );
@@ -430,7 +469,7 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
         other => panic!("unexpected item in history: {other:?}"),
     };
     assert_eq!(summary_text, "SUMMARY");
-    assert_eq!(history[0].id(), user_message.id.as_ref());
+    assert_eq!(history[0].id(), original.id());
     assert_eq!(history[0].metadata, Some(CodexHarnessMetadata::default()));
     assert_eq!(history[1].metadata, None);
 }
@@ -438,7 +477,8 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
 #[test]
 fn build_token_limited_compacted_history_appends_summary_message() {
     let initial_context: Vec<ResponseItemEnvelope> = Vec::new();
-    let user_messages = vec![compacted_user_message("first user message")];
+    let original = user_message("first user message");
+    let user_messages = collect_user_messages(std::slice::from_ref(&original));
     let summary_text = "summary text";
 
     let history = build_compacted_history(initial_context, &user_messages, summary_text);
@@ -459,24 +499,27 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 
 #[test]
 fn build_compacted_history_preserves_user_message_passthrough_metadata() {
+    let original = serde_json::from_value(json!({
+        "type": "message", "role": "user",
+        "id": ResponseItemId::with_suffix("msg", "user"),
+        "content": [
+            {"type": "input_image", "image_url": "file://image.png"},
+            {"type": "input_text", "text": "first user message"},
+            {"type": "input_audio", "audio_url": "file://audio.wav"}
+        ],
+        "internal_chat_message_metadata_passthrough": {
+            "turn_id": "turn-1",
+            "content_item_kinds": ["user.image", "user.text", "user.audio"]
+        }
+    }))
+    .unwrap();
+    let original = ResponseItemEnvelope {
+        item: original,
+        metadata: Some(CodexHarnessMetadata::default()),
+    };
     let history = build_compacted_history(
         Vec::new(),
-        &[CompactedUserMessage {
-            id: Some(ResponseItemId::with_suffix("msg", "user")),
-            message: "first user message".to_string(),
-            internal_chat_message_metadata_passthrough: Some(
-                InternalChatMessageMetadataPassthrough {
-                    turn_id: Some("turn-1".to_string()),
-                    content_item_kinds: Some(vec![
-                        ContentItemKind("user.image".to_string()),
-                        ContentItemKind("user.text".to_string()),
-                        ContentItemKind("user.audio".to_string()),
-                    ]),
-                    ..Default::default()
-                },
-            ),
-            harness_metadata: Some(CodexHarnessMetadata::default()),
-        }],
+        &collect_annotated_user_messages(std::slice::from_ref(&original)),
         "summary text",
     );
 
