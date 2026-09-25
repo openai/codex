@@ -78,6 +78,7 @@ impl PlanType {
             "plus" => Self::Known(KnownPlan::Plus),
             "pro" => Self::Known(KnownPlan::Pro),
             "prolite" => Self::Known(KnownPlan::ProLite),
+            "promax" => Self::Known(KnownPlan::ProMax),
             "team" => Self::Known(KnownPlan::Team),
             "self_serve_business_prolite" => Self::Known(KnownPlan::SelfServeBusinessProLite),
             "self_serve_business_usage_based" => {
@@ -104,6 +105,7 @@ pub enum KnownPlan {
     Plus,
     Pro,
     ProLite,
+    ProMax,
     Team,
     #[serde(rename = "self_serve_business_prolite")]
     SelfServeBusinessProLite,
@@ -131,8 +133,9 @@ impl KnownPlan {
             Self::Free => "Free",
             Self::Go => "Go",
             Self::Plus => "Plus",
-            Self::Pro => "Pro",
-            Self::ProLite => "Pro Lite",
+            Self::Pro => "Pro (More)",
+            Self::ProLite => "Pro",
+            Self::ProMax => "Pro (Max)",
             Self::Team => "Team",
             Self::SelfServeBusinessProLite => "Self Serve Business ProLite",
             Self::SelfServeBusinessUsageBased => "Self Serve Business Usage Based",
@@ -154,6 +157,7 @@ impl KnownPlan {
             Self::Plus => "plus",
             Self::Pro => "pro",
             Self::ProLite => "prolite",
+            Self::ProMax => "promax",
             Self::Team => "team",
             Self::SelfServeBusinessProLite => "self_serve_business_prolite",
             Self::SelfServeBusinessUsageBased => "self_serve_business_usage_based",
@@ -233,6 +237,7 @@ mod tests {
             PlanType::Known(KnownPlan::EnterpriseCbpAutomation)
         );
         for (raw, known) in [
+            ("promax", KnownPlan::ProMax),
             ("edu_plus", KnownPlan::EduPlus),
             ("edu_pro", KnownPlan::EduPro),
         ] {

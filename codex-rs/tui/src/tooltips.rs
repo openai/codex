@@ -94,7 +94,11 @@ pub(crate) fn preferred_tooltip<R: Rng + ?Sized>(
             Some(plan_type)
                 if matches!(
                     plan_type,
-                    PlanType::Plus | PlanType::Enterprise | PlanType::Pro | PlanType::ProLite
+                    PlanType::Plus
+                        | PlanType::Enterprise
+                        | PlanType::Pro
+                        | PlanType::ProLite
+                        | PlanType::ProMax
                 ) || plan_type.is_team_like()
                     || plan_type.is_business_like() =>
             {

@@ -37,7 +37,7 @@ fn id_token_info_parses_email_and_plan() {
 
     let info = parse_chatgpt_jwt_claims(&fake_jwt).expect("should parse");
     assert_eq!(info.email.as_deref(), Some("user@example.com"));
-    assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Pro"));
+    assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Pro (More)"));
 }
 
 #[test]

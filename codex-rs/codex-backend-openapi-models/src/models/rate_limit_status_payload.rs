@@ -108,6 +108,8 @@ pub enum PlanType {
     Pro,
     #[serde(rename = "prolite")]
     ProLite,
+    #[serde(rename = "promax")]
+    ProMax,
     #[serde(rename = "free_workspace")]
     FreeWorkspace,
     #[serde(rename = "team")]

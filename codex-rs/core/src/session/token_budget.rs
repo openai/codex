@@ -14,7 +14,7 @@ fn experimental_context_is_eligible(auth_mode: AuthMode, plan_type: Option<PlanT
     auth_mode == AuthMode::Chatgpt
         && matches!(
             plan_type,
-            Some(PlanType::Plus | PlanType::Pro | PlanType::ProLite)
+            Some(PlanType::Plus | PlanType::Pro | PlanType::ProLite | PlanType::ProMax)
         )
 }
 
@@ -235,6 +235,7 @@ mod tests {
             (AuthMode::Chatgpt, PlanType::Plus, true),
             (AuthMode::Chatgpt, PlanType::Pro, true),
             (AuthMode::Chatgpt, PlanType::ProLite, true),
+            (AuthMode::Chatgpt, PlanType::ProMax, true),
             (AuthMode::Chatgpt, PlanType::Free, false),
             (AuthMode::Chatgpt, PlanType::Enterprise, false),
             (AuthMode::ApiKey, PlanType::Pro, false),

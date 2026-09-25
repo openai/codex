@@ -16,6 +16,7 @@ pub enum PlanType {
     Plus,
     Pro,
     ProLite,
+    ProMax,
     Team,
     #[serde(rename = "self_serve_business_prolite")]
     #[ts(rename = "self_serve_business_prolite")]
@@ -104,6 +105,7 @@ impl From<KnownPlan> for PlanType {
             KnownPlan::Plus => Self::Plus,
             KnownPlan::Pro => Self::Pro,
             KnownPlan::ProLite => Self::ProLite,
+            KnownPlan::ProMax => Self::ProMax,
             KnownPlan::Team => Self::Team,
             KnownPlan::SelfServeBusinessProLite => Self::SelfServeBusinessProLite,
             KnownPlan::SelfServeBusinessUsageBased => Self::SelfServeBusinessUsageBased,
