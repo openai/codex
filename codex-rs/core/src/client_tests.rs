@@ -486,7 +486,7 @@ fn output_with_tool_result_metadata(metadata: ToolResultMetadata) -> ResponseIte
 }
 
 #[tokio::test]
-async fn responses_request_limits_internal_metadata_to_resolved_first_party_https_endpoint()
+async fn responses_request_includes_internal_metadata_for_provider_grant_or_first_party_destination()
 -> anyhow::Result<()> {
     use crate::session::step_context::StepContext;
     use crate::tools::ExecutedToolCalls;
@@ -548,13 +548,13 @@ async fn responses_request_limits_internal_metadata_to_resolved_first_party_http
     )]);
     without_omitted_metadata.mark_tool_calls_complete();
 
-    let provider =
+    let mut provider =
         ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
     let mut api_provider = provider.to_api_provider(/*auth_mode*/ None)?;
     let mut client = test_model_client(SessionSource::Cli);
     Arc::get_mut(&mut client.state)
         .expect("test client should have unique session state")
-        .provider = create_model_provider(provider, /*auth_manager*/ None);
+        .provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
     let output = output_with_tool_result_metadata(ToolResultMetadata::new(&json!({
         "private": { "resource": "raw-result-metadata" },
     })));
@@ -582,19 +582,27 @@ async fn responses_request_limits_internal_metadata_to_resolved_first_party_http
         TestCodexResponsesRequestKind::Turn,
     );
     responses_metadata.mcp_attribution = Some(attribution.clone());
-    for (base_url, allowed) in [
-        ("https://api.openai.com/v1", true),
-        ("https://chatgpt.com/backend-api/codex", true),
-        ("https://api.chatgpt-staging.com/v1", true),
-        ("https://proxy.example.com/v1", false),
-        ("http://api.openai.com/v1", false),
-        ("https://api.openai.com.evil.example/v1", false),
-        ("https://chatgpt.com.evil.example/v1", false),
-        ("https://api.openai.com@proxy.example.com/v1", false),
-        ("not a URL", false),
+    for (provider_grant, base_url, allowed) in [
+        (false, "https://api.openai.com/v1", true),
+        (false, "https://chatgpt.com/backend-api/codex", true),
+        (false, "https://api.chatgpt-staging.com/v1", true),
+        (false, "https://proxy.example.com/v1", false),
+        (false, "http://api.openai.com/v1", false),
+        (false, "https://api.openai.com.evil.example/v1", false),
+        (false, "https://chatgpt.com.evil.example/v1", false),
+        (false, "https://api.openai.com@proxy.example.com/v1", false),
+        (false, "not a URL", false),
+        (true, "http://provider.example/v1", true),
     ] {
+        provider.include_internal_metadata = provider_grant;
+        Arc::get_mut(&mut client.state)
+            .expect("test client should have unique session state")
+            .provider = create_model_provider(provider.clone(), /*auth_manager*/ None);
         api_provider.base_url = base_url.to_string();
-        let include_internal = super::is_internal_metadata_destination(&api_provider);
+        let include_internal = client
+            .state
+            .provider
+            .include_internal_metadata(&api_provider);
         for responses_lite in [false, true] {
             let mut model = test_model_info();
             model.use_responses_lite = responses_lite;
@@ -776,7 +784,10 @@ fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
         codex_protocol::config_types::ReasoningSummary::None,
         /*service_tier*/ None,
         &responses_metadata,
-        super::is_internal_metadata_destination(&api_provider),
+        client
+            .state
+            .provider
+            .include_internal_metadata(&api_provider),
     )?;
     let body = serde_json::to_value(&request)?;
     // Whole-input equality covers bindings, arguments, results, sources and completion too.
@@ -797,8 +808,10 @@ fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
 
 #[test]
 fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()> {
-    let provider =
-        ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
+    let provider = ModelProviderInfo {
+        include_internal_metadata: false,
+        ..ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()))
+    };
     let mut api_provider = provider.to_api_provider(/*auth_mode*/ None)?;
     let mut client = test_model_client(SessionSource::Cli);
     Arc::get_mut(&mut client.state)
@@ -869,7 +882,10 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
         previous_output.set_turn_id_if_missing("previous-turn");
         current_output.set_turn_id_if_missing("current-turn");
         api_provider.base_url = base_url.to_string();
-        let include_internal = super::is_internal_metadata_destination(&api_provider);
+        let include_internal = client
+            .state
+            .provider
+            .include_internal_metadata(&api_provider);
         let previous = client.build_responses_request(
             &Prompt {
                 input: vec![previous_output],
@@ -924,7 +940,7 @@ fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()
 }
 
 #[tokio::test]
-async fn responses_http_omits_raw_tool_metadata_for_openai_named_custom_endpoint()
+async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
 -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -986,12 +1002,7 @@ async fn responses_http_omits_raw_tool_metadata_for_openai_named_custom_endpoint
     let requests = server.received_requests().await.expect("received requests");
     assert_eq!(requests.len(), 1);
     let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
-    assert_eq!(
-        body["input"],
-        serde_json::to_value(vec![output_with_tool_result_metadata(
-            ToolResultMetadata::default(),
-        )])?,
-    );
+    assert_eq!(body["input"], serde_json::to_value(vec![output.clone()])?);
     assert_eq!(prompt.input, vec![output]);
     Ok(())
 }

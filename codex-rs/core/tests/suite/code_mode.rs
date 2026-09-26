@@ -1991,6 +1991,8 @@ fn result_metadata_apps_builder(base_url: String, account_email: &str) -> TestCo
     search_capable_apps_builder(base_url)
         .with_auth(auth)
         .with_config(|config| {
+            // Keep this mock provider ungranted to cover custom-provider filtering.
+            config.model_provider.include_internal_metadata = false;
             for feature in [
                 Feature::CodeMode,
                 Feature::CodeModeOnly,
@@ -2490,7 +2492,7 @@ async fn result_metadata_preserves_results_within_request_budget(
     );
     let captured = serde_json::to_value(captured)?;
     for (input, expected_metadata) in [
-        // Custom inference endpoints must strip raw metadata, including omission markers.
+        // Ungranted custom inference endpoints strip raw metadata, including omission markers.
         (request.input(), None),
         (
             captured.as_array().unwrap().clone(),
@@ -2684,7 +2686,7 @@ async fn result_metadata_follows_call_binding(
         assert_eq!(result.success, Some(!is_error));
     }
     if metadata_enabled {
-        // The custom inference endpoint gets no raw metadata; inspect capture independently.
+        // The ungranted custom endpoint gets no raw metadata; inspect capture independently.
         assert_result_metadata_call(&output, &arguments, /*expected_metadata*/ None);
         let captured = serde_json::to_value(captured)?;
         let captured_output = captured

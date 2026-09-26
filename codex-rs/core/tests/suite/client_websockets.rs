@@ -214,7 +214,7 @@ async fn responses_websocket_preserves_credit_usage_metadata() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_omits_raw_tool_metadata_for_openai_named_custom_endpoint() {
+async fn responses_websocket_preserves_raw_tool_metadata_for_openai_custom_endpoint() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![vec![
@@ -238,11 +238,7 @@ async fn responses_websocket_omits_raw_tool_metadata_for_openai_named_custom_end
     output.append_executed_tool_calls(vec![call]);
     output.mark_tool_calls_complete();
     let prompt = prompt_with_input(vec![output.clone()]);
-    let mut expected = serde_json::to_value(&output).unwrap();
-    expected["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("tool_result_metadata");
+    let expected = serde_json::to_value(&output).unwrap();
 
     let mut client_session = harness.client.new_session();
     stream_until_complete_with_model_info(
@@ -2643,6 +2639,7 @@ fn websocket_provider_with_connect_timeout(
         requires_openai_auth: false,
         supports_websockets: true,
         supports_standalone_web_search: false,
+        include_internal_metadata: false,
     }
 }
 

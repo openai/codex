@@ -411,16 +411,6 @@ fn response_items_equal_ignoring_internal_metadata(
     previous == current
 }
 
-/// Whether the resolved outbound Responses destination may receive internal tool metadata.
-fn is_internal_metadata_destination(provider: &ApiProvider) -> bool {
-    url::Url::parse(&provider.base_url).ok().is_some_and(|url| {
-        url.scheme() == "https"
-            && url.host_str().is_some_and(|host| {
-                host == "api.openai.com" || codex_http_client::is_allowed_chatgpt_host(host)
-            })
-    })
-}
-
 impl WebsocketSession {
     fn reset(&mut self, reason: Option<&'static str>) {
         // Per-socket backend metrics call a resend after reconnect "initial".
@@ -1674,7 +1664,11 @@ impl ModelClientSession {
                 .client
                 .current_client_setup(ClientRouting::Workspace)
                 .await?;
-            let include_internal = is_internal_metadata_destination(&client_setup.api_provider);
+            let include_internal = self
+                .client
+                .state
+                .provider
+                .include_internal_metadata(&client_setup.api_provider);
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
@@ -1864,7 +1858,11 @@ impl ModelClientSession {
                 .client
                 .current_client_setup(ClientRouting::Workspace)
                 .await?;
-            let include_internal = is_internal_metadata_destination(&client_setup.api_provider);
+            let include_internal = self
+                .client
+                .state
+                .provider
+                .include_internal_metadata(&client_setup.api_provider);
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);

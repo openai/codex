@@ -688,6 +688,7 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
     )
     .await;
     let mut builder = search_capable_apps_builder(apps.chatgpt_base_url).with_config(|config| {
+        config.model_provider.include_internal_metadata = false;
         config.analytics_enabled = Some(true);
         config
             .features
@@ -757,7 +758,7 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
             recorded_metadata["executed_tool_calls"][0]["arguments"],
             json!({"query": query})
         );
-        // A custom Responses provider must never receive internal result metadata.
+        // An ungranted custom Responses provider must not receive internal result metadata.
         assert!(
             wire_metadata["executed_tool_calls"][0]
                 .get("tool_result_metadata")
