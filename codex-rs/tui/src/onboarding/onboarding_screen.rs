@@ -33,6 +33,8 @@ use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::app_server_session::AppServerSession;
+use crate::clipboard_copy::CopyFormat;
+use crate::clipboard_copy::CopyStatus;
 use crate::config_update::RemoteProjectTrust;
 use crate::config_update::format_config_error;
 use crate::config_update::replace_config_value;
@@ -48,6 +50,7 @@ use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
 use crate::tui::FrameRequester;
+use crate::tui::OverlayInput;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
@@ -543,6 +546,30 @@ pub(crate) async fn run_onboarding_app(
 }
 
 async fn run_onboarding_screen(
+    onboarding_screen: OnboardingScreen,
+    app_server_request_handle: Option<AppServerRequestHandle>,
+    app_server: Option<&mut AppServerSession>,
+    tui: &mut Tui,
+) -> Result<OnboardingResult> {
+    // Let the terminal select and copy login URLs and device codes, even in fullscreen mode.
+    let previous_input = tui.overlay_input;
+    let result = match tui.set_overlay_input(OverlayInput::Onboarding) {
+        Ok(()) => {
+            run_onboarding_screen_inner(
+                onboarding_screen,
+                app_server_request_handle,
+                app_server,
+                tui,
+            )
+            .await
+        }
+        Err(error) => Err(error.into()),
+    };
+    let restore = tui.set_overlay_input(previous_input);
+    result.and_then(|result| restore.map(|()| result).map_err(Into::into))
+}
+
+async fn run_onboarding_screen_inner(
     mut onboarding_screen: OnboardingScreen,
     app_server_request_handle: Option<AppServerRequestHandle>,
     mut app_server: Option<&mut AppServerSession>,
@@ -552,6 +579,7 @@ async fn run_onboarding_screen(
     let mut directory_trust_persisted = false;
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
+    let mut pending_copy: Option<(u64, String)> = None;
 
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&onboarding_screen, frame.area());
@@ -569,7 +597,36 @@ async fn run_onboarding_screen(
                     tui.screen_size_for_event(&event)?;
                     match event {
                         TuiEvent::Key(key_event) => {
-                            onboarding_screen.handle_key_event(key_event);
+                            let copy_link = if key_event.kind == KeyEventKind::Press
+                                && keys::COPY_LINK.is_pressed(key_event)
+                                && let Some(Step::Auth(widget)) = onboarding_screen.current_steps().last()
+                                && let Ok(state) = widget.sign_in_state.read()
+                                && let SignInState::ChatGptContinueInBrowser(state) = &*state
+                                && !state.auth_url.is_empty()
+                            {
+                                Some((state.login_id.clone(), Arc::<str>::from(state.auth_url.as_str())))
+                            } else {
+                                None
+                            };
+                            if let Some((login_id, url)) = copy_link {
+                                let result = tui.clipboard.copy(url, CopyFormat::PlainText, tui.frame_requester());
+                                let message = match result {
+                                    Ok(CopyStatus::Pending(id)) => {
+                                        pending_copy = Some((id, login_id));
+                                        "Copying link…".to_string()
+                                    }
+                                    Ok(CopyStatus::Busy) => "Clipboard busy; try again".to_string(),
+                                    Ok(CopyStatus::Confirmed) => "Copied link to clipboard".to_string(),
+                                    Ok(CopyStatus::Unconfirmed) => "Copy requested; check your clipboard".to_string(),
+                                    Err(error) => format!("Could not copy link: {error}"),
+                                };
+                                if let Some(Step::Auth(widget)) = onboarding_screen.current_steps_mut().into_iter().last() {
+                                    *widget.error.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message);
+                                }
+                                tui.frame_requester().schedule_frame();
+                            } else {
+                                onboarding_screen.handle_key_event(key_event);
+                            }
                             if !directory_trust_persisted {
                                 directory_trust_persisted = persist_selected_trust(
                                     &mut onboarding_screen,
@@ -586,6 +643,25 @@ async fn run_onboarding_screen(
                         | TuiEvent::Resize(_)
                         | TuiEvent::FocusGained
                         | TuiEvent::FocusLost => {
+                            if let Some((id, result)) = tui.clipboard.poll().cloned()
+                                && let Some((pending_id, login_id)) = &pending_copy
+                                && id == *pending_id
+                            {
+                                if let Some(Step::Auth(widget)) = onboarding_screen.current_steps_mut().into_iter().last()
+                                    && widget.sign_in_state.read().is_ok_and(|state| {
+                                        matches!(&*state, SignInState::ChatGptContinueInBrowser(state) if state.login_id == *login_id)
+                                    })
+                                {
+                                    let message = match result {
+                                        Ok(CopyStatus::Confirmed) => "Copied link to clipboard".to_string(),
+                                        Ok(CopyStatus::Unconfirmed) => "Copy requested; check your clipboard".to_string(),
+                                        Ok(CopyStatus::Busy | CopyStatus::Pending(_)) => "Clipboard busy; try again".to_string(),
+                                        Err(error) => format!("Could not copy link: {error}"),
+                                    };
+                                    *widget.error.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(message);
+                                }
+                                pending_copy = None;
+                            }
                             for step in &onboarding_screen.steps {
                                 if let Step::Welcome(widget) = step {
                                     if matches!(&event, TuiEvent::Resume) {

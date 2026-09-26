@@ -5,7 +5,7 @@ expression: contents
   Finish signing in via your browser
 
   If the link doesn't open automatically,
-open the following link to authenticate:
+press c to copy it:
 
   https://auth.openai.com/oauth/authorize?re
 sponse_type=code&client_id=app_EMoamEEZ73f0C

@@ -629,11 +629,12 @@ pub enum TuiEvent {
     FocusLost,
 }
 
-/// The overlay requesting pointer reports; ordinary pickers retain alternate-scroll input.
+/// The current screen's pointer policy; ordinary pickers retain alternate-scroll input.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum OverlayInput {
     #[default]
     Default,
+    Onboarding,
     Transcript,
     StaticPager,
     Usage,
@@ -643,7 +644,7 @@ impl OverlayInput {
     fn captures_mouse(self, owned_screen: bool) -> bool {
         match self {
             Self::Default => owned_screen,
-            Self::StaticPager => false,
+            Self::Onboarding | Self::StaticPager => false,
             Self::Transcript | Self::Usage => true,
         }
     }
@@ -676,7 +677,7 @@ pub struct Tui {
     alt_screen_enabled: bool,
     // Keep the alternate screen alive when an overlay closes.
     owned_screen: bool,
-    overlay_input: OverlayInput,
+    pub(crate) overlay_input: OverlayInput,
     // Copies and native ownership survive closing an overlay or startup picker.
     pub(crate) clipboard: crate::clipboard_copy::worker::ClipboardWorker,
     // Keeps unmanaged process stderr writes out of the inline viewport.
