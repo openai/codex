@@ -65,6 +65,7 @@ pub(crate) enum CommandPopupPlacement {
 pub(crate) struct ComposerRenderOptions<'a> {
     /// Reserve a shared hint row independently of whether it currently contains a notice.
     pub(crate) composer_gap: Option<&'a crate::bottom_pane::ComposerGap>,
+    pub(crate) working_tip: Option<&'a crate::turn_tip::TurnTip>,
     pub(crate) warning_count: usize,
     pub(crate) textarea_right_reserve: u16,
     /// Keep configured status below the composer while hints occupy the final row.

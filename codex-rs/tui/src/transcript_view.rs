@@ -19,6 +19,7 @@ mod search;
 mod selection;
 mod snapshot;
 mod text;
+mod turn_tip;
 
 use std::sync::Arc;
 
@@ -89,6 +90,7 @@ pub(crate) struct TranscriptView {
     follow_control: follow_control::FollowControl,
     copy_feedback: Option<composer_gap::CopyFeedback>,
     composer_tip: Option<(Rect, HyperlinkLine)>,
+    turn_tip_key: Option<EntryKey>,
     cache: LayoutCache,
     live: Option<Arc<TextLayout>>,
     live_separated: Option<Arc<TextLayout>>,
@@ -120,6 +122,7 @@ impl Default for TranscriptView {
             follow_control: follow_control::FollowControl::default(),
             copy_feedback: None,
             composer_tip: None,
+            turn_tip_key: None,
             cache: LayoutCache::default(),
             live: None,
             live_separated: None,

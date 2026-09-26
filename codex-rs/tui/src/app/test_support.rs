@@ -39,6 +39,7 @@ pub(crate) async fn make_test_app() -> App {
         file_search,
         transcript_cells: Vec::new(),
         native_history: Default::default(),
+        turn_tips: Default::default(),
         transcript_view: Default::default(),
         last_rendered_history_tail: None,
         last_thread_usage_status_cell: None,

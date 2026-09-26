@@ -23,7 +23,7 @@ use crossterm::event::MouseEventKind::Up;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 
-fn user_cell(message: &str) -> Arc<dyn HistoryCell> {
+pub(in crate::app) fn user_cell(message: &str) -> Arc<dyn HistoryCell> {
     Arc::new(UserHistoryCell {
         spoken: false,
         message: message.to_string(),
@@ -33,7 +33,7 @@ fn user_cell(message: &str) -> Arc<dyn HistoryCell> {
     })
 }
 
-fn attach_thread(app: &mut App, thread_id: ThreadId) {
+pub(in crate::app) fn attach_thread(app: &mut App, thread_id: ThreadId) {
     app.chat_widget.handle_thread_session(ThreadSessionState {
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id,
@@ -59,7 +59,7 @@ fn attach_thread(app: &mut App, thread_id: ThreadId) {
     });
 }
 
-pub(super) fn buffer_text(buffer: &Buffer) -> String {
+pub(in crate::app) fn buffer_text(buffer: &Buffer) -> String {
     buffer
         .content()
         .chunks(usize::from(buffer.area.width))
@@ -515,6 +515,7 @@ async fn owned_details_keep_the_composer_cursor_and_screen() -> Result<()> {
             /*footer*/ None,
             crate::bottom_pane::CommandPopupPlacement::Overlay,
             Some(&crate::bottom_pane::ComposerGap::default()),
+            /*working_tip*/ None,
         )
         .cursor_pos(bottom_area)
         .expect("composer cursor");

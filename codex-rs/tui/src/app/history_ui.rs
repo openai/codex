@@ -395,6 +395,7 @@ impl App {
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
+        self.turn_tips.dismiss();
         self.native_history = Default::default();
         self.cancel_pending_key_chord();
         self.transcript_view = Default::default();

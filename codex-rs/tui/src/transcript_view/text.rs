@@ -142,7 +142,16 @@ impl TextLayout {
 
     /// Add visual spacing between entries without changing any source position.
     pub(super) fn with_leading_separator(mut self) -> Self {
-        if !self.separated && !self.rows.is_empty() {
+        if !self.separated {
+            self = self.with_leading_spacer();
+            self.separated = !self.rows.is_empty();
+        }
+        self
+    }
+
+    /// Reserve one presentation-only row before existing spacing and source text.
+    pub(super) fn with_leading_spacer(mut self) -> Self {
+        if !self.rows.is_empty() {
             self.rows.insert(
                 /*index*/ 0,
                 TextRow {
@@ -158,7 +167,6 @@ impl TextLayout {
             if let Some(control) = &mut self.disclosure_control {
                 control.row += 1;
             }
-            self.separated = true;
         }
         self
     }
