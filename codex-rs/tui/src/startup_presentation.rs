@@ -81,6 +81,13 @@ pub(super) async fn load(
         .disable_paste_burst
         .or(config_toml.disable_paste_burst)
         .unwrap_or(/*default*/ false);
+    let welcome_motion = crate::motion::MotionMode::from_animations_enabled(
+        config_toml
+            .tui
+            .as_ref()
+            .is_none_or(|tui| tui.animations && tui.effects.welcome)
+            && crate::system_motion::mode() == crate::motion::MotionMode::Animated,
+    );
     Ok(StartupPresentation {
         bootstrap_config,
         config_cwd,
@@ -88,6 +95,7 @@ pub(super) async fn load(
             use_alt_screen,
             transcript_mode,
             status_line_enabled,
+            welcome_motion,
             keymap,
             disable_paste_burst,
         },

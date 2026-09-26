@@ -156,10 +156,16 @@ impl TranscriptView {
                     width,
                     expanded,
                 )
-            } else if detailed || mode == HistoryRenderMode::Rich {
-                TextLayout::new(cell.retained_hyperlink_lines(width, detailed), width)
             } else {
-                TextLayout::new(cell.display_hyperlink_lines_for_mode(width, mode), width)
+                TextLayout::new(
+                    crate::history_cell::fullscreen_session_lines(
+                        cell.as_ref(),
+                        width,
+                        detailed,
+                        mode,
+                    ),
+                    width,
+                )
             }
         }))
     }

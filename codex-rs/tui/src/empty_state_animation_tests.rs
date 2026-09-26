@@ -1,13 +1,159 @@
 //! Logo visibility, theme contrast, placement, and redraw lifecycle tests.
 
 use super::*;
+use crossterm::event::KeyModifiers;
 use pretty_assertions::assert_eq;
 
-impl EmptyStateAnimation {
-    // App integration tests inspect lifecycle eligibility without advancing the render clock.
-    pub(crate) fn is_eligible_for_test(&self) -> bool {
-        self.eligible
+#[test]
+fn first_screen_stage_ignores_notices_and_hides_instead_of_shrinking() {
+    let mut animation = EmptyStateAnimation::default();
+    animation.start_fresh();
+    let screen = Rect::new(
+        /*x*/ 7, /*y*/ 3, /*width*/ 80, /*height*/ 44,
+    );
+    let mut buffer = Buffer::empty(screen);
+    for header_rows in [5, 7, 11] {
+        buffer.reset();
+        let free = Rect::new(
+            screen.x,
+            screen.y + header_rows,
+            screen.width,
+            screen.height - header_rows - 3,
+        );
+        assert_eq!(
+            animation.render_first_screen(
+                free,
+                &mut buffer,
+                Some(ComposerState::Empty),
+                MotionMode::Animated
+            ),
+            None
+        );
+        assert_eq!(
+            animation.stage,
+            Some(Rect::new(
+                /*x*/ 17, /*y*/ 14, /*width*/ 60, /*height*/ 21
+            ))
+        );
     }
+    // Content which reaches the center must win; it must not move the stage down.
+    let free = Rect::new(screen.x, /*y*/ 20, screen.width, /*height*/ 24);
+    animation.render_first_screen(
+        free,
+        &mut buffer,
+        Some(ComposerState::Empty),
+        MotionMode::Animated,
+    );
+    assert_eq!(animation.stage, None);
+    // Both sides of the minimum size, and a terminal that is too short for the full logo.
+    for (width, height, expected) in [(44, 36, true), (43, 36, false), (80, 20, false)] {
+        let screen = Rect::new(/*x*/ 7, /*y*/ 3, width, height);
+        let mut buffer = Buffer::empty(screen);
+        animation.render_first_screen(
+            screen,
+            &mut buffer,
+            Some(ComposerState::Empty),
+            MotionMode::Animated,
+        );
+        assert_eq!(animation.stage.is_some(), expected);
+    }
+}
+
+#[test]
+fn first_screen_single_click_replays_the_visible_blossom() {
+    let mut animation = EmptyStateAnimation::default();
+    animation.start_fresh();
+    let screen = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 80, /*height*/ 44,
+    );
+    let mut buffer = Buffer::empty(screen);
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 40,
+        row: 22,
+        modifiers: KeyModifiers::NONE,
+    };
+    let draw = |animation: &mut EmptyStateAnimation, buffer: &mut Buffer, composer| {
+        buffer.reset();
+        animation.render_first_screen(screen, buffer, composer, MotionMode::Animated)
+    };
+    assert_eq!(
+        draw(&mut animation, &mut buffer, Some(ComposerState::Empty)),
+        None
+    );
+    let static_frame = buffer.clone();
+    for other in [
+        MouseEvent {
+            column: 0,
+            row: 0,
+            ..click
+        },
+        MouseEvent {
+            modifiers: KeyModifiers::CONTROL,
+            ..click
+        },
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            ..click
+        },
+    ] {
+        assert!(!animation.handle_mouse(other));
+    }
+    assert_eq!(
+        draw(&mut animation, &mut buffer, Some(ComposerState::Empty)),
+        None
+    );
+    assert_eq!(buffer, static_frame);
+    assert!(animation.handle_mouse(click));
+    // Release belongs to the transcript if it started a selection outside the logo.
+    assert!(!animation.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        ..click
+    }));
+    assert_eq!(
+        draw(&mut animation, &mut buffer, Some(ComposerState::Empty)),
+        Some(FRAME_INTERVAL)
+    );
+    assert_eq!(buffer, static_frame);
+    let started = animation.last_frame.unwrap();
+    let stage = animation.stage.unwrap();
+    buffer.reset();
+    assert_eq!(
+        animation.render_in_at(
+            stage,
+            &mut buffer,
+            Presentation::Animated,
+            started + sequence::STATIC_FADE,
+        ),
+        Some(FRAME_INTERVAL)
+    );
+    assert_ne!(buffer, static_frame);
+    assert!(animation.handle_mouse(click));
+    assert_eq!(
+        draw(&mut animation, &mut buffer, Some(ComposerState::Empty)),
+        Some(FRAME_INTERVAL)
+    );
+    assert_eq!(buffer, static_frame);
+    assert_eq!(
+        draw(&mut animation, &mut buffer, Some(ComposerState::Draft)),
+        None
+    );
+    assert!(!animation.handle_mouse(click));
+    assert_eq!(
+        draw(&mut animation, &mut buffer, Some(ComposerState::Empty)),
+        None
+    );
+    assert_eq!(buffer, static_frame);
+    // Disabling motion removes both the logo and its click target.
+    buffer.reset();
+    animation.render_first_screen(
+        screen,
+        &mut buffer,
+        Some(ComposerState::Empty),
+        MotionMode::Reduced,
+    );
+    assert_eq!(buffer, Buffer::empty(screen));
+    assert!(!animation.handle_mouse(click));
 }
 
 #[test]

@@ -1,14 +1,14 @@
 ---
 source: tui/src/startup_draft_tests.rs
+assertion_line: 148
 expression: "snapshots.join(\"\\n---\\n\")"
 ---
 empty (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+
+  >_ OpenAI Codex (v<VERSION>)
+     loading
+
+  Pull up a prompt.
 
 
 › Ask Codex to do anything
@@ -16,12 +16,11 @@ empty (48 columns):
   ? for shortcuts
 ---
 resuming (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+
+  >_ OpenAI Codex (v<VERSION>)
+     loading
+
+  Pull up a prompt.
   Resuming session…
 
 › Ask Codex to do anything
@@ -29,12 +28,11 @@ resuming (48 columns):
   ? for shortcuts
 ---
 forking (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+
+  >_ OpenAI Codex (v<VERSION>)
+     loading
+
+  Pull up a prompt.
   Forking session…
 
 › draft while loading
@@ -42,12 +40,11 @@ forking (48 columns):
 
 ---
 multiline (48 columns):
-╭───────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)              │
-│                                       │
-│ model:     loading   /model to change │
-│ directory: loading                    │
-╰───────────────────────────────────────╯
+
+  >_ OpenAI Codex (v<VERSION>)
+     loading
+
+  Pull up a prompt.
 
 
 › first startup line
@@ -56,12 +53,11 @@ multiline (48 columns):
 
 ---
 narrow (18 columns):
-╭────────────────╮
-│ >_ OpenAI Cod… │
-│                │
-│ model:     lo… │
-│ directory: …ng │
-╰────────────────╯
+
+  >_ OpenAI Codex…
+     loading
+
+  Pull up a promp…
 
 
 › first startup

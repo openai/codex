@@ -72,13 +72,7 @@ impl App {
         let motion = MotionMode::from_animations_enabled(
             self.local_settings.tui.animations && self.local_settings.tui.effects.shimmer,
         );
-        let focused = tui.is_terminal_focused();
-        self.empty_state_presentation(
-            MotionMode::from_animations_enabled(
-                self.local_settings.tui.animations && self.local_settings.tui.effects.welcome,
-            ),
-            focused,
-        );
+        let composer = self.first_screen_composer();
         let latest_navigation = if self.enter_returns_to_latest() {
             "enter/esc latest"
         } else {
@@ -148,6 +142,7 @@ impl App {
         let mut rendered_cursor = None;
         let mut footer_height_changed = false;
         let mut feedback_tick = None;
+        let mut blossom_tick = None;
         let mut transcript_bottom = available.saturating_sub(u16::from(composer_gap.is_none()));
         tui.draw(screen_size.height, |frame| {
             ratatui::widgets::Clear.render(
@@ -223,6 +218,18 @@ impl App {
                 );
                 footer_height_changed = false;
             }
+            blossom_tick = chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .render_first_screen(
+                    Rect {
+                        width: screen_size.width,
+                        ..view.remaining_area()
+                    },
+                    frame.buffer,
+                    composer,
+                    MotionMode::from_animations_enabled(self.local_settings.tui.animations),
+                );
             bottom.render(bottom_area, frame.buffer);
             if let (Some(tip), Some(area)) = (completion_tip, completion_tip_area) {
                 tip.render(area, frame.buffer);
@@ -263,6 +270,9 @@ impl App {
         if let Some(delay) = feedback_tick {
             tui.frame_requester().schedule_frame_in(delay);
         }
+        if let Some(delay) = blossom_tick {
+            tui.frame_requester().schedule_frame_in(delay);
+        }
         let animating =
             view.is_following() && active_key.is_some_and(|key| key.animation_tick.is_some());
         let loading = view.is_loading_history() && motion == MotionMode::Animated;
@@ -297,6 +307,10 @@ impl App {
             return Ok(false);
         }
         if matches!(event, TuiEvent::FocusLost) {
+            self.chat_widget
+                .empty_state_animation
+                .borrow_mut()
+                .cancel_replay();
             // Show the static, faded decoration immediately when the terminal loses focus.
             tui.frame_requester().schedule_frame();
         }
@@ -319,6 +333,16 @@ impl App {
             if mouse.kind != crossterm::event::MouseEventKind::Moved {
                 let size = tui.prepare_draw_size()?;
                 self.render_owned_transcript(tui, size)?;
+            }
+            if self.chat_widget.no_modal_or_popup_active()
+                && self
+                    .chat_widget
+                    .empty_state_animation
+                    .borrow_mut()
+                    .handle_mouse(*mouse)
+            {
+                tui.frame_requester().schedule_frame();
+                return Ok(true);
             }
             if composer_ready
                 && self.handle_composer_copy_event(tui, event, |tui, text| {

@@ -184,10 +184,10 @@ async fn prepare_from_package(
             return Ok(false);
         }
     } else {
-        eprintln!(
+        daemon.diagnostic(format_args!(
             "Installing daemon from CLI version {version} into {}...",
             root.display()
-        );
+        ));
     }
     // Confirmation must not block lifecycle commands. Recheck the approved
     // selection and running state once this operation owns both locks.
