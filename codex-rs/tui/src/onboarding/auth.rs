@@ -129,8 +129,8 @@ pub(crate) struct ApiKeyInputState {
 #[derive(Clone)]
 /// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {
-    login_id: String,
-    auth_url: String,
+    pub(super) login_id: String,
+    pub(super) auth_url: String,
 }
 
 #[derive(Clone)]
@@ -575,7 +575,14 @@ impl AuthModeWidget {
         let mut lines = vec![spans.into(), "".into()];
 
         let auth_url = if !state.auth_url.is_empty() {
-            lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
+            lines.push(Line::from(vec![
+                "  If the link doesn't open automatically, press ".into(),
+                keys::COPY_LINK[0].into(),
+                " to copy it:".into(),
+            ]));
+            if let Some(message) = self.error_message() {
+                lines.push(format!("  {message}").dim().into());
+            }
             lines.push("".into());
             lines.push(Line::from(vec![
                 "  ".into(),
