@@ -70,6 +70,7 @@ struct CachedLayout {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct CellPresentation {
     separated: bool,
+    turn_tip_space: bool,
     expanded: bool,
     disclosure: bool,
 }
@@ -136,6 +137,7 @@ impl TranscriptView {
         let separated = index > 0 && !cell.is_stream_continuation();
         let presentation = CellPresentation {
             separated,
+            turn_tip_space: self.turn_tip_key == Some(EntryKey::cell(cell)),
             expanded,
             disclosure,
         };
@@ -203,8 +205,13 @@ impl LayoutCache {
             return layout;
         }
         let layout = render();
-        let layout = Arc::new(if presentation.separated {
+        let layout = if presentation.separated {
             layout.with_leading_separator()
+        } else {
+            layout
+        };
+        let layout = Arc::new(if presentation.turn_tip_space {
+            layout.with_leading_spacer()
         } else {
             layout
         });

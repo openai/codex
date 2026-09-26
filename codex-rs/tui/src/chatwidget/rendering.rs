@@ -136,6 +136,7 @@ impl ChatWidget {
                 /*footer*/ None,
                 crate::bottom_pane::CommandPopupPlacement::AboveComposer,
                 /*composer_gap*/ None,
+                /*working_tip*/ None,
             );
         }
 
@@ -201,6 +202,7 @@ impl ChatWidget {
                 /*footer*/ None,
                 crate::bottom_pane::CommandPopupPlacement::AboveComposer,
                 /*composer_gap*/ None,
+                /*working_tip*/ None,
             )
             .inset(Insets::tlbr(
                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
@@ -218,6 +220,7 @@ impl ChatWidget {
         footer: Option<&'a crate::bottom_pane::TranscriptFooter>,
         command_popup_placement: crate::bottom_pane::CommandPopupPlacement,
         composer_gap: Option<&'a crate::bottom_pane::ComposerGap>,
+        working_tip: Option<&'a crate::turn_tip::TurnTip>,
     ) -> RenderableItem<'a> {
         if self.fork_in_progress {
             RenderableItem::Owned(Box::new(
@@ -244,6 +247,7 @@ impl ChatWidget {
             self.bottom_pane
                 .as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions {
                     composer_gap,
+                    working_tip,
                     warning_count: self.warning_display_state.count,
                     textarea_right_reserve: right_reserve,
                     separate_status_line: command_popup_placement

@@ -2248,6 +2248,12 @@ impl BottomPane {
                 || self.hook_status_message.is_some()
                 || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
+            if !has_inline_previews
+                && self.status_widget().is_some()
+                && let Some(tip) = options.working_tip
+            {
+                flex.push(/*flex*/ 1, RenderableItem::Borrowed(tip));
+            }
             if has_inline_previews && has_status_or_footer {
                 flex.push(/*flex*/ 0, RenderableItem::Owned("".into()));
             }

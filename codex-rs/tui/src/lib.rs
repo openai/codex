@@ -230,6 +230,7 @@ mod transcript_mode;
 mod transcript_reflow;
 mod transcript_view;
 mod tui;
+mod turn_tip;
 mod ui_consts;
 mod unarchive_prompt;
 pub(crate) mod update_action;

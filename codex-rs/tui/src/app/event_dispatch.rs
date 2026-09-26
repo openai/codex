@@ -834,6 +834,10 @@ impl App {
             AppEvent::InsertHistoryCell(cell) => {
                 self.insert_history_cell(tui, cell);
             }
+            AppEvent::TurnTipReady { thread_id, turn_id } => {
+                self.turn_tips.ready(thread_id, &turn_id, self.transcript_cells.last());
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::EndInitialHistoryReplayBuffer => {
                 self.scrollback_has_older_history = self
                     .chat_widget

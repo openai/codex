@@ -395,6 +395,7 @@ impl App {
     pub(super) fn reset_transcript_state_after_clear(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
+        self.turn_tips.dismiss();
         self.chat_widget.warning_display_state.dismissed.clear();
         self.chat_widget.warning_display_state.transcript = Arc::default();
         self.chat_widget.warning_display_state.synced_cells = None;

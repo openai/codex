@@ -1106,6 +1106,11 @@ pub(crate) enum AppEvent {
     FollowTranscript,
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    /// FIFO barrier after the completed turn's history insertions.
+    TurnTipReady {
+        thread_id: ThreadId,
+        turn_id: String,
+    },
 
     /// Move visible completed voice captions into history in one app event.
     CommitRealtimeTranscriptHistory,
