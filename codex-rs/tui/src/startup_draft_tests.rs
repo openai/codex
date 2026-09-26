@@ -28,8 +28,20 @@ where
     I: Iterator<Item = TuiEvent> + Send + 'static,
 {
     let (tx, rx) = unbounded_channel();
+    let mut blossom = crate::empty_state_animation::EmptyStateAnimation::default();
+    blossom
+        .greeting
+        .set(crate::empty_state_animation::Greeting {
+            phrase: "Pull up a prompt.",
+        })
+        .expect("initial greeting");
+    blossom.start_fresh();
+    let mut header = startup_session_header(/*config*/ None);
+    crate::history_cell::set_session_greeting(header.as_mut(), &blossom.greeting);
     StartupDraftPump {
-        header: startup_session_header(/*config*/ None),
+        header,
+        blossom: std::cell::RefCell::new(blossom),
+        motion: crate::motion::MotionMode::Animated,
         bottom_pane: startup_draft_bottom_pane(
             AppEventSender::new(tx),
             FrameRequester::test_dummy(),
@@ -138,11 +150,7 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
 #[test]
 fn terminal_app_ssh_fallback_renders_inline_startup() {
     let pump = startup_test_pump(std::iter::empty());
-    let owned_layout = super::layout::OwnedStartupLayout::new(
-        &pump.header,
-        &pump.bottom_pane,
-        StartupDraftSessionAction::New,
-    );
+    let owned_layout = super::layout::OwnedStartupLayout::new(&pump);
     let mut frames = Vec::new();
     for terminal_app_over_ssh in [false, true] {
         let owned = crate::determine_alt_screen_mode(
@@ -168,6 +176,12 @@ fn terminal_app_ssh_fallback_renders_inline_startup() {
         let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
         let mut buffer = Buffer::empty(area);
         renderable.render(area, &mut buffer);
+        assert!(
+            buffer
+                .content
+                .iter()
+                .any(|cell| { cell.symbol() == ">" && cell.fg == crate::style::accent_color() })
+        );
         let frame = (0..height)
             .map(|y| {
                 (0..width)
@@ -243,6 +257,7 @@ async fn startup_draft_clears_loading_status_when_starting_fresh() {
         let mut pump = startup_test_pump(std::iter::empty());
         pump.initial_screen = initial_screen;
         pump.session_action = session_action;
+        pump.blossom.borrow_mut().dismiss();
         if initial_screen == StartupDraftInitialScreen::Composer {
             pump.bottom_pane.insert_str("draft while loading");
         }
@@ -257,6 +272,7 @@ async fn startup_draft_clears_loading_status_when_starting_fresh() {
 
         pump.update_session_selection(&mut tui, &SessionSelection::StartFresh)
             .expect("clear the loading status after a fresh-session selection");
+        assert!(pump.blossom.borrow().is_eligible());
         if initial_screen == StartupDraftInitialScreen::SessionPicker {
             assert!(tui.terminal.viewport_area.is_empty());
             pump.show(&mut tui)
@@ -291,21 +307,15 @@ async fn startup_draft_hydrates_its_header_without_moving_the_composer() {
         startup_draft_renderable(&pump.header, &pump.bottom_pane, pump.session_action)
             .desired_height(width);
 
-    assert_eq!(
-        pump.header.raw_lines().last().map(ToString::to_string),
-        Some("directory: loading".to_string())
-    );
+    assert_eq!(pump.header.raw_lines()[2].to_string().trim(), "loading");
     pump.apply_config(&config);
-    let expected_directory = format!(
-        "directory: {}",
-        crate::history_cell::SessionHeaderHistoryCell::format_directory_inner(
-            config.cwd.as_path(),
-            /*max_width*/ None,
-        )
+    let expected_directory = crate::history_cell::SessionHeaderHistoryCell::format_directory_inner(
+        config.cwd.as_path(),
+        /*max_width*/ None,
     );
     assert_eq!(
-        pump.header.raw_lines().last().map(ToString::to_string),
-        Some(expected_directory)
+        pump.header.raw_lines()[2].to_string().trim(),
+        expected_directory
     );
     assert_eq!(
         startup_draft_renderable(&pump.header, &pump.bottom_pane, pump.session_action)

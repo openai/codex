@@ -319,15 +319,19 @@ impl TranscriptView {
         Some(pending.follow && completion.1 == Ok(crate::clipboard_copy::CopyStatus::Confirmed))
     }
 
-    /// End the pointer gesture without discarding selected text when input ownership changes.
-    pub(crate) fn end_drag(&mut self) {
-        self.follow_control = Default::default();
-        if !self.has_selection_range()
+    /// A stationary click begun at Latest still belongs to the fresh screen until it selects text.
+    pub(crate) fn has_pending_latest_selection(&self) -> bool {
+        !self.has_selection_range()
             && self
                 .selection
                 .as_ref()
                 .is_some_and(|selection| selection.dragging && selection.resume_on_empty)
-        {
+    }
+
+    /// End the pointer gesture without discarding selected text when input ownership changes.
+    pub(crate) fn end_drag(&mut self) {
+        self.follow_control = Default::default();
+        if self.has_pending_latest_selection() {
             self.position = Position::Latest;
             self.selection = None;
             self.release_live_reading();

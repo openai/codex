@@ -161,9 +161,26 @@ impl StartupDraftPump {
             TuiEvent::Draw | TuiEvent::Resize(_) | TuiEvent::Resume | TuiEvent::FocusGained => {}
             TuiEvent::FocusLost => {
                 self.key_chord_matcher.cancel();
+                self.blossom.borrow_mut().cancel_replay();
                 return Ok(());
             }
-            TuiEvent::Mouse(_) => return Ok(()),
+            TuiEvent::Mouse(mouse) => {
+                if !tui.is_owned_screen()
+                    || self.initial_screen != StartupDraftInitialScreen::Composer
+                    || !matches!(
+                        self.session_action,
+                        super::StartupDraftSessionAction::New
+                            | super::StartupDraftSessionAction::NewFromCommandCenter
+                    )
+                {
+                    return Ok(());
+                }
+                // Size, composer, and modal ownership must be current before hit testing.
+                self.draw(tui, screen_size)?;
+                if !self.blossom.borrow_mut().handle_mouse(mouse) {
+                    return Ok(());
+                }
+            }
         }
         crate::startup_recovery::remember(self.bottom_pane.composer_recovery_snapshot());
         if self.initial_screen == StartupDraftInitialScreen::Composer {

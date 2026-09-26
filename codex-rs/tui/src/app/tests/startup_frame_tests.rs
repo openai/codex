@@ -4,6 +4,7 @@ use super::*;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 use crate::chatwidget::tests::helpers::normalize_snapshot_paths;
 use crate::custom_terminal::test_support::last_rendered_buffer;
+use crate::history_cell::HistoryRenderMode;
 use crate::startup_draft::tests::quiet_startup_test_pump;
 use pretty_assertions::assert_eq;
 
@@ -16,23 +17,31 @@ fn frame_text(tui: &tui::Tui) -> String {
 }
 
 #[tokio::test]
-async fn owned_startup_tip_follows_splash_in_transcript() -> Result<()> {
+async fn owned_startup_hides_tip_in_transcript() -> Result<()> {
     let mut app = crate::app::test_support::make_test_app().await;
     app.local_settings.tui.show_tooltips = true;
     app.local_settings.tui.animations = false;
+    let greeting = Arc::new(std::sync::OnceLock::new());
+    greeting
+        .set(crate::empty_state_animation::Greeting {
+            phrase: "Pull up a prompt.",
+        })
+        .unwrap();
     let session = test_thread_session(ThreadId::new(), app.config.cwd.to_path_buf());
+    let mut session_info = new_session_info(
+        &app.config,
+        &app.local_settings,
+        &session.model,
+        &session.model,
+        &session,
+        /*is_first_event*/ false,
+        Some("Use /mcp to list configured MCP tools.".into()),
+        /*auth_plan*/ None,
+        /*show_fast_status*/ false,
+    );
+    history_cell::set_session_greeting(&mut session_info, &greeting);
     app.transcript_cells = vec![
-        Arc::new(new_session_info(
-            &app.config,
-            &app.local_settings,
-            &session.model,
-            &session.model,
-            &session,
-            /*is_first_event*/ false,
-            Some("Use /mcp to list configured MCP tools.".into()),
-            /*auth_plan*/ None,
-            /*show_fast_status*/ false,
-        )),
+        Arc::new(session_info),
         Arc::new(AgentMessageCell::new(
             vec!["Conversation continues here.".into()],
             /*is_first_line*/ true,
@@ -64,6 +73,28 @@ async fn owned_startup_tip_follows_splash_in_transcript() -> Result<()> {
         "startup_tip_in_transcript",
         normalize_snapshot_paths(normalize_agent_center_snapshot(snapshots.join("\n\n"))),
     );
+    // The source remains available to terminal scrollback in both presentation modes.
+    for mode in [HistoryRenderMode::Rich, HistoryRenderMode::Raw] {
+        let lines = app.transcript_cells[0].display_lines_for_mode(/*width*/ 80, mode);
+        let text = lines
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Pull up a prompt."));
+        assert!(text.contains("Use /mcp"));
+        assert!(!text.contains("model:"));
+        assert!(!text.contains('╭'));
+    }
+    app.transcript_view.begin_search();
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 20))?;
+    assert!(!frame_text(&tui).contains("Use /mcp"));
+    app.open_transcript_overlay(&mut tui);
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 20))?;
+    assert!(!frame_text(&tui).contains("Use /mcp"));
+    app.apply_raw_output_mode(&mut tui, /*enabled*/ true, /*notify*/ false);
+    app.render_owned_transcript(&mut tui, Size::new(/*width*/ 80, /*height*/ 20))?;
+    assert!(!frame_text(&tui).contains("Use /mcp"));
     tui.set_owned_screen(/*owned*/ false)?;
     Ok(())
 }

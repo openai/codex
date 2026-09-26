@@ -75,6 +75,16 @@ async fn command_center_new_keeps_startup_draft_visible_through_handoff() -> Res
             app.chat_widget.composer_text_with_pending(),
             "draft during startup"
         );
+        assert_eq!(
+            app.chat_widget
+                .empty_state_animation
+                .borrow()
+                .greeting
+                .get()
+                .unwrap()
+                .phrase,
+            "Pull up a prompt."
+        );
 
         while let Ok(event) = events.try_recv() {
             Box::pin(app.handle_event(&mut tui, &mut server, event)).await?;

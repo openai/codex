@@ -1,6 +1,10 @@
 //! Session headers, onboarding guidance, and transcript cards.
 
+use std::sync::Arc;
+use std::sync::OnceLock;
+
 use super::*;
+use crate::empty_state_animation::Greeting;
 use crate::line_truncation::line_width;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::style::accent_color;
@@ -120,6 +124,46 @@ impl HistoryCell for SessionNoticeCell {
 
 #[derive(Debug)]
 pub struct SessionInfoCell(CompositeHistoryCell);
+
+/// Bind provisional and configured banners to the thread's chosen greeting.
+pub(crate) fn set_session_greeting(cell: &mut dyn HistoryCell, greeting: &Arc<OnceLock<Greeting>>) {
+    if let Some(header) = cell.as_any_mut().downcast_mut::<SessionHeaderHistoryCell>() {
+        header.greeting = Arc::clone(greeting);
+    } else if let Some(info) = cell.as_any_mut().downcast_mut::<SessionInfoCell>() {
+        for part in &mut info.0.parts {
+            set_session_greeting(part.as_mut(), greeting);
+        }
+    }
+}
+
+/// Fullscreen transcript presentation omits tips; scrollback retains the original cells.
+pub(crate) fn fullscreen_session_lines(
+    cell: &dyn HistoryCell,
+    width: u16,
+    detailed: bool,
+    mode: HistoryRenderMode,
+) -> Vec<HyperlinkLine> {
+    if let Some(info) = cell.as_any().downcast_ref::<SessionInfoCell>() {
+        let mut lines = Vec::new();
+        for part in &info.0.parts {
+            if part.as_any().is::<TooltipHistoryCell>() {
+                continue;
+            }
+            let part_lines = fullscreen_session_lines(part.as_ref(), width, detailed, mode);
+            if !part_lines.is_empty() {
+                if !lines.is_empty() {
+                    lines.push(HyperlinkLine::from(""));
+                }
+                lines.extend(part_lines);
+            }
+        }
+        lines
+    } else if detailed || mode == HistoryRenderMode::Rich {
+        cell.retained_hyperlink_lines(width, detailed)
+    } else {
+        cell.display_hyperlink_lines_for_mode(width, mode)
+    }
+}
 
 impl HistoryCell for SessionInfoCell {
     fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
@@ -269,6 +313,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     show_fast_status: bool,
     directory: PathBuf,
     yolo_mode: bool,
+    greeting: Arc<OnceLock<Greeting>>,
 }
 
 impl SessionHeaderHistoryCell {
@@ -305,6 +350,7 @@ impl SessionHeaderHistoryCell {
             show_fast_status,
             directory,
             yolo_mode: false,
+            greeting: Default::default(),
         }
     }
 
@@ -348,7 +394,50 @@ impl SessionHeaderHistoryCell {
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {
+    fn compact_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        if self.greeting.get().is_none() {
+            return self.display_hyperlink_lines(width);
+        }
+        let width = usize::from(width);
+        let mut lines = vec![
+            Line::default(),
+            Line::from(vec![
+                "  ".into(),
+                ">_ ".fg(accent_color()),
+                "OpenAI Codex".bold(),
+                format!(" (v{})", self.version).dim(),
+            ]),
+            Line::from(vec![
+                "     ".into(),
+                self.format_directory(Some(width.saturating_sub(/*rhs*/ 5)))
+                    .dim(),
+            ]),
+        ];
+        if self.yolo_mode {
+            lines.push(Line::from(vec![
+                "  permissions: ".dim(),
+                "YOLO mode".magenta().bold(),
+            ]));
+        }
+        if let Some(greeting) = self.greeting.get() {
+            // The tip/help that follows has its own normal composite separator.
+            lines.extend([
+                Line::default(),
+                Line::from(vec!["  ".into(), greeting.phrase.fg(accent_color())]),
+            ]);
+        }
+        plain_hyperlink_lines(
+            lines
+                .into_iter()
+                .map(|line| truncate_line_with_ellipsis_if_overflow(line, width))
+                .collect(),
+        )
+    }
+
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if self.greeting.get().is_some() {
+            return visible_lines(self.compact_hyperlink_lines(width));
+        }
         let Some(inner_width) = card_inner_width(width, SESSION_HEADER_MAX_INNER_WIDTH) else {
             return Vec::new();
         };
@@ -428,6 +517,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
+        if self.greeting.get().is_some() {
+            return visible_lines(self.compact_hyperlink_lines(u16::MAX))
+                .into_iter()
+                .map(|line| Line::from(line.to_string()))
+                .collect();
+        }
         let mut lines = vec![
             Line::from(format!("OpenAI Codex (v{})", self.version)),
             Line::from(format!(

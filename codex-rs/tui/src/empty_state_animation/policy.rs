@@ -1,32 +1,14 @@
 //! Positive eligibility for the fresh-conversation decoration.
 //! Unknown history cell types are activity, even when they render no visible text.
 
-use super::ComposerState;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
-use crate::motion::MotionMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Presentation {
     Hidden,
     Animated,
     Faded,
-}
-
-impl Presentation {
-    /// Only an explicitly available ordinary composer may display a fresh-thread logo.
-    pub(crate) fn for_composer(
-        composer: Option<ComposerState>,
-        motion: MotionMode,
-        focused: bool,
-    ) -> Self {
-        match (composer, motion, focused) {
-            (None, _, _) | (_, MotionMode::Reduced, _) => Self::Hidden,
-            (Some(ComposerState::Empty), MotionMode::Animated, true) => Self::Animated,
-            (Some(ComposerState::Empty), MotionMode::Animated, false)
-            | (Some(ComposerState::Draft), MotionMode::Animated, _) => Self::Faded,
-        }
-    }
 }
 
 /// Startup metadata is the entire allowlist; new content types opt out by default.

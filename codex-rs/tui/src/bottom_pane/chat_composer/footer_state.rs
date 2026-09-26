@@ -81,6 +81,7 @@ impl super::ChatComposer {
         use crate::empty_state_animation::ComposerState;
 
         let composer = match self.footer_mode() {
+            FooterMode::ComposerEmpty if self.is_in_paste_burst() => Some(ComposerState::Draft),
             FooterMode::ComposerEmpty => Some(ComposerState::Empty),
             FooterMode::ComposerHasDraft => Some(ComposerState::Draft),
             FooterMode::HistorySearch

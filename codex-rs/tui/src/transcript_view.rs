@@ -149,6 +149,19 @@ impl Default for TranscriptView {
 }
 
 impl TranscriptView {
+    /// Rows left after the last render, including all startup notices and live entries.
+    /// Callers can paint temporary UI here without changing selection or saved history.
+    pub(crate) fn remaining_area(&self) -> Rect {
+        let used = u16::try_from(self.visible.len())
+            .unwrap_or(u16::MAX)
+            .min(self.area.height);
+        Rect {
+            y: self.area.y + used,
+            height: self.area.height - used,
+            ..self.area
+        }
+    }
+
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cells: &[Arc<dyn HistoryCell>]) {
         self.composer_tip = None;
         self.cache.begin_frame();
@@ -542,6 +555,15 @@ impl TranscriptView {
                 row = self
                     .layout(cells, index)
                     .map_or(/*default*/ 0, |l| l.row_count());
+            }
+            // At the beginning, hidden entries are not preceding content. Keep the first
+            // visible entry at the same position whether it is live or committed.
+            if index == 0
+                && remaining >= row
+                && let Some(first) = self.next_nonempty(cells, index)
+                && let Some(layout) = self.layout(cells, first)
+            {
+                return (first, usize::from(layout.separated));
             }
             return (index, row.saturating_sub(remaining));
         }

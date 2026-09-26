@@ -203,7 +203,7 @@ impl ChatWidget {
             let startup_tooltip_override = self.startup_tooltip_override.take();
             let show_fast_status = self
                 .should_show_fast_status(&model_for_header, self.effective_service_tier.as_deref());
-            let session_info_cell = history_cell::new_session_info(
+            let mut session_info_cell = history_cell::new_session_info(
                 &self.config,
                 &self.local_settings,
                 &model_for_header,
@@ -213,6 +213,10 @@ impl ChatWidget {
                 startup_tooltip_override,
                 self.plan_type,
                 show_fast_status,
+            );
+            history_cell::set_session_greeting(
+                &mut session_info_cell,
+                &self.empty_state_animation.borrow().greeting,
             );
             self.apply_session_info_cell(session_info_cell);
         } else if self

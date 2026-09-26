@@ -1097,10 +1097,13 @@ impl App {
             ThreadAttachPresentation::Fresh | ThreadAttachPresentation::FreshWithDraft
         ) {
             self.chat_widget.mark_fresh_task_for_sparkle(&started);
-            self.chat_widget
-                .empty_state_animation
-                .borrow_mut()
-                .start_fresh();
+            // FreshWithDraft inherits its provisional greeting and replay at the handoff.
+            if matches!(presentation, ThreadAttachPresentation::Fresh) {
+                self.chat_widget
+                    .empty_state_animation
+                    .borrow_mut()
+                    .start_fresh();
+            }
         }
         self.chat_widget
             .set_task_mentions_enabled(started.task_tools_available);

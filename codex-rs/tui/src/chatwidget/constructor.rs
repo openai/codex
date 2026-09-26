@@ -63,7 +63,10 @@ impl ChatWidget {
             settings: fallback_default,
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let empty_state_animation = crate::empty_state_animation::EmptyStateAnimation::default();
+        let mut header = Self::placeholder_session_header_cell(&config);
+        history_cell::set_session_greeting(header.as_mut(), &empty_state_animation.greeting);
+        let active_cell = Some(header);
 
         let current_cwd = Some(config.cwd.to_path_buf());
         let effective_service_tier = crate::service_tier_resolution::effective_service_tier(
@@ -94,7 +97,7 @@ impl ChatWidget {
             pet_http_client.clone(),
         );
         let mut widget = Self {
-            empty_state_animation: Default::default(),
+            empty_state_animation: std::cell::RefCell::new(empty_state_animation),
             cyber_policy_notice: Default::default(),
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),

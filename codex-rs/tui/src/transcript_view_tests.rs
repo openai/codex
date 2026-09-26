@@ -64,6 +64,60 @@ pub(super) fn text(buffer: &Buffer) -> String {
 }
 
 #[test]
+fn startup_warning_keeps_first_visible_header_in_place() {
+    let header: Arc<dyn HistoryCell> =
+        Arc::new(crate::history_cell::SessionHeaderHistoryCell::new(
+            "gpt-test".into(),
+            /*reasoning_effort*/ None,
+            /*show_fast_status*/ false,
+            crate::test_support::test_path_buf("/project"),
+            "test",
+        ));
+    let mut view = TranscriptView::default();
+    view.sync_live_tail(/*width*/ 80, /*key*/ None, |width| {
+        Some(header.compact_hyperlink_lines(width))
+    });
+    let mut cells = Vec::new();
+    let before = render(&mut view, &cells, /*width*/ 80, /*height*/ 24);
+    cells.push(Arc::new(crate::history_cell::StartupWarningsCell::new(vec![
+        "Skill manifest is invalid.".into(),
+    ])) as Arc<dyn HistoryCell>);
+    assert_eq!(
+        render(&mut view, &cells, /*width*/ 80, /*height*/ 24),
+        before
+    );
+    view.sync_live_tail(/*width*/ 80, /*key*/ None, |_| None);
+    cells.insert(/*index*/ 0, header);
+    assert_eq!(
+        render(&mut view, &cells, /*width*/ 80, /*height*/ 24),
+        before
+    );
+    assert_eq!(crate::history_cell::warning_count(&cells), 1);
+}
+
+#[test]
+fn hidden_initial_entries_do_not_add_a_separator_but_visible_entries_do() {
+    let cells = vec![cell(""), cell(""), cell("First"), cell(""), cell("Second")];
+    let mut view = TranscriptView::default();
+    view.sync_live_tail(
+        /*width*/ 20,
+        /*key*/ None,
+        |_| Some(vec![HyperlinkLine::from("Live")]),
+    );
+    let frame = render(&mut view, &cells, /*width*/ 20, /*height*/ 5);
+    insta::assert_snapshot!(text(&frame), @"
+    First
+
+    Second
+
+    Live
+    ");
+    // Scrolling past the first visible entry must stop at its content, not its separator.
+    view.scroll(&cells, /*rows*/ -100);
+    assert_eq!(render(&mut view, &cells, /*width*/ 20, /*height*/ 5), frame);
+}
+
+#[test]
 fn reading_survives_prepend_and_new_output_then_returns_to_latest() {
     let mut cells = vec![cell("older\nline two"), cell("current\nlast line")];
     let mut view = TranscriptView::default();

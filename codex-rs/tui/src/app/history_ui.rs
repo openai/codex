@@ -315,7 +315,7 @@ impl App {
         &self,
         version: &'static str,
     ) -> history_cell::SessionHeaderHistoryCell {
-        history_cell::SessionHeaderHistoryCell::new(
+        let mut header = history_cell::SessionHeaderHistoryCell::new(
             self.chat_widget.model_display_name().to_string(),
             self.chat_widget.current_reasoning_effort(),
             self.chat_widget.should_show_fast_status(
@@ -325,7 +325,12 @@ impl App {
             self.config.cwd.to_path_buf(),
             version,
         )
-        .with_yolo_mode(history_cell::is_yolo_mode(&self.config))
+        .with_yolo_mode(history_cell::is_yolo_mode(&self.config));
+        history_cell::set_session_greeting(
+            &mut header,
+            &self.chat_widget.empty_state_animation.borrow().greeting,
+        );
+        header
     }
 
     pub(super) fn clear_ui_header_lines(&self, width: u16) -> Vec<Line<'static>> {
