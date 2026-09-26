@@ -426,10 +426,16 @@ pub(crate) fn remap_wrapped_line(
     wrapped: Vec<Line<'static>>,
 ) -> Vec<HyperlinkLine> {
     let mut out = plain_hyperlink_lines(wrapped);
-    if source.hyperlinks.is_empty() {
+    if source.hyperlinks.is_empty() && source.source.is_none() {
         return out;
     }
     let source_text = line_text(&source.line);
+    if source_text.trim().is_empty() {
+        for line in &mut out {
+            line.source = source.source.clone();
+        }
+        return out;
+    }
     let mut source_byte = 0usize;
     let mut source_column = 0usize;
     let mut link_index = 0usize;
@@ -447,6 +453,10 @@ pub(crate) fn remap_wrapped_line(
             continue;
         };
         let mapped = &rendered[rendered_start..];
+        line.source = source
+            .source
+            .as_ref()
+            .map(|source| source.wrapped(source_byte..source_byte + mapped.len(), rendered_start));
         let mut output_column = display_width(&rendered[..rendered_start]);
         for grapheme in mapped.graphemes(/*is_extended*/ true) {
             let width = display_width(grapheme);

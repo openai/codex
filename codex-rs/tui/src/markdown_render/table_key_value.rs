@@ -163,8 +163,13 @@ fn render_aligned_field(
     let wrapped_value = wrap_cell(value, value_width);
     for (line_index, value_line) in wrapped_value.into_iter().enumerate() {
         let mut spans = Vec::new();
+        let mut copy = None;
         if line_index == 0 {
             let label = header.plain_text();
+            let label_source = label_line(header, label_style);
+            if let Some(source) = &label_source.source {
+                crate::markdown_copy::table::append(&mut copy, source, FIELD_LEADING_PADDING);
+            }
             spans.push(Span::raw(" ".repeat(FIELD_LEADING_PADDING)));
             spans.push(Span::styled(label.clone(), label_style));
             spans.push(Span::raw(" ".repeat(
@@ -173,7 +178,7 @@ fn render_aligned_field(
         } else {
             spans.push(Span::raw(" ".repeat(value_indent)));
         }
-        push_prefixed_value_line(out, spans, value_line);
+        push_prefixed_value_line(out, spans, value_line, copy);
     }
 }
 
@@ -187,16 +192,22 @@ fn render_stacked_field(
     let label_width = available_width
         .map(|width| width.saturating_sub(FIELD_LEADING_PADDING).max(1))
         .unwrap_or_else(|| display_width(&header.plain_text()).max(1));
-    let label = Line::from(Span::styled(header.plain_text(), label_style));
+    let label = label_line(header, label_style);
     let mut wrapped_labels = Vec::new();
     push_owned_lines(
-        &word_wrap_line(&label, RtOptions::new(label_width)),
+        &word_wrap_line(&label.line, RtOptions::new(label_width)),
         &mut wrapped_labels,
     );
-    for label_line in wrapped_labels {
+    for label_line in remap_wrapped_line(&label, wrapped_labels) {
         let mut spans = vec![Span::raw(" ".repeat(FIELD_LEADING_PADDING))];
-        spans.extend(label_line.spans);
-        out.push(HyperlinkLine::new(Line::from(spans)));
+        let mut copy = None;
+        if let Some(source) = &label_line.source {
+            crate::markdown_copy::table::append(&mut copy, source, FIELD_LEADING_PADDING);
+        }
+        spans.extend(label_line.line.spans);
+        let mut line = HyperlinkLine::new(Line::from(spans));
+        crate::markdown_copy::table::attach(&mut line, copy);
+        out.push(line);
     }
 
     let value_width = available_width
@@ -207,6 +218,7 @@ fn render_stacked_field(
             out,
             vec![Span::raw(" ".repeat(STACKED_VALUE_INDENT))],
             value_line,
+            /*copy*/ None,
         );
     }
 }
@@ -215,13 +227,19 @@ fn push_prefixed_value_line(
     out: &mut Vec<HyperlinkLine>,
     mut prefix: Vec<Span<'static>>,
     mut value_line: HyperlinkLine,
+    mut copy: Option<crate::markdown_copy::table::TableLine>,
 ) {
+    let bytes = prefix.iter().map(|span| span.content.len()).sum();
+    if let Some(source) = &value_line.source {
+        crate::markdown_copy::table::append(&mut copy, source, bytes);
+    }
     let shift = prefix
         .iter()
         .map(|span| display_width(span.content.as_ref()))
         .sum::<usize>();
     prefix.append(&mut value_line.line.spans);
     let mut output_line = HyperlinkLine::new(Line::from(prefix));
+    crate::markdown_copy::table::attach(&mut output_line, copy);
     output_line
         .hyperlinks
         .extend(value_line.hyperlinks.into_iter().map(|mut link| {
@@ -229,6 +247,26 @@ fn push_prefixed_value_line(
             link
         }));
     out.push(output_line);
+}
+
+fn label_line(header: &TableCell, style: Style) -> HyperlinkLine {
+    let mut line = HyperlinkLine::new(Line::from(Span::styled(header.plain_text(), style)));
+    let mut copy = None;
+    let mut offset = 0;
+    for header_line in &header.lines {
+        if let Some(source) = &header_line.source {
+            crate::markdown_copy::table::append(&mut copy, source, offset);
+        }
+        offset += header_line
+            .line
+            .spans
+            .iter()
+            .map(|span| span.content.len())
+            .sum::<usize>()
+            + 1;
+    }
+    crate::markdown_copy::table::attach(&mut line, copy);
+    line
 }
 
 fn wrap_cell(cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {
@@ -243,7 +281,7 @@ fn wrap_cell(cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {
             .map(|line| line_to_static(&line))
             .collect::<Vec<_>>();
         if rendered.is_empty() {
-            wrapped.push(HyperlinkLine::new(Line::default()));
+            wrapped.push(source_line.clone());
         } else {
             wrapped.extend(remap_wrapped_line(source_line, rendered));
         }

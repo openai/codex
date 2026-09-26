@@ -14,6 +14,8 @@ use pulldown_cmark::Tag;
 use crate::clipboard_copy::CopyFormat;
 use crate::terminal_hyperlinks::LogicalLineSource;
 
+pub(crate) mod table;
+
 // Bound retained inline stacks and container prefixes independently of parser nesting.
 pub(crate) const MAX_COPY_DEPTH: usize = 64;
 
@@ -56,6 +58,7 @@ pub(crate) struct CopyLine {
     /// Restore the containing item when a multiline selection starts in its later paragraph.
     pub(crate) item_prefix: String,
     pub(crate) code: bool,
+    pub(crate) table: Option<table::TableLine>,
     pub(crate) rule: bool,
     pub(crate) heading: usize,
     pub(crate) hard_break: bool,

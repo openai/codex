@@ -7,6 +7,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::Path;
 
+#[path = "markdown_element_copy_tests.rs"]
+mod elements;
+
 #[test]
 fn selected_markdown_preserves_lists_and_inline_code() {
     let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(AgentMarkdownCell::new(

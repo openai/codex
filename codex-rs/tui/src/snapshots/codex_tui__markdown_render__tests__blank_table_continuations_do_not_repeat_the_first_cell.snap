@@ -1,0 +1,11 @@
+---
+source: tui/src/markdown_render.rs
+assertion_line: 2773
+expression: rendered
+---
+[
+    " short    first",
+    "",
+    "          last",
+    "",
+]
