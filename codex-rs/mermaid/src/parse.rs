@@ -59,6 +59,13 @@ fn node(rest: &mut &str, graph: &mut Graph) -> Result<usize, RenderError> {
     ) {
         return Err(RenderError::Unsupported);
     }
+    // Longer shape delimiters must not become punctuation inside a simpler node.
+    if ["[(", "[[", "[/", "[\\", "{{"]
+        .iter()
+        .any(|open| rest.starts_with(open))
+    {
+        return Err(RenderError::Unsupported);
+    }
     let declaration = match rest.chars().next() {
         Some('[') => Some(("[", "]", Shape::Rectangle)),
         Some('{') => Some(("{", "}", Shape::Decision)),
@@ -84,6 +91,10 @@ fn node(rest: &mut &str, graph: &mut Graph) -> Result<usize, RenderError> {
 }
 
 fn flowchart_label(label: &str) -> Result<&str, RenderError> {
+    // Mermaid Markdown strings require rendering beyond ordinary quoted labels.
+    if label.starts_with("\"`") {
+        return Err(RenderError::Unsupported);
+    }
     let label = if let Some(quoted) = label.strip_prefix('"') {
         quoted.strip_suffix('"').ok_or(RenderError::Unsupported)?
     } else {

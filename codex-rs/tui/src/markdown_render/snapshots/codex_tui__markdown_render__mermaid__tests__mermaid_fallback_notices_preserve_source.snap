@@ -16,6 +16,22 @@ pie
 
 ---
 
+unsupported shape after supported edges
+This Mermaid diagram uses features the terminal renderer doesn't support.
+flowchart TD
+P --> Q
+A[(Database)]
+
+---
+
+Markdown string after supported edges
+This Mermaid diagram uses features the terminal renderer doesn't support.
+flowchart TD
+P --> Q
+A["`hello **world**`"]
+
+---
+
 too wide
 This
 Mermaid

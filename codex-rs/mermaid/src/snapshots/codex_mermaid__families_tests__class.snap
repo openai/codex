@@ -1,10 +1,9 @@
 ---
 source: mermaid/src/families_tests.rs
-assertion_line: 100
 expression: output
 ---
 ┌──────────────────┐
-│ Order            │
+│ order            │
 │ ─────            │
 │ +String id       │
 │ +Status status   │
@@ -12,7 +11,7 @@ expression: output
 │ +cancel()        │
 │                  ├◆─(1) contains────┐
 │                  ├──(1) pays with───╪─┐
-│                  ├◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╪┄╪┄┄┄┐
+│                  ├─┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╪┄╪┄┄┄┐
 └──────────────────┘                  │ │   ┆
                                       │ │   ┆
                                       │ │   ┆

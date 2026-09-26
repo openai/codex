@@ -113,6 +113,16 @@ fn mermaid_fallback_notices_preserve_source() {
         ("invalid", "```mermaid\nflowchart LR\nA[unfinished\n```", 80),
         ("unsupported", "```mermaid\npie\n\"Cats\": 2\n```", 80),
         (
+            "unsupported shape after supported edges",
+            "```mermaid\nflowchart TD\nP --> Q\nA[(Database)]\n```",
+            80,
+        ),
+        (
+            "Markdown string after supported edges",
+            "```mermaid\nflowchart TD\nP --> Q\nA[\"`hello **world**`\"]\n```",
+            80,
+        ),
+        (
             "too wide",
             "```mermaid\nflowchart LR\nA[Request] --> B[Reply]\n```",
             8,

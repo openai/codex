@@ -1,4 +1,5 @@
 //! Flat state machines, with distinct initial/final pseudostates and labeled transitions.
+//! Aliases and descriptions accumulate in source order: first the title, then body rows.
 
 use super::Direction;
 use super::Edge;
@@ -32,11 +33,10 @@ pub(super) fn parse(body: &[&str]) -> Result<Graph, RenderError> {
                 .strip_prefix("as ")
                 .ok_or(RenderError::Unsupported)?;
             let index = graph.node(identifier(&mut rest)?)?;
-            if !rest.trim().is_empty() || graph.nodes[index].declared {
+            if !rest.trim().is_empty() {
                 return Err(RenderError::Unsupported);
             }
-            graph.nodes[index].label = label.to_owned();
-            graph.nodes[index].declared = true;
+            add_description(&mut graph.nodes[index], label)?;
             continue;
         }
         let from = if let Some(after) = rest.strip_prefix("[*]") {
@@ -66,10 +66,7 @@ pub(super) fn parse(body: &[&str]) -> Result<Graph, RenderError> {
             }
             let description = description.trim();
             check_label(description)?;
-            if graph.nodes[from].members.len() == 16 {
-                return Err(RenderError::Limit);
-            }
-            graph.nodes[from].members.push(description.to_owned());
+            add_description(&mut graph.nodes[from], description)?;
             continue;
         }
         rest = rest
@@ -106,4 +103,17 @@ pub(super) fn parse(body: &[&str]) -> Result<Graph, RenderError> {
         return Err(RenderError::Unsupported);
     }
     Ok(graph)
+}
+
+fn add_description(node: &mut super::Node, description: &str) -> Result<(), RenderError> {
+    if !node.declared {
+        node.label = description.to_owned();
+        node.declared = true;
+    } else {
+        if node.members.len() == 16 {
+            return Err(RenderError::Limit);
+        }
+        node.members.push(description.to_owned());
+    }
+    Ok(())
 }

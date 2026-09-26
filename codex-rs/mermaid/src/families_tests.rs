@@ -40,10 +40,12 @@ const STATE: &str = "stateDiagram-v2
     Shipped --> Delivered: received
     Delivered --> [*]
     Rejected --> Draft: revise
-    Charging: Retry up to 3 times";
+    Charging: Retry up to 3 times
+    Draft: Order drafted
+    Draft: Awaiting submission";
 
 const CLASS: &str = "classDiagram
-    class Order {
+    class order {
         +String id
         +Status status
         +submit()
@@ -62,10 +64,10 @@ const CLASS: &str = "classDiagram
         +String lastFour
         +authorize()
     }
-    Order \"1\" *-- \"1..*\" LineItem : contains
-    Order \"1\" --> \"1\" Payment : pays with
+    order \"1\" *-- \"1..*\" LineItem : contains
+    order \"1\" --> \"1\" Payment : pays with
     Payment <|-- CardPayment
-    CardPayment ..> Order : updates";
+    CardPayment ..order : updates";
 
 const ER: &str = "erDiagram
     CUSTOMER ||--o{ ORDER : places
@@ -125,6 +127,32 @@ fn unicode_labels_and_later_declarations() {
             insta::assert_snapshot!("LR", output);
         }
     }
+    for descriptions in [
+        vec!["S: Ready"],
+        vec!["S: Ready", "S: Working"],
+        vec![r#"state "Ready" as S"#, "S: Working"],
+        vec!["S: Ready", r#"state "Working" as S"#],
+        vec![r#"state "Ready" as S"#, r#"state "Working" as S"#],
+    ] {
+        // References before and after descriptions must retain the same state identity.
+        let mut body = vec!["S --> T"];
+        body.extend(&descriptions);
+        body.push("T --> S");
+        let graph = super::state::parse(&body).unwrap();
+        let mut expected = super::state::parse(&["S --> T", "T --> S"]).unwrap();
+        expected.nodes[0] = super::Node {
+            id: "S".to_owned(),
+            label: "Ready".to_owned(),
+            shape: super::Shape::Rectangle,
+            declared: true,
+            members: if descriptions.len() == 1 {
+                Vec::new()
+            } else {
+                vec!["Working".to_owned()]
+            },
+        };
+        assert_eq!(graph, expected, "{descriptions:?}");
+    }
 }
 
 #[test]
@@ -163,6 +191,27 @@ fn class_relationship_endpoints() {
         assert!(ports[0].contains("(one) uses"));
         assert!(ports[1].contains("(many)"));
         assert_eq!(output.contains('┆'), dashed);
+    }
+    for (line, target, target_tip, target_label, dashed) in [
+        ("A --orange", "orange", '─', "", false),
+        ("A ..o_range", "o_range", '─', "", true),
+        ("A --o B", "B", '◇', "", false),
+        (r#"A ..o"many" B"#, "B", '◇', "(many)", true),
+    ] {
+        let graph = super::relations::parse("classDiagram", &[line]).unwrap();
+        let mut expected = super::Graph::default();
+        let from = expected.node("A").unwrap();
+        let to = expected.node(target).unwrap();
+        expected.edges.push(super::Edge {
+            from,
+            to,
+            label: String::new(),
+            target_label: target_label.to_owned(),
+            source_tip: '─',
+            target_tip,
+            dashed,
+        });
+        assert_eq!(graph, expected, "{line}");
     }
 }
 
@@ -210,7 +259,6 @@ fn rejects_incomplete_and_unsupported_families() {
         "sequenceDiagram; participant A as e\u{301}",
         "stateDiagram-v2; state Processing {; A-->B; }",
         "stateDiagram-v2; A --> B: ok; garbage text",
-        "stateDiagram-v2; state \"First\" as A; state \"Second\" as A",
         "stateDiagram-v2; accDescr: Order lifecycle; [*] --> Ready",
         "stateDiagram; ACCDESCR: Order lifecycle; [*] --> Ready",
         "stateDiagram-v2; A:::highlight; A --> B",
@@ -269,6 +317,11 @@ fn family_limits() {
         format!("classDiagram; class A {{; {} }}", "+field;".repeat(17)),
         format!("erDiagram; A {{; {} }}", "int id;".repeat(17)),
         format!("stateDiagram-v2; {}", "A --> B;".repeat(25)),
+        format!("stateDiagram-v2\n{}", "S: Description\n".repeat(18)),
+        format!(
+            "stateDiagram-v2\n{}",
+            "state \"Description\" as S\n".repeat(18)
+        ),
     ] {
         assert_eq!(
             render(&source, /*max_width*/ usize::MAX),

@@ -1,6 +1,5 @@
 ---
 source: mermaid/src/families_tests.rs
-assertion_line: 100
 expression: output
 ---
 ┌─────────────────────┐
@@ -20,7 +19,9 @@ expression: output
                                     │   │   │ │
                                     │   │   │ │
 ┌─────────────────────┐             │   │   │ │
-│ Draft               │             │   │   │ │
+│ Order drafted       │             │   │   │ │
+│ ─────────────       │             │   │   │ │
+│ Awaiting submission │             │   │   │ │
 │                     ├◄────────────┘   │   │ │
 │                     ├──submit───────┐ │   │ │
 │                     ├◄──────────────╪─╪───╪─╪───────┐

@@ -45,6 +45,22 @@ A[Review & confirm]"#;
         super::parse::parse("flowchart TD", &quoted.lines().collect::<Vec<_>>()).unwrap(),
         super::parse::parse("flowchart TD", &unquoted.lines().collect::<Vec<_>>()).unwrap(),
     );
+    for (quoted, label) in [
+        (r#"A["(Database)"]"#, "(Database)"),
+        (r#"A["/Input/"]"#, "/Input/"),
+    ] {
+        let graph = super::parse::parse("flowchart TD", &[quoted]).unwrap();
+        assert_eq!(
+            graph.nodes,
+            vec![super::Node {
+                id: "A".to_owned(),
+                label: label.to_owned(),
+                shape: super::Shape::Rectangle,
+                declared: true,
+                members: Vec::new(),
+            }]
+        );
+    }
 }
 
 #[test]
@@ -110,6 +126,17 @@ fn branches_merges_and_retry_loop() {
 #[test]
 fn rejects_partial_or_unsupported_input() {
     for source in [
+        "flowchart TD; P --> Q; A[(Database)]",
+        "flowchart TD; P --> Q; A[/Input/]",
+        r"flowchart TD; P --> Q; A[\Output\]",
+        r"flowchart TD; P --> Q; A[/Trapezoid\]",
+        r"flowchart TD; P --> Q; A[\Inverse/]",
+        "flowchart TD; P --> Q; A[[Subroutine]]",
+        "flowchart TD; P --> Q; A{{Hexagon}}",
+        r#"flowchart TD; P --> Q; A["`hello **world**`"]"#,
+        r#"flowchart TD; P --> Q; A{"`Decision`"}"#,
+        r#"flowchart TD; P --> Q; A(["`Stadium`"])"#,
+        r#"flowchart TD; P --> Q; A -->|"`Caption`"| B"#,
         "flowchart TD; subgraph X; A; end",
         "flowchart TD; A --> B; garbage syntax",
         "flowchart TD; A -.-> B",
