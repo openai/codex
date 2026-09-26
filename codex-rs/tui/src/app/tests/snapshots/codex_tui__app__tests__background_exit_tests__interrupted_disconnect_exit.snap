@@ -3,4 +3,5 @@ source: tui/src/app/tests/background_exit_tests.rs
 expression: output
 ---
 Disconnected from this task. The current turn was stopped.
-Reconnect: codex resume THREAD_ID
+To reconnect, run:
+  codex resume THREAD_ID

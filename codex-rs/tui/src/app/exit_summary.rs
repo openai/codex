@@ -104,8 +104,9 @@ impl AppExitInfo {
             lines.push(message.to_string());
             let mut resume_command = disconnect.command.clone();
             resume_command.extend(["resume".to_string(), thread_id.to_string()]);
+            lines.push("To reconnect, run:".to_string());
             lines.push(format!(
-                "Reconnect: {}",
+                "  {}",
                 color_command(escape_command(&resume_command)),
             ));
             if !turn_interrupted {
