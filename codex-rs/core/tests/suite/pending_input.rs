@@ -1131,28 +1131,53 @@ async fn injected_response_item_reopens_turn_after_final_answer() {
     server.shutdown().await;
 }
 
+#[test_case(false; "completed_reasoning")]
+#[test_case(true; "discarded_reasoning")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn steer_reconnects_websocket_and_sends_full_history() -> anyhow::Result<()> {
+async fn steer_interrupts_and_drains_websocket(discard_partial: bool) -> anyhow::Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
 
-    let server = responses::start_websocket_server(vec![
+    let mut interrupted = ev_completed_with_tokens("resp-interrupted", /*total_tokens*/ 42);
+    interrupted["type"] = json!("response.incomplete");
+    interrupted["response"]["status"] = json!("incomplete");
+    interrupted["response"]["incomplete_details"] = json!({"reason": "interrupted"});
+    let server = responses::start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
-            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
-            vec![
-                ev_response_created("resp-interrupted"),
-                ev_reasoning_item_added("reason-1", &["thinking"]),
-            ],
-            // Keep the first connection open until the client closes it.
-            vec![],
+            ev_response_created("resp-interrupted"),
+            ev_reasoning_item_added("reason-1", &["thinking"]),
         ],
-        vec![vec![
+        // Finish the active response only after receiving response.interrupt.
+        vec![
+            json!({
+                "type": "response.interrupt.accepted",
+                "response_id": "resp-interrupted",
+                "sequence_number": 3,
+            }),
+            if discard_partial {
+                json!({
+                    "type": "response.output_item.interrupted",
+                    "response_id": "resp-interrupted",
+                    "item_id": "reason-1",
+                    "output_index": 0,
+                    "sequence_number": 4,
+                })
+            } else {
+                ev_reasoning_item("reason-1", &["thinking"], &[])
+            },
+            interrupted,
+        ],
+        vec![
             ev_response_created("resp-follow-up"),
             ev_completed("resp-follow-up"),
-        ]],
-    ])
+        ],
+    ]])
     .await;
     let test = test_codex()
         .with_model("gpt-5.4")
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
         .with_config(|config| {
             config
                 .features
@@ -1174,27 +1199,34 @@ async fn steer_reconnects_websocket_and_sends_full_history() -> anyhow::Result<(
     steer_user_input(codex, "second prompt").await;
     let follow_up = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        server.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0),
+        server.wait_for_request(/*connection_index*/ 0, /*request_index*/ 3),
     )
     .await
-    .expect("steer should close the first socket and open a new one")
+    .expect("steer should interrupt, drain, and reuse the first socket")
     .body_json();
-    assert!(follow_up.get("previous_response_id").is_none());
+    assert_eq!(
+        server.single_connection()[2].body_json(),
+        json!({"type": "response.interrupt", "response_id": "resp-interrupted", "mode": "discard_partial_items"}),
+    );
+    // Incremental continuation is only possible when the drained output made it into history.
+    assert_eq!(follow_up["previous_response_id"], "resp-interrupted");
     let prompts = message_input_texts(&follow_up, "user")
         .into_iter()
         .filter(|text| text == "first prompt" || text == "second prompt")
         .collect::<Vec<_>>();
-    assert_eq!(prompts, vec!["first prompt", "second prompt"]);
+    assert_eq!(prompts, vec!["second prompt"]);
     wait_for_event(codex, |event| {
-        assert!(!matches!(
+        matches!(
             event,
-            EventMsg::TurnAborted(_) | EventMsg::StreamError(_)
-        ));
-        matches!(event, EventMsg::TurnComplete(completed) if completed.error.is_none())
+            EventMsg::TokenCount(count)
+                if count.info.as_ref().is_some_and(|info| info.last_token_usage.total_tokens == 42)
+        )
     })
     .await;
+    wait_for_successful_turn(codex).await;
 
-    assert_eq!(server.connections().len(), 2);
+    assert_eq!(server.connections().len(), 1);
+    codex.shutdown_and_wait().await?;
     server.shutdown().await;
     Ok(())
 }

@@ -16,6 +16,7 @@ use codex_client::TransportError;
 use codex_http_client::HttpClientFactory;
 use codex_websocket_client::WebSocketConnection;
 use codex_websocket_client::WebSocketConnector;
+use futures::FutureExt;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -243,6 +244,7 @@ impl ResponsesWebsocketConnection {
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
+        let (tx_interrupt, rx_interrupt) = oneshot::channel();
         let stream = Arc::clone(&self.stream);
         let idle_timeout = self.idle_timeout;
         let server_reasoning_included = self.server_reasoning_included;
@@ -318,6 +320,7 @@ impl ResponsesWebsocketConnection {
                             telemetry,
                             turn_state.as_deref(),
                             &timing_log_context,
+                            rx_interrupt,
                         ) => result,
                         _ = tx_event.closed() => Err(ApiError::Stream(
                             "response event consumer dropped".to_string(),
@@ -340,6 +343,7 @@ impl ResponsesWebsocketConnection {
         Ok(ResponseStream {
             rx_event,
             upstream_request_id: None,
+            interrupt: Some(tx_interrupt),
         })
     }
 }
@@ -659,6 +663,7 @@ fn map_wrapped_websocket_error_event(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
@@ -667,6 +672,7 @@ async fn run_websocket_response_stream(
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
     timing_log_context: &ResponsesWebsocketTimingLogContext,
+    interrupt: oneshot::Receiver<()>,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
     let mut safety_buffering_treatment = SafetyBufferingTreatment::default();
@@ -679,11 +685,31 @@ async fn run_websocket_response_stream(
     )
     .await?;
 
+    // A response owns its interrupt, and create must be sent before interrupt.
+    let mut interrupt = interrupt.fuse();
+    let mut response_id = None;
     loop {
         let poll_start = Instant::now();
-        let response = tokio::time::timeout(idle_timeout, ws_stream.next())
-            .await
-            .map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()));
+        let response = tokio::select! {
+            response = tokio::time::timeout(idle_timeout, ws_stream.next()) => {
+                response.map_err(|_| ApiError::Stream("idle timeout waiting for websocket".into()))
+            }
+            Ok(()) = &mut interrupt, if response_id.is_some() => {
+                send_websocket_request(
+                    ws_stream,
+                    serde_json::json!({
+                        "type": "response.interrupt",
+                        "response_id": response_id,
+                        "mode": "discard_partial_items",
+                    }).to_string(),
+                    idle_timeout,
+                    /*telemetry*/ None,
+                    timing_log_context.connection_reused,
+                )
+                .await?;
+                continue;
+            }
+        };
         if let Some(t) = telemetry.as_ref() {
             t.on_ws_event(&response, poll_start.elapsed());
         }
@@ -793,6 +819,9 @@ async fn run_websocket_response_stream(
                 }
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
+                        if let ResponseEvent::Created { response_id: id } = &event {
+                            response_id.clone_from(id);
+                        }
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });
                         let _ = tx_event.send(Ok(event)).await;
                         if is_completed {

@@ -2532,11 +2532,11 @@ async fn try_run_sampling_request(
         .features
         .enabled(Feature::ConcurrentReasoningSummaries)
         && turn_context.provider.info().is_openai();
-    let preempt = step_context.preempt.clone().unwrap_or_default();
+    let mut preempt = step_context.preempt.clone().unwrap_or_default();
     let effort = sess
         .reasoning_effort_for_request(&step_context.settings, super::RequestEffortUsage::Sampling)
         .await;
-    let stream = client_session
+    let mut stream = client_session
         .stream(
             prompt,
             &step_context.settings.model_info,
@@ -2548,21 +2548,11 @@ async fn try_run_sampling_request(
             &inference_trace,
         )
         .instrument(trace_span!("stream_request"))
-        .or_cancel(&preempt)
         .or_cancel(&cancellation_token)
-        .await?;
+        .await??;
     if cancellation_token.is_cancelled() {
         return Err(CodexErr::TurnAborted);
     }
-    if preempt.is_cancelled() {
-        drop(stream);
-        client_session.drop_connection();
-        return Ok(SamplingRequestResult {
-            needs_follow_up: true,
-            last_agent_message: None,
-        });
-    }
-    let mut stream = stream??;
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
@@ -2620,9 +2610,17 @@ async fn try_run_sampling_request(
         let event = match event {
             Ok(Ok(event)) => event,
             Ok(Err(_)) => {
+                if let Some(interrupt) = stream.interrupt.take() {
+                    if step_context.settings.model_info.use_responses_lite {
+                        let _ = interrupt.send(());
+                    }
+                    // Drain the response normally before reusing its connection and history.
+                    preempt = CancellationToken::new();
+                    needs_follow_up = true;
+                    continue;
+                }
                 // TODO: Reconcile any response item already being presented to the client.
                 drop(stream);
-                client_session.drop_connection();
                 break Ok(SamplingRequestResult {
                     needs_follow_up: true,
                     last_agent_message,

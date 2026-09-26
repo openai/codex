@@ -31,6 +31,7 @@ async fn interceptors_forward_before_completion_in_order_and_cancel_upstream() {
         Box::pin(
             ResponseStream {
                 rx_event,
+                interrupt: None,
                 consumer_dropped,
             }
             .map(|event| {
