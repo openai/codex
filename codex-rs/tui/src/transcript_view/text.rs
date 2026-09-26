@@ -4,7 +4,7 @@
 //! lines introduce hard breaks. Display wrapping and synthetic controls never enter `text`.
 //! Layout offsets use `usize`; terminal coordinates are narrowed only for visible rows.
 //! Disclosure controls follow their activity's source text without changing its indentation.
-//! Selected hard breaks highlight one trailing cell when space permits.
+//! Selected hard breaks on nonempty rows highlight one trailing cell when space permits.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -318,7 +318,7 @@ impl TextLayout {
         }
     }
 
-    /// Add a trailing cell for selected hard breaks, including a copied separator to `next`.
+    /// Mark selected hard breaks on nonempty rows, including a copied separator to `next`.
     pub(super) fn highlight_selection(
         &self,
         range: Range<usize>,
@@ -329,6 +329,9 @@ impl TextLayout {
     ) {
         self.highlight(range.clone(), area, buf, start_row);
         for (screen_row, row) in self.visible_rows(area, start_row) {
+            if row.source.is_empty() {
+                continue;
+            }
             let Some(end) = row.line_end else { continue };
             let selected = range.contains(&end)
                 || (end == self.text.len()

@@ -1,11 +1,14 @@
-//! Retain original table-cell ranges through grid padding, wrapping, and record labels.
+//! Copy selected table cells independently of grid padding, wrapping, and record labels.
 //!
-//! Each displayed fragment keeps its source line and cell coordinates so selection
-//! serialization can recover only visible, selected content.
+//! Each visual fragment refers to an original cell line. Only selected fragments are
+//! serialized; repeated record labels and whitespace removed by wrapping are reconciled
+//! by their shared source identity. Unselected cells never supply hidden text.
 
 use super::CopyLine;
+use super::SelectedLine;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::LogicalLineSource;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -95,4 +98,112 @@ pub(crate) fn append(output: &mut Option<TableLine>, source: &LogicalLineSource,
             source: cell,
         });
     }
+}
+
+pub(super) fn render(lines: &[&SelectedLine], table: &TableLine) -> String {
+    let mut cells: BTreeMap<(usize, usize), Vec<LogicalLineSource>> = BTreeMap::new();
+    for line in lines {
+        let Some(copy) = line
+            .source
+            .copy
+            .as_ref()
+            .and_then(|copy| copy.table.as_ref())
+        else {
+            continue;
+        };
+        for fragment in &copy.fragments {
+            // A selected blank row may have lost all display padding during wrapping.
+            let blank = line.source.range.is_empty()
+                && line.source.text.trim().is_empty()
+                && fragment.source.text.trim().is_empty();
+            let start = line.range.start.max(fragment.output.start);
+            let end = line.range.end.min(fragment.output.end);
+            if !blank && (start > end || start == end && !fragment.source.text.is_empty()) {
+                continue;
+            }
+            let mut source = fragment.source.clone();
+            if !blank {
+                source.range = source.range.start + start - fragment.output.start
+                    ..source.range.start + end - fragment.output.start;
+            }
+            let parts = cells.entry((fragment.row, fragment.column)).or_default();
+            let mut insert_at = parts.len();
+            while let Some(index) = parts.iter().position(|previous| {
+                Arc::ptr_eq(&previous.text, &source.text)
+                    && (previous.range.start <= source.range.end
+                        && source.range.start <= previous.range.end
+                        || previous.text[previous.range.end.min(source.range.end)
+                            ..previous.range.start.max(source.range.start)]
+                            .trim()
+                            .is_empty())
+            }) {
+                let previous = parts.remove(index);
+                insert_at = insert_at.min(index);
+                source.range.start = previous.range.start.min(source.range.start);
+                source.range.end = previous.range.end.max(source.range.end);
+            }
+            parts.insert(insert_at.min(parts.len()), source);
+        }
+    }
+    let includes_separator = lines.iter().any(|line| {
+        !line.range.is_empty()
+            && line
+                .source
+                .copy
+                .as_ref()
+                .and_then(|copy| copy.table.as_ref())
+                .is_some_and(|table| table.fragments.is_empty())
+    });
+    let standalone = cells.len() == 1 && !includes_separator;
+    let cells: BTreeMap<_, _> = cells
+        .into_iter()
+        .map(|(key, parts)| {
+            let text = parts
+                .into_iter()
+                .map(|source| {
+                    source.copy.as_ref().map_or_else(
+                        || super::escape(&source.text[source.range.clone()]),
+                        |copy| {
+                            let mut copy = (**copy).clone();
+                            copy.table_cell = !standalone;
+                            copy.render(&source.text, source.range.clone(), /*depth*/ 0)
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            (key, text)
+        })
+        .collect();
+    if standalone {
+        return cells.into_values().next().unwrap_or_default();
+    }
+    if cells.is_empty() {
+        return lines
+            .iter()
+            .map(|line| super::escape(&line.source.text[line.range.clone()]))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let mut rows: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
+    rows.insert(/*key*/ 0, vec![""; table.table.len()]);
+    for ((row, column), text) in &cells {
+        rows.entry(*row)
+            .or_insert_with(|| vec![""; table.table.len()])[*column] = text;
+    }
+    let mut out = String::new();
+    for (row, values) in rows {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("| {} |", values.join(" | ")));
+        if row == 0 {
+            out.push_str("\n|");
+            for alignment in table.table.iter() {
+                out.push_str(alignment);
+                out.push('|');
+            }
+        }
+    }
+    out
 }

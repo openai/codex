@@ -1665,7 +1665,7 @@ async fn slash_copy_picker_preserves_completed_source_whitespace_and_hides_direc
     for (key, expected, label) in [
         (
             '1',
-            "Intro\n\n```powershell\nWrite-Output value\nWrite-Output done\n```\n\n> Keep **formatting**\n> > Nested quote\n> hidden\n\n>",
+            "Intro\n\n```powershell\nWrite-Output value  \nWrite-Output done\t\n```\n\n> Keep **formatting**  \n> > Nested quote\n> hidden\n\n>",
             "Whole response",
         ),
         (

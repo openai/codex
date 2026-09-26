@@ -1,4 +1,6 @@
 //! Codex App directives embedded in assistant markdown.
+//!
+//! Preserve whitespace on unchanged lines: Markdown hard breaks and code can depend on it.
 
 use crate::assistant_directives::AssistantDirective;
 use crate::assistant_directives::QuoteEscaping;
@@ -67,12 +69,16 @@ pub(crate) fn parse_assistant_markdown(markdown: &str, cwd: &Path) -> ParsedAssi
                 git_actions.push(action);
             }
         }
-        visible_lines.push(visible_line.trim_end().to_string());
+        visible_lines.push(if visible_line == line {
+            visible_line
+        } else {
+            visible_line.trim_end().to_string()
+        });
     }
 
     while visible_lines
         .last()
-        .is_some_and(std::string::String::is_empty)
+        .is_some_and(|line| line.trim().is_empty())
     {
         visible_lines.pop();
     }

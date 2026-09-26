@@ -7,6 +7,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::Path;
 
+#[path = "table_copy_tests.rs"]
+mod tables;
+
 #[path = "markdown_element_copy_tests.rs"]
 mod elements;
 
@@ -361,7 +364,7 @@ fn task_lists_and_transformed_tables_keep_their_meaning() {
     );
     let copied = payload(&layout, 0..layout.text().len()).0;
     let html = crate::clipboard_html::render_markdown(&copied);
-    assert!(html.contains("<pre><code>"), "{copied}\n{html}");
+    assert!(html.contains("<table>"), "{copied}\n{html}");
 }
 
 #[test]

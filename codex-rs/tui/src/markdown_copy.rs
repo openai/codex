@@ -59,6 +59,7 @@ pub(crate) struct CopyLine {
     pub(crate) item_prefix: String,
     pub(crate) code: bool,
     pub(crate) table: Option<table::TableLine>,
+    table_cell: bool,
     pub(crate) rule: bool,
     pub(crate) heading: usize,
     pub(crate) hard_break: bool,
@@ -120,7 +121,12 @@ impl CopyLine {
             match mark {
                 Some(Inline::Code) => {
                     let content = &text[start..end];
-                    let fence = fence(content, /*minimum*/ 1);
+                    let content = if self.table_cell {
+                        content.replace('|', "\\|")
+                    } else {
+                        content.to_owned()
+                    };
+                    let fence = fence(&content, /*minimum*/ 1);
                     let padding =
                         if content.starts_with(['`', ' ']) || content.ends_with(['`', ' ']) {
                             if content.chars().all(|ch| ch == ' ') {
@@ -154,6 +160,7 @@ impl CopyLine {
                                 .replace('&', "&amp;")
                                 .replace('<', "%3C")
                                 .replace('>', "%3E")
+                                .replace('|', "%7C")
                                 .replace('\n', "%0A")
                                 .replace('\r', "%0D");
                             append_inline(&mut out, &format!("[{trimmed}](<{destination}>)"));
@@ -291,7 +298,47 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
             first = false;
             continue;
         }
-        if line.source.copy_as_prose {
+        if let Some(table) = line
+            .source
+            .copy
+            .as_ref()
+            .and_then(|copy| copy.table.as_ref())
+        {
+            let mut selected = vec![line];
+            while let Some(next) = lines.peek()
+                && next
+                    .source
+                    .copy
+                    .as_ref()
+                    .and_then(|copy| copy.table.as_ref())
+                    .is_some_and(|next| Arc::ptr_eq(&next.table, &table.table))
+            {
+                selected.extend(lines.next());
+            }
+            let body = table::render(&selected, table);
+            let continuation = line
+                .source
+                .copy
+                .as_ref()
+                .map_or("", |copy| copy.continuation.as_str());
+            let continuation = dedent(continuation, indentation.unwrap_or(/*default*/ 0));
+            for (index, row) in body.lines().enumerate() {
+                if index > 0 {
+                    out.push('\n');
+                    out.push_str(&continuation);
+                } else {
+                    out.push_str(&prefix);
+                }
+                out.push_str(row);
+            }
+            if lines
+                .peek()
+                .is_some_and(|next| next.separator == "\n" && !next.range.is_empty())
+            {
+                out.push('\n');
+                out.push_str(continuation.trim_end());
+            }
+        } else if line.source.copy_as_prose {
             let text = &line.source.text[line.range.clone()];
             push_prose_fragment(&mut out, &escape(text));
         } else if let Some(copy) = &line.source.copy

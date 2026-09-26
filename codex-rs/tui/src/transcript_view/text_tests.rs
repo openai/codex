@@ -113,7 +113,7 @@ fn selection_highlights_wide_graphemes_without_trailing_padding() {
 
 #[test]
 fn selected_newlines_respect_wrapping_and_synthetic_rows() {
-    for (width, expected) in [(8, vec![(2, 2), (6, 5), (2, 6)]), (4, vec![(2, 2), (2, 7)])] {
+    for (width, expected) in [(8, vec![(6, 5)]), (4, vec![])] {
         let layout = TextLayout::new(
             vec!["".into(), "alpha beta  ".into(), "".into(), "界".into()],
             width,

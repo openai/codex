@@ -1167,7 +1167,6 @@ impl<'a, 'policy> Writer<'a, 'policy> {
                     .and_then(|copy| copy.table.clone());
                 self.push_hyperlink_line(line);
                 self.copy_line.table = table;
-                self.copy_line.code = true;
                 self.flush_current_line();
             }
             pending_marker_line = false;
@@ -2332,7 +2331,6 @@ impl<'a, 'policy> Writer<'a, 'policy> {
         copy.prefix = self.copy_prefix(pending_marker_line);
         copy.continuation = self.copy_prefix(/*pending_marker_line*/ false);
         copy.item_prefix = self.copy_prefix(/*pending_marker_line*/ true);
-        copy.code = true;
         source.copy = Some(std::sync::Arc::new(copy));
         source.prefix_bytes = spans.iter().map(|span| span.content.len()).sum();
         source.continuation_indent = self.prefix_spans(/*pending_marker_line*/ false).into();
