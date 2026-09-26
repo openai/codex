@@ -43,7 +43,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
             "cliVersion": "0.0.0", "source": "cli", "turns": [{"id": "running", "items": [], "status": "inProgress", "error": null}]
         });
         // The first connection checks daemon compatibility before TUI startup.
-        for connection in -1..3 {
+        for connection in -1..7 {
             let mut socket = loop {
                 let (stream, _) = listener.accept().await?;
                 // Startup probes the default daemon socket before opening its WebSocket.
@@ -69,7 +69,8 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                 if connection == 1 && request.method == "initialize" {
                     restore_rx.take().unwrap().await?;
                 }
-                if connection == 1 && request.method == "thread/resume" {
+                // Keep failing past the original five-attempt limit.
+                if (1..=5).contains(&connection) && request.method == "thread/resume" {
                     socket
                         .send(Message::Text(
                             json!({"id": request.id, "error": {
@@ -131,7 +132,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
                             .into(),
                     ))
                     .await?;
-                if connection == 2 && request.method == "thread/resume" {
+                if connection == 6 && request.method == "thread/resume" {
                     // Keep the recovered turn running: its output must appear without waiting
                     // for turn/completed or rebuilding the transcript.
                     socket
@@ -162,7 +163,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
         "preserved-draft!",
         "fresh-notification-after-reconnect",
     ] {
-        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 30);
+        let deadline = Instant::now() + Duration::from_secs(/*secs*/ 60);
         while !terminal.screen_contains(expected) && Instant::now() < deadline {
             terminal.read_output(Duration::from_millis(/*millis*/ 20))?;
         }
@@ -205,7 +206,7 @@ async fn automatic_reconnect_restores_draft_and_routes_new_notifications() -> Re
             .iter()
             .filter(|method| *method == "thread/resume")
             .count(),
-        2
+        6
     );
     assert!(!methods.iter().any(|method| method == "turn/start"));
     Ok(())
