@@ -5,14 +5,17 @@ use super::wait_for_output_contains;
 use crate::TerminalSize;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
 use std::os::windows::io::OwnedHandle;
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 use winapi::um::jobapi::IsProcessInJob;
@@ -22,6 +25,70 @@ use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;
 const READY_MARKER: &str = "__CODEX_CHILD_READY__";
 const VALUE_MARKER: &str = "__CODEX_CHILD_VALUE__";
 
+#[tokio::test]
+async fn piped_child_has_no_console_with_or_without_job_containment() -> anyhow::Result<()> {
+    // Nextest itself can run without a visible console. Re-execute this test
+    // detached, like app-server-daemon, so children cannot inherit its console.
+    if std::env::var_os("CODEX_PTY_DETACHED_CONSOLE_PROBE").is_none() {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "tests::windows_tests::piped_child_has_no_console_with_or_without_job_containment",
+                "--nocapture",
+            ])
+            .env("CODEX_PTY_DETACHED_CONSOLE_PROBE", "1")
+            .creation_flags(winapi::um::winbase::DETACHED_PROCESS)
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "detached probe failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return Ok(());
+    }
+    let Some(python) = find_python() else {
+        eprintln!("python not found; skipping Windows pipe console test");
+        return Ok(());
+    };
+    let job = crate::JobObject::create_without_breakaway()?;
+    for containment in [None, Some(&job)] {
+        let mut command = crate::Command::new(&python);
+        command.envs(std::env::vars()).args([
+            "-u",
+            "-c",
+            "import ctypes,sys; print(ctypes.windll.kernel32.GetConsoleWindow()); print(sys.stdin.readline().strip())",
+        ]);
+        if let Some(job) = containment {
+            command.prepare_suspended_spawn(job);
+        }
+        let mut child = command.spawn()?;
+        if let Some(job) = containment {
+            let pid = child
+                .id()
+                .ok_or_else(|| anyhow::anyhow!("missing child pid"))?;
+            anyhow::ensure!(job.assign_and_resume_process(pid)?, "job assignment failed");
+        }
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"stdio works\n")
+            .await?;
+        let output =
+            tokio::time::timeout(Duration::from_secs(10), child.wait_with_output()).await??;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout)?.replace("\r\n", "\n"),
+            "0\nstdio works\n"
+        );
+    }
+    Ok(())
+}
 struct WindowsShell {
     name: &'static str,
     program: String,
