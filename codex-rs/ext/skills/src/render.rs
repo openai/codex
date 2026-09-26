@@ -4,6 +4,8 @@ use std::num::NonZeroUsize;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_string::approx_token_count;
 use codex_utils_string::take_bytes_at_char_boundary;
+use serde::Deserialize;
+use serde::Serialize;
 
 use crate::aliases::AliasPlan;
 use crate::catalog::SkillCatalog;
@@ -72,7 +74,8 @@ impl SkillCatalogRenderPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) enum SkillMetadataBudget {
     Tokens(usize),
     Characters(usize),
@@ -157,6 +160,13 @@ fn metadata_line_cost(budget: SkillMetadataBudget, line: &str) -> usize {
 }
 
 impl SkillMetadataBudget {
+    pub(crate) fn with_limit(self, limit: usize) -> Self {
+        match self {
+            Self::Tokens(_) => Self::Tokens(limit),
+            Self::Characters(_) => Self::Characters(limit),
+        }
+    }
+
     pub(crate) fn limit(self) -> usize {
         match self {
             Self::Tokens(limit) | Self::Characters(limit) => limit,
@@ -465,6 +475,27 @@ pub(crate) struct RenderedSkillCatalogs {
 }
 
 impl AvailableSkillsRender {
+    /// Count the metadata charged by the allocator, including aliases and omission notices.
+    pub(crate) fn metadata_cost(
+        &self,
+        budget: SkillMetadataBudget,
+        include_skills_usage_instructions: bool,
+    ) -> usize {
+        let root_cost = if self.skill_root_lines.is_empty() {
+            0
+        } else {
+            aliased_metadata_overhead_cost(
+                budget,
+                self.prompt_kind,
+                &self.skill_root_lines,
+                include_skills_usage_instructions,
+            )
+        };
+        self.skill_lines.iter().fold(root_cost, |used, line| {
+            used.saturating_add(metadata_line_cost(budget, line))
+        })
+    }
+
     pub(crate) fn into_fragment(
         self,
         include_skills_usage_instructions: bool,
@@ -862,22 +893,7 @@ fn combined_available_skills_cost(
     [&rendered.executor, &rendered.cloud, &rendered.host]
         .into_iter()
         .fold(0usize, |used, catalog| {
-            let root_cost = if !catalog.skill_root_lines.is_empty() {
-                aliased_metadata_overhead_cost(
-                    budget,
-                    catalog.prompt_kind,
-                    &catalog.skill_root_lines,
-                    include_skills_usage_instructions,
-                )
-            } else {
-                Default::default()
-            };
-            catalog
-                .skill_lines
-                .iter()
-                .fold(used.saturating_add(root_cost), |used, line| {
-                    used.saturating_add(metadata_line_cost(budget, line))
-                })
+            used.saturating_add(catalog.metadata_cost(budget, include_skills_usage_instructions))
         })
 }
 

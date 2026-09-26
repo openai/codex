@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
 codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }

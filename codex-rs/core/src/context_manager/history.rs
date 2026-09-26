@@ -107,7 +107,8 @@ pub(crate) struct ContextManager {
     /// also clear this when it trims a mixed initial-context developer bundle
     /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
-    /// World state most recently appended to model-visible history.
+    /// World-state comparison checkpoint. After compaction this may contain only
+    /// extension metadata, with model-visible context still awaiting reinjection.
     world_state_baseline: Option<WorldStateSnapshot>,
 }
 

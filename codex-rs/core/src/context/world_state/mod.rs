@@ -400,6 +400,7 @@ impl WorldState {
     }
 
     /// Renders each section against the exact persisted snapshot when available.
+    #[cfg(test)]
     pub(crate) fn render_diff(
         &self,
         previous: &WorldStateSnapshot,

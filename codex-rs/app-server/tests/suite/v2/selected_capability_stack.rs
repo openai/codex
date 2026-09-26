@@ -68,6 +68,8 @@ const SKILL_DESCRIPTION: &str = "Deploy through the selected executor.";
 const SKILL_BODY_MARKER: &str = "SELECTED_EXECUTOR_SKILL_BODY";
 const LOCAL_SKILL_BODY_MARKER: &str = "COLLIDING_LOCAL_SKILL_BODY";
 const NO_SELECTED_SKILLS_MESSAGE: &str = "No selected-environment skills are currently available.";
+const RESTORED_SELECTED_SKILLS_MESSAGE: &str =
+    "The previously listed selected-environment skills are available again.";
 const MCP_SERVER_NAME: &str = "executor_probe";
 const MCP_CALL_ID: &str = "selected-executor-mcp-call";
 const CONNECTOR_ID: &str = "calendar";
@@ -473,6 +475,19 @@ async fn selected_capability_stack_tracks_environment_availability_and_resume() 
     }
     assert_plugin_guidance_count(&requests[4], /*expected_count*/ 0);
     assert_selected_skill_is_injected(&requests[5], /*expected_count*/ 2);
+    assert!(
+        latest_selected_skill_update(&requests[5])
+            .is_some_and(|text| text.contains(RESTORED_SELECTED_SKILLS_MESSAGE))
+    );
+    assert_eq!(
+        1,
+        requests[5]
+            .message_input_texts("developer")
+            .into_iter()
+            .filter(|text| text.contains(SKILL_DESCRIPTION))
+            .count(),
+        "reattaching should retain the original catalog without repeating it"
+    );
     assert_selected_plugin_tools(&requests[5]);
     let output = requests[2].function_call_output(MCP_CALL_ID);
     let output = output["output"]
@@ -1006,9 +1021,14 @@ fn assert_selected_skill_is_injected(request: &ResponsesRequest, expected_count:
 }
 
 fn assert_selected_skill_catalog_available(request: &ResponsesRequest) {
-    let catalog_fragment = latest_selected_skill_update(request)
-        .expect("selected skill catalog update should be model-visible");
-    assert!(catalog_fragment.contains(SKILL_DESCRIPTION));
+    let latest_update = latest_selected_skill_update(request)
+        .expect("selected skill availability should be model-visible");
+    assert!(!latest_update.contains(NO_SELECTED_SKILLS_MESSAGE));
+    let catalog_fragment = request
+        .message_input_texts("developer")
+        .into_iter()
+        .rfind(|text| text.contains(SKILL_DESCRIPTION))
+        .expect("the full selected skill catalog should remain in history");
     assert!(catalog_fragment.contains("executor package:"));
 }
 
@@ -1016,7 +1036,11 @@ fn latest_selected_skill_update(request: &ResponsesRequest) -> Option<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .rfind(|text| text.contains(SKILL_DESCRIPTION) || text.contains(NO_SELECTED_SKILLS_MESSAGE))
+        .rfind(|text| {
+            text.contains(SKILL_DESCRIPTION)
+                || text.contains(NO_SELECTED_SKILLS_MESSAGE)
+                || text.contains(RESTORED_SELECTED_SKILLS_MESSAGE)
+        })
 }
 
 fn assert_selected_plugin_tools(request: &ResponsesRequest) {

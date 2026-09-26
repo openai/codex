@@ -129,6 +129,7 @@ async fn skill_world_state_fragments(
     }];
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id,
@@ -313,6 +314,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
 
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -340,6 +342,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
 
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -377,6 +380,7 @@ async fn host_world_state_records_catalog_metrics_on_publish_and_change() -> Tes
     turn_store.insert(HostSkillsSnapshot::new(Arc::new(outcome)));
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -448,6 +452,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
     turn_store.insert(host_snapshot.clone());
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &model_info,
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -489,6 +494,7 @@ async fn persisted_host_snapshot_deduplicates_warning_after_reinitialization() -
     resumed_turn_store.insert(host_snapshot);
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &model_info,
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-2",
@@ -579,6 +585,7 @@ async fn executor_cloud_and_host_share_catalog_world_state_flow() -> TestResult 
     let metrics = Arc::new(RecordingMetrics::default());
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -687,6 +694,7 @@ async fn nonempty_executor_empty_host_records_catalog_metrics() -> TestResult {
 
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -765,6 +773,7 @@ async fn host_world_state_uses_provider_catalog_with_core_compatible_rendering()
 
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -845,6 +854,7 @@ async fn shadow_selection_uses_host_catalog_when_instructions_are_disabled() -> 
 
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -1103,6 +1113,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     };
     let available_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -1156,9 +1167,12 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         )],
         read_request_keys(&read_requests)
     );
+    let available_world_state =
+        serde_json::Map::from_iter([("skills".to_string(), available_snapshot.clone())]);
     let unavailable_turn_store = ExtensionData::new("turn-2");
     let unavailable_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: Some(&available_world_state),
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-2",
@@ -1172,6 +1186,16 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
         })
         .await;
     let unavailable_snapshot = unavailable_sections[0].snapshot().clone();
+    assert_eq!(
+        unavailable_snapshot,
+        serde_json::json!({
+            "body": null,
+            "includeInstructions": true,
+            "lastAvailableFingerprint": blake3::hash(
+                available_snapshot["body"].as_str().ok_or("available catalog")?.as_bytes()
+            ).to_hex().to_string(),
+        }),
+    );
     let unavailable_fragment = unavailable_sections[0]
         .render_diff(PreviousWorldStateSection::Known(&available_snapshot))
         .ok_or("removed skills should render")?;
@@ -1181,9 +1205,12 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
             .contains("No selected-environment skills")
     );
 
+    let unavailable_world_state =
+        serde_json::Map::from_iter([("skills".to_string(), unavailable_snapshot.clone())]);
     let restored_turn_store = ExtensionData::new("turn-3");
     let restored_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: Some(&unavailable_world_state),
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-3",
@@ -1200,7 +1227,18 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     let restored_fragment = restored_sections[0]
         .render_diff(PreviousWorldStateSection::Known(&unavailable_snapshot))
         .ok_or("restored skills should render")?;
-    assert!(restored_fragment.body().contains("lint-fix"));
+    assert_eq!(
+        restored_fragment.body(),
+        "\n## Skills update\nThe previously listed selected-environment skills are available again.\n",
+    );
+    assert!(restored_sections[0].matches_retained_fragment("developer", available_fragment.body()));
+    assert!(
+        !restored_sections[0].matches_retained_fragment("developer", unavailable_fragment.body())
+    );
+    assert_eq!(
+        restored_sections[0].render_diff(PreviousWorldStateSection::Absent),
+        Some(available_fragment),
+    );
     assert_eq!(1, list_calls.load(Ordering::Relaxed));
 
     let failed_discovery = ExecutorCapabilityDiscoverySnapshot::new(
@@ -1228,6 +1266,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     ] {
         registry.context_contributors()[0]
             .contribute_world_state(WorldStateContributionInput {
+                previous_world_state: None,
                 model_info: &catalog_model_info(),
                 thread_id: codex_protocol::ThreadId::new(),
                 turn_id,
@@ -1254,6 +1293,7 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
     let listing_disabled_turn_store = ExtensionData::new("turn-4");
     let listing_disabled_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-4",
@@ -1292,13 +1332,20 @@ async fn selected_executor_catalog_follows_step_availability_and_reuses_its_cach
 #[tokio::test]
 async fn default_context_truncates_catalog_descriptions() -> TestResult {
     let description = "x".repeat(1_025);
-    let mut executor_entry = test_entry(
-        SkillSourceKind::Executor,
-        "env-1",
-        "executor/executor-long-description",
-        "skill://executor/executor-long-description/SKILL.md",
-    );
-    executor_entry.description = description.clone();
+    // A small cloud catalog leaves its unused allowance to filesystem descriptions.
+    let executor_entries = (0..5)
+        .map(|index| {
+            let package_id = format!("executor/executor-long-description-{index}");
+            let mut entry = test_entry(
+                SkillSourceKind::Executor,
+                "env-1",
+                &package_id,
+                &format!("skill://{package_id}/SKILL.md"),
+            );
+            entry.description = description.clone();
+            entry
+        })
+        .collect();
     let mut cloud_entry = test_entry(
         SkillSourceKind::Cloud,
         "codex_apps",
@@ -1309,7 +1356,7 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
     let providers = SkillProviders::new()
         .with_executor_provider(Arc::new(StaticSkillProvider {
             catalog: SkillCatalog {
-                entries: vec![executor_entry],
+                entries: executor_entries,
                 warnings: Vec::new(),
             },
             read_requests: Arc::new(Mutex::new(Vec::new())),
@@ -1348,10 +1395,15 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
 
     let (executor, cloud) =
         skill_world_state_fragments(&registry, &session_store, &thread_store, "turn-1").await?;
-    assert!(executor.body().contains("- executor-long-description:"));
+    let expected_description = "x".repeat(1_021) + "...";
+    for index in 0..5 {
+        assert!(executor.body().contains(&format!(
+            "- executor-long-description-{index}: {expected_description} (executor package:"
+        )));
+    }
     assert!(cloud.body().contains("- cloud-long-description:"));
     for rendered in [executor.body(), cloud.body()] {
-        assert!(rendered.contains(&("x".repeat(1_021) + "...")));
+        assert!(rendered.contains(&expected_description));
         assert!(!rendered.contains(&"x".repeat(1_024)));
         assert!(!rendered.contains(&description));
     }
@@ -1360,115 +1412,252 @@ async fn default_context_truncates_catalog_descriptions() -> TestResult {
 }
 
 #[tokio::test]
-async fn moderate_budget_pressure_keeps_every_catalog_entry() -> TestResult {
-    let description = "x".repeat(1_025);
-    let executor_entries = (0..5)
-        .map(|index| {
-            let package_id = format!("executor/executor-skill-{index:02}");
-            let mut entry = test_entry(
-                SkillSourceKind::Executor,
-                "env-1",
-                &package_id,
-                &format!("skill://{package_id}/SKILL.md"),
-            );
-            entry.description = description.clone();
-            entry
-        })
-        .collect();
-    let cloud_entries = (0..5)
-        .map(|index| {
-            let package_id = format!("cloud/cloud-skill-{index:02}");
-            let mut entry = test_entry(
-                SkillSourceKind::Cloud,
-                "codex_apps",
-                &package_id,
-                &format!("skill://{package_id}/SKILL.md"),
-            );
-            entry.description = description.clone();
-            entry
-        })
-        .collect();
-    let providers = SkillProviders::new()
-        .with_executor_provider(Arc::new(StaticSkillProvider {
-            catalog: SkillCatalog {
-                entries: executor_entries,
-                warnings: Vec::new(),
-            },
-            read_requests: Arc::new(Mutex::new(Vec::new())),
-            list_calls: None,
-            fail_first_list: false,
-        }))
-        .with_cloud_provider(Arc::new(StaticSkillProvider {
-            catalog: SkillCatalog {
-                entries: cloud_entries,
-                warnings: Vec::new(),
-            },
-            read_requests: Arc::new(Mutex::new(Vec::new())),
-            list_calls: None,
-            fail_first_list: false,
-        }));
-    let mut builder = ExtensionRegistryBuilder::new();
-    install_with_providers(&mut builder, providers, skills_extension_config);
-    let registry = builder.build();
-    let session_store = ExtensionData::new("session");
-    let thread_store = ExtensionData::new("thread");
-    let session_source = SessionSource::Cli;
-    let config = default_config();
-    registry.thread_lifecycle_contributors()[0]
-        .on_thread_start(ThreadStartInput {
-            config: &config,
-            session_source: &session_source,
-            persistent_thread_state_available: true,
-            environments: &[],
-            mcp_resource_client: None,
-            extension_metrics: None,
-            session_store: &session_store,
-            thread_store: &thread_store,
-        })
-        .await;
-    start_registered_turn(&registry, &session_store, &thread_store, "turn-1").await;
-
-    let (executor, cloud) =
-        skill_world_state_fragments(&registry, &session_store, &thread_store, "turn-1").await?;
-    let description_lengths = [("executor", executor.body()), ("cloud", cloud.body())]
-        .into_iter()
-        .flat_map(|(source, rendered)| (0..5).map(move |index| (source, rendered, index)))
-        .map(|(source, rendered, index)| {
-            let name = format!("{source}-skill-{index:02}");
-            let package_id = format!("{source}/{name}");
-            let line_prefix = format!("- {name}: ");
-            let line_suffix = if source == "executor" {
-                format!(" (executor package: {package_id})")
-            } else {
-                format!(" (cloud package: {package_id})")
-            };
-            rendered
-                .lines()
-                .find_map(|line| {
-                    line.strip_prefix(&line_prefix)
-                        .and_then(|line| line.strip_suffix(&line_suffix))
-                })
-                .unwrap_or_else(|| panic!("rendered catalog should include {name}"))
-                .chars()
-                .count()
-        })
-        .collect::<Vec<_>>();
-    let shortest_description = *description_lengths
-        .iter()
-        .min()
-        .expect("catalog should include descriptions");
-    let longest_description = *description_lengths
-        .iter()
-        .max()
-        .expect("catalog should include descriptions");
-    assert!(shortest_description > 0);
-    assert!(longest_description < 1_024);
-    assert!(longest_description.abs_diff(shortest_description) <= 1);
-    for rendered in [executor.body(), cloud.body()] {
-        assert!(!rendered.contains("additional skills omitted from this bounded skills list"));
-        assert!(!rendered.contains(&"x".repeat(1_021)));
+async fn catalog_rebalances_only_to_avoid_omissions_and_retains_the_allocation() -> TestResult {
+    enum Phase {
+        Initial,
+        FirstReady,
+        Disconnected,
+        Reconnected,
+        Resumed,
+        CloudCatalogGrew,
+        BudgetChanged,
     }
 
+    // Description-only pressure, filesystem omissions that can be rescued, and
+    // unavoidable omissions. Check both token and fallback character accounting.
+    for (executor_count, cloud_count, rebalance, all_fit) in [
+        (17, 82, false, true),
+        (40, 5, true, true),
+        (40, 160, false, false),
+    ] {
+        for context_window in [None, Some(100_000)] {
+            let description = "x".repeat(1_025);
+            let executor_entries: Vec<_> = (0..executor_count)
+                .map(|index| {
+                    let package_id = format!("executor/executor-skill-{index:02}");
+                    let mut entry = test_entry(
+                        SkillSourceKind::Executor,
+                        "env-1",
+                        &package_id,
+                        &format!("skill://{package_id}/SKILL.md"),
+                    );
+                    entry.description = description.clone();
+                    entry
+                })
+                .collect();
+            let registry_for_cloud_count = |cloud_count| {
+                let cloud_entries = (0..cloud_count)
+                    .map(|index| {
+                        let package_id = format!("cloud/cloud-skill-{index:02}");
+                        let mut entry = test_entry(
+                            SkillSourceKind::Cloud,
+                            "codex_apps",
+                            &package_id,
+                            &format!("skill://{package_id}/SKILL.md"),
+                        );
+                        entry.description = description.clone();
+                        entry
+                    })
+                    .collect();
+                let providers = SkillProviders::new()
+                    .with_executor_provider(Arc::new(StaticSkillProvider {
+                        catalog: SkillCatalog {
+                            entries: executor_entries.clone(),
+                            warnings: Vec::new(),
+                        },
+                        read_requests: Arc::new(Mutex::new(Vec::new())),
+                        list_calls: None,
+                        fail_first_list: false,
+                    }))
+                    .with_cloud_provider(Arc::new(StaticSkillProvider {
+                        catalog: SkillCatalog {
+                            entries: cloud_entries,
+                            warnings: Vec::new(),
+                        },
+                        read_requests: Arc::new(Mutex::new(Vec::new())),
+                        list_calls: None,
+                        fail_first_list: false,
+                    }));
+                let mut builder = ExtensionRegistryBuilder::new();
+                install_with_providers(&mut builder, providers, skills_extension_config);
+                builder.build()
+            };
+            let mut registry = registry_for_cloud_count(cloud_count);
+
+            let selected_roots = [SelectedCapabilityRoot {
+                id: "skills".to_string(),
+                location: CapabilityRootLocation::Environment {
+                    environment_id: "env-1".to_string(),
+                    path: PathUri::parse("file:///skills")?,
+                },
+            }];
+            let mut model = ModelInfo {
+                context_window,
+                ..catalog_model_info()
+            };
+            let session_store = ExtensionData::new("session");
+            let mut thread_store = ExtensionData::new("thread");
+            let mut previous = serde_json::Map::new();
+            let mut initial_cloud = None;
+            let mut accepted_cloud = None;
+            let mut phases = vec![
+                Phase::Initial,
+                Phase::FirstReady,
+                Phase::Disconnected,
+                Phase::Reconnected,
+                Phase::Disconnected,
+                Phase::Reconnected,
+                Phase::Resumed,
+            ];
+            if rebalance {
+                phases.extend([
+                    Phase::CloudCatalogGrew,
+                    Phase::Disconnected,
+                    Phase::Reconnected,
+                    Phase::Resumed,
+                ]);
+            }
+            phases.push(Phase::BudgetChanged);
+            for (step, phase) in phases.into_iter().enumerate() {
+                if matches!(phase, Phase::CloudCatalogGrew) {
+                    // Refresh the cloud inventory on resume while retaining the saved allocation.
+                    registry = registry_for_cloud_count(/*cloud_count*/ 15);
+                }
+                if matches!(
+                    phase,
+                    Phase::Initial | Phase::Resumed | Phase::CloudCatalogGrew
+                ) {
+                    thread_store = ExtensionData::new("thread");
+                    registry.thread_lifecycle_contributors()[0]
+                        .on_thread_start(ThreadStartInput {
+                            config: &default_config(),
+                            session_source: &SessionSource::Cli,
+                            persistent_thread_state_available: true,
+                            environments: &[],
+                            mcp_resource_client: None,
+                            extension_metrics: None,
+                            session_store: &session_store,
+                            thread_store: &thread_store,
+                        })
+                        .await;
+                }
+                if matches!(phase, Phase::BudgetChanged) {
+                    model.context_window = Some(200_000);
+                }
+                let ready = matches!(
+                    phase,
+                    Phase::FirstReady
+                        | Phase::Reconnected
+                        | Phase::Resumed
+                        | Phase::CloudCatalogGrew
+                );
+                let turn_id = format!("turn-{step}");
+                let turn_store = ExtensionData::new(&turn_id);
+                start_registered_turn(&registry, &session_store, &thread_store, &turn_id).await;
+                let sections = registry.context_contributors()[0]
+                    .contribute_world_state(WorldStateContributionInput {
+                        previous_world_state: Some(&previous),
+                        model_info: &model,
+                        thread_id: codex_protocol::ThreadId::new(),
+                        turn_id: &turn_id,
+                        environments: &[],
+                        ready_selected_capability_roots: if ready { &selected_roots } else { &[] },
+                        executor_capability_discovery: None,
+                        extension_metrics: None,
+                        session_store: &session_store,
+                        thread_store: &thread_store,
+                        turn_store: &turn_store,
+                    })
+                    .await;
+                let cloud = world_state_section(&sections, "cloud_skills");
+                let cloud_body = cloud.snapshot()["body"].as_str().ok_or("cloud catalog")?;
+                match phase {
+                    Phase::Initial => initial_cloud = Some(cloud_body.to_string()),
+                    Phase::FirstReady => {
+                        assert_eq!(initial_cloud.as_deref() != Some(cloud_body), rebalance);
+                        accepted_cloud = Some(cloud.snapshot().clone());
+                        let executor = world_state_section(&sections, "skills");
+                        let executor_body = executor.snapshot()["body"]
+                            .as_str()
+                            .ok_or("executor catalog")?;
+                        assert_eq!(
+                            executor_body
+                                .lines()
+                                .filter(|line| line.starts_with("- executor-skill-"))
+                                .count()
+                                == executor_count,
+                            all_fit
+                        );
+                        if all_fit {
+                            assert_eq!(
+                                cloud_body
+                                    .lines()
+                                    .filter(|line| line.starts_with("- cloud-skill-"))
+                                    .count(),
+                                cloud_count
+                            );
+                        }
+                    }
+                    Phase::CloudCatalogGrew => {
+                        let allocation = &cloud.snapshot()["allocation"];
+                        let previous_limit = previous["cloud_skills"]["allocation"]["cloudLimit"]
+                            .as_u64()
+                            .ok_or("previous cloud limit")?;
+                        assert!(
+                            allocation["cloudLimit"].as_u64().ok_or("cloud limit")?
+                                > previous_limit
+                        );
+                        assert_ne!(
+                            allocation["cloudCatalogFingerprint"],
+                            previous["cloud_skills"]["allocation"]["cloudCatalogFingerprint"]
+                        );
+                        assert_eq!(
+                            cloud_body
+                                .lines()
+                                .filter(|line| line.starts_with("- cloud-skill-"))
+                                .count(),
+                            15
+                        );
+                        let executor = world_state_section(&sections, "skills");
+                        assert_eq!(
+                            executor.snapshot()["body"]
+                                .as_str()
+                                .ok_or("executor catalog")?
+                                .lines()
+                                .filter(|line| line.starts_with("- executor-skill-"))
+                                .count(),
+                            executor_count
+                        );
+                        accepted_cloud = Some(cloud.snapshot().clone());
+                    }
+                    Phase::Disconnected | Phase::Reconnected | Phase::Resumed => {
+                        assert_eq!(Some(cloud.snapshot()), accepted_cloud.as_ref());
+                        assert!(
+                            cloud
+                                .render_diff(PreviousWorldStateSection::Known(
+                                    &previous["cloud_skills"]
+                                ))
+                                .is_none()
+                        );
+                    }
+                    Phase::BudgetChanged => {
+                        // A genuinely different total budget starts a new allocation.
+                        assert_eq!(
+                            cloud.snapshot()["allocation"],
+                            serde_json::json!({
+                                "totalBudget": {"tokens": 4_000}, "cloudLimit": 3_000,
+                                "cloudCatalogFingerprint": previous["cloud_skills"]["allocation"]["cloudCatalogFingerprint"],
+                            })
+                        );
+                    }
+                }
+                previous = sections
+                    .iter()
+                    .map(|section| (section.id().to_string(), section.snapshot().clone()))
+                    .collect();
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1554,34 +1743,34 @@ async fn extreme_budget_pressure_removes_descriptions_before_omitting_entries() 
         .lines()
         .filter(|line| line.starts_with("- cloud-skill-"))
         .count();
-    assert_eq!(40, included_executor_count);
+    assert!(included_executor_count > 0);
+    assert!(included_executor_count < 40);
     assert!(included_cloud_count > 0);
     assert!(included_cloud_count < 160);
     assert!(
         executor
             .body()
-            .contains("- executor-skill-039: (executor package:")
+            .contains("- executor-skill-000: (executor package:")
     );
     assert!(cloud.body().contains("- cloud-skill-000: (cloud package:"));
     assert!(!cloud.body().contains("- cloud-skill-159:"));
-    for rendered in [executor.body(), cloud.body()] {
+    for (total, included, rendered) in [
+        (40, included_executor_count, executor.body()),
+        (160, included_cloud_count, cloud.body()),
+    ] {
         assert!(!rendered.contains("description-"));
+        assert!(rendered.contains("additional skills omitted from this bounded skills list"));
+        let omitted_count = total - included;
+        let warning = event_rx.try_recv()?.into_warning();
+        assert_eq!(warning.thread_id, "thread");
+        assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(
+            warning.message,
+            format!(
+                "Exceeded skills context budget. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
+            )
+        );
     }
-    assert!(
-        cloud
-            .body()
-            .contains("additional skills omitted from this bounded skills list")
-    );
-    let omitted_count = 200 - included_executor_count - included_cloud_count;
-    let warning = event_rx.try_recv()?.into_warning();
-    assert_eq!(warning.thread_id, "thread");
-    assert_eq!(warning.turn_id.as_deref(), Some("turn-1"));
-    assert_eq!(
-        warning.message,
-        format!(
-            "Exceeded skills context budget. All skill descriptions were removed and {omitted_count} additional skills were not included in the model-visible skills list."
-        )
-    );
     assert!(event_rx.try_recv().is_err());
 
     Ok(())
@@ -1988,6 +2177,7 @@ async fn root_qualified_locator_selects_only_the_matching_executor_skill() -> Te
     let turn_store = ExtensionData::new("turn-1");
     registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -2117,6 +2307,7 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
     let turn_store = ExtensionData::new("turn-1");
     let sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &model_info,
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -2132,6 +2323,7 @@ async fn model_context_window_scales_executor_and_cloud_catalogs() -> TestResult
     // Core rebuilds world state before each sampling step.
     let _repeated_sections = registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &model_info,
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",
@@ -2228,6 +2420,7 @@ async fn executor_catalog_emits_at_most_four_warnings() -> TestResult {
 
     registry.context_contributors()[0]
         .contribute_world_state(WorldStateContributionInput {
+            previous_world_state: None,
             model_info: &catalog_model_info(),
             thread_id: codex_protocol::ThreadId::new(),
             turn_id: "turn-1",

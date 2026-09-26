@@ -4547,6 +4547,7 @@ name = "codex-skills-extension"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "blake3",
  "codex-analytics",
  "codex-config",
  "codex-exec-server",

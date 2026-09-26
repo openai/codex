@@ -509,7 +509,7 @@ async fn production_turn_aliases_discovered_singleton_cloud_root() -> Result<()>
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
         .with_model_info_override("gpt-5.5", |model_info| {
-            model_info.context_window = Some(1_000);
+            model_info.context_window = Some(2_000);
             model_info.max_context_window = None;
         })
         .with_config(|config| {

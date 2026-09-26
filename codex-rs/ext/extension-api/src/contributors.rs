@@ -142,6 +142,18 @@ pub trait ContextContributor: Send + Sync {
             Vec::new()
         })
     }
+
+    /// Retains bounded extension metadata when compaction discards rendered context.
+    ///
+    /// Return only this contributor's section IDs, without rendered text or availability
+    /// state. Core persists these partial sections so the next step can rebuild full
+    /// context without losing decisions that are independent of model-visible history.
+    fn retain_world_state_after_compaction(
+        &self,
+        _previous_world_state: &serde_json::Map<String, serde_json::Value>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::Map::new()
+    }
 }
 
 /// Contributor for host-owned thread lifecycle gates.

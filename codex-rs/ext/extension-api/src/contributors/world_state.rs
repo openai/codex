@@ -26,6 +26,10 @@ pub struct WorldStateContributionInput<'a> {
     pub session_store: &'a ExtensionData,
     pub thread_store: &'a ExtensionData,
     pub turn_store: &'a ExtensionData,
+    /// Persisted comparison state from the last recorded step. Its rendered text may have
+    /// left model history; use a retained-fragment matcher before referring back to it.
+    /// After compaction, sections may contain only retained extension metadata.
+    pub previous_world_state: Option<&'a serde_json::Map<String, Value>>,
 }
 
 /// What the harness knows about the previous value of one extension-owned section.

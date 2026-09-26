@@ -73,6 +73,7 @@ use crate::tools::SkillAnalytics;
 use crate::tools::SkillToolAuthority;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
+use crate::world_state::CLOUD_SKILLS_WORLD_STATE_ID;
 use crate::world_state_catalogs::CatalogContext;
 use crate::world_state_catalogs::CatalogStatus;
 
@@ -265,6 +266,25 @@ where
                 .map(|catalog| context.build_world_state_section(catalog))
                 .collect()
         })
+    }
+
+    fn retain_world_state_after_compaction(
+        &self,
+        previous_world_state: &serde_json::Map<String, serde_json::Value>,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        let mut retained = serde_json::Map::new();
+        if let Some(allocation) = previous_world_state
+            .get(CLOUD_SKILLS_WORLD_STATE_ID)
+            .and_then(|section| section.get("allocation"))
+        {
+            // Allocation survives lost history; the catalog fingerprint and budget still
+            // determine whether it can be reused after fresh discovery and policy resolution.
+            retained.insert(
+                CLOUD_SKILLS_WORLD_STATE_ID.to_string(),
+                serde_json::json!({ "allocation": allocation }),
+            );
+        }
+        retained
     }
 }
 
