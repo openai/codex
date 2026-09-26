@@ -865,8 +865,9 @@ pub struct Tui {
     pub fullscreen_transcript: bool,
 
     /// Copy selected transcript text when the mouse button is released.
-    /// Defaults to `auto`: enabled in tmux/Zellij and in direct macOS terminals except Ghostty/Kitty.
-    /// On other platforms, direct terminals default off except iTerm2/Terminal.app.
+    /// Defaults to `auto`: enabled except in direct terminals known to forward their native
+    /// copy shortcut (Ghostty 1.2+, Kitty on macOS, Windows Terminal, and VS Code on Windows).
+    /// Unknown terminals, Ghostty without a recognized version, and tmux/Zellij default to copying.
     #[serde(default)]
     pub copy_on_select: CopyOnSelect,
 

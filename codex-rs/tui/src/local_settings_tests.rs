@@ -231,20 +231,47 @@ async fn copy_on_select_respects_terminal_defaults_and_config_overrides() -> any
             (config.tui_copy_on_select, local.tui.copy_on_select),
             (expected, expected),
         );
-        for (name, multiplexer, default_enabled) in [
-            (TerminalName::Iterm2, None, true),
-            (TerminalName::AppleTerminal, None, true),
-            (TerminalName::Ghostty, None, false),
-            (TerminalName::Kitty, None, false),
-            (TerminalName::Unknown, None, cfg!(target_os = "macos")),
+        for (name, version, multiplexer, default_enabled) in [
+            (TerminalName::Iterm2, None, None, true),
+            (TerminalName::AppleTerminal, None, None, true),
+            (TerminalName::Ghostty, Some("1.2.0"), None, false),
+            (TerminalName::Ghostty, Some("1.3.0"), None, false),
+            (TerminalName::Ghostty, Some("1.1.3"), None, true),
+            (TerminalName::Ghostty, Some("1.2.0-dev"), None, true),
+            (TerminalName::Ghostty, Some("invalid"), None, true),
+            (TerminalName::Ghostty, None, None, true),
+            (TerminalName::Kitty, None, None, !cfg!(target_os = "macos")),
+            (TerminalName::WindowsTerminal, None, None, false),
+            (
+                TerminalName::VsCode,
+                None,
+                None,
+                !cfg!(target_os = "windows"),
+            ),
+            (TerminalName::Alacritty, None, None, true),
+            (TerminalName::GnomeTerminal, None, None, true),
+            (TerminalName::Konsole, None, None, true),
+            (TerminalName::Vte, None, None, true),
+            (TerminalName::WarpTerminal, None, None, true),
+            (TerminalName::WezTerm, None, None, true),
+            (TerminalName::Dumb, None, None, true),
+            (TerminalName::Unknown, None, None, true),
             (
                 TerminalName::Ghostty,
+                Some("1.3.0"),
                 Some(Multiplexer::Tmux { version: None }),
                 true,
             ),
             (
                 TerminalName::Kitty,
+                None,
                 Some(Multiplexer::Zellij { version: None }),
+                true,
+            ),
+            (
+                TerminalName::WindowsTerminal,
+                None,
+                Some(Multiplexer::Tmux { version: None }),
                 true,
             ),
         ] {
@@ -252,7 +279,7 @@ async fn copy_on_select_respects_terminal_defaults_and_config_overrides() -> any
                 name,
                 multiplexer,
                 term_program: None,
-                version: None,
+                version: version.map(str::to_owned),
                 term: None,
             };
             assert_eq!(
