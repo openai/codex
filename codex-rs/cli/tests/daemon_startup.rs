@@ -60,6 +60,28 @@ async fn daemon_auto_start_preserves_bedrock_onboarding() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(windows)]
+async fn restrictive_launcher_uses_embedded_if_daemon_cannot_start() -> Result<()> {
+    const CHILD: &str = "CODEX_TEST_RESTRICTIVE_DAEMON_START";
+    if std::env::var_os(CHILD).is_some() {
+        // The PTY creates its own breakaway-permitted job. Add Cargo's
+        // restriction *inside* the PTY so it is the CLI's innermost job.
+        let job = codex_utils_pty::JobObject::create_without_breakaway()?;
+        let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
+        let mut command = tokio::process::Command::new(codex);
+        command
+            .arg("--no-alt-screen")
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
+        let status = job.spawn_contained(&mut command)?.wait().await?;
+        ensure!(status.success(), "CLI exited: {status}");
+        return Ok(());
+    }
+    daemon_startup("restrictive-job").await
+}
+
+#[tokio::test]
 #[cfg(unix)]
 async fn bedrock_onboarding_leaves_a_running_daemon_untouched() -> Result<()> {
     daemon_startup("bedrock-running").await
@@ -129,26 +151,29 @@ async fn daemon_startup(command: &str) -> Result<()> {
     env.insert("TERM".into(), "xterm-256color".into());
     let mut args = vec!["--no-alt-screen".to_string()];
     let mut steps: VecDeque<(&str, &[u8])> = VecDeque::new();
-    if matches!(command, "start" | "bedrock-running") || mismatch {
+    if matches!(command, "start" | "bedrock-running" | "restrictive-job") || mismatch {
         // A selected package with a stopped daemon avoids installing a release.
         let managed = home
             .path()
-            .join("packages/app-server-daemon/current/bin/codex");
+            .join("packages/app-server-daemon/current/bin")
+            .join(if cfg!(windows) { "codex.exe" } else { "codex" });
         fs::create_dir_all(home.path().join("packages/app-server-daemon/current/bin"))?;
         // Hard links change the executable's ctime and invalidate Rosetta's translation cache.
         #[cfg(unix)]
         std::os::unix::fs::symlink(&codex, &managed)?;
         #[cfg(not(unix))]
         fs::hard_link(&codex, &managed).or_else(|_| fs::copy(&codex, &managed).map(|_| ()))?;
-        fs::create_dir(home.path().join("app-server-daemon"))?;
-        fs::write(
-            home.path().join("app-server-daemon/settings.json"),
-            if persisted {
-                r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false},"featureOverrides":{"api_key_model_discovery":true}}"#
-            } else {
-                r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false}}"#
-            },
-        )?;
+        if command != "restrictive-job" {
+            fs::create_dir(home.path().join("app-server-daemon"))?;
+            fs::write(
+                home.path().join("app-server-daemon/settings.json"),
+                if persisted {
+                    r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false},"featureOverrides":{"api_key_model_discovery":true}}"#
+                } else {
+                    r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false}}"#
+                },
+            )?;
+        }
     }
     let pid_file = home.path().join("app-server-daemon/daemon.pid");
     let result = async {
@@ -172,6 +197,9 @@ async fn daemon_startup(command: &str) -> Result<()> {
             // The draft header is visible before the session's command composer is ready.
             steps.push_back(("GPT-5.6-Terra", b"/status\r"));
             "Server:Localbackgroundserver"
+        } else if command == "restrictive-job" {
+            steps.push_back(("GPT-5.6-Terra", b"\x14"));
+            "Runningwithoutthesharedbackgroundserver:thisWindowslauncher"
         } else if mismatch {
             args.extend(if persisted {
                 ["--disable".into(), "api_key_model_discovery".into()]
@@ -201,8 +229,19 @@ async fn daemon_startup(command: &str) -> Result<()> {
             steps.push_back(("GPT-5.6-Terra", b"\x14"));
             "Runningwithoutthesharedbackgroundserver:--strict-config"
         };
+        let program = if cfg!(windows) && command == "restrictive-job" {
+            env.insert("CODEX_TEST_RESTRICTIVE_DAEMON_START".into(), "1".into());
+            args = vec![
+                "--exact".into(),
+                "restrictive_launcher_uses_embedded_if_daemon_cannot_start".into(),
+                "--nocapture".into(),
+            ];
+            std::env::current_exe()?
+        } else {
+            codex.clone()
+        };
         let spawned = codex_utils_pty::spawn_pty_process(
-            &codex.to_string_lossy(),
+            &program.to_string_lossy(),
             &args,
             &workspace_path,
             &env,
@@ -214,7 +253,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
             codex_utils_pty::ChildFds::Inherited(&[]),
         )
         .await?;
-        let exit = spawned.exit_rx;
+        let mut exit = spawned.exit_rx;
         let session = spawned.session;
         let writer = session.writer_sender();
         let mut stdout = spawned.stdout_rx;
@@ -247,6 +286,16 @@ async fn daemon_startup(command: &str) -> Result<()> {
                     .chars()
                     .filter(|c| !c.is_whitespace())
                     .collect();
+                if command == "restrictive-job"
+                    && text.contains("starttheWindowsdaemonfromanon-elevatedterminal")
+                {
+                    // Elevated runners must still reject startup before the job probe.
+                    ensure!(!pid_file.exists());
+                    let status = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), &mut exit)
+                        .await??;
+                    ensure!(status != 0, "elevated daemon launch must fail");
+                    return Ok::<_, anyhow::Error>(());
+                }
                 if let Some((ready, input)) = steps.front()
                     && text.contains(ready)
                 {
@@ -276,8 +325,15 @@ async fn daemon_startup(command: &str) -> Result<()> {
                         ensure!(home.path().join("app-server-daemon/daemon.pid").exists());
                     } else if let Some(existing_daemon) = &existing_daemon {
                         ensure!(fs::read(&pid_file)? == *existing_daemon);
-                    } else if bedrock_onboarding {
+                    } else if bedrock_onboarding || command == "restrictive-job" {
                         ensure!(!pid_file.exists());
+                        if command == "restrictive-job" {
+                            let contents = screen.screen().contents();
+                            let warning = contents.lines()
+                                .find(|line| line.contains("Running without the shared background server:"))
+                                .context("missing rendered fallback warning")?;
+                            insta::assert_snapshot!("restrictive_launcher_warning", warning.trim());
+                        }
                     }
                     return Ok::<_, anyhow::Error>(());
                 }

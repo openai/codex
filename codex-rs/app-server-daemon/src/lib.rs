@@ -2,6 +2,8 @@
 
 mod backend;
 #[cfg(windows)]
+pub use backend::windows::DetachedLaunchRestricted;
+#[cfg(windows)]
 use backend::windows::try_lock_file;
 mod client;
 mod install_lock;

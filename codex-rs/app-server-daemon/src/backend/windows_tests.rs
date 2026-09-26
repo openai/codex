@@ -151,7 +151,17 @@ fn detached_launch_preflight_rejects_restrictive_job() {
             0
         );
         // A new job does not permit breakaway. Reject before any lifecycle mutation.
-        assert!(super::ensure_detached_launch(&executable).is_err());
+        let err = super::ensure_detached_launch(&executable).expect_err("breakaway forbidden");
+        assert!(
+            err.is::<super::DetachedLaunchRestricted>(),
+            "expected a classified job restriction: {err:#}"
+        );
+        // File access failures must still fail normally, even in a restricted
+        // job: a CLI must not hide corrupt or inaccessible installations.
+        let temp = tempfile::tempdir().expect("test directory");
+        let err =
+            super::ensure_detached_launch(temp.path()).expect_err("directory is not an executable");
+        assert!(!err.is::<super::DetachedLaunchRestricted>(), "{err:#}");
         return;
     }
     let output = std::process::Command::new(executable)

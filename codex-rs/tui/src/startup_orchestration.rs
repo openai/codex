@@ -531,18 +531,31 @@ pub(super) async fn run_main_inner(
                 crossterm::terminal::disable_raw_mode()?;
                 let result = codex_app_server_daemon::start_with_features(&daemon_features).await;
                 daemon_telemetry::record_start(&config, &result).await;
-                result.map_err(|err| {
-                    std::io::Error::other(format!("{err:#}\n{}", daemon_startup::FAILURE_HINT))
-                })
+                match result {
+                    Ok(output) => Ok(Some(output)),
+                    #[cfg(windows)]
+                    Err(err) if err.is::<codex_app_server_daemon::DetachedLaunchRestricted>() => {
+                        Ok(None)
+                    }
+                    Err(err) => Err(std::io::Error::other(format!(
+                        "{err:#}\n{}",
+                        daemon_startup::FAILURE_HINT
+                    ))),
+                }
             })
             .await?;
-        managed_daemon = output.backend.is_some();
-        app_server_target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::from_absolute_path_checked(output.socket_path)?,
-            },
-            allow_embedded_fallback: false,
-        };
+        if let Some(output) = output {
+            managed_daemon = output.backend.is_some();
+            app_server_target = AppServerTarget::LocalDaemon {
+                endpoint: RemoteAppServerEndpoint::UnixSocket {
+                    socket_path: AbsolutePathBuf::from_absolute_path_checked(output.socket_path)?,
+                },
+                allow_embedded_fallback: false,
+            };
+        } else {
+            app_server_target = AppServerTarget::Embedded;
+            daemon_exclusion = Some("this Windows launcher");
+        }
     }
     // The overview must inspect the shared server's agents regardless of local settings.
     let compatibility_warning = if cli.agents_overview {

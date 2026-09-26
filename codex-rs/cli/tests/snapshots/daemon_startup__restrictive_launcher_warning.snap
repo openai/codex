@@ -1,0 +1,6 @@
+---
+source: cli/tests/daemon_startup.rs
+assertion_line: 325
+expression: warning.trim()
+---
+⚠ Running without the shared background server: this Windows launcher requires embedded mode.

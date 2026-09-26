@@ -3,7 +3,9 @@
 //! Managed servers must not elevate ordinary clients sharing the account's socket.
 //! Installer jobs contain extraction processes when an update is cancelled.
 //! Detached launches stop the launcher's original stdio handles from propagating.
+//! Launch probes distinguish job restrictions from other failures without running the binary.
 
+use std::fmt;
 use std::io;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
@@ -15,6 +17,7 @@ use std::process::Stdio;
 
 use anyhow::Context;
 use anyhow::Result;
+use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
 use windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE;
 use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 use windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION;
@@ -113,24 +116,52 @@ pub(crate) fn ensure_not_elevated() -> Result<()> {
     Ok(())
 }
 
+/// A launch that only fails when asked to leave the launcher's Windows job.
+/// Automatic CLI startup may use its embedded server; lifecycle operations
+/// must still return this error before stopping an existing daemon.
+#[derive(Debug)]
+pub struct DetachedLaunchRestricted;
+
+impl fmt::Display for DetachedLaunchRestricted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "this Windows launcher prevents background processes from outliving it (for example, cargo run); build and run codex.exe directly to use the background server",
+        )
+    }
+}
+
 // Check that breakaway launch is permitted before stopping an existing daemon.
 // An outer system job may remain attached; membership alone does not establish
 // whether it will terminate the daemon. Suspend the probe before cleanup.
 pub(crate) fn ensure_detached_launch(executable: &Path) -> Result<()> {
-    let mut child = Command::new(executable)
-        .creation_flags(CREATE_SUSPENDED | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB)
+    let mut command = Command::new(executable);
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .context("cannot launch detached daemon; existing daemon was not stopped")?;
+        .creation_flags(CREATE_SUSPENDED | DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB);
+    let (mut child, launch_result) = match command.spawn() {
+        Ok(child) => (child, Ok(())),
+        Err(err) if err.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => {
+            // Access denied can also mean the file cannot be executed. Only
+            // classify a job restriction if removing breakaway makes it work.
+            // This diagnostic child stays suspended and is always reaped.
+            command.creation_flags(CREATE_SUSPENDED | DETACHED_PROCESS);
+            let child = match command.spawn() {
+                Ok(child) => child,
+                Err(_) => return Err(err).context("cannot launch detached daemon"),
+            };
+            (child, Err(err).context(DetachedLaunchRestricted))
+        }
+        Err(err) => return Err(err).context("cannot launch detached daemon"),
+    };
     child
         .kill()
         .context("failed to terminate suspended launch probe")?;
     child
         .wait()
         .context("failed to reap suspended launch probe")?;
-    Ok(())
+    launch_result
 }
 
 pub(super) struct Process(OwnedHandle);

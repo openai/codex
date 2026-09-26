@@ -1,6 +1,7 @@
 //! Local daemon launch policy. Explicit embedded launches never discover or start a daemon;
 //! optional attachment may fall back to embedded mode, while automatic launches
-//! require a compatible shared server and a successful connection.
+//! require a compatible shared server and a successful connection, except when
+//! the Windows launcher forbids detaching a missing server.
 
 use super::*;
 use std::collections::BTreeMap;
