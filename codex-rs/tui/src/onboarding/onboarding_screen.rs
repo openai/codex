@@ -97,6 +97,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_login_screen: bool,
     pub bedrock_setup_enabled: bool,
     pub login_status: LoginStatus,
+    pub app_server_target: crate::AppServerTarget,
     pub app_server_request_handle: Option<AppServerRequestHandle>,
     pub config: Config,
 }
@@ -123,6 +124,7 @@ impl OnboardingScreen {
             show_login_screen,
             bedrock_setup_enabled,
             login_status,
+            app_server_target,
             app_server_request_handle,
             config,
         } = args;
@@ -168,6 +170,7 @@ impl OnboardingScreen {
                     error: Arc::new(RwLock::new(None)),
                     sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                     login_status,
+                    app_server_target,
                     app_server_request_handle,
                     auth_config,
                     bedrock_setup_enabled,
