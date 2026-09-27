@@ -175,7 +175,6 @@ impl App {
     }
 
     pub(super) fn begin_reconnect(&mut self) -> bool {
-        self.chat_widget.clear_prompt_suggestion();
         if matches!(self.app_server_target, AppServerTarget::Embedded) {
             return false;
         }

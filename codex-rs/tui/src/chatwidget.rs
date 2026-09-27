@@ -288,7 +288,6 @@ mod input_flow;
 mod input_restore;
 mod input_submission;
 mod interrupts;
-mod prompt_suggestions;
 mod questions;
 mod startup_submission;
 use self::interrupts::InterruptManager;
@@ -658,8 +657,6 @@ pub(crate) struct ChatWidget {
     pet_image_support_override: Option<crate::pets::PetImageSupport>,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
-    // Unknown until the server supplies live settings; resume responses omit summary.
-    pub(crate) prompt_suggestion_summary: Option<codex_protocol::config_types::ReasoningSummary>,
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
     blocks_direct_input: bool,
@@ -1778,7 +1775,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn show_external_writer_thread(&mut self) {
-        self.clear_prompt_suggestion();
         self.cancel_image_submission();
         self.blocks_direct_input = true;
         self.external_writer_view = true;

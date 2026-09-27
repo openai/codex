@@ -284,7 +284,6 @@ async fn new_config(
         show_tooltips: true,
         tui_show_server_version_notice: true,
         tui_auto_recap: true,
-        tui_prompt_suggestions: false,
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         tui_fullscreen_transcript: false,
         tui_copy_on_select: Default::default(),

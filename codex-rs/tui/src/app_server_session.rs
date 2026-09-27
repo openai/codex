@@ -364,7 +364,6 @@ impl ThreadParamsMode {
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppServerStartedThread {
-    pub(crate) reasoning_summary: Option<codex_protocol::config_types::ReasoningSummary>,
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
     pub(crate) blocks_direct_input: bool,
@@ -2202,14 +2201,6 @@ async fn started_thread_from_start_response(
         turns: response.thread.turns,
         blocks_direct_input,
         task_tools_available: false,
-        reasoning_summary: match thread_params_mode {
-            ThreadParamsMode::Embedded => Some(
-                config
-                    .model_reasoning_summary
-                    .unwrap_or(codex_protocol::config_types::ReasoningSummary::None),
-            ),
-            ThreadParamsMode::Remote => config.model_reasoning_summary,
-        },
     })
 }
 
@@ -2233,7 +2224,6 @@ async fn started_thread_from_resume_response(
         turns: response.thread.turns,
         blocks_direct_input,
         task_tools_available: false,
-        reasoning_summary: None,
     })
 }
 
@@ -2257,7 +2247,6 @@ async fn started_thread_from_fork_response(
         turns: response.thread.turns,
         blocks_direct_input,
         task_tools_available: false,
-        reasoning_summary: None,
     })
 }
 

@@ -490,7 +490,6 @@ impl App {
     /// This helper copies every known nickname/role from `AgentNavigationState` into the
     /// replacement widget so that replayed collab items render agent names immediately.
     pub(super) fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
-        self.chat_widget.clear_prompt_suggestion();
         self.pending_right_click_paste = None;
         if !self.chat_widget.realtime_conversation_is_running() {
             self.retain_realtime_replay_state_before_replace();
@@ -848,7 +847,6 @@ impl App {
             .set_queue_submissions_until_session_configured(/*queue*/ false);
         match result {
             Ok(started) => {
-                self.chat_widget.prompt_suggestion_summary = started.reasoning_summary;
                 self.chat_widget.mark_fresh_task_for_sparkle(&started);
                 let thread_id = started.session.thread_id;
                 if started.task_tools_available {
@@ -1091,7 +1089,6 @@ impl App {
             initial_user_message,
         );
         self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-        self.chat_widget.prompt_suggestion_summary = started.reasoning_summary;
         if matches!(
             presentation,
             ThreadAttachPresentation::Fresh | ThreadAttachPresentation::FreshWithDraft
