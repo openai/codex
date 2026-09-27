@@ -512,10 +512,7 @@ async fn connect_websocket(
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
-            info!(
-                "successfully connected to websocket: {url}, headers: {:?}",
-                response.headers()
-            );
+            info!("successfully connected to websocket: {url}");
             (stream, response)
         }
         Err(err) => {

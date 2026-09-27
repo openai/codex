@@ -17,7 +17,6 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::call_trace;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
-use crate::tools::router::tool_log_payload;
 use codex_memories_read::citations::parse_memory_citation;
 use codex_memories_read::citations::thread_ids_from_memory_citation;
 use codex_protocol::error::CodexErr;
@@ -338,12 +337,10 @@ pub(crate) async fn handle_output_item_done(
                 )
                 .await;
 
-            let payload_preview = tool_log_payload(&call.payload, &call.direct_source());
             tracing::info!(
                 thread_id = %ctx.sess.thread_id,
-                "ToolCall: {} {}",
+                "ToolCall: {}",
                 call.tool_name,
-                payload_preview
             );
 
             record_completed_response_item(ctx.sess.as_ref(), ctx.step_context.as_ref(), &item)
