@@ -1,11 +1,14 @@
 //! Reviews bind each action to its captured target policy while reusing the reviewer context.
 
 use super::*;
+use codex_core::context::UserGoalUpdate;
 use codex_history::RolloutItem;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
+use tokio_util::task::AbortOnDropHandle;
 use wiremock::Mock;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_partial_json;
@@ -285,5 +288,197 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
     classifier.shutdown().await;
     shutdown.send(()).expect("stop secondary executor");
     executor.await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let executor_url = format!("ws://{}", listener.local_addr()?);
+    let (attach, connection) = tokio::sync::oneshot::channel();
+    let (disconnect, stop) = tokio::sync::oneshot::channel();
+    let executor = AbortOnDropHandle::new(tokio::spawn(serve_environment_with_agents_md(
+        listener, "", connection, stop,
+    )));
+    attach.send(()).expect("attach secondary executor");
+
+    let server = start_mock_server().await;
+    let test = test_codex()
+        .with_model_info_override("guardian-offline-parent", |info| {
+            info.guardian = None;
+            info.auto_review_model_override = Some(info.slug.clone());
+        })
+        .with_config(|config| {
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::read_only())
+                .expect("set read-only permissions");
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("enable permission requests");
+            config
+                .features
+                .disable(Feature::DeferredExecutor)
+                .expect("disable deferred executor");
+            config
+                .features
+                .disable(Feature::CwdRelativeTurnDiffs)
+                .expect("exercise Git-relative diff display");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let manager = test.thread_manager.environment_manager();
+    let secondary_id = "guardian-secondary";
+    manager.upsert_environment(
+        secondary_id.to_owned(),
+        executor_url,
+        /*connect_timeout*/ None,
+    )?;
+    manager
+        .get_environment(secondary_id)
+        .context("secondary executor")?
+        .wait_until_ready()
+        .await?;
+
+    let mut primary = test.executor_environment().selection().clone();
+    primary.config =
+        EnvironmentConfigState::Ready(environment_config_for_selection(&test.config, &primary));
+    let mut secondary = primary.clone();
+    secondary.environment_id = secondary_id.to_owned();
+    secondary.config =
+        EnvironmentConfigState::Ready(environment_config_for_selection(&test.config, &secondary));
+    let (allow, pending_allow) = tokio::sync::oneshot::channel();
+    let (model, _) = start_streaming_sse_server(vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_function_call(
+                    "permission",
+                    "request_permissions",
+                    &json!({
+                        "environment_id": primary.environment_id,
+                        "permissions": {"network": {"enabled": true}},
+                        "reason": "Review the primary executor only.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("parent"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: Some(pending_allow),
+            body: sse(vec![
+                ev_assistant_message("allow", r#"{"outcome":"allow"}"#),
+                ev_completed("first-review"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message(
+                    "deny",
+                    r#"{"outcome":"deny","rationale":"The user withdrew authorization."}"#,
+                ),
+                ev_completed("retry-review"),
+            ]),
+        }],
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_assistant_message("done", "done"),
+                ev_completed("done"),
+            ]),
+        }],
+    ])
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(
+            ResponseTemplate::new(/*s*/ 307)
+                .insert_header("location", format!("{}/v1/responses", model.uri())),
+        )
+        .mount(&server)
+        .await;
+    test.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Approve network permission for the primary executor.".to_owned(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                environments: Some(TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    vec![primary, secondary],
+                )),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    timeout(
+        Duration::from_secs(10),
+        model.wait_for_request_count(/*count*/ 2),
+    )
+    .await
+    .context("first Guardian request")?;
+    let first: Value = serde_json::from_slice(&model.requests().await[1])?;
+    assert_eq!(
+        first["client_metadata"]["x-openai-subagent"],
+        json!("guardian")
+    );
+
+    // Invalidate the pending allow, then disconnect the unrelated executor. The
+    // retry must still reach the model and respect the updated authorization.
+    let mut expected_authorization = test.codex.guardian_authorization_version().await;
+    test.codex
+        .record_user_goal_update(UserGoalUpdate::Set {
+            objective: Some("Do not grant network permission after all.".to_owned()),
+            status: None,
+        })
+        .await?;
+    expected_authorization.user_message_revision += 1;
+    assert_eq!(
+        test.codex.guardian_authorization_version().await,
+        expected_authorization
+    );
+    disconnect.send(()).expect("disconnect secondary executor");
+    executor.await?;
+    allow.send(()).expect("complete stale allow");
+
+    timeout(
+        Duration::from_secs(10),
+        model.wait_for_request_count(/*count*/ 3),
+    )
+    .await
+    .context("Guardian retry must not wait for the offline secondary executor")?;
+    let retry: Value = serde_json::from_slice(&model.requests().await[2])?;
+    assert_eq!(
+        retry["client_metadata"]["x-openai-subagent"],
+        json!("guardian")
+    );
+    assert!(
+        retry["input"]
+            .to_string()
+            .contains("Do not grant network permission after all.")
+    );
+    let status = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::GuardianAssessment(assessment)
+            if assessment.status != GuardianAssessmentStatus::InProgress =>
+        {
+            Some(assessment.status)
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(status, GuardianAssessmentStatus::Denied);
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.codex.shutdown_and_wait().await?;
+    model.shutdown().await;
     Ok(())
 }

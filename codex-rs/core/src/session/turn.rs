@@ -282,11 +282,13 @@ pub(crate) async fn run_turn(
     let (world_state, display_roots) = tokio::join!(
         sess.record_context_updates_and_set_reference_context_item(first_step_context.as_ref()),
         async {
-            if first_step_context
-                .turn
-                .config
-                .features
-                .enabled(Feature::CwdRelativeTurnDiffs)
+            // Guardian must not wait for remote Git discovery just to display diff paths.
+            if crate::guardian::is_basic_session_source(&turn_context.session_source)
+                || first_step_context
+                    .turn
+                    .config
+                    .features
+                    .enabled(Feature::CwdRelativeTurnDiffs)
             {
                 first_step_context
                     .environments
