@@ -201,8 +201,6 @@ impl ChatWidget {
         let model_for_header = self.current_model().to_string();
         if display == SessionConfiguredDisplay::Normal {
             let startup_tooltip_override = self.startup_tooltip_override.take();
-            let show_fast_status = self
-                .should_show_fast_status(&model_for_header, self.effective_service_tier.as_deref());
             let mut session_info_cell = history_cell::new_session_info(
                 &self.config,
                 &self.local_settings,
@@ -212,7 +210,6 @@ impl ChatWidget {
                 self.show_welcome_banner,
                 startup_tooltip_override,
                 self.plan_type,
-                show_fast_status,
             );
             history_cell::set_session_greeting(
                 &mut session_info_cell,

@@ -2377,47 +2377,6 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 }
 
-#[tokio::test]
-async fn fast_status_indicator_requires_chatgpt_auth() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
-
-    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
-
-    set_chatgpt_auth(&mut chat);
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-
-    assert!(chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
-}
-
-#[tokio::test]
-async fn fast_status_indicator_is_hidden_for_models_without_fast_support() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(!get_available_model(&chat, "gpt-5.2").supports_fast_mode());
-    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
-    set_chatgpt_auth(&mut chat);
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(!get_available_model(&chat, "gpt-5.2").supports_fast_mode());
-
-    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
-}
-
-#[tokio::test]
-async fn fast_status_indicator_is_hidden_when_fast_mode_is_off() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-    set_chatgpt_auth(&mut chat);
-    set_fast_mode_test_catalog(&mut chat);
-    assert!(get_available_model(&chat, "gpt-5.4").supports_fast_mode());
-
-    assert!(!chat.should_show_fast_status(chat.current_model(), chat.current_service_tier(),));
-}
-
 // Snapshot test: ChatWidget at very small heights (idle)
 // Ensures overall layout behaves when terminal height is extremely constrained.
 #[tokio::test]

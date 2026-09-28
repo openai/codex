@@ -5819,7 +5819,6 @@ async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
             is_first,
             /*tooltip_override*/ None,
             /*auth_plan*/ None,
-            /*show_fast_status*/ false,
         )) as Arc<dyn HistoryCell>
     };
 
@@ -7521,7 +7520,6 @@ async fn backtrack_selection_preserves_selected_prompt_and_requests_branch() {
             is_first,
             /*tooltip_override*/ None,
             /*auth_plan*/ None,
-            /*show_fast_status*/ false,
         )) as Arc<dyn HistoryCell>
     };
 

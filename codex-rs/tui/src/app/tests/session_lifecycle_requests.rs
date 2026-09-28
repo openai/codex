@@ -2661,7 +2661,6 @@ async fn underfilled_scrollback_fetches_older_pages_without_opening_the_transcri
             /*is_first_event*/ false,
             Some("This is a test announcement".to_string()),
             /*auth_plan*/ None,
-            /*show_fast_status*/ false,
         )),
     );
     app.enqueue_primary_thread_session(started.session, started.turns)

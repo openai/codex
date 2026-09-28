@@ -1,0 +1,8 @@
+---
+source: tui/src/tooltips.rs
+expression: rendered
+---
+Line::from_iter([Span::from("Tip:").bold(), Span::from(" Use the "), Span::from("desktop app").bold(), Span::from(". Install it")]) []
+Line::from("from") []
+Line::from(Span::from("https://learn.chatgpt.com/docs/linux/linux-app").fg(Color::Reset).underlined()) [TerminalHyperlink { columns: 0..46, destination: "https://learn.chatgpt.com/docs/linux/linux-app", destination_kind: Web }]
+Line::from_iter([Span::from("and run "), Span::from("chatgpt").fg(Color::Rgb(166, 227, 161)), Span::from(".")]) []
