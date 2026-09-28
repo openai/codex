@@ -99,23 +99,18 @@ fn acl_api_result(path: &Path, operation: &str, code: u32) -> Result<()> {
 /// # Safety
 /// Caller must free the returned security descriptor with `LocalFree` and pass an existing path.
 pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> {
-    let wpath = to_wide(path);
-    let h = CreateFileW(
-        wpath.as_ptr(),
-        READ_CONTROL,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        std::ptr::null_mut(),
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS,
-        0,
-    );
-    if h == INVALID_HANDLE_VALUE {
-        return Err(anyhow!("CreateFileW failed for {}", path.display()));
-    }
+    // Rust's file opening supports extended-length paths without changing the
+    // caller's spelling or resolving links before the existing reparse checks.
+    let handle = OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .with_context(|| format!("open ACL target {}", path.display()))?;
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
     let code = GetSecurityInfo(
-        h,
+        handle.as_raw_handle() as _,
         1, // SE_FILE_OBJECT
         DACL_SECURITY_INFORMATION,
         std::ptr::null_mut(),
@@ -124,7 +119,6 @@ pub unsafe fn fetch_dacl_handle(path: &Path) -> Result<(*mut ACL, *mut c_void)> 
         std::ptr::null_mut(),
         &mut p_sd,
     );
-    CloseHandle(h);
     if code != ERROR_SUCCESS {
         return Err(anyhow!(
             "GetSecurityInfo failed for {}: {}",
@@ -576,50 +570,51 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
             },
         });
     }
-    let mut added = false;
-    if !entries.is_empty() {
-        let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
+    let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
+    // Collect errors before releasing either allocation so every update path
+    // shares the same cleanup, including failure to open the write handle.
+    let result = (|| -> Result<bool> {
+        if entries.is_empty() {
+            return Ok(false);
+        }
         let code2 = SetEntriesInAclW(
             entries.len() as u32,
             entries.as_ptr(),
             p_dacl,
             &mut p_new_dacl,
         );
-        if code2 == ERROR_SUCCESS {
-            let code3 = SetNamedSecurityInfoW(
-                to_wide(path).as_ptr() as *mut u16,
-                1,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                p_new_dacl,
-                std::ptr::null_mut(),
-            );
-            if code3 == ERROR_SUCCESS {
-                added = true;
-                if !p_new_dacl.is_null() {
-                    LocalFree(p_new_dacl as HLOCAL);
-                }
-            } else {
-                if !p_new_dacl.is_null() {
-                    LocalFree(p_new_dacl as HLOCAL);
-                }
-                if !p_sd.is_null() {
-                    LocalFree(p_sd as HLOCAL);
-                }
-                return Err(anyhow!("SetNamedSecurityInfoW failed: {code3}"));
-            }
-        } else {
-            if !p_sd.is_null() {
-                LocalFree(p_sd as HLOCAL);
-            }
+        if code2 != ERROR_SUCCESS {
             return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
         }
+        // Keep no-op checks read-only; request ACL-write access only when
+        // a grant actually needs updating. Use the same long-path support.
+        let handle = OpenOptions::new()
+            .access_mode(READ_CONTROL | WRITE_DAC)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .context("open ACL target for update")?;
+        let code3 = SetSecurityInfo(
+            handle.as_raw_handle() as _,
+            1,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            p_new_dacl,
+            std::ptr::null_mut(),
+        );
+        if code3 != ERROR_SUCCESS {
+            return Err(anyhow!("SetSecurityInfo failed: {code3}"));
+        }
+        Ok(true)
+    })();
+    if !p_new_dacl.is_null() {
+        LocalFree(p_new_dacl as HLOCAL);
     }
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
-    Ok(added)
+    result
 }
 
 /// Ensure all provided SIDs have an allow ACE with the requested mask on the path.
