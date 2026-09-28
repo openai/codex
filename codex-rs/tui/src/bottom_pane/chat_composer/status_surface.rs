@@ -19,16 +19,43 @@ impl ChatComposer {
         props
     }
 
-    pub(super) fn render_status_surface(&self, area: Rect, buf: &mut Buffer) {
+    pub(super) fn render_status_surface(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        options: ComposerRenderOptions<'_>,
+    ) {
         if area.is_empty() {
             return;
         }
         let mut props = self.footer_props();
+        let show_cycle_hint = !props.is_task_running
+            && !self.blocks_direct_input
+            && self.draft.input_enabled
+            && !self.popup_active()
+            && matches!(
+                props.mode,
+                FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+            )
+            && options.footer.is_none_or(|footer| !footer.is_interactive);
         // Persistent context is independent of help, queue, search, and quit modes.
         props.mode = FooterMode::ComposerHasDraft;
         props.is_task_running = false;
         let line = passive_footer_status_line(&props);
-        let right = self.mode_indicator_line(/*show_cycle_hint*/ false);
+        let full = self.mode_indicator_line(show_cycle_hint);
+        let left_width = line
+            .as_ref()
+            .map_or(/*default*/ 0, |line| line.width() as u16);
+        let full_width = full
+            .as_ref()
+            .map_or(/*default*/ 0, |line| line.width() as u16);
+        let right = if full_width <= inset_footer_hint_area(area).width
+            && can_show_left_with_context(area, left_width, full_width)
+        {
+            full
+        } else {
+            self.mode_indicator_line(/*show_cycle_hint*/ false)
+        };
         let right_width = right
             .as_ref()
             .map_or(/*default*/ 0, |line| line.width() as u16);

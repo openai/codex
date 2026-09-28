@@ -90,6 +90,65 @@ fn passive_activity_keeps_shortcuts_only_when_the_complete_hint_fits() {
 }
 
 #[test]
+fn fullscreen_plan_indicator_keeps_the_cycle_hint_when_it_fits() {
+    let mut composer = composer();
+    composer.set_collaboration_modes_enabled(/*enabled*/ true);
+    composer.set_collaboration_mode_indicator(Some(CollaborationModeIndicator::Plan));
+    let (wide, _) = render(&composer, /*width*/ 100, /*footer*/ None);
+    assert!(
+        wide.contains("Plan mode (shift+tab to cycle)"),
+        "idle fullscreen must explain how to leave Plan mode: {wide}"
+    );
+    insta::assert_snapshot!("fullscreen_plan_cycle_hint", wide);
+
+    let (narrow, _) = render(&composer, /*width*/ 44, /*footer*/ None);
+    assert!(narrow.contains("Plan mode"), "{narrow}");
+    assert!(!narrow.contains("shift+tab"), "{narrow}");
+
+    composer.set_task_running(/*running*/ true);
+    let (running, _) = render(&composer, /*width*/ 100, /*footer*/ None);
+    assert!(running.contains("Plan mode"), "{running}");
+    assert!(!running.contains("shift+tab"), "{running}");
+    composer.set_task_running(/*running*/ false);
+
+    let footer = TranscriptFooter {
+        text: "Search: verify".into(),
+        cursor_column: Some(8),
+        is_interactive: true,
+    };
+    let (search, _) = render(&composer, /*width*/ 100, Some(&footer));
+    assert!(search.contains("Plan mode"), "{search}");
+    assert!(!search.contains("shift+tab"), "{search}");
+
+    // Configured items such as git-branch can have no value outside a repository.
+    composer.set_status_line(/*status_line*/ None);
+    let (empty_narrow, _) = render(&composer, /*width*/ 24, /*footer*/ None);
+    assert_eq!(
+        empty_narrow.lines().rev().nth(1).map(str::trim),
+        Some("Plan mode")
+    );
+    let (empty_wide, _) = render(&composer, /*width*/ 100, /*footer*/ None);
+    assert!(
+        empty_wide.contains("Plan mode (shift+tab to cycle)"),
+        "{empty_wide}"
+    );
+
+    composer.set_input_enabled(/*enabled*/ false, /*placeholder*/ None);
+    let (read_only, _) = render(&composer, /*width*/ 100, /*footer*/ None);
+    assert_eq!(
+        read_only.lines().rev().nth(1).map(str::trim),
+        Some("Plan mode")
+    );
+    composer.set_input_enabled(/*enabled*/ true, /*placeholder*/ None);
+    composer.set_parent_owned_thread();
+    let (parent_owned, _) = render(&composer, /*width*/ 100, /*footer*/ None);
+    assert_eq!(
+        parent_owned.lines().rev().nth(1).map(str::trim),
+        Some("Plan mode")
+    );
+}
+
+#[test]
 fn shortcut_help_stays_above_the_prompt_and_bottom_status() {
     let mut composer = composer();
     composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
