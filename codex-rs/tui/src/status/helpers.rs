@@ -107,11 +107,11 @@ pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
     } else if plan_type.is_business_like() {
         "Enterprise".to_string()
     } else if plan_type == PlanType::Pro {
-        "Pro (More)".to_string()
+        "Pro Extra".to_string()
     } else if plan_type == PlanType::ProMax {
-        "Pro (Max)".to_string()
+        "Pro Max".to_string()
     } else if plan_type == PlanType::ProLite {
-        "Pro".to_string()
+        "Pro Standard".to_string()
     } else if plan_type == PlanType::EduPlus {
         "Edu Plus".to_string()
     } else if plan_type == PlanType::EduPro {
@@ -233,9 +233,9 @@ mod tests {
             (PlanType::Free, "Free"),
             (PlanType::Go, "Go"),
             (PlanType::Plus, "Plus"),
-            (PlanType::Pro, "Pro (More)"),
-            (PlanType::ProLite, "Pro"),
-            (PlanType::ProMax, "Pro (Max)"),
+            (PlanType::Pro, "Pro Extra"),
+            (PlanType::ProLite, "Pro Standard"),
+            (PlanType::ProMax, "Pro Max"),
             (PlanType::Team, "Business"),
             (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),

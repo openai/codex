@@ -108,9 +108,9 @@ impl AnalyticsView {
                 PlanType::Free => "Free",
                 PlanType::Go => "Go",
                 PlanType::Plus => "Plus",
-                PlanType::Pro => "Pro (More)",
-                PlanType::ProLite => "Pro",
-                PlanType::ProMax => "Pro (Max)",
+                PlanType::Pro => "Pro Extra",
+                PlanType::ProLite => "Pro Standard",
+                PlanType::ProMax => "Pro Max",
                 PlanType::Team
                 | PlanType::Business
                 | PlanType::SelfServeBusinessProLite
