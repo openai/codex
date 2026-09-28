@@ -57,6 +57,73 @@ async fn unpolled_snapshot_does_not_delay_canceling_a_removed_environment() {
 }
 
 #[tokio::test]
+async fn updating_another_environment_retries_the_executor_without_canceling_pending_config() {
+    let manager = Arc::new(EnvironmentManager::default_for_tests());
+    manager
+        .upsert_environment(
+            "failing".to_string(),
+            "http://example.com".to_string(),
+            /*connect_timeout*/ None,
+        )
+        .unwrap();
+    let cwd = PathUri::from_abs_path(&AbsolutePathBuf::current_dir().unwrap());
+    let mut local = TurnEnvironmentSelection {
+        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+        cwd,
+        workspace_roots: Vec::new(),
+        config: EnvironmentConfigState::FromThread,
+    };
+    let mut pending = TurnEnvironmentSelection {
+        environment_id: "failing".to_string(),
+        config: EnvironmentConfigState::Pending,
+        ..local.clone()
+    };
+    let environments = ThreadEnvironments::new(
+        manager,
+        crate::shell::default_user_shell(),
+        ThreadEnvironmentDefaults::new(tests::test_environment_config(), SandboxType::None),
+        ShellSnapshot::disabled(),
+        TurnEnvironmentSnapshot::default(),
+        /*non_blocking_snapshots*/ true,
+    );
+    let current = || {
+        let state = environments.state.lock().unwrap();
+        let failing = &state.environments[1];
+        (
+            failing.resolution.clone(),
+            failing.pending_completion.as_ref().unwrap().subscribe(),
+            failing.owner_config_result.clone().unwrap(),
+        )
+    };
+
+    environments.update_selections(&[local.clone(), pending.clone()]);
+    let (first_attempt, mut original_config, original_owner) = current();
+    assert!(first_attempt.clone().await.is_err());
+
+    local.config = EnvironmentConfigState::Ready(tests::test_environment_config());
+    environments.update_selections(&[local.clone(), pending.clone()]);
+    let (second_attempt, _, second_owner) = current();
+    assert!(!first_attempt.ptr_eq(&second_attempt));
+    assert!(original_owner.ptr_eq(&second_owner));
+    assert!(second_attempt.await.is_err());
+    assert!(original_config.borrow().is_none());
+
+    let config = tests::test_environment_config();
+    pending.config = EnvironmentConfigState::Ready(config.clone());
+    environments.update_selections(&[local, pending]);
+    let received = timeout(
+        Duration::from_secs(/*secs*/ 5),
+        original_config.wait_for(Option::is_some),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .clone();
+    assert_eq!(received, Some(Ok(config.clone())));
+    assert_eq!(original_owner.await, Ok(config));
+}
+
+#[tokio::test]
 async fn credential_refresh_does_not_restore_a_removed_environment() {
     let home = tempfile::tempdir().expect("home");
     let cwd = AbsolutePathBuf::from_absolute_path(home.path()).expect("cwd");

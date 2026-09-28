@@ -676,9 +676,13 @@ impl LocalAgentControl {
             .registry
             .reserve_spawn_slot(reservation_max_threads)?;
         let inheritance = SpawnAgentThreadInheritance {
-            environments: self
-                .inherited_environments_for_source(&state, session_source.as_ref())
-                .await,
+            environments: match &options.environments {
+                Some(environments) => Some(environments.clone()),
+                None => {
+                    self.inherited_environments_for_source(&state, session_source.as_ref())
+                        .await
+                }
+            },
             exec_policy: self
                 .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
                 .await,
@@ -735,6 +739,10 @@ impl LocalAgentControl {
                 } else {
                     None
                 };
+                let environments = options
+                    .environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::inheritable_selections);
                 let child_create_started_at = Instant::now();
                 let new_thread = Box::pin(state.spawn_new_thread_with_source(
                     config.clone(),
@@ -747,7 +755,7 @@ impl LocalAgentControl {
                     /*metrics_service_name*/ None,
                     inheritance.environments,
                     inheritance.exec_policy,
-                    options.environments.clone(),
+                    environments,
                 ))
                 .await?;
                 SpawnedThreadResult {
@@ -1229,7 +1237,7 @@ impl LocalAgentControl {
                 /*forked_from_thread_id*/ Some(parent_thread_id),
                 inherited_environments,
                 inherited_exec_policy,
-                options.environments.clone(),
+                /*environments*/ None,
                 thread_extension_init,
             )
             .await?;

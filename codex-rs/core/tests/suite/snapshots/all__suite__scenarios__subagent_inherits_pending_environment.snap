@@ -1,0 +1,128 @@
+---
+source: core/tests/suite/scenarios.rs
+expression: snapshot
+---
+Scenario: A parent spawns a child before the selected environment is configured. The child sees it starting, waits, and receives the ready result after an ordinary parent turn-settings update.
+
+## Window 1
+-- request 1 (request; parent delegates while the environment is starting) --
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <ENVIRONMENTS_INSTRUCTIONS>
+01:message/developer:
+    You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+    <STANDARD_MULTI_AGENT_INSTRUCTIONS>
+02:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+03:message/user:
+    <environment_context>
+      <environments>
+        <environment id="<ENVIRONMENT>">
+          <cwd><CWD></cwd>
+          <status>starting</status>
+        </environment>
+      </environments>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+    </environment_context>
+04:message/user:
+    Delegate waiting for the shared workspace, and report what the worker finds.
+-- request 2 (request; parent waits for the worker) --
+05:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Wait for the shared workspace to become ready.","task_name":"worker"}
+06:function_call_output:{"task_name":"/root/worker"}
+
+## Window 2 (after request 2: input diverged at item 01, settings changed (tools))
+-- request 3 (request; child sees the inherited starting environment) --
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <ENVIRONMENTS_INSTRUCTIONS>
+01:message/developer:
+    You are an agent in a team of agents collaborating to complete a task.
+    <STANDARD_MULTI_AGENT_INSTRUCTIONS>
+02:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+03:message/user:
+    <environment_context>
+      <environments>
+        <environment id="<ENVIRONMENT>">
+          <cwd><CWD></cwd>
+          <status>starting</status>
+        </environment>
+      </environments>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+    </environment_context>
+04:agent_message
+
+## Window 3 (after request 3: settings changed (tools))
+-- request 4 (request; child receives the ready result and updated environment) --
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <ENVIRONMENTS_INSTRUCTIONS>
+01:message/developer:
+    You are an agent in a team of agents collaborating to complete a task.
+    <STANDARD_MULTI_AGENT_INSTRUCTIONS>
+02:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+03:message/user:
+    <environment_context>
+      <environments>
+        <environment id="<ENVIRONMENT>">
+          <cwd><CWD></cwd>
+          <status>starting</status>
+        </environment>
+      </environments>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+    </environment_context>
+04:agent_message
+05:function_call/functions.wait_for_environment:{"environment_id":"<ENVIRONMENT>"}
+06:function_call_output:{"environment_id":"<ENVIRONMENT>","status":"ready"}
+07:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+    </environment_context>
+
+## Window 4 (after request 4: input diverged at item 01, settings changed (tools))
+-- request 5 (request; parent receives the child result) --
+00:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <ENVIRONMENTS_INSTRUCTIONS>
+01:message/developer:
+    You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+    <STANDARD_MULTI_AGENT_INSTRUCTIONS>
+02:message/developer:
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
+03:message/user:
+    <environment_context>
+      <environments>
+        <environment id="<ENVIRONMENT>">
+          <cwd><CWD></cwd>
+          <status>starting</status>
+        </environment>
+      </environments>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+    </environment_context>
+04:message/user:
+    Delegate waiting for the shared workspace, and report what the worker finds.
+05:function_call/collaboration.spawn_agent:{"fork_turns":"none","message":"Wait for the shared workspace to become ready.","task_name":"worker"}
+06:function_call_output:{"task_name":"/root/worker"}
+07:function_call/collaboration.wait_agent:{"timeout_ms":10000}
+08:function_call_output:{"message":"Wait completed.","timed_out":false}
+09:agent_message
+10:message/user:
+    <environment_context>
+      <cwd><CWD></cwd>
+      <shell><HOST_SHELL></shell>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+      <filesystem><workspace_roots><root><CWD></root></workspace_roots><permission_profile type="managed"><f...ntry></file_system></permission_profile></filesystem> [hash=e8c1de60307d0a3d]
+      <subagents>
+        <agent name="/root/worker" />
+      </subagents>
+    </environment_context>

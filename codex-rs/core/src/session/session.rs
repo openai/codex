@@ -1427,6 +1427,7 @@ impl Session {
             } else {
                 ShellSnapshot::disabled()
             };
+            let inherited_environments = inherited_environments.unwrap_or_default();
             let turn_environments = Arc::new(ThreadEnvironments::new(
                 environment_manager,
                 default_shell.clone(),
@@ -1435,7 +1436,7 @@ impl Session {
                     session_configuration.windows_sandbox_type,
                 ),
                 shell_snapshot,
-                inherited_environments.unwrap_or_default(),
+                inherited_environments.clone(),
                 config.features.enabled(Feature::DeferredExecutor),
             ));
             turn_environments.update_selections(environment_selections);
@@ -1884,6 +1885,10 @@ impl Session {
             )
             .await?;
             sess.start_mcp_prewarm_worker(mcp_prewarm_rx, mcp_auth_changes);
+            sess.follow_inherited_environment_configurations(
+                &inherited_environments,
+                &session_configuration.environments,
+            );
             sess.schedule_startup_prewarm(super::startup_prewarm::PrewarmInput::Base)
                 .await;
             let session_start_source = match &initial_history {

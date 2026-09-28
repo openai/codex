@@ -1969,16 +1969,11 @@ impl ThreadManagerState {
             None => self.client_mcp_extensions_for_child(parent_thread_id).await,
         };
         let thread_source = initial_history.get_resumed_thread_source();
-        let environments = environment_selections.or_else(|| {
-            inherited_environments
-                .as_ref()
-                .map(TurnEnvironmentSnapshot::to_selections)
-        });
         let options = StartThreadOptions {
             initial_history,
             session_source: Some(session_source),
             thread_source,
-            environments,
+            environments: environment_selections,
             client_mcp_extensions,
             ..StartThreadOptions::new(config)
         };
@@ -2092,13 +2087,23 @@ impl ThreadManagerState {
                 }
             });
         thread_extension_init.insert(isolation);
-        let environments = environments.unwrap_or_else(|| {
-            default_thread_environment_selections(
-                self.environment_manager.as_ref(),
-                &config.cwd,
-                &config.workspace_roots,
-            )
-        });
+        let environments = environments
+            .or_else(|| {
+                let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) = &session_source
+                else {
+                    return None;
+                };
+                inherited_environments
+                    .as_ref()
+                    .map(TurnEnvironmentSnapshot::inheritable_selections)
+            })
+            .unwrap_or_else(|| {
+                default_thread_environment_selections(
+                    self.environment_manager.as_ref(),
+                    &config.cwd,
+                    &config.workspace_roots,
+                )
+            });
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if reserved_thread_id.is_some() && matches!(&initial_history, InitialHistory::Resumed(_)) {
             return Err(CodexErr::InvalidRequest(
