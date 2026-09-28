@@ -187,12 +187,18 @@ impl MessageBoardHost for LocalBoardHost {
                 /*trigger_turn*/ false,
             );
             Ok(
-                match recipient
-                    .inject_if_running(vec![communication.to_model_input_item()])
+                if recipient
+                    .session
+                    .input_queue
+                    .deliver_mailbox_communication_to_current_turn(
+                        &recipient.session.active_turn,
+                        communication,
+                    )
                     .await
                 {
-                    Ok(()) => NotificationDelivery::Accepted,
-                    Err(_) => NotificationDelivery::SkippedInactive,
+                    NotificationDelivery::Accepted
+                } else {
+                    NotificationDelivery::SkippedInactive
                 },
             )
         })
