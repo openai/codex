@@ -18,8 +18,10 @@ pub enum NotificationDelivery {
 ///
 /// The host remains authoritative for membership even when runtimes are unloaded.
 /// Clock reads use the posting agent's configured source, including simulated
-/// time. Notification admission is atomic with turn completion: inactive agents
-/// are skipped, and no notification may start work or survive into a later turn.
+/// time. Notifications are accepted only while a running turn still accepts
+/// mailbox delivery; otherwise they are skipped without being queued.
+/// Accepted notifications must not start a new turn or reopen a finalized answer,
+/// but may remain in conversation history for a later turn.
 /// Backends may implement these capabilities with local handles or remote RPCs.
 pub trait MessageBoardHost: Send + Sync {
     fn agent_path(&self, caller: ThreadId) -> BoxFuture<'_, Result<AgentPath>>;
