@@ -619,17 +619,19 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
-        let mut docs_line = HyperlinkLine::new(Line::from("  For more details see the ").dim());
+        let mut docs_line =
+            HyperlinkLine::new(Line::from("  Learn about permissions and approvals in the ").dim());
         docs_line.push_span(
             "Codex docs".underlined(),
             Some("https://developers.openai.com/codex/security"),
         );
         let mut preferences_line =
-            HyperlinkLine::new(Line::from("  Uses your plan's rate limits and ").dim());
+            HyperlinkLine::new(Line::from("  Your plan's rate limits and ").dim());
         preferences_line.push_span(
             "training data preferences".underlined(),
             Some("https://chatgpt.com/#settings"),
         );
+        preferences_line.push_span(" apply".into(), /*destination*/ None);
 
         let lines = vec![
             HyperlinkLine::new(
@@ -638,9 +640,7 @@ impl AuthModeWidget {
                     .into(),
             ),
             "".into(),
-            "  Before you start:".into(),
-            "".into(),
-            "  Decide how much autonomy you want to grant Codex".into(),
+            "  You're in control".into(),
             docs_line,
             "".into(),
             "  Codex can make mistakes".into(),
@@ -650,7 +650,7 @@ impl AuthModeWidget {
                     .into(),
             ),
             "".into(),
-            "  Powered by your ChatGPT account".into(),
+            "  Included with your ChatGPT plan".into(),
             preferences_line,
             "".into(),
             HyperlinkLine::new(Line::from(vec![
@@ -1492,7 +1492,7 @@ mod tests {
     fn chatgpt_success_message_renders_osc8_hyperlinks() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
-        let area = Rect::new(0, 0, 80, 14);
+        let area = Rect::new(0, 0, 80, 12);
         let mut buf = Buffer::empty(area);
 
         widget.render_chatgpt_success_message(area, &mut buf);
@@ -1506,18 +1506,19 @@ mod tests {
             "training data preferences"
         );
         assert_eq!(
-            (0..37).map(|x| buf[(x, 5)].modifier).collect::<Vec<_>>(),
+            (0..57).map(|x| buf[(x, 3)].modifier).collect::<Vec<_>>(),
             [
-                vec![Modifier::DIM; 27],
+                vec![Modifier::DIM; 47],
                 vec![Modifier::DIM | Modifier::UNDERLINED; 10],
             ]
             .concat()
         );
         assert_eq!(
-            (0..60).map(|x| buf[(x, 11)].modifier).collect::<Vec<_>>(),
+            (0..61).map(|x| buf[(x, 9)].modifier).collect::<Vec<_>>(),
             [
-                vec![Modifier::DIM; 35],
+                vec![Modifier::DIM; 30],
                 vec![Modifier::DIM | Modifier::UNDERLINED; 25],
+                vec![Modifier::DIM; 6],
             ]
             .concat()
         );
@@ -1536,16 +1537,14 @@ mod tests {
         insta::assert_snapshot!(visible, @r###"
         ✓ Signed in with your ChatGPT account
 
-          Before you start:
-
-          Decide how much autonomy you want to grant Codex
-          For more details see the Codex docs
+          You're in control
+          Learn about permissions and approvals in the Codex docs
 
           Codex can make mistakes
           Review the code it writes and commands it runs
 
-          Powered by your ChatGPT account
-          Uses your plan's rate limits and training data preferences
+          Included with your ChatGPT plan
+          Your plan's rate limits and training data preferences apply
 
           Press enter to continue
         "###);
