@@ -13,9 +13,11 @@ use crate::LOG_WRITE_ENTRIES_METRIC;
 use crate::LOG_WRITE_MAX_ENTRY_BYTES_METRIC;
 use crate::LOG_WRITE_METRIC;
 use crate::LogEntry;
+use crate::runtime::reclamation::ReclamationPass;
+
 use tracing::debug;
 
-/// Low-cardinality sink for SQLite startup, fallback, and log-write telemetry.
+/// Low-cardinality sink for SQLite startup, fallback, log-write, and reclamation telemetry.
 ///
 /// Implementations should absorb delivery failures locally. Database behavior
 /// must not depend on whether telemetry export succeeds.
@@ -134,6 +136,31 @@ pub(crate) fn record_log_write(
 
 pub(crate) fn record_log_queue_drop(reason: &'static str, telemetry: Option<&dyn DbTelemetry>) {
     record_counter(telemetry, LOG_QUEUE_DROPPED_METRIC, &[("reason", reason)]);
+}
+
+pub(crate) fn record_reclamation(
+    db: &'static str,
+    duration: Duration,
+    result: &anyhow::Result<ReclamationPass>,
+) {
+    let Some(telemetry) = resolve_telemetry(/*telemetry*/ None) else {
+        return;
+    };
+    let outcome = DbOutcomeTags::from_result(result);
+    let tags = [
+        ("db", db),
+        ("status", outcome.status),
+        ("error", outcome.error),
+    ];
+    telemetry.counter("codex.sqlite.reclamation.count", /*inc*/ 1, &tags);
+    telemetry.record_duration("codex.sqlite.reclamation.duration_ms", duration, &tags);
+    if let Ok(pass) = result {
+        telemetry.histogram(
+            "codex.sqlite.reclamation.pages",
+            i64::from(pass.pages),
+            &tags,
+        );
+    }
 }
 
 fn record_counter(telemetry: Option<&dyn DbTelemetry>, name: &str, tags: &[(&str, &str)]) {
