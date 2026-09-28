@@ -7,6 +7,7 @@ mod tool_policy;
 mod turn_admission;
 mod user_instructions;
 
+pub use session_isolation::IsolatedSessionExtensions;
 pub use session_isolation::SessionIsolation;
 pub use tool_policy::ToolPolicy;
 

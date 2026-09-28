@@ -16,6 +16,7 @@ use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::SelectedPlugin;
 use codex_extension_api::SelectedPluginIdentity;
 use codex_extension_api::SelectedPluginSnapshot;
+use codex_extension_api::SessionIsolation;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -348,7 +349,14 @@ impl McpManager {
         let mut mcp_config = config
             .to_mcp_config_with_loaded_plugins(&loaded_plugins, selected_plugin_registrations);
         let mut catalog = mcp_config.mcp_server_catalog.to_builder();
-        if mcp_config.apps_enabled {
+        // Isolated sessions do not inherit the implicit Apps connection.
+        if mcp_config.apps_enabled
+            && context
+                .thread_init()
+                .and_then(codex_extension_api::ExtensionDataInit::get::<SessionIsolation>)
+                .as_deref()
+                != Some(&SessionIsolation::Isolated)
+        {
             catalog.register(McpServerRegistration::from_compatibility(
                 CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 LEGACY_CODEX_APPS_REGISTRATION_ID,

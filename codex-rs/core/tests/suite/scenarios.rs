@@ -96,6 +96,9 @@ mod mailbox_preemption;
 #[path = "scenarios_guardian_extra_policy.rs"]
 mod guardian_extra_policy;
 
+#[path = "scenarios_guardian_conversation_history_tests.rs"]
+mod guardian_conversation_history;
+
 #[path = "scenarios_indirect_namespace_prefixes.rs"]
 mod indirect_namespace_prefixes;
 

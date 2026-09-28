@@ -2181,11 +2181,20 @@ impl ThreadManagerState {
         }
         let (instructions, inherited_exec_policy, extensions, mcp_manager, multi_agent_version) =
             if isolation == codex_extension_api::SessionIsolation::Isolated {
+                let extensions = thread_extension_init
+                    .get::<codex_extension_api::IsolatedSessionExtensions<Config>>()
+                    .map(|extensions| Arc::clone(&extensions.0))
+                    .unwrap_or_else(empty_extension_registry);
+                let mcp_manager = McpManager::new_with_extensions(
+                    Arc::clone(&self.plugins_manager),
+                    Arc::clone(&extensions),
+                    CodexAppsToolsCache::default(),
+                );
                 (
                     inherited_instructions.unwrap_or_default(),
                     None,
-                    empty_extension_registry(),
-                    Arc::new(McpManager::new(Arc::clone(&self.plugins_manager))),
+                    extensions,
+                    Arc::new(mcp_manager),
                     Some(MultiAgentVersion::Disabled),
                 )
             } else {

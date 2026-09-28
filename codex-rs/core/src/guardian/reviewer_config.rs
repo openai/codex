@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use codex_features::Feature;
 use codex_guardian_reviewer::guardian_output_contract_prompt;
 use codex_prompts::GuardianPolicyInstructions;
 use codex_prompts::ResolvedModelMessages;
@@ -11,6 +12,7 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use crate::config::Config;
 use crate::config::NetworkProxySpec;
 use crate::context::ContextualUserFragment;
+use crate::context::GuardianConversationHistory;
 
 /// Adds the captured model, policy prompt and live network rules before reuse selection.
 pub fn build_guardian_review_session_config(
@@ -36,15 +38,29 @@ pub fn build_guardian_review_session_config(
         .guardian_policy_template
         .as_deref()
         .unwrap_or(auto_review.policy_template);
-    guardian_config.base_instructions = Some(
-        GuardianPolicyInstructions::new(
-            tenant_policy_config,
-            extra_policy,
-            policy_template,
-            guardian_output_contract_prompt(),
-        )
-        .render(),
-    );
+    let mut instructions = GuardianPolicyInstructions::new(
+        tenant_policy_config,
+        extra_policy,
+        policy_template,
+        guardian_output_contract_prompt(),
+    )
+    .render();
+    if guardian_config
+        .features
+        .enabled(Feature::GuardianConversationHistoryTools)
+        && guardian_config.features.enabled(Feature::Apps)
+    {
+        instructions.push('\n');
+        instructions.push_str(
+            &GuardianConversationHistory {
+                prompt: guardian_config
+                    .guardian_conversation_history_prompt
+                    .as_deref(),
+            }
+            .render(),
+        );
+    }
+    guardian_config.base_instructions = Some(instructions);
     guardian_config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
     if let Some(live_network_config) = live_network_config
         && guardian_config.permissions.network.is_some()

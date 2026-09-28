@@ -104,6 +104,7 @@ use tracing::field::Empty;
 use url::Url;
 
 mod account;
+pub(crate) mod conversation_history;
 mod telemetry;
 
 use account::McpToolAccountError;
@@ -212,15 +213,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let item_metadata = McpToolCallItemMetadata::from_tool_metadata(&server, Some(&metadata));
     let runtime_config = prepared_call.config();
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
-        let annotations = metadata.annotations.as_ref();
-        AppToolPolicyEvaluator::new(&runtime_config.config_layer_stack).policy(AppToolPolicyInput {
-            connector_id: metadata.connector_id.as_deref(),
-            link_id: metadata.link_id.as_deref(),
-            tool_name: &tool_name,
-            tool_title: metadata.tool_title.as_deref(),
-            destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
-            open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
-        })
+        app_tool_policy(runtime_config, &metadata, &tool_name)
     } else {
         AppToolPolicy::default()
     };
@@ -1796,6 +1789,22 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
                 read_only_hint: annotations.read_only_hint,
             }),
     }
+}
+
+fn app_tool_policy(
+    config: &codex_mcp::McpConfig,
+    metadata: &McpToolApprovalMetadata,
+    tool_name: &str,
+) -> AppToolPolicy {
+    let annotations = metadata.annotations.as_ref();
+    AppToolPolicyEvaluator::new(&config.config_layer_stack).policy(AppToolPolicyInput {
+        connector_id: metadata.connector_id.as_deref(),
+        link_id: metadata.link_id.as_deref(),
+        tool_name,
+        tool_title: metadata.tool_title.as_deref(),
+        destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
+        open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
+    })
 }
 
 fn mcp_tool_metadata(

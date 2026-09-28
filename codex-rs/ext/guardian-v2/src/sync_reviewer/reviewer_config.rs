@@ -36,6 +36,9 @@ pub(crate) fn build_reviewer_config(parent_config: &Config) -> anyhow::Result<Co
     config.mcp_servers.set(HashMap::new()).map_err(|err| {
         anyhow::anyhow!("guardian review session could not clear MCP servers: {err}")
     })?;
+    let conversation_history_tools = config
+        .features
+        .enabled(Feature::GuardianConversationHistoryTools);
     for feature in [
         Feature::Collab,
         Feature::MultiAgentV2,
@@ -48,6 +51,9 @@ pub(crate) fn build_reviewer_config(parent_config: &Config) -> anyhow::Result<Co
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
     ] {
+        if feature == Feature::Apps && conversation_history_tools {
+            continue;
+        }
         config.features.disable(feature).map_err(|err| {
             anyhow::anyhow!(
                 "guardian review session could not disable `features.{}`: {err}",
