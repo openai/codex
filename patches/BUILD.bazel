@@ -17,6 +17,7 @@ exports_files([
     "rules_rs_build_script_deps_annotation.patch",
     "rules_rs_rust_debug_modes.patch",
     "rules_rs_windows_msvc_linker.patch",
+    "rules_rs_workspace_package_version.patch",
     "rules_rs_zlib_snapshot_urls.patch",
     "rusty_v8_prebuilt_out_dir.patch",
     "ring_windows_msvc_include_dirs.patch",

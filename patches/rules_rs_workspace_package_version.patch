@@ -1,0 +1,14 @@
+# What: expose resolved Cargo workspace package versions in DEP_DATA.
+# Scope: rules_rs workspace metadata only.
+
+diff --git a/rs/private/cargo_workspace_graph.bzl b/rs/private/cargo_workspace_graph.bzl
+--- a/rs/private/cargo_workspace_graph.bzl
++++ b/rs/private/cargo_workspace_graph.bzl
+@@ -762,6 +762,7 @@ def workspace_dep_data(
+             "deps": deps,
+             "deps_by_platform": deps_by_platform,
+             "dev_deps": dev_deps,
+             "dev_deps_by_platform": dev_deps_by_platform,
+             "shared_libraries": shared_libraries,
++            "version": package["version"],
+         }
