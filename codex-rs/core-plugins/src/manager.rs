@@ -14,6 +14,7 @@ use super::LoadedPlugin;
 use super::PluginLoadOutcome;
 use crate::PluginGitMode;
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
+use crate::http_client_selector::HttpClientSelector;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::is_openai_curated_marketplace_name;
 use crate::loaded_cache_metrics;
@@ -58,6 +59,7 @@ use crate::marketplace_upgrade::ConfigLayerReload;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces_with_mode;
+use crate::remote::CODEX_PRODUCT_SKU;
 use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RecommendedPluginsMode;
 use crate::remote::RemoteInstalledPlugin;
@@ -98,7 +100,9 @@ use codex_config::types::ToolSuggestDiscoverableType;
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::PluginConnectorSource;
 use codex_hooks::plugin_hook_declarations;
+use codex_http_client::ClientRouteClass;
 use codex_http_client::HttpClientFactory;
+use codex_http_client::RouteAwareClientPool;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -128,6 +132,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -157,6 +162,7 @@ pub struct PluginsConfigInput {
     pub chatgpt_base_url: String,
     pub product_sku: Option<String>,
     http_client_factory: HttpClientFactory,
+    remote_http_clients: Arc<OnceLock<Arc<dyn HttpClientSelector>>>,
 }
 
 impl PluginsConfigInput {
@@ -177,16 +183,29 @@ impl PluginsConfigInput {
             chatgpt_base_url,
             http_client_factory,
             product_sku,
+            remote_http_clients: Arc::new(OnceLock::new()),
         }
     }
 
-    /// Builds route-aware service state for remote plugin requests.
+    /// Shares a lazy route-aware connection pool across this input and its clones.
+    /// Request metadata remains current; new config inputs own a new pool.
     pub fn remote_plugin_service_config(&self) -> RemotePluginServiceConfig {
-        RemotePluginServiceConfig::new(
-            self.chatgpt_base_url.clone(),
-            self.http_client_factory.clone(),
-            self.product_sku.clone(),
-        )
+        let http_clients = self.remote_http_clients.get_or_init(|| {
+            Arc::new(
+                RouteAwareClientPool::with_chatgpt_cloudflare_cookies_without_request_logging(
+                    self.http_client_factory.clone(),
+                    ClientRouteClass::Api,
+                ),
+            )
+        });
+        RemotePluginServiceConfig {
+            chatgpt_base_url: self.chatgpt_base_url.clone(),
+            product_sku: self
+                .product_sku
+                .clone()
+                .unwrap_or_else(|| CODEX_PRODUCT_SKU.to_string()),
+            http_clients: Arc::clone(http_clients),
+        }
     }
 }
 
@@ -3811,3 +3830,7 @@ impl PluginUninstallError {
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "plugins_config_input_tests.rs"]
+mod plugins_config_input_tests;
