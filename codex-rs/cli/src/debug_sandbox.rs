@@ -413,7 +413,11 @@ async fn run_command_under_sandbox(
             // for the unsandboxed shell that resumes when Codex exits.
             match args.as_mut_slice() {
                 [flag, policy, ..] if flag.as_str() == "-p" => {
-                    policy.push_str("\n(deny file-ioctl (ioctl-command TIOCSTI))");
+                    // Older macOS policy compilers do not define the TIOCSTI symbol.
+                    policy.push_str(&format!(
+                        "\n(deny file-ioctl (ioctl-command {}))",
+                        libc::TIOCSTI
+                    ));
                 }
                 _ => anyhow::bail!("Seatbelt command is missing its generated policy"),
             }
