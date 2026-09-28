@@ -267,13 +267,20 @@ async fn capture_reaches_remote_rtp_and_mute_discards_queued_and_partial_audio()
         worker.set_controls(muted()).unwrap();
         worker.set_controls(unmuted()).unwrap();
         let old_generation = worker.buffers.microphone.load(Ordering::Acquire);
-        now = Instant::now().max(start + Duration::from_millis(/*millis*/ 100));
+        now = start + Duration::from_millis(before.len() as u64 * 20 + 580);
         enqueue(&worker, /*samples*/ 720, old_generation, now);
         assert_eq!(worker.service(&mut local.audio, || now).await.unwrap(), 0);
         enqueue(&worker, /*samples*/ 2_880, old_generation, now);
         worker.set_controls(muted()).unwrap();
         assert_eq!(worker.service(&mut local.audio, || now).await.unwrap(), 0);
         let silence = received.recv().await.unwrap();
+        assert_eq!(
+            silence
+                .header
+                .timestamp
+                .wrapping_sub(before[0].header.timestamp),
+            before.len() as u32 * 960 + 27_840
+        );
         let mut decoder = opus::Decoder::new(/*sample_rate*/ 48_000, opus::Channels::Mono).unwrap();
         let mut decoded = [1.0; 960];
         assert_eq!(
@@ -316,10 +323,12 @@ async fn capture_reaches_remote_rtp_and_mute_discards_queued_and_partial_audio()
             .header
             .timestamp
             .wrapping_sub(before[0].header.timestamp);
+        assert_eq!(clock_gap % 960, 0);
         let expected_gap = (resumed.duration_since(start).as_secs_f64() * 48_000.0) as u32;
-        // Allow 1 ms for sample rounding without imposing a wall-clock throughput requirement.
+        // Real gaps advance by whole packets, keeping wall time within one
+        // packet without imposing a wall-clock throughput requirement.
         assert!(
-            clock_gap.abs_diff(expected_gap) <= 48,
+            clock_gap.abs_diff(expected_gap) <= 960,
             "received RTP clock gap: {clock_gap}, expected {expected_gap}"
         );
         assert_eq!(
