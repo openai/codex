@@ -227,11 +227,7 @@ impl ThreadWatchManager {
         let notification = {
             let mut state = self.state.lock().await;
             let notification = mutate(&mut state);
-            let running_turn_count = state
-                .runtime_by_thread_id
-                .values()
-                .filter(|runtime| runtime.running)
-                .count();
+            let running_turn_count = state.running_turn_count;
             self.running_turn_count_tx.send_if_modified(|current| {
                 if *current == running_turn_count {
                     false
@@ -311,6 +307,7 @@ pub(crate) fn resolve_thread_status(
 struct ThreadWatchState {
     runtime_by_thread_id: HashMap<String, RuntimeFacts>,
     status_watcher_by_thread_id: HashMap<String, watch::Sender<ThreadStatus>>,
+    running_turn_count: usize,
 }
 
 impl ThreadWatchState {
@@ -335,7 +332,13 @@ impl ThreadWatchState {
 
     fn remove_thread(&mut self, thread_id: &str) -> Option<ThreadStatusChangedNotification> {
         let previous_status = self.status_for(thread_id);
-        self.runtime_by_thread_id.remove(thread_id);
+        if self
+            .runtime_by_thread_id
+            .remove(thread_id)
+            .is_some_and(|runtime| runtime.running)
+        {
+            self.running_turn_count -= 1;
+        }
         self.update_status_watcher(thread_id, &ThreadStatus::NotLoaded);
         if previous_status.is_some() && previous_status != Some(ThreadStatus::NotLoaded) {
             Some(ThreadStatusChangedNotification {
@@ -360,8 +363,14 @@ impl ThreadWatchState {
             .runtime_by_thread_id
             .entry(thread_id.to_string())
             .or_default();
+        let was_running = runtime.running;
         runtime.is_loaded = true;
         mutate(runtime);
+        match (was_running, runtime.running) {
+            (false, true) => self.running_turn_count += 1,
+            (true, false) => self.running_turn_count -= 1,
+            (false, false) | (true, true) => {}
+        }
         self.update_status_watcher_for_thread(thread_id);
         self.status_changed_notification(thread_id.to_string(), previous_status)
     }
@@ -712,10 +721,23 @@ mod tests {
         assert!(count.has_changed().expect("watch remains open"));
         assert_eq!(*count.borrow_and_update(), 1);
 
+        manager.note_turn_started(INTERACTIVE_THREAD_ID).await;
+        assert!(!count.has_changed().expect("watch remains open"));
+
+        manager.note_turn_started(NON_INTERACTIVE_THREAD_ID).await;
+        assert!(count.has_changed().expect("watch remains open"));
+        assert_eq!(*count.borrow_and_update(), 2);
+        assert_eq!(manager.running_turn_count().await, 2);
+
         let _permission_guard = manager
             .note_permission_requested(INTERACTIVE_THREAD_ID)
             .await;
         assert!(!count.has_changed().expect("watch remains open"));
+
+        manager.remove_thread(NON_INTERACTIVE_THREAD_ID).await;
+        assert!(count.has_changed().expect("watch remains open"));
+        assert_eq!(*count.borrow_and_update(), 1);
+        assert_eq!(manager.running_turn_count().await, 1);
 
         manager.note_thread_shutdown(INTERACTIVE_THREAD_ID).await;
         assert!(count.has_changed().expect("watch remains open"));
