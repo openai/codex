@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::process_telemetry::ProcessTelemetry;
@@ -30,6 +32,8 @@ use codex_sandboxing::resolve_windows_elevated_filesystem_overrides;
 use codex_sandboxing::resolve_windows_restricted_token_filesystem_overrides;
 use codex_sandboxing::windows_sandbox_uses_elevated_backend;
 use codex_sandboxing::with_managed_mitm_ca_readable_root;
+#[cfg(windows)]
+use codex_shell_command::shell_detect::fallback_powershell_shell_for_windows_sandbox;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 
@@ -245,6 +249,20 @@ pub(crate) async fn prepare_exec_request_with_telemetry(
     );
     #[cfg(not(unix))]
     let (program, args) = (program.into(), args.to_vec());
+    #[cfg(windows)]
+    let program = if matches!(
+        sandbox_context.windows_sandbox_selection,
+        WindowsSandboxSelection::Elevated | WindowsSandboxSelection::Mxc
+    ) && Path::new(&program).file_stem().is_some_and(|name| {
+        name.eq_ignore_ascii_case("pwsh") || name.eq_ignore_ascii_case("powershell")
+    }) && let Some(fallback) =
+        fallback_powershell_shell_for_windows_sandbox(Path::new(&program))
+    {
+        // Remote controllers cannot resolve a sandbox-compatible shell on this host.
+        fallback.shell_path.into_os_string()
+    } else {
+        program
+    };
     let transform_request = SandboxDirectSpawnTransformRequest {
         workspace_roots,
         windows_sandbox_proxy_settings_mode,
