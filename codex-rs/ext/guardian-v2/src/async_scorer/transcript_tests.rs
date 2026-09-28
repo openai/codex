@@ -1193,7 +1193,7 @@ fn transcript_omits_media_payloads_and_keeps_readable_content() {
 }
 
 #[test]
-fn transcript_omits_encrypted_messages_arguments_and_tool_outputs() {
+fn transcript_preserves_encrypted_agent_messages_and_omits_other_encrypted_fields() {
     let items = vec![
         ResponseItem::AgentMessage {
             id: None,
@@ -1238,7 +1238,7 @@ fn transcript_omits_encrypted_messages_arguments_and_tool_outputs() {
         },
     ];
 
-    let transcript = TranscriptConfig::default()
+    let context = TranscriptConfig::default()
         .build_context(ContextInput {
             permissions: None,
             target: ContextTarget::Async,
@@ -1252,14 +1252,23 @@ fn transcript_omits_encrypted_messages_arguments_and_tool_outputs() {
             node_repl_images: None,
         })
         .expect("collect transcript")
-        .transcript_entries();
+        .into_messages();
+    assert_eq!(context[1], items[0]);
+    let text = context
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { content, .. } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|content| match content {
+            ContentItem::InputText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
     assert_eq!(
-        transcript,
-        vec![
-            "[1] assistant: Agent message from worker:\nThe workspace is ready.\n",
-            "[2] tool exec_command call: {}\n",
-            "[3] tool exec_command result: Command completed.\n",
-        ]
+        text,
+        ">>> TRANSCRIPT START\n[2] assistant: Agent message from worker:\nThe workspace is ready.\n[3] tool exec_command call: {}\n[4] tool exec_command result: Command completed.\n>>> TRANSCRIPT END\n\n"
     );
 }
 

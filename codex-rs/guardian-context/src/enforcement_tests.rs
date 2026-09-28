@@ -172,7 +172,9 @@ fn budget_reserves_existing_context_and_preserves_required_messages() {
             },
             SectionOutput {
                 id: "previous_reviews",
-                delivery: SectionDelivery::Message(Box::new(trusted.clone())),
+                delivery: SectionDelivery::Message(crate::Budgeted::required(Box::new(
+                    trusted.clone(),
+                ))),
             },
             SectionOutput {
                 id: "planned_action",

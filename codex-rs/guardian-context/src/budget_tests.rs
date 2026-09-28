@@ -33,11 +33,11 @@ fn section_costs_keep_multimodal_payloads_separate() {
             },
             SectionOutput {
                 id: "trusted",
-                delivery: SectionDelivery::Message(Box::new(message(vec![
-                    ContentItem::InputText {
+                delivery: SectionDelivery::Message(crate::Budgeted::required(Box::new(message(
+                    vec![ContentItem::InputText {
                         text: "verified".to_owned(),
-                    },
-                ]))),
+                    }],
+                )))),
             },
         ],
         truncations: Vec::new(),

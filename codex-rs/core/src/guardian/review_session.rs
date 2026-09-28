@@ -38,7 +38,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::InputModality;
@@ -580,10 +579,13 @@ async fn run_review_on_session(
                             }
                         }
                     });
-                    let prompt: ResponseItem =
-                        ResponseInputItem::from(prompt_items.context.clone().into_user_inputs()?)
-                            .into();
-                    let prompt_tokens = crate::context_manager::estimate_item_token_count(&prompt);
+                    let prompt_tokens = prompt_items
+                        .context
+                        .clone()
+                        .into_messages()
+                        .iter()
+                        .map(crate::context_manager::estimate_item_token_count)
+                        .fold(0i64, i64::saturating_add);
                     let base_instructions = review_session.session.get_base_instructions().await;
                     let history_tokens = reviewer_history
                         .estimate_token_count_with_base_instructions(&base_instructions)
@@ -599,7 +601,20 @@ async fn run_review_on_session(
                 }
             }
 
-            let items = prompt_items.context.clone().into_user_inputs()?;
+            let items = match prompt_items.context.clone().into_user_inputs() {
+                Ok(items) => items,
+                Err(codex_guardian_context::SectionError::UnsupportedDelivery {
+                    section: "conversation_transcript",
+                }) => {
+                    // Final admission replaces this turn-start marker with the complete,
+                    // budgeted context, including native encrypted agent-message evidence.
+                    vec![codex_protocol::user_input::UserInput::Text {
+                        text: super::prompt::GUARDIAN_TRANSCRIPT_START.to_owned(),
+                        text_elements: Vec::new(),
+                    }]
+                }
+                Err(error) => return Err(error.into()),
+            };
             Ok::<_, anyhow::Error>((prompt_items, items))
         }),
     )

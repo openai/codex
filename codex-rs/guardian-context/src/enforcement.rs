@@ -136,6 +136,14 @@ impl ComposedContext {
         let mut remaining_items = vec![0; self.sections.len()];
         let mut candidate_framing = vec![0; self.sections.len()];
         for (section_index, section) in self.sections.iter().enumerate() {
+            if let SectionDelivery::Message(message) = &section.delivery
+                && let Retention::Optional(priority) = message.retention
+            {
+                let tokens = section_tokens(section);
+                required_tokens = required_tokens.saturating_sub(tokens);
+                candidates.push((priority, section_index, 0, tokens));
+                remaining_items[section_index] = 1;
+            }
             if let SectionDelivery::UserContent(content) = &section.delivery {
                 let mut required_items = content.len();
                 for (index, item) in content.iter().enumerate() {
@@ -227,6 +235,12 @@ impl ComposedContext {
             if !removed.insert((section_index, index)) {
                 return 0;
             }
+            if matches!(
+                self.sections[section_index].delivery,
+                SectionDelivery::Message(_)
+            ) {
+                return tokens;
+            }
             let count = &mut remaining_items[section_index];
             let framing = content_framing_tokens(*count);
             *count -= 1;
@@ -252,6 +266,17 @@ impl ComposedContext {
             });
         }
         for (section_index, section) in self.sections.iter_mut().enumerate() {
+            if let SectionDelivery::Message(message) = &section.delivery
+                && removed.contains(&(section_index, 0))
+            {
+                self.truncations.push(TruncationObservation {
+                    component: section.id,
+                    original_bytes: serde_json::to_vec(&message.content)
+                        .map_or(usize::MAX, |bytes| bytes.len()),
+                    retained_bytes: 0,
+                });
+                section.delivery = SectionDelivery::UserContent(Vec::new());
+            }
             retain_content(section, &mut self.truncations, |index, _| {
                 !removed.contains(&(section_index, index))
             });

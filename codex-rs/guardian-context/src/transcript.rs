@@ -11,6 +11,7 @@ use codex_protocol::protocol::TruncationPolicy;
 use std::collections::HashMap;
 
 use codex_protocol::mcp::is_node_repl_backed_tool;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ReasoningItemContent;
@@ -27,7 +28,10 @@ use crate::SectionError;
 use crate::SectionHistory;
 use crate::SectionInput;
 use crate::SectionScope;
+use crate::TranscriptContent;
 use crate::truncate_text;
+
+pub(crate) const TRANSCRIPT_OMISSION_NOTICE: &str = "Some conversation entries were omitted.";
 
 /// Trusted developer marker that preserves an explicit manual action approval.
 pub const MANUAL_APPROVAL_DEVELOPER_PREFIX: &str =
@@ -164,6 +168,31 @@ pub fn collect_transcript(
             ResponseItem::AgentMessage {
                 author, content, ..
             } => {
+                if content
+                    .iter()
+                    .any(|part| matches!(part, AgentMessageInputContent::EncryptedContent { .. }))
+                {
+                    // Ciphertext cannot be truncated. Keep the complete native item, or
+                    // an explicit omission at the same cursor position. Serialized bytes
+                    // conservatively charge the encrypted payload to the message budget.
+                    let bytes = serde_json::to_vec(item).map_or(usize::MAX, |item| item.len());
+                    let limit = codex_protocol::protocol::TruncationPolicy::Tokens(
+                        config.entry_limits.message_tokens.min(9_000),
+                    )
+                    .byte_budget();
+                    let content = if bytes <= limit {
+                        TranscriptContent::AgentMessage(Box::new(item.clone()))
+                    } else {
+                        TranscriptContent::Text(TRANSCRIPT_OMISSION_NOTICE.to_owned())
+                    };
+                    entries.push(ConversationTranscriptEntry {
+                        kind: ConversationTranscriptEntryKind::Assistant,
+                        content,
+                        original_bytes: bytes,
+                        retained_source: None,
+                    });
+                    continue;
+                }
                 let Some(text) = plaintext_agent_message_content(content) else {
                     continue;
                 };
@@ -387,7 +416,7 @@ pub fn collect_transcript(
                 )
             }),
             kind,
-            text,
+            content: TranscriptContent::Text(text),
             original_bytes,
         });
     }

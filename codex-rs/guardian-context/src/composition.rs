@@ -21,6 +21,7 @@ use crate::Budgeted;
 use crate::ContextSection;
 use crate::ConversationTranscriptEntry;
 use crate::SectionError;
+use crate::TranscriptContent;
 use crate::TruncationObservation;
 
 /// Consumer framing after the host has selected a full or delta transcript.
@@ -32,7 +33,7 @@ pub enum ContextPresentation<'a> {
 
 /// Host-selected transcript entries and omission notice, before request admission.
 pub struct RenderedTranscript {
-    pub items: Vec<Budgeted<String>>,
+    pub items: Vec<Budgeted<TranscriptContent>>,
     pub omission_note: Option<String>,
     pub truncations: Vec<TruncationObservation>,
 }
@@ -46,7 +47,7 @@ pub struct CollectedContext {
 #[derive(Clone, PartialEq)]
 pub(crate) enum SectionDelivery {
     UserContent(Vec<Budgeted<ContentItem>>),
-    Message(Box<ResponseItem>),
+    Message(Budgeted<Box<ResponseItem>>),
 }
 
 /// Rendered evidence with a stable identity, independent of its source type.
@@ -125,17 +126,21 @@ impl CollectedContext {
                 ContextSection::PreviousReviews(reviews) => (
                     6,
                     "previous_reviews",
-                    SectionDelivery::Message(Box::new(reviews.into_message())),
+                    SectionDelivery::Message(Budgeted::required(Box::new(reviews.into_message()))),
                 ),
                 ContextSection::TrustedTool(tool) => (
                     7,
                     "trusted_tool",
-                    SectionDelivery::Message(Box::new(ContextualUserFragment::into(tool))),
+                    SectionDelivery::Message(Budgeted::required(Box::new(
+                        ContextualUserFragment::into(tool),
+                    ))),
                 ),
                 ContextSection::TrustedSkills(skills) => (
                     8,
                     "trusted_skills",
-                    SectionDelivery::Message(Box::new(ContextualUserFragment::into(skills))),
+                    SectionDelivery::Message(Budgeted::required(Box::new(
+                        ContextualUserFragment::into(skills),
+                    ))),
                 ),
                 ContextSection::RootConversation { items } => {
                     (1, "root_conversation", text_content(items))
@@ -169,11 +174,44 @@ impl CollectedContext {
                         })?;
                     let mut items = vec![Budgeted::required(start.to_owned())];
                     for (index, entry) in transcript.items.into_iter().enumerate() {
-                        let text = if session_id.is_some() {
-                            let prefix = if index == 0 { "" } else { "\n" };
-                            format!("{prefix}{}\n", entry.content)
-                        } else {
-                            entry.content
+                        let text = match entry.content {
+                            TranscriptContent::AgentMessage(message) => {
+                                sections.push((
+                                    4,
+                                    SectionOutput {
+                                        id: "conversation_transcript",
+                                        delivery: SectionDelivery::UserContent(
+                                            std::mem::take(&mut items)
+                                                .into_iter()
+                                                .map(|item| Budgeted {
+                                                    content: ContentItem::InputText {
+                                                        text: item.content,
+                                                    },
+                                                    retention: item.retention,
+                                                    source: item.source,
+                                                })
+                                                .collect(),
+                                        ),
+                                    },
+                                ));
+                                sections.push((
+                                    4,
+                                    SectionOutput {
+                                        id: "conversation_transcript",
+                                        delivery: SectionDelivery::Message(Budgeted {
+                                            content: message,
+                                            retention: entry.retention,
+                                            source: entry.source,
+                                        }),
+                                    },
+                                ));
+                                continue;
+                            }
+                            TranscriptContent::Text(text) if session_id.is_some() => {
+                                let prefix = if index == 0 { "" } else { "\n" };
+                                format!("{prefix}{text}\n")
+                            }
+                            TranscriptContent::Text(text) => text,
                         };
                         items.push(Budgeted {
                             content: text,
@@ -376,7 +414,7 @@ impl ComposedContext {
                             std::mem::take(&mut metadata),
                         ));
                     }
-                    messages.push(ResponseItemEnvelope::new(*message));
+                    messages.push(ResponseItemEnvelope::new(*message.content));
                 }
             }
         }
