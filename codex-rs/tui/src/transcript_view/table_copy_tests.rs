@@ -33,7 +33,33 @@ fn partial_table_selection_never_adds_unselected_cell_text() {
         /*width*/ 80,
     );
     let start = code.text().find("a|b").unwrap();
-    assert_eq!(payload(&code, start..start + 3).0, "`a|b`");
+    assert_eq!(
+        payload(&code, start..start + 3),
+        ("a|b".into(), CopyFormat::PlainText)
+    );
+    assert_eq!(
+        payload(&code, start + 1..start + 3),
+        ("|b".into(), CopyFormat::PlainText)
+    );
+    let mixed = markdown_layout(
+        "Before\n\n| `a\\|b` | B |\n|---|---|\n| left | right |",
+        /*width*/ 80,
+    );
+    let end = mixed.text().find("a|b").unwrap() + "a|b".len();
+    assert_eq!(
+        payload(&mixed, 0..end),
+        ("Before\n\n`a|b`".into(), CopyFormat::Markdown)
+    );
+    let controls = markdown_layout(
+        "| A | B |\n|---|---|\n| `a\u{7}\\|b` | value |",
+        /*width*/ 80,
+    );
+    let selected = "a\u{7}|b";
+    let start = controls.text().find(selected).unwrap();
+    assert_eq!(
+        payload(&controls, start..start + selected.len()),
+        ("a|b".into(), CopyFormat::PlainText)
+    );
     let repeated = markdown_layout(
         "| alpha SECRET omega |\n|---|\n| long_value_one |\n| long_value_two |",
         /*width*/ 12,

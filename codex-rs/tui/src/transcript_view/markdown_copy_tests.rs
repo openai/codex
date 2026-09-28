@@ -82,8 +82,6 @@ fn payload(layout: &TextLayout, range: std::ops::Range<usize>) -> (String, CopyF
 #[test]
 fn partial_markup_is_balanced_and_preserves_selected_characters() {
     for (source, selected, expected) in [
-        ("before `closeRequested_` after", "Requested", "`Requested`"),
-        ("before ``a`b`` after", "a`", "`` a` ``"),
         ("**hello café界**", "café界", "**café界**"),
         ("before * first *", "first", "first"),
         ("before **hello world** after", " world", "&#32;**world**"),
@@ -117,6 +115,35 @@ fn partial_markup_is_balanced_and_preserves_selected_characters() {
             "{source}"
         );
     }
+}
+
+#[test]
+fn inline_code_selection_copies_only_selected_content() {
+    let mut copies = Vec::new();
+    for (source, selected) in [
+        ("before `something` after", "something"),
+        ("before `something` after", "some"),
+        ("before `something` after", "thing"),
+        ("before `closeRequested_` after", "Requested"),
+        ("before ``a`b`` after", "a`"),
+        ("- **`café界_*`**", "café界_*"),
+        ("before `  leading and trailing  ` after", " leading"),
+    ] {
+        for width in [18, 80] {
+            let layout = markdown_layout(source, width);
+            let start = layout.text().find(selected).expect(source);
+            let copied = payload(&layout, start..start + selected.len());
+            assert_eq!(copied, (selected.into(), CopyFormat::PlainText), "{source}");
+            assert_eq!(
+                payload(&layout.rewrap(/*width*/ 12), start..start + selected.len()),
+                copied
+            );
+            if width == 80 {
+                copies.push(format!("{source}\nSelected {selected:?} → {copied:?}"));
+            }
+        }
+    }
+    insta::assert_snapshot!(copies.join("\n"));
 }
 
 #[test]
@@ -306,7 +333,7 @@ fn copied_selection_keeps_its_revision_and_format_across_resize() {
     assert_eq!(view.selected_text(&cells).as_deref(), Some("selected"));
     for clear_selection in [false, true] {
         view.copy_selected_text_with(&cells, "selected", clear_selection, |text, format| {
-            assert_eq!((text, format), ("`selected`", CopyFormat::Markdown));
+            assert_eq!((text, format), ("selected", CopyFormat::PlainText));
             Ok(CopyStatus::Pending(1))
         })
         .unwrap();

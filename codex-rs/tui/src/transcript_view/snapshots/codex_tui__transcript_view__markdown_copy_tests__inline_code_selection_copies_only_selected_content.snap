@@ -1,0 +1,18 @@
+---
+source: tui/src/transcript_view/markdown_copy_tests.rs
+expression: "copies.join(\"\\n\")"
+---
+before `something` after
+Selected "something" → ("something", PlainText)
+before `something` after
+Selected "some" → ("some", PlainText)
+before `something` after
+Selected "thing" → ("thing", PlainText)
+before `closeRequested_` after
+Selected "Requested" → ("Requested", PlainText)
+before ``a`b`` after
+Selected "a`" → ("a`", PlainText)
+- **`café界_*`**
+Selected "café界_*" → ("café界_*", PlainText)
+before `  leading and trailing  ` after
+Selected " leading" → (" leading", PlainText)
