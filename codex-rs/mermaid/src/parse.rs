@@ -1,4 +1,5 @@
 //! Strict parser for a small flowchart grammar; every non-comment byte must be consumed.
+//! Node groups expand into explicit edges within the graph edge cap.
 
 use super::Direction;
 use super::Edge;
@@ -13,35 +14,83 @@ use unicode_width::UnicodeWidthStr;
 
 pub(super) fn parse(header: &str, body: &[&str]) -> Result<Graph, RenderError> {
     let tokens = header.split_whitespace().collect::<Vec<_>>();
-    let ["flowchart" | "graph", direction] = tokens.as_slice() else {
-        return Err(RenderError::Unsupported);
+    let direction = match tokens.as_slice() {
+        ["flowchart" | "graph"] => Direction::Down,
+        ["flowchart" | "graph", direction] => Direction::parse(direction)?,
+        _ => return Err(RenderError::Unsupported),
     };
     let mut graph = Graph {
-        direction: Direction::parse(direction)?,
+        direction,
         ..Graph::default()
     };
     for statement in body {
         let mut rest = *statement;
-        let mut from = node(&mut rest, &mut graph)?;
+        let mut from = nodes(&mut rest, &mut graph)?;
         while !rest.trim_start().is_empty() {
-            rest = rest
-                .trim_start()
-                .strip_prefix("-->")
-                .ok_or(RenderError::Unsupported)?;
             rest = rest.trim_start();
-            let label = if let Some(after) = rest.strip_prefix('|') {
-                let (label, remaining) = delimited_label(after, "|")?;
-                let label = flowchart_label(label)?;
-                rest = remaining;
-                label.to_owned()
+            let mut label = String::new();
+            let (source_tip, target_tip, dashed) = if let Some((after, source, target, dashed)) = [
+                ("<-.->", '◄', '◄', true),
+                ("<-->", '◄', '◄', false),
+                ("-.->", '─', '◄', true),
+                ("-.-", '─', '─', true),
+                ("-->", '─', '◄', false),
+                ("---", '─', '─', false),
+            ]
+            .into_iter()
+            .find_map(|(token, source, target, dashed)| {
+                rest.strip_prefix(token)
+                    .map(|after| (after, source, target, dashed))
+            }) {
+                // Circle/cross tips are unsupported; without a space they are not node IDs.
+                if target == '─' && after.starts_with(['o', 'x']) {
+                    return Err(RenderError::Unsupported);
+                }
+                rest = after.trim_start();
+                if let Some(after) = rest.strip_prefix('|') {
+                    let (text, remaining) = delimited_label(after, "|")?;
+                    label = flowchart_label(text)?.to_owned();
+                    rest = remaining;
+                }
+                (source, target, dashed)
             } else {
-                String::new()
+                let (after, stem, dashed) = if let Some(after) = rest.strip_prefix("--") {
+                    (after, "--", false)
+                } else if let Some(after) = rest.strip_prefix("-.") {
+                    (after, ".-", true)
+                } else {
+                    return Err(RenderError::Unsupported);
+                };
+                // Spaced labels keep endpoint markers out of the text. Stop at the first
+                // closing stem instead of swallowing an unsupported edge and its target.
+                let (text, remaining) = after.split_once(stem).ok_or(RenderError::Unsupported)?;
+                if !text.starts_with(char::is_whitespace) || !text.ends_with(char::is_whitespace) {
+                    return Err(RenderError::Unsupported);
+                }
+                rest = remaining
+                    .strip_prefix('>')
+                    .ok_or(RenderError::Unsupported)?;
+                label = flowchart_label(text.trim())?.to_owned();
+                ('─', '◄', dashed)
             };
-            let to = node(&mut rest, &mut graph)?;
-            if graph.edges.len() == MAX_EDGES {
+            let to = nodes(&mut rest, &mut graph)?;
+            // Check the Cartesian expansion before allocating edges, including repeated IDs.
+            if from.len() * to.len() > MAX_EDGES - graph.edges.len() {
                 return Err(RenderError::Limit);
             }
-            graph.edges.push(Edge::directed(from, to, label));
+            for &from in &from {
+                for &to in &to {
+                    graph.edges.push(Edge {
+                        from,
+                        to,
+                        label: label.clone(),
+                        target_label: String::new(),
+                        source_tip,
+                        target_tip,
+                        dashed,
+                    });
+                }
+            }
             from = to;
         }
     }
@@ -49,6 +98,18 @@ pub(super) fn parse(header: &str, body: &[&str]) -> Result<Graph, RenderError> {
         return Err(RenderError::Unsupported);
     }
     Ok(graph)
+}
+
+fn nodes(rest: &mut &str, graph: &mut Graph) -> Result<Vec<usize>, RenderError> {
+    let mut nodes = vec![node(rest, graph)?];
+    while let Some(after) = rest.trim_start().strip_prefix('&') {
+        if nodes.len() == MAX_EDGES {
+            return Err(RenderError::Limit);
+        }
+        *rest = after;
+        nodes.push(node(rest, graph)?);
+    }
+    Ok(nodes)
 }
 
 fn node(rest: &mut &str, graph: &mut Graph) -> Result<usize, RenderError> {

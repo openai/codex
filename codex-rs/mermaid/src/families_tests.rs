@@ -156,7 +156,7 @@ fn unicode_labels_and_later_declarations() {
 }
 
 #[test]
-fn class_relationship_endpoints() {
+fn graph_relationship_endpoints() {
     for (operator, source_tip, target_tip, dashed) in [
         ("<|--", '◁', '─', false),
         ("*--", '◆', '─', false),
@@ -190,6 +190,33 @@ fn class_relationship_endpoints() {
         );
         assert!(ports[0].contains("(one) uses"));
         assert!(ports[1].contains("(many)"));
+        assert_eq!(output.contains('┆'), dashed);
+    }
+    for (operator, source_tip, target_tip, dashed) in [
+        ("---", '─', '─', false),
+        ("-.->", '─', '◄', true),
+        ("-.-", '─', '─', true),
+        ("<-->", '◄', '◄', false),
+        ("<-.->", '◄', '◄', true),
+    ] {
+        let output = render(
+            &format!("flowchart; A{operator}|uses|B"),
+            /*max_width*/ 100,
+        )
+        .unwrap();
+        let ports = output
+            .lines()
+            .filter(|line| line.contains('├'))
+            .collect::<Vec<_>>();
+        assert!(
+            ports[0].contains(&format!("├{source_tip}")),
+            "{operator}: {output}"
+        );
+        assert!(
+            ports[1].contains(&format!("├{target_tip}")),
+            "{operator}: {output}"
+        );
+        assert!(ports[0].contains("uses"));
         assert_eq!(output.contains('┆'), dashed);
     }
     for source in [
