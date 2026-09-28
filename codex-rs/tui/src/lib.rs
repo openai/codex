@@ -209,6 +209,7 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod subscription;
 mod system_motion;
 mod task_mentions;
 mod temporary_structured_request;

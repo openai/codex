@@ -56,27 +56,10 @@ impl AnalyticsView {
                 ));
             }
         }
-        let plan = self.account.ready().map(|plan| {
-            use codex_protocol::account::PlanType;
-            match plan {
-                PlanType::Free => "Free",
-                PlanType::Go => "Go",
-                PlanType::Plus => "Plus",
-                PlanType::Pro => "Pro Extra",
-                PlanType::ProLite => "Pro Standard",
-                PlanType::ProMax => "Pro Max",
-                PlanType::Team
-                | PlanType::Business
-                | PlanType::SelfServeBusinessProLite
-                | PlanType::SelfServeBusinessUsageBased => "Business",
-                PlanType::Ent26
-                | PlanType::EnterpriseCbpAutomation
-                | PlanType::EnterpriseCbpUsageBased
-                | PlanType::Enterprise => "Enterprise",
-                PlanType::Edu | PlanType::EduPlus | PlanType::EduPro => "Education",
-                PlanType::Unknown => "Account",
-            }
-        });
+        let plan = self
+            .account
+            .ready()
+            .map(|plan| crate::subscription::SubscriptionDisplay::Analytics.label(*plan));
         if let Some(plan) = plan {
             lines.push(center(
                 plan.set_style(secondary_style()).into(),

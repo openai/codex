@@ -102,27 +102,10 @@ impl AnalyticsView {
         ])
         .areas(inner);
         let account = self.live.as_ref().and_then(|live| live.account_label());
-        let plan = self.account.ready().map(|plan| {
-            use codex_protocol::account::PlanType;
-            match plan {
-                PlanType::Free => "Free",
-                PlanType::Go => "Go",
-                PlanType::Plus => "Plus",
-                PlanType::Pro => "Pro Extra",
-                PlanType::ProLite => "Pro Standard",
-                PlanType::ProMax => "Pro Max",
-                PlanType::Team
-                | PlanType::Business
-                | PlanType::SelfServeBusinessProLite
-                | PlanType::SelfServeBusinessUsageBased => "Business",
-                PlanType::Enterprise
-                | PlanType::Ent26
-                | PlanType::EnterpriseCbpAutomation
-                | PlanType::EnterpriseCbpUsageBased => "Enterprise",
-                PlanType::Edu | PlanType::EduPlus | PlanType::EduPro => "Education",
-                PlanType::Unknown => "Account",
-            }
-        });
+        let plan = self
+            .account
+            .ready()
+            .map(|plan| crate::subscription::SubscriptionDisplay::Analytics.label(*plan));
         let heading = Line::from(vec![
             plan.map(|plan| format!("Usage · {plan}"))
                 .unwrap_or_else(|| "Usage".into())

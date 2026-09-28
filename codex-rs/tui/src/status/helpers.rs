@@ -98,27 +98,9 @@ pub(crate) fn compose_account_display(
 }
 
 pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
-    if plan_type == PlanType::EnterpriseCbpAutomation {
-        "Enterprise (Automation)".to_string()
-    } else if plan_type == PlanType::SelfServeBusinessProLite {
-        "Business Premium".to_string()
-    } else if plan_type.is_team_like() {
-        "Business".to_string()
-    } else if plan_type.is_business_like() {
-        "Enterprise".to_string()
-    } else if plan_type == PlanType::Pro {
-        "Pro Extra".to_string()
-    } else if plan_type == PlanType::ProMax {
-        "Pro Max".to_string()
-    } else if plan_type == PlanType::ProLite {
-        "Pro Standard".to_string()
-    } else if plan_type == PlanType::EduPlus {
-        "Edu Plus".to_string()
-    } else if plan_type == PlanType::EduPro {
-        "Edu Pro".to_string()
-    } else {
-        title_case(format!("{plan_type:?}").as_str())
-    }
+    crate::subscription::SubscriptionDisplay::Status
+        .label(plan_type)
+        .to_string()
 }
 
 pub(crate) fn format_tokens_compact(value: i64) -> String {
@@ -198,18 +180,6 @@ pub(crate) fn format_reset_timestamp(
     }
 }
 
-fn title_case(s: &str) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return String::new();
-    };
-    let rest = chars.as_str().to_ascii_lowercase();
-    first.to_uppercase().collect::<String>() + &rest
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,9 +203,9 @@ mod tests {
             (PlanType::Free, "Free"),
             (PlanType::Go, "Go"),
             (PlanType::Plus, "Plus"),
-            (PlanType::Pro, "Pro Extra"),
-            (PlanType::ProLite, "Pro Standard"),
-            (PlanType::ProMax, "Pro Max"),
+            (PlanType::Pro, "Pro 200"),
+            (PlanType::ProLite, "Pro 100"),
+            (PlanType::ProMax, "Pro 500"),
             (PlanType::Team, "Business"),
             (PlanType::SelfServeBusinessUsageBased, "Business"),
             (PlanType::Business, "Enterprise"),
