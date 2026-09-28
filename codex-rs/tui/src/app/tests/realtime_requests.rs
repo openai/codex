@@ -90,7 +90,6 @@ async fn remote_voice_start_routes_v3_offer_and_effective_preference() -> Result
         (HistoryCapabilities::ConfigReadUnsupported(-32601), None),
         (HistoryCapabilities::Current, Some("cove")),
         (HistoryCapabilities::VoiceCatalogCustom, Some("maple")),
-        (HistoryCapabilities::VoiceCatalogUnavailable, Some("cove")),
         (HistoryCapabilities::ConfigReadUnknownVoice, None),
     ] {
         check_remote_voice_start(capabilities, expected_voice).await?;
@@ -1888,14 +1887,14 @@ async fn remote_voice_picker_reads_server_preference() -> Result<()> {
 }
 
 #[tokio::test]
-async fn remote_voice_picker_uses_server_catalog_and_falls_back_when_unavailable() -> Result<()> {
+async fn remote_voice_catalog_success_and_failure() -> Result<()> {
     use super::session_lifecycle_requests::HistoryCapabilities;
     for (capabilities, expected_catalog) in [
         (HistoryCapabilities::VoiceCatalogCustom, true),
         (HistoryCapabilities::VoiceCatalogUnavailable, false),
     ] {
-        let (mut app, _events, _ops) = make_test_app_with_channels().await;
-        let (server, requests, proxy) =
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        let (mut server, requests, proxy) =
             super::session_lifecycle_requests::start_recording_app_server_with_realtime_speech(
                 &app.config,
                 capabilities,
@@ -1906,13 +1905,14 @@ async fn remote_voice_picker_uses_server_catalog_and_falls_back_when_unavailable
                 codex_config::LoaderOverrides::default(),
             )
             .await?;
+        while events.try_recv().is_ok() {}
         app.open_realtime_settings(&server).await;
         let popup = crate::chatwidget::tests::helpers::render_bottom_popup(
             &app.chat_widget,
             /*width*/ 80,
         );
         assert_eq!(popup.contains("1. maple (current)"), expected_catalog);
-        assert_eq!(popup.contains("  3. spruce"), !expected_catalog);
+        assert!(!popup.contains("  3. spruce"));
         if expected_catalog {
             insta::assert_snapshot!("remote_voice_picker_server_default", popup);
         }
@@ -1920,6 +1920,76 @@ async fn remote_voice_picker_uses_server_catalog_and_falls_back_when_unavailable
             recorded_params(&requests, "thread/realtime/listVoices").len(),
             1
         );
+        if !expected_catalog {
+            assert!(!app.chat_widget.has_active_view());
+            for phase in ["picker", "save", "start"] {
+                match phase {
+                    "save" => {
+                        let previous = (
+                            app.config.realtime.voice,
+                            app.chat_widget.config_ref().realtime.voice,
+                        );
+                        app.persist_realtime_voice(
+                            &server,
+                            codex_protocol::protocol::RealtimeVoice::Juniper,
+                        )
+                        .await;
+                        assert_eq!(
+                            (
+                                app.config.realtime.voice,
+                                app.chat_widget.config_ref().realtime.voice,
+                            ),
+                            previous,
+                        );
+                        let saved: toml::Value = toml::from_str(&std::fs::read_to_string(
+                            app.config.codex_home.join("config.toml"),
+                        )?)?;
+                        assert_eq!(saved["realtime"]["voice"].as_str(), Some("juniper"));
+                    }
+                    "start" => {
+                        let thread_id = ThreadId::new();
+                        app.chat_widget
+                            .handle_thread_session_quiet(test_thread_session(
+                                thread_id,
+                                app.config.cwd.to_path_buf(),
+                            ));
+                        app.active_thread_id = Some(thread_id);
+                        crate::chatwidget::activate_voice_for_thread(
+                            &mut app.chat_widget,
+                            thread_id,
+                        );
+                        assert!(app.chat_widget.may_receive_realtime_transcripts());
+                        let mut tui = crate::tui::test_support::make_test_tui()?;
+                        Box::pin(app.handle_event(
+                            &mut tui,
+                            &mut server,
+                            AppEvent::CodexOp(Op::RealtimeConversationStart {
+                                thread_id,
+                                offer_sdp: String::from("v=0\r\n").into(),
+                            }),
+                        ))
+                        .await?;
+                        assert!(!app.chat_widget.may_receive_realtime_transcripts());
+                        assert!(recorded_params(&requests, "thread/realtime/start").is_empty());
+                    }
+                    _ => {}
+                }
+                let messages = std::iter::from_fn(|| events.try_recv().ok())
+                    .filter_map(|event| match event {
+                        AppEvent::InsertHistoryCell(cell) => Some(
+                            cell.display_lines(/*width*/ 80)
+                                .into_iter()
+                                .map(|line| line.to_string())
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        ),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                insta::assert_snapshot!(format!("voice_catalog_failure_{phase}"), messages);
+            }
+        }
         server.shutdown().await?;
         proxy.await??;
     }
