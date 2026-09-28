@@ -160,6 +160,11 @@ jobs:
         shell: pwsh
         run: python .github/scripts/test_run_bazel_with_buildbuddy.py
 
+      - name: Test Windows Bazel target selector
+        if: matrix.shard == 1
+        shell: pwsh
+        run: python -m unittest discover -s .github/scripts -p test_select_windows_bazel_targets.py
+
       - name: Prepare Bazel CI
         id: prepare_bazel
         uses: ./.github/actions/prepare-bazel-ci
@@ -180,29 +185,19 @@ jobs:
           set -euo pipefail
 
           bazel_test_query='tests(//...) except tests(//third_party/v8:all) except attr(tags, "manual", tests(//...))'
-          mapfile -t bazel_targets < <(
-            ./.github/scripts/run-bazel-query-ci.sh --output=label -- "${bazel_test_query}" \
-              | LC_ALL=C sort
-          )
+          bazel_targets_file="$(mktemp)"
+          selected_targets_file="$(mktemp)"
+          trap 'rm -f "${bazel_targets_file}" "${selected_targets_file}"' EXIT
 
-          selected_targets=()
-          for bazel_target in "${bazel_targets[@]}"; do
-            target_bucket="$(
-              printf '%s\n' "${bazel_target}" \
-                | cksum \
-                | awk -v shard_count="${BAZEL_TEST_SHARD_COUNT}" '{ print ($1 % shard_count) + 1 }'
-            )"
-            if [[ "${target_bucket}" == "${BAZEL_TEST_SHARD}" ]]; then
-              selected_targets+=("${bazel_target}")
-            fi
-          done
-
-          if [[ ${#selected_targets[@]} -eq 0 ]]; then
-            echo "No Bazel test targets selected for Windows shard ${BAZEL_TEST_SHARD}/${BAZEL_TEST_SHARD_COUNT}." >&2
-            exit 1
-          fi
-
-          echo "Selected ${#selected_targets[@]} of ${#bazel_targets[@]} Bazel test targets for Windows shard ${BAZEL_TEST_SHARD}/${BAZEL_TEST_SHARD_COUNT}."
+          # Keep query and selection in the foreground so failures cannot leave
+          # different jobs assigning different partial target lists.
+          ./.github/scripts/run-bazel-query-ci.sh --output=label -- "${bazel_test_query}" \
+            | LC_ALL=C sort > "${bazel_targets_file}"
+          python .github/scripts/select_windows_bazel_targets.py \
+            --shard "${BAZEL_TEST_SHARD}" \
+            --shard-count "${BAZEL_TEST_SHARD_COUNT}" \
+            < "${bazel_targets_file}" > "${selected_targets_file}"
+          mapfile -t selected_targets < "${selected_targets_file}"
 
           bazel_test_args=(
             test
