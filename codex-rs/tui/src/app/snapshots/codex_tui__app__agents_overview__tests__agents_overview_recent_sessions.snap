@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/agents_overview_tests.rs
+assertion_line: 633
 expression: "age.replace_all(&rendered, \" [age]\")"
 ---
   Agent command center  Group: Project  g
@@ -18,7 +19,7 @@ expression: "age.replace_all(&rendered, \" [age]\")"
     ○ Task 4                                           Inactive [age]
     ○ Task 3                                           Inactive [age]
 
-
+      Show more
 
 
 

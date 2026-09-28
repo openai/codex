@@ -141,6 +141,8 @@ pub(super) struct AgentsOverviewViewState {
     pub(super) creating_worktree: bool,
     pub(super) refresh_failed: bool,
     pub(super) loading: bool,
+    pub(super) has_more: bool,
+    show_more_selected: bool,
     pub(super) connection_notice: Option<&'static str>,
     pub(super) server_version_notice: Option<String>,
     search: String,
@@ -224,6 +226,9 @@ impl AgentsOverviewView {
             center_shortcut_keys,
             worktrees_enabled,
         };
+        if selected_thread_id.is_none() && view.state().show_more_selected {
+            view.selected = usize::MAX;
+        }
         view.state().completion = None;
         view.reconcile_command_center_selection();
         view
@@ -295,7 +300,7 @@ impl AgentsOverviewView {
         if self.state().rename_target.is_some() {
             return;
         }
-        let visible = self.visible_indices();
+        let visible = self.selectable_indices();
         if visible.is_empty() {
             return;
         }
@@ -308,9 +313,17 @@ impl AgentsOverviewView {
         } else {
             visible[current.checked_sub(1).unwrap_or(visible.len() - 1)]
         };
+        self.state().show_more_selected = self.selected == usize::MAX;
     }
 
     fn activate(&mut self) {
+        if self.selected == usize::MAX && self.state().has_more {
+            if !self.state().loading {
+                self.state().loading = true;
+                self.app_event_tx.send(AppEvent::ShowMoreAgentsOverview);
+            }
+            return;
+        }
         let input = self.state().input.clone();
         if self.state().rename_target.is_some() && !input.trim().is_empty() {
             if let Some(row) = self.selected_row() {
@@ -350,7 +363,7 @@ impl AgentsOverviewView {
         drop(state);
         if searching {
             self.selected = self
-                .visible_indices()
+                .selectable_indices()
                 .first()
                 .copied()
                 .unwrap_or(usize::MAX);

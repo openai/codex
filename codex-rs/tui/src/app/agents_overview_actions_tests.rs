@@ -335,6 +335,7 @@ async fn hidden_task_stays_hidden_through_activity_and_seed_until_explicit_resum
             threads: HashMap::from([(id, Some(thread.clone()))]),
             last_messages: HashMap::new(),
             recent_seed_complete: true,
+            discovery: None,
         }),
     );
     assert_eq!(
@@ -613,6 +614,7 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
                 threads: stale_threads,
                 last_messages: HashMap::new(),
                 recent_seed_complete: true,
+                discovery: None,
             }),
         );
         assert_eq!(
@@ -699,7 +701,14 @@ async fn lifecycle_removes_background_and_current_tasks_without_losing_the_dashb
             app.agents_overview.threads.remove(&primary);
         }
         crate::chatwidget::activate_voice_for_thread(&mut app.chat_widget, primary);
+        // Canceling pagination must allow automatic refill to finish after removing the last task.
+        app.agents_overview.initialized = true;
+        app.agents_overview.view_state.lock().unwrap().loading = true;
         Box::pin(app.handle_event(&mut tui, &mut app_server, confirmed)).await?;
+        if app.agents_overview.request_id.is_some() {
+            finish_overview_refresh(&mut app, &app_server, &mut rx).await;
+        }
+        assert!(!app.agents_overview.view_state.lock().unwrap().loading);
         assert_eq!(app.voice_owner_thread_id(), None);
         assert_eq!(
             (

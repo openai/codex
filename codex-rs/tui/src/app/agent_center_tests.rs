@@ -1,6 +1,7 @@
 //! Dashboard rows, paging, metadata clipping and status-filter regressions.
 
 use super::*;
+use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
 
 fn screen(view: &AgentsOverviewView, width: u16, height: u16) -> String {
@@ -552,4 +553,42 @@ async fn overview_clears_voice_badge_after_async_close() -> Result<()> {
     assert!(!render_bottom_popup(&app.chat_widget, /*width*/ 100).contains("  voice"));
     server.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn live_center_show_more_navigation_search_and_loading() {
+    let mut app = make_test_app().await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    app.app_event_tx = AppEventSender::new(tx);
+    app.agents_overview.view_state.lock().unwrap().has_more = true;
+    let thread = overview_thread(
+        ThreadId::new(),
+        /*parent_thread_id*/ None,
+        "Recent task",
+        ThreadStatus::NotLoaded,
+    );
+    let mut view = app.agents_overview_view(vec![thread], /*selected_thread_id*/ None);
+    view.handle_key_event(KeyCode::Down.into());
+    insta::assert_snapshot!(
+        "live_center_show_more",
+        screen(&view, /*width*/ 80, /*height*/ 12)
+    );
+    view.handle_key_event(KeyCode::Enter.into());
+    view.handle_key_event(KeyCode::Enter.into());
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowMoreAgentsOverview));
+    assert!(rx.try_recv().is_err());
+    assert!(screen(&view, /*width*/ 80, /*height*/ 12).contains("Loading more"));
+    {
+        let mut state = app.agents_overview.view_state.lock().unwrap();
+        state.loading = false;
+        state.refresh_failed = true;
+    }
+    view.handle_key_event(KeyCode::Char('f').into());
+    view.handle_paste("Older task".into());
+    insta::assert_snapshot!(
+        "live_center_show_more_search_retry",
+        screen(&view, /*width*/ 80, /*height*/ 12)
+    );
+    view.handle_key_event(KeyCode::Enter.into());
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowMoreAgentsOverview));
 }

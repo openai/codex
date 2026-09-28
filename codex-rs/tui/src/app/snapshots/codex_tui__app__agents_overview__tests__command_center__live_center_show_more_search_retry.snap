@@ -1,0 +1,17 @@
+---
+source: tui/src/app/agent_center_tests.rs
+assertion_line: 588
+expression: "screen(&view, 80, 12)"
+---
+  Agent command center  Group: Project  g
+   All 1   Needs you 0   Working 0   Ready 0   Inactive 1
+  ────────────────────────────────────────────────────────────────────────────
+  Search › Older task
+      Tasks                                            Status         Updated
+
+  ›   Show more (retry)
+
+
+
+
+  Error loading tasks

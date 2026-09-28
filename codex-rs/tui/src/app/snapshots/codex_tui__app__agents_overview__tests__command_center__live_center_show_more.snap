@@ -1,0 +1,17 @@
+---
+source: tui/src/app/agent_center_tests.rs
+assertion_line: 572
+expression: "screen(&view, 80, 12)"
+---
+  Agent command center  Group: Project  g
+   All 1   Needs you 0   Working 0   Ready 0   Inactive 1
+  ────────────────────────────────────────────────────────────────────────────
+      Tasks                                            Status         Updated
+  /tmp/project  1
+    ○ Recent task                                      Inactive        2m ago
+
+  ›   Show more
+
+
+
+  ? help  esc back  ↑/↓ move  enter open  n new

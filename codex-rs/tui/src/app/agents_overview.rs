@@ -44,6 +44,10 @@ pub(super) struct AgentsOverviewState {
     pub(super) usage_disabled: bool,
     pub(super) activity: HashMap<ThreadId, super::agents_overview_details::AgentsOverviewActivity>,
     pub(super) initialized: bool,
+    pub(super) discovery: super::agents_overview_discovery::AgentsOverviewDiscovery,
+    pub(super) show_more_requested: bool,
+    /// Vacancies left by lifecycle removals, filled without expanding the visible window.
+    pub(super) refill_count: usize,
     pub(super) request_id: Option<Uuid>,
     pub(super) refresh_pending: bool,
     pub(super) refresh_thread_ids: HashSet<ThreadId>,
@@ -159,6 +163,9 @@ impl App {
         }
         self.agents_overview.request_id = None;
         self.agents_overview.refresh_task = None;
+        let refill_succeeded = result
+            .as_ref()
+            .is_ok_and(|refresh| refresh.recent_seed_complete);
         {
             let mut state = self
                 .agents_overview
@@ -166,17 +173,31 @@ impl App {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.loading = false;
-            state.refresh_failed = !result
-                .as_ref()
-                .is_ok_and(|refresh| refresh.recent_seed_complete);
+            state.refresh_failed = !refill_succeeded;
         }
         match result {
             Ok(refresh) => {
                 self.agents_overview.initialized = refresh.recent_seed_complete;
+                if let Some(discovery) = refresh.discovery {
+                    if !discovery.has_more() {
+                        self.agents_overview.refill_count = 0;
+                        self.agents_overview.show_more_requested = false;
+                    }
+                    self.agents_overview.initialized = true;
+                    self.agents_overview
+                        .view_state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .has_more = discovery.has_more();
+                    self.agents_overview.discovery = discovery;
+                }
                 self.agents_overview
                     .last_messages
                     .extend(refresh.last_messages);
                 for (thread_id, thread) in refresh.threads {
+                    if self.agents_overview.removed_threads.contains(&thread_id) {
+                        continue;
+                    }
                     if let Some(mut thread) = thread {
                         if thread.ephemeral {
                             self.agents_overview.threads.remove(&thread_id);
@@ -184,6 +205,17 @@ impl App {
                             self.agents_overview.activity.remove(&thread_id);
                             self.agents_overview.usage.remove(&thread_id);
                             continue;
+                        }
+                        if !self.agents_overview.threads.contains_key(&thread_id)
+                            && !self.agents_overview.hidden_threads.contains(&thread_id)
+                            && thread.parent_thread_id.is_none()
+                            && !matches!(
+                                thread.source,
+                                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+                            )
+                        {
+                            self.agents_overview.refill_count =
+                                self.agents_overview.refill_count.saturating_sub(1);
                         }
                         thread.turns.clear();
                         self.agents_overview.threads.insert(thread_id, Some(thread));
@@ -213,7 +245,12 @@ impl App {
                 self.track_agents_overview_notification(&notification);
             }
         }
-        if std::mem::take(&mut self.agents_overview.refresh_pending) {
+        if std::mem::take(&mut self.agents_overview.refresh_pending)
+            || (refill_succeeded
+                && (self.agents_overview.refill_count > 0
+                    || self.agents_overview.show_more_requested)
+                && self.agents_overview.discovery.has_more())
+        {
             self.refresh_changed_agents_overview_threads(app_server);
         }
         self.repaint_agents_overview();

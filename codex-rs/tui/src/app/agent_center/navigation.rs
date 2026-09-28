@@ -7,6 +7,7 @@ pub(super) enum CenterRow {
     Group(usize),
     Task(usize),
     Gap,
+    ShowMore,
 }
 
 impl AgentsOverviewView {
@@ -18,6 +19,11 @@ impl AgentsOverviewView {
         let mut entries = Vec::new();
         let mut previous = None;
         for index in indices.iter().copied() {
+            if index == usize::MAX {
+                entries.push(CenterRow::Gap);
+                entries.push(CenterRow::ShowMore);
+                continue;
+            }
             if previous.is_none_or(|previous| !self.same_group(grouping, previous, index)) {
                 if previous.is_some() {
                     entries.push(CenterRow::Gap);
@@ -31,7 +37,7 @@ impl AgentsOverviewView {
     }
 
     pub(in crate::app::agents_overview_view) fn page_selection(&mut self, action: ListAction) {
-        let indices = self.visible_indices();
+        let indices = self.selectable_indices();
         let mut state = self.state();
         if state.rename_target.is_some() || indices.is_empty() {
             return;
@@ -44,6 +50,8 @@ impl AgentsOverviewView {
             .filter_map(|(position, row)| {
                 if let CenterRow::Task(index) = row {
                     Some((position, *index))
+                } else if matches!(row, CenterRow::ShowMore) {
+                    Some((position, usize::MAX))
                 } else {
                     None
                 }
@@ -79,5 +87,6 @@ impl AgentsOverviewView {
         .min(entries.len().saturating_sub(height));
         drop(state);
         self.selected = selected;
+        self.state().show_more_selected = selected == usize::MAX;
     }
 }
