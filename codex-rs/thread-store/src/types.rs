@@ -914,6 +914,10 @@ impl ThreadMetadataPatch {
     }
 
     pub fn is_empty(&self) -> bool {
+        self.updated_at.is_none() && self.is_empty_except_updated_at()
+    }
+
+    pub(crate) fn is_empty_except_updated_at(&self) -> bool {
         self.name.is_none()
             && self.rollout_path.is_none()
             && self.preview.is_none()
@@ -922,7 +926,6 @@ impl ThreadMetadataPatch {
             && self.model.is_none()
             && self.reasoning_effort.is_none()
             && self.created_at.is_none()
-            && self.updated_at.is_none()
             && self.advance_recency_at.is_none()
             && self.source.is_none()
             && self.originator.is_none()
