@@ -78,6 +78,7 @@ use tracing::info;
 use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -163,6 +164,10 @@ enum LogFormat {
 }
 
 type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
+
+fn stderr_span_events() -> FmtSpan {
+    FmtSpan::NEW | FmtSpan::CLOSE
+}
 
 /// Control-plane messages from the processor/transport side to the outbound router task.
 ///
@@ -703,16 +708,19 @@ pub async fn run_main_with_transport_options(
     // Install a simple subscriber so `tracing` output is visible. Users can
     // control the log level with `RUST_LOG` and switch to JSON logs with
     // `LOG_FORMAT=json`.
+    // SQLx enters the caller's span for each command. Skip enter/exit records
+    // that can block its worker on stderr while holding a write transaction.
+    // Preserve span boundaries, busy/idle timings, and explicit events.
     let stderr_fmt: StderrLogLayer = match log_format_from_env() {
         LogFormat::Json => tracing_subscriber::fmt::layer()
             .json()
             .with_writer(std::io::stderr)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_span_events(stderr_span_events())
             .with_filter(EnvFilter::from_default_env())
             .boxed(),
         LogFormat::Default => tracing_subscriber::fmt::layer()
             .with_writer(std::io::stderr)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::FULL)
+            .with_span_events(stderr_span_events())
             .with_filter(EnvFilter::from_default_env())
             .boxed(),
     };
@@ -1523,6 +1531,10 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
         | AppServerTransport::Off => AppServerRpcTransport::Websocket,
     }
 }
+
+#[cfg(test)]
+#[path = "stderr_logging_tests.rs"]
+mod stderr_logging_tests;
 
 #[cfg(test)]
 mod tests {

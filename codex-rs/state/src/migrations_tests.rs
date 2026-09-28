@@ -1013,3 +1013,75 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
     pool.close().await;
     repair_result.expect("current migration history should not need the writer slot");
 }
+
+#[tokio::test]
+async fn writable_pool_reads_do_not_wait_for_an_existing_writer() {
+    let sqlite_home = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&sqlite_home).await.unwrap();
+    let _cleanup = scopeguard::guard(sqlite_home.clone(), |sqlite_home| {
+        let _ = std::fs::remove_dir_all(sqlite_home);
+    });
+    let sqlite = crate::SqliteConfig::new_for_testing(sqlite_home.as_path().abs());
+
+    for (index, (setup, expected_mode)) in [
+        ("PRAGMA auto_vacuum = INCREMENTAL", 2_i64),
+        ("PRAGMA auto_vacuum = FULL", 2),
+        ("PRAGMA auto_vacuum = NONE; VACUUM", 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = sqlite_home.join(format!("pool-{index}.sqlite"));
+        let pool = sqlite.open_read_write_pool(&path).await.unwrap();
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            2,
+            "new databases must support incremental vacuum"
+        );
+        sqlx::query(setup).execute(&pool).await.unwrap();
+        sqlx::query("CREATE TABLE sample (value INTEGER); INSERT INTO sample VALUES (7)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        // Reopening converts FULL, but preserves legacy NONE without VACUUM.
+        let pool = sqlite.open_read_write_pool(&path).await.unwrap();
+        let mut connection = pool.acquire().await.unwrap();
+        let writer = connection.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let read_result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let readers = sqlite.open_read_write_pool(&path).await.unwrap();
+            let mode = sqlx::query_scalar::<_, i64>("PRAGMA auto_vacuum")
+                .fetch_one(&readers)
+                .await
+                .unwrap();
+            let mut held_connections = Vec::new();
+            let mut values = Vec::new();
+            // Keep every connection checked out to exercise lazy pool expansion too.
+            for _ in 0..5 {
+                let mut reader = readers.acquire().await.unwrap();
+                values.push(
+                    sqlx::query_scalar::<_, i64>("SELECT value FROM sample")
+                        .fetch_one(&mut *reader)
+                        .await
+                        .unwrap(),
+                );
+                held_connections.push(reader);
+            }
+            drop(held_connections);
+            readers.close().await;
+            (mode, values)
+        })
+        .await;
+        writer.rollback().await.unwrap();
+        drop(connection);
+        pool.close().await;
+        assert_eq!(
+            read_result.expect("opening and expanding a read pool must not wait for a writer"),
+            (expected_mode, vec![7; 5])
+        );
+    }
+}
