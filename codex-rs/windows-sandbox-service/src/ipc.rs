@@ -339,7 +339,7 @@ fn handle_request(
         }
         crate::service::log_error(
             crate::service::EVENT_REQUEST_REJECTED,
-            &format!("Codex sandbox provisioning was rejected by administrator policy: {error}"),
+            &policy_rejection_diagnostic(&error),
         );
         return Err(error)
             .context("requested sandbox settings violate administrator-controlled machine policy");
@@ -350,6 +350,39 @@ fn handle_request(
         sandbox_sid,
         shutdown,
         on_authenticated_user,
+    )
+}
+
+fn policy_rejection_diagnostic(error: &anyhow::Error) -> String {
+    // Only service-owned labels and typed codes belong in persistent events.
+    // Parser wrappers can stringify entire config lines, including credentials.
+    let stage = match error.to_string().as_str() {
+        "start managed configuration runtime" => "runtime",
+        "load bootstrap configuration" => "bootstrap",
+        "resolve cloud configuration authentication" => "resolve_auth",
+        "initialize cloud configuration authentication" => "initialize_auth",
+        "load managed configuration" => "managed",
+        "enforce managed provisioning requirements" => "enforce",
+        _ => "unknown",
+    };
+    let detail = error.chain().find_map(|cause| {
+        let io = cause.downcast_ref::<std::io::Error>();
+        let inner = io
+            .and_then(std::io::Error::get_ref)
+            .map(|inner| inner as &(dyn std::error::Error + 'static))
+            .unwrap_or(cause);
+        if let Some(cloud) = inner.downcast_ref::<codex_config::CloudConfigBundleLoadError>() {
+            return Some(format!(
+                "cloud={:?} http={:?}",
+                cloud.code(),
+                cloud.status_code()
+            ));
+        }
+        io.map(|io| format!("io={:?} win32={:?}", io.kind(), io.raw_os_error()))
+    });
+    let detail = detail.unwrap_or_else(|| "cause=unavailable".to_string());
+    format!(
+        "Codex sandbox provisioning was rejected by administrator policy: stage={stage} {detail}"
     )
 }
 
