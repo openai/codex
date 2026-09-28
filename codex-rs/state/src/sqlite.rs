@@ -1,4 +1,5 @@
 //! Shared SQLite connection configuration.
+//! Writable pools preserve existing vacuum modes and report initialization errors to callers.
 
 #![expect(
     clippy::disallowed_methods,
@@ -313,38 +314,54 @@ impl SqliteConfig {
             .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5))
             .log_statements(LevelFilter::Off);
-        SqlitePoolOptions::new()
-            .max_connections(5)
-            .after_connect(|connection, _metadata| {
+        // SQLx retries after_connect errors, eventually replacing them with PoolTimedOut.
+        // Return the first initialization error directly while opening this pool.
+        let (init_error_tx, mut init_error_rx) = tokio::sync::mpsc::channel(/*buffer*/ 1);
+        let pool_options = SqlitePoolOptions::new().max_connections(5).after_connect(
+            move |connection, _metadata| {
+                let init_error_tx = init_error_tx.clone();
                 Box::pin(async move {
-                    let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
-                        .fetch_one(&mut *connection)
-                        .await?;
-                    // The setter takes the writer lock even when the mode is unchanged.
-                    // Initialize it before WAL creates the first database page. Existing
-                    // NONE databases require VACUUM to convert; leave those alone.
-                    let empty = if mode == 0 {
-                        sqlx::query_scalar::<_, bool>(
-                            "SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)",
-                        )
-                        .fetch_one(&mut *connection)
-                        .await?
-                    } else {
-                        false
-                    };
-                    if mode == 1 || empty {
-                        sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
-                            .execute(&mut *connection)
+                    let result = async {
+                        let mode: i64 = sqlx::query_scalar("PRAGMA auto_vacuum")
+                            .fetch_one(&mut *connection)
                             .await?;
+                        // The setter takes the writer lock even when the mode is unchanged.
+                        // Initialize before WAL creates the first database page; preserve
+                        // existing modes, including FULL, without taking the writer lock.
+                        let empty = if mode == 0 {
+                            sqlx::query_scalar::<_, bool>(
+                                "SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)",
+                            )
+                            .fetch_one(&mut *connection)
+                            .await?
+                        } else {
+                            false
+                        };
+                        if empty {
+                            sqlx::query("PRAGMA auto_vacuum = INCREMENTAL")
+                                .execute(&mut *connection)
+                                .await?;
+                        }
+                        sqlx::query("PRAGMA journal_mode = WAL")
+                            .execute(connection)
+                            .await?;
+                        Ok(())
                     }
-                    sqlx::query("PRAGMA journal_mode = WAL")
-                        .execute(connection)
-                        .await?;
-                    Ok(())
+                    .await;
+                    result.map_err(|error| match init_error_tx.try_send(error) {
+                        // The opener owns the original error and cancels connection retries.
+                        Ok(()) => Error::PoolClosed,
+                        // After opening, lazy connections retain SQLx's normal error handling.
+                        Err(error) => error.into_inner(),
+                    })
                 })
-            })
-            .connect_with(options)
-            .await
+            },
+        );
+        tokio::select! {
+            biased;
+            Some(error) = init_error_rx.recv() => Err(error),
+            result = pool_options.connect_with(options) => result,
+        }
     }
 
     /// Open an existing Codex SQLite database without creating or modifying it.
@@ -367,3 +384,7 @@ impl SqliteConfig {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "sqlite_tests.rs"]
+mod tests;

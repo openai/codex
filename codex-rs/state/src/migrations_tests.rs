@@ -1025,7 +1025,7 @@ async fn writable_pool_reads_do_not_wait_for_an_existing_writer() {
 
     for (index, (setup, expected_mode)) in [
         ("PRAGMA auto_vacuum = INCREMENTAL", 2_i64),
-        ("PRAGMA auto_vacuum = FULL", 2),
+        ("PRAGMA auto_vacuum = FULL", 1),
         ("PRAGMA auto_vacuum = NONE; VACUUM", 0),
     ]
     .into_iter()
@@ -1048,7 +1048,7 @@ async fn writable_pool_reads_do_not_wait_for_an_existing_writer() {
             .unwrap();
         pool.close().await;
 
-        // Reopening converts FULL, but preserves legacy NONE without VACUUM.
+        // Reopening preserves existing FULL and legacy NONE without taking a writer lock.
         let pool = sqlite.open_read_write_pool(&path).await.unwrap();
         let mut connection = pool.acquire().await.unwrap();
         let writer = connection.begin_with("BEGIN IMMEDIATE").await.unwrap();
