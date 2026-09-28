@@ -59,6 +59,17 @@ pub struct GitDiffToRemote {
     pub diff: String,
 }
 
+/// Return the sanitized URL for the `origin` remote, if available.
+pub async fn get_git_origin_url(cwd: &Path) -> Option<SanitizedGitUrl> {
+    let output = run_git_command_with_timeout(&["remote", "get-url", "origin"], cwd).await?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let url = String::from_utf8(output.stdout).ok()?;
+    SanitizedGitUrl::try_from(url.trim()).ok()
+}
+
 /// Collect git repository information from the given working directory using command-line git.
 /// Returns None if no git repository is found or if git operations fail.
 /// Uses timeouts to prevent freezing on large repositories.
@@ -75,16 +86,16 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     }
 
     // Run all git info collection commands in parallel
-    let (commit_result, branch_result, url_result) = tokio::join!(
+    let (commit_result, branch_result, repository_url) = tokio::join!(
         run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd),
         run_git_command_with_timeout(&["rev-parse", "--abbrev-ref", "HEAD"], cwd),
-        run_git_command_with_timeout(&["remote", "get-url", "origin"], cwd)
+        get_git_origin_url(cwd)
     );
 
     let mut git_info = GitInfo {
         commit_hash: None,
         branch: None,
-        repository_url: None,
+        repository_url,
     };
 
     // Process commit hash
@@ -104,14 +115,6 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
         if branch != "HEAD" {
             git_info.branch = Some(branch.to_string());
         }
-    }
-
-    // Process repository URL
-    if let Some(output) = url_result
-        && output.status.success()
-        && let Ok(url) = String::from_utf8(output.stdout)
-    {
-        git_info.repository_url = SanitizedGitUrl::try_from(url.trim()).ok();
     }
 
     Some(git_info)

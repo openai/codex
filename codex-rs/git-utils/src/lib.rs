@@ -41,6 +41,7 @@ pub use info::canonicalize_git_remote_url;
 pub use info::collect_git_info;
 pub use info::current_branch_name;
 pub use info::default_branch_name;
+pub use info::get_git_origin_url;
 pub use info::get_git_remote_urls;
 pub use info::get_git_remote_urls_assume_git_repo;
 pub use info::get_git_repo_root;
