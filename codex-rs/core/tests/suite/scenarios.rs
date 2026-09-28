@@ -108,6 +108,10 @@ mod mcp_resource_messages;
 #[path = "scenarios_guardian_agent_messages_tests.rs"]
 mod guardian_agent_messages;
 
+#[cfg(not(target_os = "windows"))]
+#[path = "scenarios_guardian_handoff.rs"]
+mod guardian_handoff;
+
 #[path = "scenarios_guardian_heartbeat.rs"]
 mod guardian_heartbeat;
 

@@ -7,18 +7,16 @@ use codex_protocol::turn_input::TurnStartOptions;
 use core_test_support::responses::mount_sse_once;
 use pretty_assertions::assert_eq;
 
+#[test_case::test_case(Feature::GuardianThreadContext; "existing_projection")]
+#[test_case::test_case(Feature::GuardianRootHandoffContext; "handoff_filter")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn heartbeat_root_projection_uses_latest_turn_skills() -> Result<()> {
+async fn heartbeat_root_projection_uses_latest_turn_skills(feature: Feature) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let test = test_codex()
-        .with_config(|config| {
-            for feature in [
-                Feature::Collab,
-                Feature::MultiAgentV2,
-                Feature::GuardianThreadContext,
-            ] {
-                config.features.enable(feature).unwrap();
+        .with_config(move |config| {
+            for feature in [Feature::Collab, Feature::MultiAgentV2, feature] {
+                config.features.enable(feature).expect("enable feature");
             }
         })
         .build_with_auto_env(&server)
@@ -30,9 +28,12 @@ async fn heartbeat_root_projection_uses_latest_turn_skills() -> Result<()> {
         .thread_extension_data()
         .get_or_init(GuardianReviewEvidence::default);
     let mut first_prompt = String::new();
-    for index in 0..2 {
-        let events = if index == 0 {
-            vec![ev_completed("first-heartbeat")]
+    for index in 0..3 {
+        let events = if index < 2 {
+            vec![
+                ev_assistant_message(&format!("reply-{index}"), &format!("Run {index} finished.")),
+                ev_completed("heartbeat"),
+            ]
         } else {
             vec![
                 ev_function_call_with_namespace(
@@ -45,7 +46,7 @@ async fn heartbeat_root_projection_uses_latest_turn_skills() -> Result<()> {
             ]
         };
         mount_sse_once(&server, sse(events)).await;
-        if index == 1 {
+        if index == 2 {
             mount_completion(&server, root_id, SPAWN_CALL_ID).await;
             mount_sse_once_match(
                 &server,
@@ -95,15 +96,16 @@ async fn heartbeat_root_projection_uses_latest_turn_skills() -> Result<()> {
         .guardian_root_snapshot()
         .await
         .expect("root snapshot");
+    let expected = vec![
+        GuardianRootMessage::RetainedContextScope,
+        GuardianRootMessage::User(first_prompt),
+        GuardianRootMessage::Assistant("Run 0 finished.".to_owned()),
+        GuardianRootMessage::Assistant("Run 1 finished.".to_owned()),
+    ];
+    assert_eq!(snapshot.messages, expected);
     assert_eq!(
-        (snapshot.messages, snapshot.trusted_skill_paths),
-        (
-            vec![
-                GuardianRootMessage::RetainedContextScope,
-                GuardianRootMessage::User(first_prompt)
-            ],
-            vec!["/skills/run-1/SKILL.md".to_owned()]
-        ),
+        snapshot.trusted_skill_paths,
+        vec!["/skills/run-2/SKILL.md".to_owned()]
     );
     mount_sse_once(&server, sse(vec![ev_completed("human-turn")])).await;
     test.submit_text_turn("Stop monitoring.").await?;

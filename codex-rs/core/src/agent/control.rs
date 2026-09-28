@@ -71,6 +71,7 @@ mod interrupt;
 mod legacy;
 mod residency;
 mod resume;
+mod root_handoff;
 mod runtime;
 mod runtime_context;
 mod sender_context;

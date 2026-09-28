@@ -65,6 +65,9 @@ use test_case::test_case;
 use tokio::sync::Notify;
 use tokio::sync::oneshot;
 
+#[path = "guardian_root_handoff.rs"]
+pub(super) mod root_handoff;
+
 #[path = "guardian_heartbeat_authorization.rs"]
 mod heartbeat;
 #[path = "guardian_pending_root_delivery.rs"]
