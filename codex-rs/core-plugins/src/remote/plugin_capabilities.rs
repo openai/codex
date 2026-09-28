@@ -8,7 +8,6 @@ use crate::loader::load_plugin_hooks;
 use crate::loader::load_plugin_mcp_servers_from_manifest_with_format;
 use crate::loader::plugin_skill_roots;
 use crate::manifest::PluginManifestFormat;
-use crate::manifest::load_plugin_manifest_with_format;
 use crate::store::PluginStore;
 use codex_hooks::plugin_hook_declarations;
 use codex_plugin::PluginId;
@@ -31,7 +30,7 @@ impl RemotePluginCapabilities {
         let Some(root) = store.active_plugin_root(plugin_id) else {
             return;
         };
-        let Some(loaded) = load_plugin_manifest_with_format(root.as_path()) else {
+        let Some(loaded) = store.manifest_cache.load(root.as_path()) else {
             return;
         };
         let paths = &loaded.manifest.paths;

@@ -18,13 +18,13 @@ use tokio::sync::Semaphore;
 
 use crate::app_mcp_routing::apply_app_mcp_routing_policy;
 use crate::loader::PluginSkillInventory;
-use crate::loader::load_plugin_apps;
-use crate::loader::load_plugin_mcp_servers;
+use crate::loader::load_plugin_apps_from_manifest;
+use crate::loader::load_plugin_mcp_servers_from_manifest_with_format;
 use crate::loader::load_plugin_skill_inventory;
 use crate::manager::ConfiguredMarketplacePlugin;
 use crate::manager::remote_plugin_install_required_description;
+use crate::manifest::ManifestCache;
 use crate::manifest::PluginManifestFormat;
-use crate::manifest::load_plugin_manifest_with_format;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplacePluginSource;
 
@@ -37,6 +37,7 @@ type ToolSuggestMetadataEntry = Result<Arc<ToolSuggestMetadataFragment>, String>
 /// `PluginsManager` clears these entries alongside its loaded-plugin cache. Current skill config
 /// and auth routing are projected after each lookup and are not part of this cache.
 pub(crate) struct ToolSuggestMetadataCache {
+    manifest_cache: Arc<ManifestCache>,
     state: RwLock<ToolSuggestMetadataCacheState>,
     load_semaphore: Semaphore,
 }
@@ -103,8 +104,9 @@ impl ToolSuggestMetadataFragment {
 }
 
 impl ToolSuggestMetadataCache {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(manifest_cache: Arc<ManifestCache>) -> Self {
         Self {
+            manifest_cache,
             state: RwLock::new(ToolSuggestMetadataCacheState::default()),
             load_semaphore: Semaphore::new(/*permits*/ 1),
         }
@@ -146,6 +148,7 @@ impl ToolSuggestMetadataCache {
 
             let generation = self.generation();
             let entry = load_plugin_metadata(
+                &self.manifest_cache,
                 marketplace_name,
                 plugin,
                 restriction_product,
@@ -196,6 +199,7 @@ impl ToolSuggestMetadataCache {
 }
 
 async fn load_plugin_metadata(
+    manifest_cache: &ManifestCache,
     marketplace_name: &str,
     plugin: &ConfiguredMarketplacePlugin,
     restriction_product: Option<Product>,
@@ -223,7 +227,8 @@ async fn load_plugin_metadata(
     if !plugin_root.as_path().is_dir() {
         return Err("path does not exist or is not a directory".to_string());
     }
-    let loaded_manifest = load_plugin_manifest_with_format(plugin_root.as_path())
+    let loaded_manifest = manifest_cache
+        .load(plugin_root.as_path())
         .ok_or_else(|| "missing or invalid plugin.json".to_string())?;
     let plugin_identity = PluginIdentity {
         plugin_id: plugin_id.as_key(),
@@ -240,17 +245,22 @@ async fn load_plugin_metadata(
         skill_root_loader,
     )
     .await;
-    let mut mcp_server_names =
-        load_plugin_mcp_servers(plugin_root.as_path(), /*auth_mode*/ None)
-            .await
-            .into_keys()
-            .collect::<Vec<_>>();
+    let mut mcp_server_names = load_plugin_mcp_servers_from_manifest_with_format(
+        plugin_root.as_path(),
+        &manifest.paths,
+        /*plugin_policy*/ None,
+        /*plugin_data_root*/ None,
+        loaded_manifest.format,
+    )
+    .await
+    .into_keys()
+    .collect::<Vec<_>>();
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
     let app_declarations = if loaded_manifest.format == PluginManifestFormat::AgentPlugin {
         Vec::new()
     } else {
-        load_plugin_apps(plugin_root.as_path()).await
+        load_plugin_apps_from_manifest(plugin_root.as_path(), &manifest.paths).await
     };
 
     Ok(Arc::new(ToolSuggestMetadataFragment {

@@ -1,4 +1,5 @@
 use crate::command_migration::migrate_plugin_commands;
+use crate::manifest::ManifestCache;
 use crate::manifest::PluginManifest;
 use crate::manifest::PluginManifestFormat;
 use crate::manifest::load_plugin_manifest;
@@ -19,6 +20,7 @@ use std::io;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub use codex_core_plugin_common::installed::DEFAULT_PLUGIN_VERSION;
 pub use codex_core_plugin_common::installed::PLUGINS_CACHE_DIR;
@@ -39,6 +41,7 @@ pub struct PluginInstallResult {
 
 #[derive(Debug, Clone)]
 pub struct PluginStore {
+    pub(crate) manifest_cache: Arc<ManifestCache>,
     codex_home: AbsolutePathBuf,
     root: AbsolutePathBuf,
     data_root: AbsolutePathBuf,
@@ -91,6 +94,7 @@ impl PluginStore {
             .map_err(|err| PluginStoreError::io("failed to resolve Codex home", err))?;
 
         Ok(Self {
+            manifest_cache: Arc::new(ManifestCache::default()),
             codex_home,
             root,
             data_root,

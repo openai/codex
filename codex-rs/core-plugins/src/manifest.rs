@@ -10,6 +10,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+
+mod manifest_cache;
+pub(crate) use manifest_cache::ManifestCache;
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 
@@ -165,41 +168,8 @@ pub fn is_agent_plugin_manifest(plugin_root: &Path) -> bool {
 }
 
 pub(crate) fn load_plugin_manifest_with_format(plugin_root: &Path) -> Option<LoadedPluginManifest> {
-    let manifest_path = find_plugin_manifest_path(plugin_root)?;
-    let contents = fs::read_to_string(&manifest_path).ok()?;
-    let is_agent_plugin = manifest_path == plugin_root.join(AGENT_PLUGIN_MANIFEST_RELATIVE_PATH);
-    let overlay = if is_agent_plugin {
-        let overlay_path = plugin_root.join(".codex-plugin/plugin.json");
-        fs::read_to_string(&overlay_path)
-            .ok()
-            .map(|contents| (overlay_path, contents))
-    } else {
-        None
-    };
-    match parse_resolved_plugin_manifest(
-        plugin_root,
-        &manifest_path,
-        &contents,
-        overlay
-            .as_ref()
-            .map(|(path, contents)| (path.as_path(), contents.as_str())),
-    ) {
-        Ok(manifest) => Some(LoadedPluginManifest {
-            manifest,
-            format: if is_agent_plugin {
-                PluginManifestFormat::AgentPlugin
-            } else {
-                PluginManifestFormat::Legacy
-            },
-        }),
-        Err(err) => {
-            tracing::warn!(
-                path = %manifest_path.display(),
-                "failed to parse plugin manifest: {err}"
-            );
-            None
-        }
-    }
+    // TODO: accept an owner-provided cache when these standalone loaders join a repeated workflow.
+    ManifestCache::disabled().load(plugin_root)
 }
 
 pub(crate) fn load_plugin_command_paths(plugin_root: &Path) -> io::Result<Option<Vec<PathBuf>>> {
@@ -220,15 +190,23 @@ pub(crate) fn load_plugin_command_paths(plugin_root: &Path) -> io::Result<Option
         .map(Some)
 }
 
+// TODO: share an owner-provided cache if inline fallback manifests are parsed repeatedly.
 pub(crate) fn parse_plugin_manifest(
     plugin_root: &Path,
     manifest_path: &Path,
     contents: &str,
 ) -> Result<PluginManifest, serde_json::Error> {
-    parse_resolved_plugin_manifest(plugin_root, manifest_path, contents, /*overlay*/ None)
+    parse_resolved_plugin_manifest(
+        &ManifestCache::disabled(),
+        plugin_root,
+        manifest_path,
+        contents,
+        /*overlay*/ None,
+    )
 }
 
 fn parse_resolved_plugin_manifest(
+    cache: &ManifestCache,
     plugin_root: &Path,
     manifest_path: &Path,
     contents: &str,
@@ -245,13 +223,22 @@ fn parse_resolved_plugin_manifest(
                 .map_err(serde_json::Error::io)
         })
         .transpose()?;
-    parse_resolved_plugin_manifest_uri(
-        &plugin_root_uri,
-        &manifest_path_uri,
-        contents,
-        overlay.as_ref().map(|(path, contents)| (path, *contents)),
-    )?
-    .try_map_resources(|path| path.to_abs_path().map_err(serde_json::Error::io))
+    cache
+        .parse(
+            &plugin_root_uri,
+            &manifest_path_uri,
+            contents,
+            overlay.as_ref().map(|(path, contents)| (path, *contents)),
+            || {
+                parse_resolved_plugin_manifest_uri(
+                    &plugin_root_uri,
+                    &manifest_path_uri,
+                    contents,
+                    overlay.as_ref().map(|(path, contents)| (path, *contents)),
+                )
+            },
+        )?
+        .try_map_resources(|path| path.to_abs_path().map_err(serde_json::Error::io))
 }
 
 pub fn parse_plugin_manifest_uri(

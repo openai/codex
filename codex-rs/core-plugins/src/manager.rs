@@ -38,8 +38,6 @@ use crate::loader::refresh_non_curated_plugin_cache_force_reinstall_detailed;
 use crate::loader::remote_installed_plugins_to_config;
 use crate::manifest::PluginManifestFormat;
 use crate::manifest::PluginManifestInterface;
-use crate::manifest::load_plugin_manifest;
-use crate::manifest::load_plugin_manifest_with_format;
 use crate::marketplace::MarketplaceError;
 use crate::marketplace::MarketplaceInterface;
 use crate::marketplace::MarketplaceListError;
@@ -52,7 +50,7 @@ use crate::marketplace::ResolvedMarketplacePlugin;
 use crate::marketplace::find_installable_marketplace_plugin;
 use crate::marketplace::find_marketplace_plugin;
 use crate::marketplace::home_dir;
-use crate::marketplace::list_marketplaces_with_home;
+use crate::marketplace::list_marketplaces_with_cache;
 use crate::marketplace::plugin_interface_with_marketplace_category;
 use crate::marketplace_policy::MarketplacePolicy;
 use crate::marketplace_policy::configured_plugins_from_stack;
@@ -677,9 +675,12 @@ impl PluginsManager {
         // This assumes a single CODEX_HOME is only used by one product.
         let remote_installed_plugin_bundle_sync_gate =
             crate::remote::remote_installed_plugin_bundle_sync_gate(&codex_home);
+        let store = PluginStore::new(codex_home.clone());
+        let tool_suggest_metadata_cache =
+            ToolSuggestMetadataCache::new(Arc::clone(&store.manifest_cache));
         Self {
-            codex_home: codex_home.clone(),
-            store: PluginStore::new(codex_home),
+            codex_home,
+            store,
             featured_plugin_ids_cache: RwLock::new(None),
             recommended_plugins_cache: RwLock::new(HashMap::new()),
             recommended_plugins_refreshes: RwLock::new(HashMap::new()),
@@ -695,7 +696,7 @@ impl PluginsManager {
             loaded_plugins_cache: Mutex::new(LoadedPluginsCache::default()),
             loaded_plugins_load_semaphore: Semaphore::new(/*permits*/ 1),
             skill_root_loader,
-            tool_suggest_metadata_cache: ToolSuggestMetadataCache::new(),
+            tool_suggest_metadata_cache,
             remote_installed_plugins_cache: RwLock::new(RemoteInstalledPluginsCache::default()),
             remote_installed_plugin_bundle_sync_gate,
             remote_installed_plugins_cache_refresh_state: RwLock::new(
@@ -1147,6 +1148,7 @@ impl PluginsManager {
                     plugin_id,
                     &plugin_root,
                     self.skill_root_loader.as_ref(),
+                    &self.store.manifest_cache,
                 )
                 .await
             }
@@ -1168,6 +1170,7 @@ impl PluginsManager {
                     plugin_id,
                     &plugin_root,
                     self.skill_root_loader.as_ref(),
+                    &self.store.manifest_cache,
                 )
                 .await
             }
@@ -2425,7 +2428,11 @@ impl PluginsManager {
                             && plugin.source.is_install_materialized()
                             && let Some(plugin_id) = plugin_id.as_ref()
                             && let Some(plugin_root) = self.store.active_plugin_root(plugin_id)
-                            && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
+                            && let Some(manifest) = self
+                                .store
+                                .manifest_cache
+                                .load(plugin_root.as_path())
+                                .map(|loaded| loaded.manifest)
                         {
                             local_version = manifest.version.clone();
                             let marketplace_category = interface
@@ -2656,7 +2663,7 @@ impl PluginsManager {
         }
         let loaded_manifest =
             if codex_utils_plugins::find_plugin_manifest_path(source_path.as_path()).is_some() {
-                load_plugin_manifest_with_format(source_path.as_path())
+                self.store.manifest_cache.load(source_path.as_path())
             } else {
                 plugin
                     .manifest_fallback
@@ -3600,7 +3607,8 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         roots: &[AbsolutePathBuf],
     ) -> Result<MarketplaceListOutcome, MarketplaceError> {
-        let mut outcome = list_marketplaces_with_home(roots, home_dir().as_deref())?;
+        let mut outcome =
+            list_marketplaces_with_cache(roots, home_dir().as_deref(), &self.store.manifest_cache)?;
         let policy = MarketplacePolicy::from_requirements(config.config_layer_stack.requirements());
         outcome.marketplaces.retain(|marketplace| {
             policy

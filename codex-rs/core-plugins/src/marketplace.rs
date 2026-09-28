@@ -1,5 +1,5 @@
+use crate::manifest::ManifestCache;
 use crate::manifest::PluginManifestInterface;
-use crate::manifest::load_plugin_manifest;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_git_utils::get_git_repo_root;
@@ -244,6 +244,7 @@ impl MarketplaceError {
     }
 }
 
+// TODO: thread an owner-provided manifest cache through standalone install/read workflows.
 pub fn find_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
@@ -256,9 +257,12 @@ pub fn find_marketplace_plugin(
             continue;
         }
 
-        if let Some(plugin) =
-            resolve_marketplace_plugin_entry(marketplace_path, &marketplace_name, plugin)?
-        {
+        if let Some(plugin) = resolve_marketplace_plugin_entry(
+            marketplace_path,
+            &marketplace_name,
+            plugin,
+            &ManifestCache::disabled(),
+        )? {
             return Ok(plugin);
         }
     }
@@ -368,25 +372,35 @@ fn marketplace_root_from_layout(marketplace_path: &Path, relative_path: &str) ->
     Some(current.to_path_buf())
 }
 
+// TODO: allow standalone callers to share a cache across marketplace loads.
 pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
+    load_marketplace_with_cache(path, &ManifestCache::disabled())
+}
+
+fn load_marketplace_with_cache(
+    path: &AbsolutePathBuf,
+    manifest_cache: &ManifestCache,
+) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
 
     for plugin in marketplace.plugins {
-        let plugin = match resolve_marketplace_plugin_entry(path, &marketplace.name, plugin) {
-            Ok(Some(plugin)) => plugin,
-            Ok(None) => continue,
-            Err(MarketplaceError::InvalidPlugin(message)) => {
-                warn!(
-                    path = %path.display(),
-                    marketplace = %marketplace.name,
-                    error = %message,
-                    "skipping invalid marketplace plugin"
-                );
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
+        let plugin =
+            match resolve_marketplace_plugin_entry(path, &marketplace.name, plugin, manifest_cache)
+            {
+                Ok(Some(plugin)) => plugin,
+                Ok(None) => continue,
+                Err(MarketplaceError::InvalidPlugin(message)) => {
+                    warn!(
+                        path = %path.display(),
+                        marketplace = %marketplace.name,
+                        error = %message,
+                        "skipping invalid marketplace plugin"
+                    );
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
 
         let manifest_fallback = plugin
             .manifest_fallback
@@ -420,15 +434,24 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
     })
 }
 
+// TODO: pass an owner-provided cache from remaining callers; the manager already does.
 #[doc(hidden)]
 pub fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
 ) -> Result<MarketplaceListOutcome, MarketplaceError> {
+    list_marketplaces_with_cache(additional_roots, home_dir, &ManifestCache::disabled())
+}
+
+pub(crate) fn list_marketplaces_with_cache(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+    manifest_cache: &ManifestCache,
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
     let mut outcome = MarketplaceListOutcome::default();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        match load_marketplace(&marketplace_path) {
+        match load_marketplace_with_cache(&marketplace_path, manifest_cache) {
             Ok(marketplace) => outcome.marketplaces.push(marketplace),
             Err(err) => {
                 warn!(
@@ -508,6 +531,7 @@ fn resolve_marketplace_plugin_entry(
     marketplace_path: &AbsolutePathBuf,
     marketplace_name: &str,
     plugin: RawMarketplaceManifestPlugin,
+    manifest_cache: &ManifestCache,
 ) -> Result<Option<ResolvedMarketplacePlugin>, MarketplaceError> {
     let RawMarketplaceManifestPlugin {
         name,
@@ -525,7 +549,9 @@ fn resolve_marketplace_plugin_entry(
     let manifest = match &source {
         MarketplacePluginSource::Local { path } => {
             if codex_utils_plugins::find_plugin_manifest_path(path.as_path()).is_some() {
-                load_plugin_manifest(path.as_path())
+                manifest_cache
+                    .load(path.as_path())
+                    .map(|loaded| loaded.manifest)
             } else if manifest_fallback.has_metadata {
                 manifest_fallback.parse_for_plugin_root(path.as_path())
             } else {

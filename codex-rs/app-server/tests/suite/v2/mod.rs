@@ -89,6 +89,7 @@ mod permission_profile_list;
 mod plan_item;
 mod plugin_install;
 mod plugin_list;
+mod plugin_manifest_cache;
 mod plugin_read;
 mod plugin_reconcile;
 mod plugin_search;
