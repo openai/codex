@@ -132,7 +132,7 @@ fn file_exists(path: &std::path::Path) -> Option<PathBuf> {
     }
 }
 
-// Store PowerShell can be inaccessible to the elevated sandbox account;
+// Store PowerShell cannot run under MXC and can be inaccessible to the elevated sandbox account;
 // WindowsApps also contains valid Codex frameworks.
 fn is_inaccessible_windows_apps_powershell_path(path: &std::path::Path) -> bool {
     path.as_os_str()
@@ -156,7 +156,7 @@ fn targets_inaccessible_windows_apps_powershell(path: &std::path::Path) -> bool 
             .is_some_and(|resolved| is_inaccessible_windows_apps_powershell_path(&resolved))
 }
 
-fn is_elevated_sandbox_compatible_powershell_path(path: &std::path::Path) -> bool {
+fn is_windows_sandbox_compatible_powershell_path(path: &std::path::Path) -> bool {
     if !path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
@@ -167,19 +167,19 @@ fn is_elevated_sandbox_compatible_powershell_path(path: &std::path::Path) -> boo
     !targets_inaccessible_windows_apps_powershell(path)
 }
 
-fn get_elevated_sandbox_compatible_powershell_path(
+fn get_windows_sandbox_compatible_powershell_path(
     binary_name: &str,
     fallback_paths: &[&str],
 ) -> Option<PathBuf> {
     if let Ok(mut paths) = which::which_all(binary_name)
-        && let Some(path) = paths.find(|path| is_elevated_sandbox_compatible_powershell_path(path))
+        && let Some(path) = paths.find(|path| is_windows_sandbox_compatible_powershell_path(path))
     {
         return Some(path);
     }
 
     for path in fallback_paths {
         let path = std::path::Path::new(path);
-        if is_elevated_sandbox_compatible_powershell_path(path)
+        if is_windows_sandbox_compatible_powershell_path(path)
             && let Some(path) = file_exists(path)
         {
             return Some(path);
@@ -281,21 +281,21 @@ fn get_powershell_shell() -> Option<DetectedShell> {
 }
 
 /// Returns a replacement only when shell_path targets Store PowerShell and
-/// an elevated sandbox-compatible PowerShell executable can be discovered.
+/// an unpackaged PowerShell executable can be discovered.
 ///
-/// The caller owns the elevated-sandbox policy decision. Normal shell discovery
+/// The caller decides whether the sandbox backend requires a fallback. Normal shell discovery
 /// intentionally keeps the user's ordered PATH selection unchanged.
-pub fn fallback_powershell_shell_for_elevated_windows_sandbox(
+pub fn fallback_powershell_shell_for_windows_sandbox(
     shell_path: &std::path::Path,
 ) -> Option<DetectedShell> {
     if !cfg!(windows) || !targets_inaccessible_windows_apps_powershell(shell_path) {
         return None;
     }
 
-    let shell_path = get_elevated_sandbox_compatible_powershell_path("pwsh", PWSH_FALLBACK_PATHS)
+    let shell_path = get_windows_sandbox_compatible_powershell_path("pwsh", PWSH_FALLBACK_PATHS)
         .or_else(|| {
-        get_elevated_sandbox_compatible_powershell_path("powershell", POWERSHELL_FALLBACK_PATHS)
-    })?;
+            get_windows_sandbox_compatible_powershell_path("powershell", POWERSHELL_FALLBACK_PATHS)
+        })?;
 
     Some(DetectedShell {
         shell_type: ShellType::PowerShell,
@@ -385,7 +385,7 @@ mod tests {
             r"C:\PROGRAM FILES\WINDOWSAPPS\MICROSOFT.POWERSHELL\PWSH.EXE",
             r"C:\portable\pwsh.cmd",
         ] {
-            assert!(!is_elevated_sandbox_compatible_powershell_path(
+            assert!(!is_windows_sandbox_compatible_powershell_path(
                 std::path::Path::new(path)
             ));
         }
@@ -400,7 +400,7 @@ mod tests {
             r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
             r"C:\portable\NotWindowsApps\pwsh.EXE",
         ] {
-            assert!(is_elevated_sandbox_compatible_powershell_path(
+            assert!(is_windows_sandbox_compatible_powershell_path(
                 std::path::Path::new(path)
             ));
         }
@@ -421,7 +421,7 @@ mod tests {
             PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
         ]
         .into_iter()
-        .find(|path| is_elevated_sandbox_compatible_powershell_path(path));
+        .find(|path| is_windows_sandbox_compatible_powershell_path(path));
 
         assert_eq!(found, Some(portable));
     }
