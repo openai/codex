@@ -1432,6 +1432,15 @@ async fn replay_only_thread_keeps_restored_queue_visible() {
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
     let session = test_thread_session(thread_id, test_path_buf("/tmp/project"));
+    app.thread_event_channels.insert(
+        thread_id,
+        ThreadEventChannel::new_with_session(
+            THREAD_EVENT_CHANNEL_CAPACITY,
+            session.clone(),
+            Vec::new(),
+        ),
+    );
+    app.activate_thread_channel(thread_id).await;
     app.chat_widget.handle_thread_session(session.clone());
     app.chat_widget.handle_server_notification(
         turn_started_notification(thread_id, "turn-1"),
@@ -1445,10 +1454,11 @@ async fn replay_only_thread_keeps_restored_queue_visible() {
         .apply_external_edit("queued follow-up".to_string());
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let input_state = app
+    let mut input_state = app
         .chat_widget
         .capture_thread_input_state()
         .expect("expected queued follow-up state");
+    input_state.reconnect_pending = true;
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
@@ -1621,13 +1631,24 @@ async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up()
         /*replay_kind*/ None,
     );
     app.chat_widget
+        .apply_external_edit("accepted steer".to_string());
+    app.chat_widget
+        .handle_key_event(KeyEvent::from(KeyCode::Enter));
+    app.chat_widget
         .apply_external_edit("queued follow-up".to_string());
     app.chat_widget
         .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
-    let input_state = app
+    let mut input_state = app
         .chat_widget
         .capture_thread_input_state()
         .expect("expected queued follow-up state");
+    let client_id = input_state
+        .pending_steers
+        .front()
+        .unwrap()
+        .client_id
+        .clone();
+    input_state.reconnect_pending = true;
 
     let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
         make_chatwidget_manual_with_sender().await;
@@ -1641,6 +1662,21 @@ async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up()
             session: None,
             turns: Vec::new(),
             events: vec![
+                ThreadBufferedEvent::Notification(Box::new(ServerNotification::ItemCompleted(
+                    codex_app_server_protocol::ItemCompletedNotification {
+                        thread_id: thread_id.to_string(),
+                        turn_id: "turn-1".into(),
+                        completed_at_ms: 0,
+                        item: ThreadItem::UserMessage {
+                            id: "accepted".into(),
+                            client_id: Some(client_id),
+                            content: vec![UserInput::Text {
+                                text: "accepted steer".into(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                    },
+                ))),
                 ThreadBufferedEvent::Notification(Box::new(turn_completed_notification(
                     thread_id,
                     "turn-0",

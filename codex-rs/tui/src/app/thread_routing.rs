@@ -1878,10 +1878,38 @@ impl App {
             self.chat_widget
                 .remember_realtime_delegated_reasoning_turn(turn_id);
         }
+        let confirmed_message_ids = snapshot
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.items)
+            .chain(snapshot.events.iter().filter_map(|event| {
+                let ThreadBufferedEvent::Notification(notification) = event else {
+                    return None;
+                };
+                if let ServerNotification::ItemStarted(notification) = notification.as_ref() {
+                    Some(&notification.item)
+                } else if let ServerNotification::ItemCompleted(notification) =
+                    notification.as_ref()
+                {
+                    Some(&notification.item)
+                } else {
+                    None
+                }
+            }))
+            .filter_map(|item| {
+                if let ThreadItem::UserMessage { client_id, .. } = item {
+                    client_id.clone()
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         let recovered_input = snapshot
             .input_state
             .as_ref()
-            .is_some_and(|input| input.recovered_queue)
+            .is_some_and(|input| {
+                input.recovered_queue || input.reconnect_pending || input.has_unconfirmed_messages()
+            })
             .then(|| snapshot.input_state.take())
             .flatten();
         self.chat_widget.restore_thread_input_state(
@@ -1908,10 +1936,12 @@ impl App {
             self.app_event_tx
                 .send(AppEvent::EndInitialHistoryReplayBuffer);
         }
-        if recovered_input.is_some() {
+        let recovered = recovered_input.is_some();
+        if recovered {
             let mode = has_resumed_collaboration_mode
                 .then(|| self.chat_widget.effective_collaboration_mode());
-            self.chat_widget.restore_reconnected_input(recovered_input);
+            self.chat_widget
+                .restore_reconnected_input(recovered_input, &confirmed_message_ids);
             if let Some(mode) = mode {
                 self.chat_widget.set_effective_collaboration_mode(mode);
             }

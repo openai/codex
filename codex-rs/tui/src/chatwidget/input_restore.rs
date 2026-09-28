@@ -584,7 +584,9 @@ impl ChatWidget {
                 .queued_user_message_history_records
                 .clone(),
             recovered_queue: self.input_queue.recovered_queue,
+            reconnect_pending: false,
             user_turn_pending_start: self.input_queue.user_turn_pending_start,
+            pending_user_message_client_id: self.input_queue.pending_user_message_client_id.clone(),
             submit_pending_steers_after_interrupt: self
                 .input_queue
                 .submit_pending_steers_after_interrupt,
@@ -618,6 +620,8 @@ impl ChatWidget {
             );
             self.input_queue.user_turn_pending_start =
                 preserve_in_flight_turn && input_state.user_turn_pending_start;
+            self.input_queue.pending_user_message_client_id =
+                input_state.pending_user_message_client_id;
             self.input_queue.submit_pending_steers_after_interrupt =
                 preserve_in_flight_turn && input_state.submit_pending_steers_after_interrupt;
             self.update_collaboration_mode_indicator();
@@ -634,6 +638,11 @@ impl ChatWidget {
                 for pending in pending_steers.into_iter().rev() {
                     queued_user_messages.push_front(QueuedUserMessage {
                         source: pending.source,
+                        delivery: if input_state.reconnect_pending {
+                            MessageDelivery::Unconfirmed(Some(pending.client_id))
+                        } else {
+                            MessageDelivery::Unsent
+                        },
                         ..QueuedUserMessage::from(pending.user_message)
                     });
                     queued_user_message_history_records.push_front(pending.history_record);

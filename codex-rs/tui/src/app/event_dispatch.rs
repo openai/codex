@@ -574,7 +574,7 @@ impl App {
                             {
                                 Ok(()) => {
                                     // Keep local input without replacing the fork's running state.
-                                    self.chat_widget.restore_reconnected_input(retained_input);
+                                    self.chat_widget.restore_reconnected_input(retained_input, &[]);
                                     if let Some(err) = name_error {
                                         self.chat_widget.add_error_message(err);
                                     }

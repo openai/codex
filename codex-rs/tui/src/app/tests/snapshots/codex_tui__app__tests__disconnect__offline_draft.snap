@@ -2,8 +2,10 @@
 source: tui/src/app/tests/disconnect_tests.rs
 expression: "format!(\"{}\\n{}\",\nlines_to_single_string(&app.transcript_cells.last().unwrap().display_lines(80)),\nrender_bottom_popup(&app.chat_widget, 80))"
 ---
-■ Connection lost. Attempting to reconnect…
-• Reconnecting to app-server… (0s)
+
+› only once
+
+• Reconnecting to server… (0s)
 
 • Queued follow-up inputs
   ↳ queued before disconnect

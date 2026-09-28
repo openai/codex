@@ -402,6 +402,7 @@ use self::turn_lifecycle::TurnLifecycleState;
 mod usage;
 mod user_messages;
 mod working_directory;
+use self::user_messages::MessageDelivery;
 use self::user_messages::PendingSteer;
 #[cfg(test)]
 use self::user_messages::PendingSteerCompareKey;
@@ -1349,6 +1350,14 @@ impl ChatWidget {
             && self.last_rendered_user_message_display.as_ref() != Some(&display)
         {
             self.on_user_message_display(display);
+        }
+        if let Some(client_id) = client_id
+            && self.input_queue.queued_user_messages.iter().any(|message| {
+                matches!(&message.delivery, MessageDelivery::Unconfirmed(Some(id)) if id == client_id)
+            })
+        {
+            self.reconcile_recovered_messages(&[client_id.to_string()]);
+            self.maybe_send_next_queued_input();
         }
     }
 

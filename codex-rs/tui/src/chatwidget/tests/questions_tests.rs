@@ -363,7 +363,7 @@ async fn reconnect_preserves_buffered_question_answer_source() {
 
     let (mut restored, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     restored.thread_id = Some(ThreadId::new());
-    restored.restore_reconnected_input(state);
+    restored.restore_reconnected_input(state, &[]);
     assert_eq!(
         restored
             .input_queue
@@ -801,7 +801,7 @@ async fn question_drafts_survive_navigation_and_snapshot_replay() {
         Some(ReplayKind::ThreadSnapshot),
     );
     assert_eq!(question_count(&chat), 1);
-    chat.restore_reconnected_input(saved);
+    chat.restore_reconnected_input(saved, &[]);
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("second draft"));
     chat.pause_unavailable_thread();
     chat.handle_question_key(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL));

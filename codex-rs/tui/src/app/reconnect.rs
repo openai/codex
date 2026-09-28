@@ -1,6 +1,6 @@
 //! TUI-only out-of-process reconnection. Each attempt initializes a fresh client and rejoins existing
-//! threads using ordinary resume/history semantics; no user operation is retried.
-//! Offline input and old async completions are quarantined.
+//! threads using ordinary resume/history semantics. Confirmed submissions are reconciled before
+//! unsent queues resume; uncertain submissions and old async completions remain quarantined.
 
 use super::*;
 use crate::app_server_session::ResumeModelSettings;
@@ -118,7 +118,7 @@ pub(super) async fn reconnect(
         }
         // Transport errors can contain endpoint credentials. Do not render or log them.
     }
-    color_eyre::eyre::bail!("app-server session could not be restored")
+    color_eyre::eyre::bail!("Server connection could not be restored")
 }
 
 impl App {
@@ -261,7 +261,7 @@ impl App {
         let displayed = self.current_displayed_thread_id();
         let mut input = self.chat_widget.capture_thread_input_state();
         if let Some(input) = input.as_mut() {
-            input.recovered_queue = true;
+            input.reconnect_pending = true;
         }
         self.store_active_thread_receiver().await;
         // Old request handles stay attached to the dead connection. Rotating the event channel
@@ -347,7 +347,7 @@ impl App {
         self.agents_overview.request_id = None;
         self.agents_overview.refresh_pending = false;
         for input in self.agents_overview.input_states.values_mut() {
-            input.recovered_queue = true;
+            input.reconnect_pending = true;
         }
         self.pending_startup_thread_start = false;
         // Move cached UI state into fresh channels. Old producers retain the old sender/store,
@@ -370,7 +370,7 @@ impl App {
                 .buffer
                 .retain(|event| matches!(event, ThreadBufferedEvent::Notification(_)));
             if let Some(input) = store.input_state.as_mut() {
-                input.recovered_queue = true;
+                input.reconnect_pending = true;
             }
             *replacement.store.lock().await = store;
             *channel = replacement;
@@ -378,7 +378,7 @@ impl App {
         if let Some(id) = self.current_displayed_thread_id()
             && let Some(mut input) = input.clone()
         {
-            input.recovered_queue = true;
+            input.reconnect_pending = true;
             self.agents_overview.input_states.insert(id, input);
         }
         if let Some(mut started) = thread {
@@ -442,7 +442,7 @@ impl App {
                 /*initial_user_message*/ None,
             );
             self.replace_chat_widget(ChatWidget::new_with_app_event(init));
-            self.chat_widget.restore_reconnected_input(input);
+            self.chat_widget.restore_reconnected_input(input, &[]);
         }
         // Discover tasks whose notifications were missed, without clearing retained rows.
         // A hidden overview performs this discovery when it is next opened.
@@ -485,9 +485,9 @@ impl App {
             );
         }
         self.feedback_audience = bootstrap.feedback_audience;
-        self.chat_widget.add_info_message(
-            "Reconnected. No input was resent. Review uncertain submissions before retrying; recovered queues remain paused.".into(), /*hint*/ None,
-        );
+        if displayed.is_some_and(|id| !self.thread_unavailable(id)) {
+            self.chat_widget.maybe_send_next_queued_input();
+        }
         let connected_notice_key = crate::status::remote_connection::server_version_notice_key(
             &self.app_server_target,
             app_server.server_codex_home(),
