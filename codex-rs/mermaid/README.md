@@ -8,7 +8,7 @@ production dependency is needed.
 
 | Family | Supported syntax |
 | --- | --- |
-| `flowchart`, `graph` | TD/TB, BT, LR, RL; rectangle `[label]`, decision `{label}`, and stadium `([label])` nodes; directed and labeled `-->` edges; chains, branches, merges, loops |
+| `flowchart`, `graph` | TD/TB (default), BT, LR, RL; rectangle `[label]`, decision `{label}`, and stadium `([label])` nodes; solid `-->`/`---`/`<-->` and dashed `-.->`/`-.-`/`<-.->` edges; pipe labels and spaced directed infix labels (`-- text -->`, `-. text .->`); `&` fan-out/fan-in, chains, branches, merges, loops |
 | `sequenceDiagram` | Implicit participants, `participant`/`actor`, aliases, `->`, `->>`, `-->`, `-->>`, `-x`, `--x`, self-messages, `Note over A[,B]`, nested `loop`/`alt`/`opt`/`critical`/`break`, one labeled `else` per `alt` |
 | `stateDiagram-v2`, `stateDiagram` | Flat states, `state "label" as ID`, descriptions, directed transitions with optional labels, initial/final `[*]`, direction declarations |
 | `classDiagram` | `class ID`, multiline member bodies, `ID : member`, solid/dashed links, association, inheritance, composition, aggregation, dependency, realization, quoted endpoint cardinalities, relationship labels, direction declarations |
@@ -59,8 +59,8 @@ named participants. States use separate `● initial` and `◎ final` nodes.
 
 ## Limits and evaluation
 
-All inputs are limited to 16 KiB. Graphs allow 16 nodes, 24 edges, and 16 members per
-node. Sequences allow 8 participants, 64 events (including fragment boundaries),
+All inputs are limited to 16 KiB. Graphs allow 16 nodes, 24 edges (after expanding
+`&` groups), and 16 members per node. Each `&` group allows at most 24 node references. Sequences allow 8 participants, 64 events (including fragment boundaries),
 and 4 fragment levels. Source labels and identifiers are limited to 40 display
 cells/ASCII bytes respectively. Rendered canvases are capped at 65,536 cells,
 independent of the caller's maximum width. The library performs no I/O.
