@@ -1,4 +1,6 @@
-//! Prepare file citations once, then feed them to the ordinary Markdown link renderer.
+//! Render file citations as links and follow-up directives as labels.
+//!
+//! Preserve source offsets and literal Markdown boundaries for streaming and completed messages.
 
 use super::local_links::extract_colon_location_suffix;
 use super::local_links::is_local_path_like_link;
@@ -16,21 +18,48 @@ use std::borrow::Cow;
 use std::ops::Range;
 use std::path::Path;
 
-/// Offset-preserving Markdown plus the original, fully parsed citation metadata.
-pub(super) struct FileCitations<'a> {
-    input: &'a str,
-    pub(super) markdown: Cow<'a, str>,
-    citations: Vec<(Range<usize>, AssistantDirective<'a>)>,
+/// Preserve source Markdown when copying, replacing only recognized follow-up directives.
+pub(crate) fn followup_labels(input: &str) -> Cow<'_, str> {
+    if !input.contains(":codex-followup[") {
+        return Cow::Borrowed(input);
+    }
+    let prepared = InlineDirectives::new(
+        input,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+    );
+    let mut copied = String::new();
+    let mut offset = 0;
+    for (range, directive) in prepared.directives {
+        if directive.name == "codex-followup"
+            && let Some(label) = directive.label
+        {
+            copied.push_str(&input[offset..range.start]);
+            copied.push_str(label);
+            offset = range.end;
+        }
+    }
+    if offset == 0 {
+        return Cow::Borrowed(input);
+    }
+    copied.push_str(&input[offset..]);
+    Cow::Owned(copied)
 }
 
-impl<'a> FileCitations<'a> {
+/// Offset-preserving Markdown plus the original, fully parsed directive metadata.
+pub(super) struct InlineDirectives<'a> {
+    input: &'a str,
+    pub(super) markdown: Cow<'a, str>,
+    directives: Vec<(Range<usize>, AssistantDirective<'a>)>,
+}
+
+impl<'a> InlineDirectives<'a> {
     pub(super) fn new(input: &'a str, options: Options) -> Self {
         let mut prepared = Self {
             input,
             markdown: Cow::Borrowed(input),
-            citations: Vec::new(),
+            directives: Vec::new(),
         };
-        if !input.contains("codex-file-citation") {
+        if !input.contains("codex-file-citation") && !input.contains(":codex-followup[") {
             return prepared;
         }
 
@@ -55,8 +84,9 @@ impl<'a> FileCitations<'a> {
         let mut literal_ranges = literal_ranges.into_iter().peekable();
 
         let mut directive_end = 0;
-        // Share the allowance across offsets and quote modes: malformed retries must stay linear.
-        let mut scan_budget = input.len().saturating_mul(/*rhs*/ 4);
+        // Share separate preferred/fallback allowances across offsets, so fallback retries
+        // cannot starve later preferred parses. Both allowances stay proportional to input size.
+        let mut scan_budget = [input.len().saturating_mul(/*rhs*/ 4); 2];
         for (start, _) in input.match_indices(':') {
             while literal_ranges.next_if(|range| range.end <= start).is_some() {}
             if start < directive_end
@@ -77,9 +107,14 @@ impl<'a> FileCitations<'a> {
             } else {
                 [QuoteEscaping::Backslash, QuoteEscaping::Literal]
             };
-            let Some(directive) = escaping.into_iter().find_map(|escaping| {
-                parse_assistant_directive_with_budget(source, escaping, &mut scan_budget)
-            }) else {
+            let Some(directive) =
+                escaping
+                    .into_iter()
+                    .zip(&mut scan_budget)
+                    .find_map(|(escaping, remaining)| {
+                        parse_assistant_directive_with_budget(source, escaping, remaining)
+                    })
+            else {
                 continue;
             };
             let end = start + directive.raw.len();
@@ -91,18 +126,24 @@ impl<'a> FileCitations<'a> {
                 .count()
                 % 2
                 != 0
-                || directive.name != "codex-file-citation"
-                || directive
-                    .attributes
-                    .get("path")
-                    .is_none_or(|path| path.is_empty())
+                || match directive.name {
+                    "codex-file-citation" => directive
+                        .attributes
+                        .get("path")
+                        .is_none_or(|path| path.is_empty()),
+                    "codex-followup" => {
+                        !directive.raw.starts_with(":codex-followup[")
+                            || directive.label.is_none_or(|label| label.trim().is_empty())
+                    }
+                    _ => true,
+                }
             {
                 continue;
             }
             // Mask the interior without moving offsets or changing Markdown delimiter flanking.
             let markdown = prepared.markdown.to_mut();
             markdown.replace_range(start + 1..end - 1, &"x".repeat(end - start - 2));
-            prepared.citations.push((start..end, directive));
+            prepared.directives.push((start..end, directive));
         }
         prepared
     }
@@ -113,24 +154,24 @@ impl<'a> FileCitations<'a> {
         events: impl Iterator<Item = (Event<'s>, Range<usize>)>,
         cwd: Option<&'s Path>,
     ) -> impl Iterator<Item = (Event<'s>, Range<usize>)> {
-        let mut citations = self.citations.iter().peekable();
+        let mut directives = self.directives.iter().peekable();
         events.flat_map(move |(event, range)| {
-            while citations
+            while directives
                 .next_if(|(span, _)| span.end <= range.start)
                 .is_some()
             {}
             let Event::Text(text) = event else {
                 return Either::Left(std::iter::once((event, range)));
             };
-            if citations
+            if directives
                 .peek()
                 .is_none_or(|(span, _)| span.start >= range.end)
             {
                 return Either::Left(std::iter::once((Event::Text(text), range)));
             }
-            // Never apply source offsets to entity-decoded text or a partial citation.
+            // Never apply source offsets to entity-decoded text or a partial directive.
             if text.as_ref() != &self.markdown[range.clone()]
-                || citations
+                || directives
                     .peek()
                     .is_some_and(|(span, _)| span.start < range.start || span.end > range.end)
             {
@@ -140,13 +181,39 @@ impl<'a> FileCitations<'a> {
 
             let mut events = Vec::new();
             let mut offset = range.start;
-            while let Some((span, directive)) = citations.next_if(|(span, _)| span.end <= range.end)
+            while let Some((span, directive)) =
+                directives.next_if(|(span, _)| span.end <= range.end)
             {
                 if offset < span.start {
                     events.push((
                         Event::Text(self.markdown[offset..span.start].into()),
                         offset..span.start,
                     ));
+                }
+                offset = span.end;
+                if let Some(label) = directive
+                    .label
+                    .filter(|_| directive.name == "codex-followup")
+                {
+                    // Keep the unmatched `[` as a sentinel so labels cannot introduce blocks.
+                    let inline = &directive.raw
+                        [":codex-followup".len()..":codex-followup[".len() + label.len()];
+                    events.extend(
+                        Parser::new_ext(inline, Options::ENABLE_STRIKETHROUGH)
+                            .into_offset_iter()
+                            .filter_map(|(event, range)| {
+                                let event = match event {
+                                    Event::Start(Tag::Paragraph)
+                                    | Event::End(TagEnd::Paragraph) => return None,
+                                    Event::Text(text) if range.start == 0 => {
+                                        Event::Text(text[1..].to_owned().into())
+                                    }
+                                    event => event,
+                                };
+                                Some((event, span.clone()))
+                            }),
+                    );
+                    continue;
                 }
                 let path = directive.attributes["path"].as_ref();
                 let destination = if is_local_path_like_link(path) {
@@ -180,7 +247,6 @@ impl<'a> FileCitations<'a> {
                     (Event::Text(destination.into()), span.clone()),
                     (Event::End(TagEnd::Link), span.clone()),
                 ]);
-                offset = span.end;
             }
             if offset < range.end {
                 events.push((
@@ -196,3 +262,7 @@ impl<'a> FileCitations<'a> {
 #[cfg(test)]
 #[path = "file_citations_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "followups_tests.rs"]
+mod followups_tests;

@@ -16,6 +16,7 @@ fn parses_git_receipts_with_unquoted_attributes() {
         parse_assistant_directive(raw, QuoteEscaping::Literal),
         Some(AssistantDirective {
             name: "git-create-pr",
+            label: None,
             attributes: BTreeMap::from([
                 ("branch", Cow::Borrowed("feature/report")),
                 ("cwd", Cow::Borrowed(r"/repo\")),
@@ -35,6 +36,7 @@ fn parses_triple_colon_comments_with_escaped_quotes_and_closing_braces() {
         parse_assistant_directive(&source, QuoteEscaping::Backslash),
         Some(AssistantDirective {
             name: "code-comment",
+            label: None,
             attributes: BTreeMap::from([
                 (
                     "body",
@@ -58,6 +60,7 @@ fn preserves_artifact_metadata_and_single_quoted_values() {
         parse_assistant_directive(raw, QuoteEscaping::Backslash),
         Some(AssistantDirective {
             name: "artifact",
+            label: None,
             attributes: BTreeMap::from([
                 ("label", Cow::Owned("team's report".to_string())),
                 ("path", Cow::Borrowed("Quarterly Report.xlsx")),
@@ -74,6 +77,9 @@ fn rejects_ambiguous_or_incomplete_directives() {
     for source in [
         r#"::git-push{cwd="/repo" cwd="/other"}"#,
         r#"::git-push{cwd="/repo" branch="feature""#,
+        "::git-push[anything]{cwd=/repo branch=main}",
+        "::code-comment[anything]{body=comment file=foo}",
+        ":codex-file-citation[caption]{path=foo}",
         "::::code-comment{title=comment}",
         ":artifact{path=/tmp/a path=:artifact{path=/tmp/b}}",
         ":artifact{invalid:key=:artifact{path=/tmp/a}}",

@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct AssistantDirective<'source> {
     pub(crate) name: &'source str,
+    pub(crate) label: Option<&'source str>,
     pub(crate) attributes: BTreeMap<&'source str, Cow<'source, str>>,
     pub(crate) raw: &'source str,
 }
@@ -47,7 +48,7 @@ pub(crate) fn parse_assistant_directive_with_budget<'source>(
 ) -> Option<AssistantDirective<'source>> {
     spend_scan_budget(remaining, /*scanned*/ 1)?;
     // `::git-create-pr{...}` starts with a one-to-three-colon marker and a name;
-    // require `{` immediately after the name so `::git-create-pr prose` is not parsed.
+    // Follow-ups additionally accept a `[label]` before their attributes.
     let rest = source.trim_start_matches(':');
     spend_scan_budget(remaining, source.len() - rest.len())?;
     if !(1..=3).contains(&(source.len() - rest.len())) {
@@ -56,6 +57,63 @@ pub(crate) fn parse_assistant_directive_with_budget<'source>(
     let name_len = rest.bytes().take_while(|byte| is_name_byte(*byte)).count();
     spend_scan_budget(remaining, name_len + 1)?;
     let (name, suffix) = rest.split_at(name_len);
+    let (label, suffix) = if let Some(label) = suffix.strip_prefix('[') {
+        if name != "codex-followup" {
+            return None;
+        }
+        let mut characters = label.char_indices().peekable();
+        let mut depth = 1;
+        let mut code_ticks = 0;
+        let mut code_start = None;
+        let end = loop {
+            let (index, character) = match characters.next() {
+                Some((_, '\n' | '\r')) | None => {
+                    // An unmatched backtick run is literal Markdown. Replay its contents
+                    // with the same scan budget so brackets and escapes regain their meaning.
+                    characters = code_start.take()?;
+                    code_ticks = 0;
+                    continue;
+                }
+                Some(character) => character,
+            };
+            spend_scan_budget(remaining, character.len_utf8())?;
+            match character {
+                '`' => {
+                    let mut ticks = 1;
+                    while characters.next_if(|(_, next)| *next == '`').is_some() {
+                        spend_scan_budget(remaining, /*scanned*/ 1)?;
+                        ticks += 1;
+                    }
+                    if code_ticks == 0 {
+                        code_ticks = ticks;
+                        code_start = Some(characters.clone());
+                    } else if code_ticks == ticks {
+                        code_ticks = 0;
+                        code_start = None;
+                    }
+                }
+                _ if code_ticks > 0 => {}
+                '\\' => {
+                    let (_, escaped) = characters.next()?;
+                    spend_scan_budget(remaining, escaped.len_utf8())?;
+                    if matches!(escaped, '\n' | '\r') {
+                        return None;
+                    }
+                }
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break index;
+                    }
+                }
+                _ => {}
+            }
+        };
+        (Some(&label[..end]), label[end..].strip_prefix(']')?)
+    } else {
+        (None, suffix)
+    };
     let mut rest = suffix.strip_prefix('{')?;
     if !name.as_bytes().first().is_some_and(u8::is_ascii_alphabetic) {
         return None;
@@ -68,6 +126,7 @@ pub(crate) fn parse_assistant_directive_with_budget<'source>(
             // In `::git-push{cwd="/repo"} done`, retain the directive but not ` done`.
             return Some(AssistantDirective {
                 name,
+                label,
                 attributes,
                 raw: &source[..source.len() - suffix.len()],
             });

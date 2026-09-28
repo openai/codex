@@ -73,7 +73,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 
-mod file_citations;
+mod inline_directives;
 mod list_spacing;
 mod local_links;
 mod math;
@@ -85,7 +85,8 @@ mod table_key_value;
 mod task_lists;
 mod web_links;
 
-use file_citations::FileCitations;
+use inline_directives::InlineDirectives;
+pub(crate) use inline_directives::followup_labels;
 pub(crate) use list_spacing::ListSpacing;
 use list_spacing::UniformList;
 use local_links::is_local_path_like_link;

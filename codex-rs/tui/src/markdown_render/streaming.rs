@@ -5,8 +5,8 @@
 
 use super::DecodedTextMerge;
 use super::Event;
-use super::FileCitations;
 use super::HyperlinkLine;
+use super::InlineDirectives;
 use super::ListSpacing;
 use super::Options;
 use super::Parser;
@@ -50,14 +50,14 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         Options::ENABLE_TASKLISTS,
         super::preferences::current().lists,
     );
-    let citations = FileCitations::new(input, options);
-    let math = MathMarkdown::new(&citations.markdown, options, width);
+    let directives = InlineDirectives::new(input, options);
+    let math = MathMarkdown::new(&directives.markdown, options, width);
     let parser = Parser::new_ext(&math.markdown, options);
     let has_reference_link_definition = parser.reference_definitions().iter().next().is_some();
     let parser = TopLevelBlockTracker {
         iter: DecodedTextMerge::new(super::source_tables::preserve(
             input,
-            citations.events(math.events(parser.into_offset_iter()), cwd),
+            directives.events(math.events(parser.into_offset_iter()), cwd),
         )),
         depth: 0,
         block_count: 0,

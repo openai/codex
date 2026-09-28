@@ -91,7 +91,8 @@ impl TranscriptState {
 
     pub(super) fn record_agent_markdown(&mut self, markdown: String, source: String) {
         self.last_status_copy_targets = None;
-        self.last_agent_markdown = Some(markdown);
+        self.last_agent_markdown =
+            Some(crate::markdown_render::followup_labels(&markdown).into_owned());
         self.last_agent_source = Some(source);
         self.saw_copy_source_this_turn = true;
     }
