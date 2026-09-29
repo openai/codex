@@ -69,12 +69,12 @@ where
         }
     }
 
-    fn find_next_open(&self) -> Option<(usize, usize)> {
+    fn find_next_open(&self, pending: &str) -> Option<(usize, usize)> {
         self.specs
             .iter()
             .enumerate()
             .filter_map(|(idx, spec)| {
-                self.pending
+                pending
                     .find(spec.open)
                     .map(|pos| (pos, spec.open.len(), idx))
             })
@@ -87,10 +87,10 @@ where
             .map(|(pos, _len, idx)| (pos, idx))
     }
 
-    fn max_open_prefix_suffix_len(&self) -> usize {
+    fn max_open_prefix_suffix_len(&self, pending: &str) -> usize {
         self.specs
             .iter()
-            .map(|spec| longest_suffix_prefix_len(&self.pending, spec.open))
+            .map(|spec| longest_suffix_prefix_len(pending, spec.open))
             .max()
             .map_or(0, std::convert::identity)
     }
@@ -99,19 +99,6 @@ where
         if !pending.is_empty() {
             out.visible_text.push_str(pending);
         }
-    }
-
-    fn drain_visible_to_suffix_match(
-        &mut self,
-        out: &mut StreamTextChunk<ExtractedInlineTag<T>>,
-        keep_suffix_len: usize,
-    ) {
-        let take = self.pending.len().saturating_sub(keep_suffix_len);
-        if take == 0 {
-            return;
-        }
-        Self::push_visible_prefix(out, &self.pending[..take]);
-        self.pending.drain(..take);
     }
 }
 
@@ -124,39 +111,39 @@ where
     fn push_str(&mut self, chunk: &str) -> StreamTextChunk<Self::Extracted> {
         self.pending.push_str(chunk);
         let mut out = StreamTextChunk::default();
+        let mut consumed = 0;
 
         loop {
+            let pending = &self.pending[consumed..];
             if let Some(close) = self.active.as_ref().map(|active| active.close) {
-                if let Some(close_idx) = self.pending.find(close) {
+                if let Some(close_idx) = pending.find(close) {
                     let Some(mut active) = self.active.take() else {
                         continue;
                     };
-                    active.content.push_str(&self.pending[..close_idx]);
+                    active.content.push_str(&pending[..close_idx]);
                     out.extracted.push(ExtractedInlineTag {
                         tag: active.tag,
                         content: active.content,
                     });
-                    let close_len = close.len();
-                    self.pending.drain(..close_idx + close_len);
+                    consumed += close_idx + close.len();
                     continue;
                 }
 
-                let keep = longest_suffix_prefix_len(&self.pending, close);
-                let take = self.pending.len().saturating_sub(keep);
+                let keep = longest_suffix_prefix_len(pending, close);
+                let take = pending.len().saturating_sub(keep);
                 if take > 0 {
                     if let Some(active) = self.active.as_mut() {
-                        active.content.push_str(&self.pending[..take]);
+                        active.content.push_str(&pending[..take]);
                     }
-                    self.pending.drain(..take);
+                    consumed += take;
                 }
                 break;
             }
 
-            if let Some((open_idx, spec_idx)) = self.find_next_open() {
-                Self::push_visible_prefix(&mut out, &self.pending[..open_idx]);
+            if let Some((open_idx, spec_idx)) = self.find_next_open(pending) {
+                Self::push_visible_prefix(&mut out, &pending[..open_idx]);
                 let spec = &self.specs[spec_idx];
-                let open_len = spec.open.len();
-                self.pending.drain(..open_idx + open_len);
+                consumed += open_idx + spec.open.len();
                 self.active = Some(ActiveTag {
                     tag: spec.tag.clone(),
                     close: spec.close,
@@ -165,11 +152,15 @@ where
                 continue;
             }
 
-            let keep = self.max_open_prefix_suffix_len();
-            self.drain_visible_to_suffix_match(&mut out, keep);
+            let keep = self.max_open_prefix_suffix_len(pending);
+            let take = pending.len().saturating_sub(keep);
+            Self::push_visible_prefix(&mut out, &pending[..take]);
+            consumed += take;
             break;
         }
 
+        // Compact once per chunk rather than shifting the tail after every delimiter.
+        self.pending.drain(..consumed);
         out
     }
 
@@ -260,6 +251,36 @@ mod tests {
         assert_eq!(out.extracted[0].content, "x");
         assert_eq!(out.extracted[1].tag, Tag::B);
         assert_eq!(out.extracted[1].content, "y");
+    }
+
+    #[test]
+    fn generic_inline_parser_preserves_output_across_every_chunk_boundary() {
+        let specs = vec![
+            InlineTagSpec {
+                tag: Tag::A,
+                open: "<a>",
+                close: "</a>",
+            },
+            InlineTagSpec {
+                tag: Tag::B,
+                open: "<é>",
+                close: "</é>",
+            },
+        ];
+        let text = "前<a>one</a>中<é>二</é><a></a>後<é>unfinished";
+        let expected = collect_chunks(&mut InlineHiddenTagParser::new(specs.clone()), &[text]);
+        for split in text
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain([text.len()])
+        {
+            let mut parser = InlineHiddenTagParser::new(specs.clone());
+            assert_eq!(
+                collect_chunks(&mut parser, &[&text[..split], &text[split..]]),
+                expected,
+                "split at byte {split}",
+            );
+        }
     }
 
     #[test]
