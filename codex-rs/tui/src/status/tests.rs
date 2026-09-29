@@ -1710,17 +1710,18 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
         .expect("timestamp");
     for (is_local_daemon, snapshot) in [
         (
-            false,
+            None,
             "status_snapshot_uses_default_reasoning_when_config_empty",
         ),
-        (true, "status_snapshot_local_background_server"),
+        (Some(false), "status_snapshot_remote_server"),
+        (Some(true), "status_snapshot_local_background_server"),
     ] {
-        let remote_connection = RemoteConnectionStatus {
+        let remote_connection = is_local_daemon.map(|is_local_daemon| RemoteConnectionStatus {
             address: "unix:///tmp/codex-home/app-server-control/app-server-control.sock"
                 .to_string(),
             version: "v0.133.0".to_string(),
             is_local_daemon,
-        };
+        });
 
         let model_slug = get_model_offline_for_tests(config.model.as_deref());
         let token_info = token_info_for(&model_slug, &config, &usage);
@@ -1728,7 +1729,7 @@ async fn status_snapshot_uses_default_reasoning_when_config_empty() {
             &config,
             /*requires_openai_auth*/ true,
             /*model_provider_id*/ None,
-            Some(&remote_connection),
+            remote_connection.as_ref(),
             account_display.as_ref(),
             Some(&token_info),
             &usage,
