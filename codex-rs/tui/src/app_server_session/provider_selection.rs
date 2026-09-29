@@ -58,6 +58,7 @@ impl AppServerSession {
         .await?
         .map(|config| {
             config
+                .config
                 .model_provider
                 .unwrap_or_else(|| "openai".to_string())
         }))
