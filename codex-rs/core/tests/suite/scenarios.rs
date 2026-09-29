@@ -118,6 +118,9 @@ mod guardian_heartbeat;
 #[path = "scenarios_preparation.rs"]
 mod preparation;
 
+#[path = "scenarios_content_filter.rs"]
+mod content_filter;
+
 #[path = "scenarios_shared_instructions.rs"]
 mod shared_instructions;
 

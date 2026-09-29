@@ -1,0 +1,26 @@
+---
+source: core/tests/suite/scenarios_content_filter.rs
+expression: "context_snapshot::format_request_history_snapshot(\"Repeated content-filter blocks append catalog guidance and retain delivered output.\",\n&requests, &ContextSnapshotOptions::default().rewrite_known_segments(),)"
+---
+Scenario: Repeated content-filter blocks append catalog guidance and retain delivered output.
+
+## Window 1
+-- request 1 (turn) --
+00:message/developer:
+    <PERMISSIONS_INSTRUCTIONS>
+01:message/user:
+    <ENVIRONMENT_CONTEXT>
+02:message/user:
+    Help me with this topic.
+-- request 2 (turn) --
+03:message/assistant:
+    I can help with this topic.
+04:message/developer:
+    <content_filter_guidance>
+    Your previous response was blocked. Offer a permitted alternative.
+    </content_filter_guidance>
+-- request 3 (turn) --
+05:message/developer:
+    <content_filter_guidance>
+    Your previous response was blocked. Offer a permitted alternative.
+    </content_filter_guidance>

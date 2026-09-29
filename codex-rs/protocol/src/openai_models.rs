@@ -542,6 +542,10 @@ impl ModelInfo {
 /// retained to decode catalogs produced before personality selection was removed.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelMessages {
+    /// Developer guidance after a content-filter block. Missing, null, blank, or values over
+    /// 512 UTF-8 bytes use the bundled guidance.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_filter_guidance: Option<String>,
     /// Additional developer instructions for persistent mode. Missing or null uses the built-in
     /// instructions; an empty string disables them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1503,6 +1507,7 @@ mod tests {
     #[test]
     fn models_response_prefers_template_and_preserves_message_siblings() {
         let messages = ModelMessages {
+            content_filter_guidance: Some("Offer a permitted alternative.".to_string()),
             persistent_instructions: Some("Persistent catalog instructions".to_string()),
             tools: Some(ToolMessages {
                 send_user_message_async: Some(ToolMessage {

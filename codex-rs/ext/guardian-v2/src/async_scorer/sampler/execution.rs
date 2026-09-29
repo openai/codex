@@ -54,6 +54,7 @@ impl SamplingExecution {
                 ApiError::Retryable { .. }
                 | ApiError::RateLimitExceeded { .. }
                 | ApiError::Stream(_)
+                | ApiError::ContentFilter
                 | ApiError::ServerOverloaded { .. }
                 | ApiError::FlexUnavailable,
             )

@@ -31,6 +31,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         available_access_programs: preset.available_access_programs.clone(),
         upgrade: preset.upgrade.as_ref().map(Into::into),
         model_messages: Some(ModelMessages {
+            content_filter_guidance: None,
             persistent_instructions: None,
             tools: None,
             instructions_template: Some("base instructions".to_string()),

@@ -425,6 +425,9 @@ pub fn process_responses_event(
                         .and_then(Value::as_str)
                 });
                 let reason = reason.unwrap_or("unknown");
+                if reason == "content_filter" {
+                    return Err(ResponsesEventError::Api(ApiError::ContentFilter));
+                }
                 if reason != "interrupted" {
                     let message = format!("Incomplete response returned, reason: {reason}");
                     return Err(ResponsesEventError::Api(ApiError::Stream(message)));

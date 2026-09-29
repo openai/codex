@@ -11,6 +11,25 @@ fn map_api_error_maps_server_overloaded() {
     assert!(matches!(err.details(), CodexErrorDetails::ServerOverloaded));
 }
 
+#[test]
+fn map_api_error_preserves_content_filter_retry_and_public_error() {
+    let err = map_api_error(ApiError::ContentFilter);
+    assert!(matches!(err.details(), CodexErrorDetails::ContentFilter));
+    assert_eq!(
+        (
+            err.retry_delay(/*retry_count*/ 1).is_some(),
+            err.to_codex_protocol_error(),
+            err.to_string(),
+        ),
+        (
+            true,
+            CodexErrorInfo::Other,
+            "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+                .to_string(),
+        )
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn map_api_error_preserves_retry_delay() {
     let retry_delay = std::time::Duration::from_secs(17);

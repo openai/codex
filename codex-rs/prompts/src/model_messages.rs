@@ -1,5 +1,5 @@
 //! Resolves model-owned messages from catalog values and bundled defaults.
-//! Resolution preserves sparse catalog data, empty strings, and source identity.
+//! Resolution preserves sparse catalog data and source identity, with family-specific validation.
 //! Prompt composition and runtime settings remain with consumers; each accessor
 //! selects and resolves only the requested message family.
 
@@ -54,12 +54,14 @@ const REMINDER_MESSAGE_TEMPLATE: &str = concat!(
     "Once reset, message items in current context window will be cleared in the new window, but notes and history items will be persistent across windows."
 );
 const PERSISTENT_INSTRUCTIONS: &str = include_str!("../templates/persistent_mode.md");
+const CONTENT_FILTER_GUIDANCE: &str = "Your previous response was blocked by a content filter. Do not treat this as a transient failure or try to reproduce or work around the blocked content through repeated attempts, altered formatting, splitting, encoding, tools, subagents, or later wakes. Briefly explain the limitation and offer a permitted alternative. Continue unrelated authorized work.";
+const MAX_CONTENT_FILTER_GUIDANCE_BYTES: usize = 512;
 
 /// Resolves model-owned text from catalog overrides or bundled defaults, one family at a time.
 ///
 /// The view borrows the consumer's captured model metadata without resolving any families.
 /// Missing values select bundled text or retain delegation to consumer-owned settings.
-/// Explicit empty strings remain overrides.
+/// Explicit empty strings remain overrides unless a message family validates them.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedModelMessages<'a> {
     catalog_messages: Option<&'a ModelMessages>,
@@ -222,5 +224,15 @@ impl<'a> ResolvedModelMessages<'a> {
         self.catalog_messages
             .and_then(|messages| messages.persistent_instructions.as_deref())
             .unwrap_or(PERSISTENT_INSTRUCTIONS)
+    }
+
+    /// Resolves bounded recovery guidance, falling back without truncating instructions.
+    pub fn content_filter_guidance(&self) -> &'a str {
+        self.catalog_messages
+            .and_then(|messages| messages.content_filter_guidance.as_deref())
+            .filter(|text| {
+                !text.trim().is_empty() && text.len() <= MAX_CONTENT_FILTER_GUIDANCE_BYTES
+            })
+            .unwrap_or(CONTENT_FILTER_GUIDANCE)
     }
 }

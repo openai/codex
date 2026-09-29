@@ -6,6 +6,7 @@ mod apps_instructions;
 mod available_plugins_instructions;
 mod base_instructions;
 mod compaction_summary;
+mod content_filter_guidance;
 mod contextual_user_message;
 mod current_time_reminder;
 mod developer_instructions;
@@ -69,6 +70,7 @@ pub(crate) use codex_guardian_context::PermissionContext as GuardianPermissionCo
 pub(crate) use codex_prompts::MultiAgentRoleInstructions;
 pub use codex_prompts::PermissionsInstructions;
 pub(crate) use compaction_summary::CompactionSummary;
+pub(crate) use content_filter_guidance::ContentFilterGuidance;
 pub(crate) use contextual_user_message::is_contextual_user_fragment;
 pub(crate) use contextual_user_message::is_guardian_context_message;
 pub(crate) use contextual_user_message::is_user_authorization_message;
