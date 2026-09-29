@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/mcp_login_tests.rs
+expression: next_history_message(&mut events)
+---
+• Signed in to enterprise.

@@ -9,7 +9,7 @@ Buffer {
         "  /model     choose what model and reasoning effort to use                      ",
         "› /memories  configure memory use and generation                                ",
         "  /mention   mention a file                                                     ",
-        "  /mcp       list configured MCP tools; use /mcp verbose for details            ",
+        "  /mcp       list MCP tools; use /mcp verbose or /mcp login <name>              ",
         "                                                                                ",
         "› /m                                                                            ",
         "                                                                                ",
@@ -32,7 +32,7 @@ Buffer {
         x: 3, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 13, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
-        x: 68, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 66, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
         x: 0, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
         x: 1, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]

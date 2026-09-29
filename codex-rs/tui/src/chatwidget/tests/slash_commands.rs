@@ -2732,6 +2732,23 @@ async fn slash_mcp_verbose_requests_full_inventory_via_app_server() {
 }
 
 #[tokio::test]
+async fn slash_mcp_login_targets_the_active_thread() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    submit_composer_text(&mut chat, "/mcp login enterprise");
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FollowTranscript));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartMcpLogin { name, thread_id: actual_thread_id })
+            if name == "enterprise" && actual_thread_id == thread_id
+    );
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_mcp_invalid_args_show_usage() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -2744,7 +2761,7 @@ async fn slash_mcp_invalid_args_show_usage() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("Usage: /mcp [verbose]"),
+        rendered.contains("Usage: /mcp [verbose | login <name>]"),
         "expected usage message, got: {rendered:?}"
     );
     assert_eq!(recall_latest_after_clearing(&mut chat), "/mcp full");

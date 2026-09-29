@@ -24,6 +24,7 @@ use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
+use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::RequestId;
 
 use crate::hooks_rpc::fetch_hooks_list;
@@ -39,6 +40,33 @@ const WORKSPACE_HEADLINE_FETCH_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(/*millis*/ 2000);
 
 impl App {
+    pub(super) fn start_mcp_login(
+        &self,
+        app_server: &AppServerSession,
+        request_id: String,
+        name: String,
+        thread_id: ThreadId,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed(ClientRequest::McpServerOauthLogin {
+                    request_id: RequestId::String(request_id.clone()),
+                    params: McpServerOauthLoginParams {
+                        name,
+                        thread_id: Some(thread_id.to_string()),
+                        client_registration: None,
+                        scopes: None,
+                        timeout_secs: None,
+                    },
+                })
+                .await
+                .map_err(|error| error.to_string());
+            app_event_tx.send(AppEvent::McpLoginStarted { request_id, result });
+        });
+    }
+
     pub(super) fn fetch_mcp_inventory(
         &mut self,
         app_server: &AppServerSession,

@@ -655,6 +655,9 @@ pub(crate) struct App {
     /// Invalidates in-flight full rate-limit reads when a newer rolling hard stop arrives.
     rate_limit_hard_stop_generation: u64,
     rate_limit_refresh_state: rate_limit_refresh::RateLimitRefreshState,
+    pending_mcp_login_start: Option<PendingMcpLoginStart>,
+    // Latest accepted attempt per server; stale retry completions must not update the UI.
+    active_mcp_login_ids: HashMap<String, String>,
     // Serialize plugin enablement writes per plugin so stale completions cannot
     // overwrite a newer toggle, even if the plugin is toggled from different
     // cwd contexts.
@@ -666,6 +669,13 @@ pub(crate) struct App {
     // App fixtures keep their home alive across widget replacement; drop it last.
     #[cfg(test)]
     _test_codex_home: Option<tempfile::TempDir>,
+}
+
+struct PendingMcpLoginStart {
+    request_id: String,
+    name: String,
+    thread_id: ThreadId,
+    completions: Vec<codex_app_server_protocol::McpServerOauthLoginCompletedNotification>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
