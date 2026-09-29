@@ -277,6 +277,35 @@ async fn confirmed_root_delivery_invalidates_root_and_worker_cached_approvals() 
             None
         );
     }
+    // Missing retained root instructions must not permanently veto a matching LOW score.
+    ThreadIdle::wait(&test.codex).await;
+    ThreadIdle::wait(&worker).await;
+    test.codex
+        .inject_response_items(
+            (0..20)
+                .map(|index| user_instruction(&format!("Root instruction {index}.")))
+                .collect(),
+        )
+        .await?;
+    let snapshot = worker
+        .guardian_root_snapshot()
+        .await
+        .expect("root snapshot");
+    assert!(!snapshot.authorization_version.retained_context_complete);
+    assert!(
+        snapshot
+            .messages
+            .contains(&codex_core::GuardianRootMessage::IncompleteRootInstructions)
+    );
+    let store = worker.thread_extension_data();
+    let progress = store.get::<GuardianV2ScoreProgress>().unwrap();
+    let authorization = ScoreAuthorization::current(&worker, &Default::default()).await;
+    assert!(authorization.local.retained_context_complete);
+    seed_cached_score(&progress, store, /*index*/ 1_000, authorization);
+    assert_eq!(
+        cached_approval(&registry, store, "review action", /*metrics*/ None).await,
+        Some(ReviewDecision::Approved)
+    );
     let shutdown = test
         .thread_manager
         .shutdown_all_threads_bounded(ASYNC_TEST_TIMEOUT)
