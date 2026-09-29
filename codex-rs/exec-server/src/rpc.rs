@@ -21,7 +21,6 @@ use codex_protocol::protocol::W3cTraceContext;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::sync::Mutex;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 use tokio::sync::SemaphorePermit;
@@ -60,6 +59,10 @@ pub(crate) enum RpcCallError {
     /// The client already has the maximum number of regular RPC calls in flight.
     PendingRequestLimitExceeded { limit: usize },
 }
+
+#[path = "rpc_pending_request.rs"]
+mod pending_request;
+use pending_request::PendingRequestGuard;
 
 type PendingRequest = oneshot::Sender<RpcCompletion>;
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -322,7 +325,7 @@ where
 pub(crate) struct RpcClient {
     metrics: Option<MetricsClient>,
     write_tx: mpsc::Sender<JSONRPCMessage>,
-    pending: Arc<Mutex<HashMap<RequestId, PendingRequest>>>,
+    pending: Arc<StdMutex<HashMap<RequestId, PendingRequest>>>,
     inbound_request_ids: Arc<StdMutex<HashSet<RequestId>>>,
     // Shared transport state from `JsonRpcConnection`. Calls use this to fail
     // immediately when the socket closes, even if no JSON-RPC error response
@@ -346,7 +349,7 @@ impl RpcClient {
             task_handles: transport_tasks,
             transport,
         } = connection;
-        let pending = Arc::new(Mutex::new(HashMap::<RequestId, PendingRequest>::new()));
+        let pending = Arc::new(StdMutex::new(HashMap::<RequestId, PendingRequest>::new()));
         let closed = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::channel(128);
 
@@ -394,7 +397,7 @@ impl RpcClient {
             };
 
             closed_for_reader.store(true, Ordering::Release);
-            drain_pending(&pending_for_reader).await;
+            drain_pending(&pending_for_reader);
             let _ = event_tx
                 .send(RpcClientEvent::Disconnected {
                     reason: disconnect_reason,
@@ -523,7 +526,7 @@ impl RpcClient {
         for task in &self.transport_tasks {
             task.abort();
         }
-        drain_pending(&self.pending).await;
+        drain_pending(&self.pending);
     }
 
     // Callers keep this permit until `call_inner` returns, so an executor
@@ -635,24 +638,24 @@ impl RpcClient {
         let request_id = RequestId::Integer(self.next_request_id.fetch_add(1, Ordering::SeqCst));
         let (response_tx, response_rx) = oneshot::channel();
         {
-            let mut pending = self.pending.lock().await;
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // Registering the pending request and checking disconnect must be
             // atomic with the reader's drain_pending path. Otherwise a call
             // can sneak in after the drain and wait forever.
             if self.closed.load(Ordering::Acquire) || *self.disconnected_rx.borrow() {
                 return Err(RpcCallError::Closed);
             }
-            pending.retain(|_, response_tx| !response_tx.is_closed());
             pending.insert(request_id.clone(), response_tx);
         }
 
-        let params = match serde_json::to_value(params) {
-            Ok(params) => params,
-            Err(err) => {
-                self.pending.lock().await.remove(&request_id);
-                return Err(RpcCallError::Json(err));
-            }
+        let _pending = PendingRequestGuard {
+            pending: &self.pending,
+            request_id: request_id.clone(),
         };
+        let params = serde_json::to_value(params).map_err(RpcCallError::Json)?;
         let response = self
             .send_request_and_wait(method, request_id, params, response_rx, call_timeout)
             .await?;
@@ -681,7 +684,6 @@ impl RpcClient {
             .await
             .is_err()
         {
-            self.pending.lock().await.remove(&request_id);
             return Err(RpcCallError::Closed);
         }
         tracing::event!(
@@ -702,7 +704,6 @@ impl RpcClient {
             RpcCallTimeout::After(call_timeout) => match timeout(call_timeout, response_rx).await {
                 Ok(response) => response,
                 Err(_) => {
-                    self.pending.lock().await.remove(&request_id);
                     return Err(RpcCallError::TimedOut {
                         method: method.to_string(),
                         timeout: call_timeout,
@@ -717,7 +718,10 @@ impl RpcClient {
 
     #[cfg(test)]
     pub(crate) async fn pending_request_count(&self) -> usize {
-        self.pending.lock().await.len()
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 }
 
@@ -835,18 +839,26 @@ where
 }
 
 async fn handle_server_message(
-    pending: &Mutex<HashMap<RequestId, PendingRequest>>,
+    pending: &StdMutex<HashMap<RequestId, PendingRequest>>,
     event_tx: &mpsc::Sender<RpcClientEvent>,
     message: JSONRPCMessage,
 ) -> Result<(), String> {
     match message {
         JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
-            if let Some(pending) = pending.lock().await.remove(&id) {
+            if let Some(pending) = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&id)
+            {
                 let _ = pending.send(RpcCompletion::new(Ok(result)));
             }
         }
         JSONRPCMessage::Error(JSONRPCError { id, error }) => {
-            if let Some(pending) = pending.lock().await.remove(&id) {
+            if let Some(pending) = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&id)
+            {
                 let _ = pending.send(RpcCompletion::new(Err(RpcCallError::Server(error))));
             }
         }
@@ -869,9 +881,11 @@ async fn handle_server_message(
     Ok(())
 }
 
-async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
+fn drain_pending(pending: &StdMutex<HashMap<RequestId, PendingRequest>>) {
     let pending = {
-        let mut pending = pending.lock().await;
+        let mut pending = pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         pending
             .drain()
             .map(|(_, pending)| pending)
@@ -1170,6 +1184,30 @@ mod tests {
         if let Err(err) = server.await {
             panic!("server task failed: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn rpc_client_cancellation_removes_pending_request_without_further_traffic() {
+        let (client_stdin, server_reader) = tokio::io::duplex(/*max_buf_size*/ 4096);
+        let (_server_writer, client_stdout) = tokio::io::duplex(/*max_buf_size*/ 4096);
+        let connection =
+            JsonRpcConnection::from_stdio(client_stdout, client_stdin, "test-rpc".to_string());
+        let (client, _events_rx) = RpcClient::new(connection);
+        let params = serde_json::json!({});
+        let mut call = Box::pin(client.call::<_, serde_json::Value>("waiting", &params));
+        let mut lines = BufReader::new(server_reader).lines();
+
+        tokio::select! {
+            message = read_jsonrpc_line(&mut lines) => {
+                assert!(matches!(message, JSONRPCMessage::Request(_)));
+            }
+            result = &mut call => panic!("call completed without a response: {result:?}"),
+        }
+        assert_eq!(client.pending_request_count().await, 1);
+
+        drop(call);
+
+        assert_eq!(client.pending_request_count().await, 0);
     }
 
     #[tokio::test]
