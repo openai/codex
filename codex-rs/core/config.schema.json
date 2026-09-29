@@ -2714,7 +2714,7 @@
         },
         "requires_openai_auth": {
           "default": false,
-          "description": "Does this provider require an OpenAI API Key or ChatGPT login token? If true, user is presented with login screen on first run, and login preference and token/key are stored in auth.json. If false (which is the default), login screen is skipped, and API key (if needed) comes from the \"env_key\" environment variable.",
+          "description": "Does this provider require an OpenAI API key or ChatGPT login token? If true, the user is presented with a login screen on first run, and credentials are stored using the backend selected by `cli_auth_credentials_store`. If false (the default), the login screen is skipped, and the API key (if needed) comes from the environment variable specified by `env_key`.",
           "type": "boolean"
         },
         "stream_idle_timeout_ms": {
