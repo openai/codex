@@ -1157,6 +1157,13 @@ fn sanitize_project_config(
         {
             ignored_keys.push("features.shell_snapshot".to_string());
         }
+        if let Some(multi_agent) = features
+            .get_mut("multi_agent_v2")
+            .and_then(TomlValue::as_table_mut)
+            && multi_agent.remove("message_board_remote").is_some()
+        {
+            ignored_keys.push("features.multi_agent_v2.message_board_remote".to_string());
+        }
         for key in ["respect_system_proxy", "system_proxy_fallback"] {
             if features.remove(key).is_some() {
                 ignored_keys.push(format!("features.{key}"));

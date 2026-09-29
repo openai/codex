@@ -2795,6 +2795,14 @@
           "description": "Keep the message board in memory for a training session, including ephemeral sessions.",
           "type": "boolean"
         },
+        "message_board_remote": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RemoteMessageBoardConfigToml"
+            }
+          ],
+          "description": "Use a session-scoped remote board instead of local storage."
+        },
         "min_wait_timeout_ms": {
           "format": "int64",
           "maximum": 3600000.0,
@@ -3841,6 +3849,27 @@
           "type": "string"
         }
       ]
+    },
+    "RemoteMessageBoardConfigToml": {
+      "additionalProperties": false,
+      "description": "Connection to a board provisioned by the research host.",
+      "properties": {
+        "bearer_token": {
+          "description": "Board credential supplied directly by a runtime config override.",
+          "type": "string"
+        },
+        "bearer_token_env_var": {
+          "description": "Read the credential from this environment variable instead of bearer_token.",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
     },
     "ResumeCwdMode": {
       "description": "Working directory to use when resuming or forking a session.",

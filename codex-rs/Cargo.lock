@@ -2899,6 +2899,7 @@ dependencies = [
  "bm25",
  "chrono",
  "codex-agent-graph-store",
+ "codex-agent-message-board-client",
  "codex-agent-message-board-extension",
  "codex-agent-roles",
  "codex-analytics",
@@ -3370,6 +3371,7 @@ version = "0.0.0"
 dependencies = [
  "codex-network-proxy",
  "codex-protocol",
+ "codex-utils-redacted-string",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
