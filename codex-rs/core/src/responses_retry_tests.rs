@@ -3,9 +3,11 @@ use super::ResponsesStreamRetryState;
 use super::handle_response_stream_error;
 use super::log_retry;
 use crate::realtime_history::RealtimeHistoryState;
+use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use codex_http_client::RetryAfter;
 use codex_protocol::error::CodexErr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -56,6 +58,7 @@ async fn sampling_retry_logs_stream_error_context() {
 )]
 async fn stream_retry_preserves_deadline_across_delayed_notification() {
     let (mut session, turn_context) = make_session_and_context().await;
+    let step_context = StepContext::for_test(Arc::new(turn_context));
     session.realtime_history = Some(Mutex::new(RealtimeHistoryState::default()));
     let mut client_session = session.services.model_client.new_session();
     // The second retry emits a notification even when release builds hide the first.
@@ -76,7 +79,7 @@ async fn stream_retry_preserves_deadline_across_delayed_notification() {
         CodexErr::InternalServerError.with_retry_after(advice),
         &mut client_session,
         &session,
-        &turn_context,
+        &step_context,
         ResponsesStreamRequest::Sampling,
     );
     tokio::pin!(retry);
