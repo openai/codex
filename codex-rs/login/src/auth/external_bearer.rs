@@ -102,7 +102,7 @@ struct CachedExternalBearerToken {
 
 async fn run_provider_auth_command(config: &ModelProviderAuthInfo) -> io::Result<String> {
     let program = resolve_provider_auth_program(&config.command, &config.cwd)?;
-    let mut command = Command::new(&program);
+    let mut command = Command::from(codex_utils_process::background_command(&program));
     command
         .args(config.args.iter().map(Deref::deref))
         .current_dir(config.cwd.as_path())

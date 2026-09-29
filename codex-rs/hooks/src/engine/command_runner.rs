@@ -3,6 +3,8 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::future::Future;
 use std::io::ErrorKind;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 #[cfg(not(unix))]
 use std::process::Stdio;
@@ -26,6 +28,9 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tracing::Span;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
@@ -221,18 +226,9 @@ pub(crate) async fn run_command(
     command.current_dir(cwd);
 
     #[cfg(windows)]
-    let mut process_tree_job = JobObject::create().ok();
-    #[cfg(windows)]
-    let child = match process_tree_job.as_ref() {
-        Some(job) => match job.spawn_contained(&mut command) {
-            Ok(child) => Ok(child),
-            Err(_) => {
-                process_tree_job = None;
-                command.creation_flags(0);
-                command.spawn()
-            }
-        },
-        None => command.spawn(),
+    let (child, process_tree_job) = match JobObject::spawn_background(&mut command) {
+        Ok((child, job)) => (Ok(child), job),
+        Err(error) => (Err(error), None),
     };
     #[cfg(not(windows))]
     let child = command.spawn();
@@ -353,6 +349,7 @@ impl Drop for ProcessTreeGuard {
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
                     .spawn();
             }
         }
@@ -414,6 +411,8 @@ fn build_command(
 
     #[cfg(unix)]
     command.process_mode(codex_utils_pty::ProcessMode::NewSession);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
     #[cfg(not(unix))]
     command
         .env_clear()

@@ -214,11 +214,6 @@ impl StdioServerLauncher for LocalStdioServerLauncher {
 
 // Local private implementation.
 
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-#[cfg(windows)]
-const CREATE_SUSPENDED: u32 = 0x0000_0004;
-
 #[cfg(unix)]
 const PROCESS_GROUP_TERM_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
@@ -293,8 +288,6 @@ impl LocalStdioServerLauncher {
             // handles and needs a handle allowlist in the shared spawn backend.
             #[cfg(unix)]
             command.descriptor_policy(DescriptorPolicy::Explicit);
-            #[cfg(windows)]
-            command.creation_flags(CREATE_NO_WINDOW);
             command
         };
         #[cfg(windows)]
@@ -305,8 +298,6 @@ impl LocalStdioServerLauncher {
         let job = match codex_utils_pty::JobObject::create_without_breakaway() {
             Ok(job) => {
                 command.prepare_suspended_spawn(&job);
-                // The helper replaces creation flags; retain suspension and suppress the console.
-                command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
                 Some(job)
             }
             Err(error) => {

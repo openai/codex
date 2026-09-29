@@ -25,6 +25,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 axum = { workspace = true, default-features = false, features = [

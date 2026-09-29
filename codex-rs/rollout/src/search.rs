@@ -71,7 +71,7 @@ async fn ripgrep_rollout_paths(
         return Ok(Some(HashSet::new()));
     }
 
-    let output = match Command::new(rg_command)
+    let output = match Command::from(codex_utils_process::background_command(rg_command))
         .arg("-l")
         .arg("--fixed-strings")
         .arg("--ignore-case")

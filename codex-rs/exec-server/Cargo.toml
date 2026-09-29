@@ -19,6 +19,7 @@ ignored-paths = [
 workspace = true
 
 [dependencies]
+codex-utils-process = { workspace = true }
 arc-swap = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 base64 = { workspace = true }

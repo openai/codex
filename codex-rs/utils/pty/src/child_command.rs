@@ -15,8 +15,6 @@ use std::path::Path;
 use std::process::Stdio as TokioStdio;
 #[cfg(windows)]
 use winapi::um::winbase::CREATE_NO_WINDOW;
-#[cfg(windows)]
-use winapi::um::winbase::CREATE_SUSPENDED;
 
 use crate::child::Child;
 use crate::child::ChildKind;
@@ -240,19 +238,10 @@ impl Command {
         self
     }
 
-    /// Set the Windows process creation flags, replacing any previously selected flags.
-    #[cfg(windows)]
-    pub fn creation_flags(&mut self, flags: u32) -> &mut Self {
-        self.inner.creation_flags(flags);
-        self
-    }
     /// Preserve Job Object assignment before the child begins executing on Windows.
     #[cfg(windows)]
     pub fn prepare_suspended_spawn(&mut self, job: &crate::JobObject) {
         job.prepare_suspended_spawn(&mut self.inner);
-        // Tokio's creation_flags replaces, rather than adds to, the flags.
-        self.inner
-            .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED);
     }
 
     /// Reject original inputs that std replaced with a NUL-free placeholder.

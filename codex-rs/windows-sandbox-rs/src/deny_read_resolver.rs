@@ -7,7 +7,6 @@ use codex_protocol::permissions::windows_deny_read_glob_scan;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::process::Command;
 
 #[path = "deny_read_walker.rs"]
 mod walker;
@@ -100,7 +99,7 @@ pub fn resolve_windows_deny_read_paths(
 }
 
 fn ripgrep_files(scan_plan: &GlobScanPlan) -> Result<Option<Vec<PathBuf>>, String> {
-    let mut command = Command::new("rg");
+    let mut command = codex_utils_process::background_command("rg");
     command
         .arg("--files")
         .arg("--hidden")
