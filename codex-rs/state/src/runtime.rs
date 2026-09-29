@@ -54,6 +54,7 @@ mod rollout_migration;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_attachments;
+mod thread_metadata;
 mod thread_section_order;
 mod thread_sections;
 mod threads;
