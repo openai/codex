@@ -9,7 +9,6 @@ use super::run_onboarding_screen;
 use crate::AppServerTarget;
 use crate::app_server_session::AppServerSession;
 use crate::config_update::ProjectTrustHost;
-use crate::config_update::RemoteProjectTrust;
 use crate::config_update::read_remote_project_trust;
 use crate::legacy_core::config::Config;
 use crate::onboarding::trust_directory::TrustCancelAction;
@@ -22,13 +21,17 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
-use codex_exec_server::LOCAL_FS;
-use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
 use color_eyre::eyre::Result;
 use std::collections::VecDeque;
 use std::path::Path;
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct DirectoryTrustOptions<'a> {
+    pub resumed_thread: Option<&'a Thread>,
+    pub cancel: Option<TrustCancelAction>,
+}
 
 pub(crate) async fn check_directory_trust(
     tui: &mut Tui,
@@ -36,9 +39,13 @@ pub(crate) async fn check_directory_trust(
     config: &Config,
     target: &AppServerTarget,
     cwd: &Path,
-    resumed_thread: Option<&Thread>,
+    options: DirectoryTrustOptions<'_>,
     mut startup_draft: Option<&mut StartupDraftPump>,
 ) -> Result<OnboardingResult> {
+    let DirectoryTrustOptions {
+        resumed_thread,
+        cancel,
+    } = options;
     let connected = !matches!(target, AppServerTarget::Embedded);
     let mut consent = OnboardingResult::default();
     // Another client can load the saved task while consent is pending. Check both folders.
@@ -58,30 +65,12 @@ pub(crate) async fn check_directory_trust(
         }
         checked_cwds.push(cwd.clone());
         let cwd = cwd.as_path();
-        let lookup = async {
-            if connected {
-                let host = if matches!(target, AppServerTarget::LocalDaemon { .. }) {
-                    ProjectTrustHost::Local
-                } else {
-                    ProjectTrustHost::Remote
-                };
-                read_remote_project_trust(app_server.request_handle(), cwd, host).await
-            } else if config.active_project.trust_level == Some(TrustLevel::Trusted) {
-                Ok(None)
-            } else {
-                Ok(Some(RemoteProjectTrust {
-                    cwd: cwd.to_path_buf(),
-                    trust_target: resolve_root_git_project_for_trust(
-                        LOCAL_FS.as_ref(),
-                        &config.cwd,
-                    )
-                    .await
-                    .map(Into::into)
-                    .unwrap_or_else(|| cwd.to_path_buf()),
-                    trust_level: config.active_project.trust_level,
-                }))
-            }
+        let host = if !target.uses_remote_workspace() {
+            ProjectTrustHost::Local
+        } else {
+            ProjectTrustHost::Remote
         };
+        let lookup = read_remote_project_trust(app_server.request_handle(), cwd, host);
         let project = if let Some(draft) = startup_draft.as_deref_mut() {
             draft.run_until(tui, lookup).await??
         } else {
@@ -95,6 +84,14 @@ pub(crate) async fn check_directory_trust(
         if target.uses_remote_workspace() && project.trust_level == Some(TrustLevel::Untrusted) {
             continue;
         }
+        if cancel == Some(TrustCancelAction::CurrentTask)
+            && project.trust_level == Some(TrustLevel::Untrusted)
+            && !config.active_project.is_untrusted()
+        {
+            color_eyre::eyre::bail!(
+                "Folder trust changed. Reopen the destination with its restricted settings."
+            );
+        }
         let remote_trust_key =
             connected.then(|| project.trust_target.to_string_lossy().into_owned());
         if let Some(draft) = startup_draft.as_deref_mut() {
@@ -105,11 +102,11 @@ pub(crate) async fn check_directory_trust(
             steps: vec![Step::TrustDirectory(TrustDirectoryWidget {
                 restricted: project.trust_level == Some(TrustLevel::Untrusted),
                 existing_task: connected && resumed_thread.is_some(),
-                cancel: if connected {
+                cancel: cancel.unwrap_or(if connected {
                     TrustCancelAction::AgentsOverview
                 } else {
                     TrustCancelAction::Quit
-                },
+                }),
                 cwd: project.cwd,
                 trust_target: project.trust_target,
                 show_windows_create_sandbox_hint: false,

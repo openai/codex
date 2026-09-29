@@ -1,0 +1,12 @@
+---
+source: tui/src/app/agents_overview_tests.rs
+expression: "crate::chatwidget::tests::helpers::render_bottom_popup(&app.chat_widget, 96)"
+---
+  Unable to complete action
+  Failed to carry forward approvals reviewer: invalid value for `approvals_reviewer`: `User`
+  is not in the allowed set [AutoReview] (set by <requirements>)
+
+
+› 1. Return to command center
+
+  enter select · esc back

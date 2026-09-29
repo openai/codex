@@ -170,7 +170,9 @@ async fn replacement_uses_server_defaults_and_preserves_explicit_launch_settings
         );
         assert_eq!(
             recorded_params(&requests, "config/read"),
-            vec![serde_json::json!({"cwd": server_config.cwd.display().to_string()})],
+            vec![
+                serde_json::json!({"cwd": server_config.cwd.display().to_string(), "includeLayers": true})
+            ],
         );
         if explicit == "saved" {
             let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80)
@@ -293,7 +295,7 @@ async fn replacement_preserves_remote_launch_paths_and_older_servers() -> Result
         .await;
         assert_eq!(
             recorded_params(&requests, "config/read"),
-            vec![serde_json::json!({"cwd": "."}),]
+            vec![serde_json::json!({"cwd": ".", "includeLayers": true}),]
         );
         let starts = recorded_params(&requests, "thread/start");
         assert_eq!(starts.len(), 1);

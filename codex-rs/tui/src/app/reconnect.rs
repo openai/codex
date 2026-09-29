@@ -324,16 +324,16 @@ impl App {
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );
         self.pending_app_server_requests.clear();
-        let pending_displayed_profile =
-            displayed.is_some_and(|id| self.pending_server_profiles.contains_key(&id));
-        if pending_displayed_profile {
-            self.runtime_approval_policy_override = None;
-            self.runtime_permission_profile_override = None;
-        }
         // The displayed task was resumed above. Keep offscreen selections pending until those
         // tasks can be resumed from the server too; their old confirmations cannot arrive.
-        if let Some(id) = displayed {
-            self.pending_server_profiles.remove(&id);
+        let pending_displayed_profile =
+            displayed.and_then(|id| self.pending_server_profiles.remove(&id));
+        if let Some(selection) = &pending_displayed_profile {
+            self.runtime_approval_policy_override = None;
+            if selection.approvals_reviewer.is_some() {
+                self.runtime_approvals_reviewer_override = None;
+            }
+            self.runtime_permission_profile_override = None;
         }
         self.pending_primary_events.clear();
         self.pending_plugin_enabled_writes.clear();
@@ -383,7 +383,7 @@ impl App {
         }
         if let Some(mut started) = thread {
             let id = started.session.thread_id;
-            if !pending_displayed_profile
+            if pending_displayed_profile.is_none()
                 && let Some(channel) = self.thread_event_channels.get(&id)
                 && let Some(cached) = channel.store.lock().await.session.as_ref()
             {

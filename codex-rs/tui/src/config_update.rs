@@ -19,7 +19,7 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_config::default_project_root_markers;
-use codex_config::loader::find_project_root;
+use codex_config::loader::discover_project_root;
 use codex_config::loader::normalized_project_trust_keys;
 use codex_config::loader::project_trust_key;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
@@ -199,7 +199,12 @@ pub(crate) async fn read_remote_project_trust(
     cwd: &Path,
     host: ProjectTrustHost,
 ) -> Result<Option<RemoteProjectTrust>> {
-    let cwd_string = cwd.to_string_lossy().into_owned();
+    let cwd_string = cwd
+        .to_str()
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("Cannot check folder trust: directory path is not valid UTF-8")
+        })?
+        .to_owned();
     let cwd = match LegacyAppPathString::from_string(cwd_string.clone()).to_inferred_path_uri() {
         Some(cwd) => cwd,
         None => {
@@ -272,16 +277,21 @@ pub(crate) async fn read_remote_project_trust(
                     .min_by_key(|(path, _)| *path)
             })
     };
+    let mut projectless = false;
     let local_roots = if host == ProjectTrustHost::Local && project_layers.is_empty() {
         let cwd = AbsolutePathBuf::from_absolute_path(&cwd)?;
         let markers = serde_json::from_value::<Option<Vec<String>>>(
             response["config"]["project_root_markers"].clone(),
         )?
         .unwrap_or_else(default_project_root_markers);
-        let project_root = find_project_root(LOCAL_FS.as_ref(), &cwd, &markers).await?;
+        let project_root = discover_project_root(LOCAL_FS.as_ref(), &cwd, &markers).await?;
         let git_root = resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &cwd).await;
+        projectless = project_root.is_none()
+            && discover_project_root(LOCAL_FS.as_ref(), &cwd, &default_project_root_markers())
+                .await?
+                .is_none();
         Some((
-            normalized_project_trust_keys(project_root.as_path()),
+            normalized_project_trust_keys(project_root.as_ref().unwrap_or(&cwd).as_path()),
             git_root.map(|root| normalized_project_trust_keys(root.as_path())),
         ))
     } else {
@@ -345,6 +355,7 @@ pub(crate) async fn read_remote_project_trust(
         });
     if !explicitly_untrusted
         && (trust_level == Some(TrustLevel::Trusted)
+            || trust_level.is_none() && projectless
             || (trust_level.is_none()
                 && disabled_project.is_none()
                 && project_layers
@@ -405,13 +416,30 @@ pub(crate) async fn write_skill_enabled(
 #[path = "config_update_tests.rs"]
 mod tests;
 
+/// Settings and layer kinds used by the TUI; ignore server-native paths and origins.
+#[derive(serde::Deserialize)]
+pub(crate) struct EffectiveConfig {
+    pub config: codex_app_server_protocol::Config,
+    pub layers: Option<Vec<JsonValue>>,
+}
+
 /// Read effective server settings, retaining compatibility with servers without config/read.
 pub(crate) async fn read_effective_config_if_supported(
     request_handle: AppServerRequestHandle,
     cwd: &Path,
-) -> Result<Option<codex_app_server_protocol::Config>> {
-    match read_effective_config(request_handle, cwd.display().to_string()).await {
-        Ok(response) => Ok(Some(response.config)),
+) -> Result<Option<EffectiveConfig>> {
+    match request_handle
+        .request_typed(ClientRequest::ConfigRead {
+            request_id: RequestId::String(format!("tui-config-read-{}", Uuid::new_v4())),
+            params: ConfigReadParams {
+                include_layers: true,
+                cwd: Some(cwd.display().to_string()),
+            },
+        })
+        .await
+        .wrap_err("config/read failed in TUI")
+    {
+        Ok(response) => Ok(Some(response)),
         Err(err)
             if matches!(
                 err.downcast_ref::<TypedRequestError>(),

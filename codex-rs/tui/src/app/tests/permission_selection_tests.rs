@@ -39,6 +39,7 @@ proxy_url = "http://127.0.0.1:43128"
         /*replay_kind*/ None,
     );
     assert!(app.chat_widget.is_user_turn_pending_or_running());
+    app.runtime_approvals_reviewer_override = Some(ApprovalsReviewer::AutoReview);
     let before = RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref());
     let profile_id = if before
         .active_permission_profile

@@ -44,6 +44,7 @@ pub(crate) struct TrustDirectoryWidget {
 pub(crate) enum TrustCancelAction {
     Quit,
     AgentsOverview,
+    CurrentTask,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +92,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 match self.cancel {
                     TrustCancelAction::Quit => "Quit",
                     TrustCancelAction::AgentsOverview => "Back to Agent Command Center",
+                    TrustCancelAction::CurrentTask => "Keep current directory",
                 },
                 TrustDirectorySelection::Quit,
             ),
@@ -130,6 +132,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 match self.cancel {
                     TrustCancelAction::Quit => " quit",
                     TrustCancelAction::AgentsOverview => " back",
+                    TrustCancelAction::CurrentTask => " cancel",
                 }
                 .dim(),
             ]))
@@ -351,6 +354,20 @@ mod tests {
             .expect("draw");
 
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn directory_change_consent_can_keep_current_directory() {
+        let mut widget = widget(/*error*/ None);
+        widget.cancel = TrustCancelAction::CurrentTask;
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
+        terminal
+            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        insta::assert_snapshot!(terminal.backend());
+        widget.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(widget.should_quit());
     }
 
     #[test]

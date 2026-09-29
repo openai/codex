@@ -103,30 +103,33 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
 
     let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
     server.thread_params_mode = ThreadParamsMode::Remote;
-    let resumed = server
-        .resume_thread(
-            &local_settings,
-            client_config.clone(),
-            thread_id,
-            ResumeModelSettings::RestoreFromThread,
-        )
-        .await?;
-    assert_eq!(
-        resumed
-            .session
-            .active_permission_profile
-            .as_ref()
-            .map(|profile| profile.id.as_str()),
-        Some("server-only")
-    );
-    assert_eq!(
-        resumed.session.approval_policy,
-        codex_app_server_protocol::AskForApproval::Never
-    );
-    assert_eq!(
-        resumed.session.approvals_reviewer,
-        codex_protocol::config_types::ApprovalsReviewer::AutoReview
-    );
+    for mode in [ThreadParamsMode::Embedded, ThreadParamsMode::Remote] {
+        server.thread_params_mode = mode;
+        let resumed = server
+            .resume_thread_with_permission_overrides(
+                &local_settings,
+                client_config.clone(),
+                thread_id,
+                ResumeModelSettings::RestoreFromThread,
+                crate::resume_permissions::ResumePermissions::default(),
+            )
+            .await?;
+        assert_eq!(
+            (
+                resumed
+                    .session
+                    .active_permission_profile
+                    .map(|profile| profile.id),
+                resumed.session.approval_policy,
+                resumed.session.approvals_reviewer,
+            ),
+            (
+                Some("server-only".to_string()),
+                codex_app_server_protocol::AskForApproval::Never,
+                codex_protocol::config_types::ApprovalsReviewer::AutoReview,
+            ),
+        );
+    }
     // A locally remembered profile may have been removed since selection.
     let stale_selection = crate::app_event::PermissionProfileSelection {
         profile_id: "removed-profile".into(),
@@ -192,6 +195,42 @@ async fn remote_resume_restores_saved_server_profile_without_permission_override
     assert_eq!(
         explicit_fork.session.permission_profile,
         codex_protocol::models::PermissionProfile::read_only()
+    );
+    server.shutdown().await?;
+    let extra = tempfile::tempdir()?;
+    let mut overrides = crate::legacy_core::config::ConfigOverrides {
+        default_permissions: Some(":workspace".into()),
+        additional_writable_roots: vec![extra.path().to_path_buf()],
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .harness_overrides(overrides.clone())
+        .build()
+        .await?;
+    let mut server = crate::start_embedded_app_server_for_picker(&config).await?;
+    overrides.default_permissions = None; // Exercise --add-dir without a profile flag.
+    let permissions =
+        crate::resume_permissions::ResumePermissions::from_overrides(&config, &overrides);
+    let resumed = server
+        .resume_thread_with_permission_overrides(
+            &local_settings,
+            config.clone(),
+            thread_id,
+            ResumeModelSettings::RestoreFromThread,
+            permissions,
+        )
+        .await?;
+    assert_eq!(
+        resumed.session.runtime_workspace_roots,
+        config.workspace_roots
+    );
+    assert!(
+        resumed
+            .session
+            .permission_profile
+            .file_system_sandbox_policy()
+            .can_write_local_path_with_cwd(extra.path(), config.cwd.as_path())
     );
     server.shutdown().await?;
     Ok(())

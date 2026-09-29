@@ -1297,19 +1297,25 @@ impl App {
             Ok(config) => config,
             Err(control) => return Ok(control),
         };
-        let baseline_approval = resume_config.permissions.approval_policy.value();
-        let baseline_permissions = RuntimePermissionProfileOverride::from_config(&resume_config);
-        self.apply_runtime_policy_overrides(&mut resume_config, RuntimePolicyOverrideScope::All);
+        if let Err(error) = self.apply_runtime_policy_overrides(
+            &mut resume_config,
+            RuntimePolicyOverrideScope::ExplicitOnly,
+        ) {
+            self.add_session_picker_error(format!("{error:#}"));
+            return Ok(AppRunControl::Continue);
+        }
+        let permission_overrides = self.resume_permission_overrides(&resume_config);
 
         if let Some(history_mode) = target_session.history_mode {
             app_server.remember_thread_history_mode(target_session.thread_id, history_mode);
         }
         let resumed = app_server
-            .resume_thread(
+            .resume_thread_with_permission_overrides(
                 &local_settings,
                 resume_config.clone(),
                 target_session.thread_id,
                 self.resume_model_settings(),
+                permission_overrides,
             )
             .await;
         let mut history_notice = None;
@@ -1381,16 +1387,22 @@ impl App {
                             .add_info_message(notice.to_string(), /*hint*/ None);
                     }
                 }
-                if self.app_server_target.uses_remote_workspace() {
-                    let config = self.chat_widget.config_ref();
-                    let approval = config.permissions.approval_policy.value();
-                    self.runtime_approval_policy_override = (approval != baseline_approval)
-                        .then_some(RuntimeApprovalPolicyOverride::Restored(approval.into()));
-                    self.runtime_permission_profile_override = (!baseline_permissions
-                        .matches_config(config))
-                    .then(|| RuntimePermissionProfileOverride::from_restored_config(config));
-                }
                 self.backfill_loaded_subagent_threads(app_server).await;
+                if matches!(
+                    self.runtime_approval_policy_override,
+                    Some(RuntimeApprovalPolicyOverride::Restored(_))
+                ) {
+                    self.runtime_approval_policy_override = None;
+                }
+                if self
+                    .runtime_permission_profile_override
+                    .as_ref()
+                    .is_some_and(|profile| {
+                        profile.turn_override == RuntimePermissionProfileTurnOverride::Preserve
+                    })
+                {
+                    self.runtime_permission_profile_override = None;
+                }
                 if !read_only {
                     self.replay_agents_overview_requests(app_server, resumed_thread_id)
                         .await;

@@ -324,6 +324,7 @@ where
             "model/list" => Some(json!({"result": {"data": [], "nextCursor": null}})),
             "collaborationMode/list" => Some(json!({"result": {"data": []}})),
             "configRequirements/read" => Some(json!({"result": {"requirements": null}})),
+            "config/read" => Some(json!({"error": {"code": -32601, "message": "unsupported"}})),
             _ => respond(request).await,
         };
         let Some(mut response) = response else {

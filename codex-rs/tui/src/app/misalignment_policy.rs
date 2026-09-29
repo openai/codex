@@ -115,12 +115,16 @@ impl App {
             return;
         };
         let config = self.chat_widget.config_ref();
-        let permissions_override = Self::turn_permissions_override_from_config(
-            config,
-            config.permissions.active_permission_profile().as_ref(),
+        let explicit_profile =
             self.runtime_permission_profile_override
                 .as_ref()
-                .and_then(RuntimePermissionProfileOverride::turn_permission_profile),
+                .filter(|profile| {
+                    profile.turn_override == RuntimePermissionProfileTurnOverride::LegacySandbox
+                });
+        let permissions_override = Self::turn_permissions_override_from_config(
+            config,
+            explicit_profile.and_then(|profile| profile.active_permission_profile.as_ref()),
+            explicit_profile.and_then(RuntimePermissionProfileOverride::turn_permission_profile),
         );
         let Ok((sandbox_policy, permissions)) =
             turn_permissions_overrides(permissions_override, config.cwd.as_path())

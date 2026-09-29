@@ -256,8 +256,10 @@ async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
                 &server,
                 &cli_kv_overrides,
                 &harness_overrides,
+                &EnvironmentManager::default_for_tests()
             )
             .await?
+            .server_defaults_read
         );
         let selected_model = startup_model(&config, &bootstrap, /*server_defaults_read*/ true);
         let started = crate::app_server_session::start_thread_with_request_handle(
@@ -285,8 +287,13 @@ async fn fresh_startup_uses_server_defaults_with_explicit_and_managed_precedence
         );
         assert_eq!(started.session.model, expected_model, "{choice}");
         assert_eq!(
-            recorded_params(&requests, "config/read"),
-            vec![serde_json::json!({"cwd": server_config.cwd.display().to_string()})],
+            recorded_params(&requests, "config/read")
+                .into_iter()
+                .filter(|params| !params["cwd"].is_null())
+                .collect::<Vec<_>>(),
+            vec![
+                serde_json::json!({"cwd": server_config.cwd.display().to_string(), "includeLayers": true})
+            ],
         );
         server.shutdown().await?;
         proxy.await??;
@@ -307,7 +314,7 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         )?;
         std::fs::write(
             server_home.path().join("config.toml"),
-            "model_reasoning_effort = \"high\"\n",
+            "model_reasoning_effort = \"high\"\nsandbox_mode = \"read-only\"\n",
         )?;
         let mut config = ConfigBuilder::default()
             .codex_home(client_home.path().to_path_buf())
@@ -341,14 +348,21 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         if override_cwd {
             server = server.with_remote_cwd_override(Some(launch_cwd.path().to_path_buf()));
         }
+        assert!(config.config_layer_stack.is_projectless());
         let bootstrap = server.bootstrap(&config).await?;
         assert_eq!(bootstrap.default_model, "stale-client-model");
-        let defaults_read =
-            prepare_fresh_startup_config(&mut config, &server, &[], &ConfigOverrides::default())
-                .await?;
-        assert!(defaults_read);
+        let defaults_read = prepare_fresh_startup_config(
+            &mut config,
+            &server,
+            &[],
+            &ConfigOverrides::default(),
+            &EnvironmentManager::default_for_tests(),
+        )
+        .await?;
+        assert!(defaults_read.server_defaults_read);
+        assert!(!defaults_read.prompt_windows_sandbox);
         assert_eq!(config.model, None);
-        let selected_model = startup_model(&config, &bootstrap, defaults_read);
+        let selected_model = startup_model(&config, &bootstrap, defaults_read.server_defaults_read);
         assert_ne!(selected_model, "stale-client-model");
         let started = crate::app_server_session::start_thread_with_request_handle(
             server.request_handle(),
@@ -360,6 +374,16 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         )
         .await?;
         assert_eq!(started.session.model, selected_model);
+        assert!(
+            !started
+                .session
+                .permission_profile
+                .file_system_sandbox_policy()
+                .can_write_local_path_with_cwd(
+                    started.session.cwd.as_path(),
+                    started.session.cwd.as_path()
+                )
+        );
         let starts = recorded_params(&requests, "thread/start");
         assert_eq!(starts.len(), 1);
         assert_eq!(starts[0]["model"], serde_json::Value::Null);
@@ -382,9 +406,14 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         } else {
             ".".to_string()
         };
-        assert_eq!(
-            recorded_params(&requests, "config/read"),
-            vec![serde_json::json!({"cwd": expected_cwd})]
+        let reads = recorded_params(&requests, "config/read")
+            .into_iter()
+            .filter(|params| !params["cwd"].is_null())
+            .collect::<Vec<_>>();
+        assert!(!reads.is_empty());
+        assert!(
+            reads.iter().all(|params| params["cwd"] == expected_cwd),
+            "{reads:?}"
         );
         server.shutdown().await?;
         proxy.await??;

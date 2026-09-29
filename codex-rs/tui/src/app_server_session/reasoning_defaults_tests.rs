@@ -69,6 +69,12 @@ stream_max_retries = 0
 "#
             ),
         )?;
+        crate::legacy_core::config::set_project_trust_level(
+            home.path(),
+            &std::env::current_dir()?,
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .map_err(|error| color_eyre::eyre::eyre!(error.to_string()))?;
         let mut config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
             .build()

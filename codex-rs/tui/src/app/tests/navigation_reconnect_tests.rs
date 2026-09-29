@@ -194,6 +194,7 @@ async fn reconnect_daemon_command_center_after_socket_replacement_without_a_conv
                 let socket = tokio_tungstenite::accept_async(stream).await?;
                 methods.extend(serve_reconnect_requests(socket, |request| std::future::ready({
                     match request.method.as_str() {
+                        "config/read" => Some(json!({"error": {"code": -32601, "message": "unsupported"}})),
                         "thread/loaded/list" if connection == 0 => None,
                         "thread/resume" if connection == 1 && previous_thread.is_some() => None,
                         "thread/resume" if request.params.as_ref().unwrap()["threadId"] != child.to_string() && !server_available.load(std::sync::atomic::Ordering::SeqCst) => Some(json!({"error": {"code": -32600, "message": "thread no longer exists"}})),

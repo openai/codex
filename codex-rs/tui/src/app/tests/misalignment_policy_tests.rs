@@ -37,7 +37,7 @@ fn error_notification(
 
 #[tokio::test]
 async fn misalignment_continuation_requires_current_review_and_submits_once() -> Result<()> {
-    for reject in [false, true] {
+    for (reject, preserve) in [(false, false), (false, true), (true, false)] {
         let (mut app, mut rx, _) = make_test_app_with_channels().await;
         let (mut server, requests, proxy) = start_recording_app_server(
             &app.config,
@@ -57,9 +57,11 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
         session.active_permission_profile = None;
         app.active_thread_id = Some(thread_id);
         app.chat_widget.handle_thread_session(session);
-        app.runtime_permission_profile_override = Some(
-            RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref()),
-        );
+        app.runtime_permission_profile_override = Some(if preserve {
+            RuntimePermissionProfileOverride::from_restored_config(app.chat_widget.config_ref())
+        } else {
+            RuntimePermissionProfileOverride::from_config(app.chat_widget.config_ref())
+        });
         app.chat_widget.handle_server_notification(
             error_notification(thread_id, "failed-turn", policy_error()),
             /*replay_kind*/ None,
@@ -191,9 +193,7 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
                 ),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(config.approvals_reviewer.into()),
-                sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::ReadOnly {
-                    network_access: false
-                }),
+                sandbox_policy: (!preserve).then(|| config.legacy_sandbox_policy().into()),
                 input: vec![codex_app_server_protocol::UserInput::Text {
                     text: "Continue **only** within the requested scope.\nDo not edit files."
                         .to_string(),

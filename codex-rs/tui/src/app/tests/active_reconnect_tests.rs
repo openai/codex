@@ -205,6 +205,7 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
             );
         let mut tui = crate::tui::test_support::make_test_tui()?;
         if pending_profile {
+            app.runtime_approvals_reviewer_override = Some(ApprovalsReviewer::User);
             app.pending_server_profiles.insert(
                 id,
                 PermissionProfileSelection {
@@ -302,6 +303,15 @@ async fn reconnect_restores_history_permissions_and_resumes_unsent_input() -> Re
             );
         }
         assert!(app.pending_server_profiles.is_empty());
+        if pending_profile {
+            assert_eq!(
+                app.resume_permission_overrides(&app.config),
+                crate::resume_permissions::ResumePermissions {
+                    approvals_reviewer: true,
+                    ..Default::default()
+                }
+            );
+        }
         assert!(!app.pending_managed_worktree_creation);
         assert!(
             !app.agents_overview
@@ -518,7 +528,7 @@ async fn reconnect_reconciles_offscreen_pending_profile_before_restoring_permiss
                 "thread/read" => json!({"result": {"thread": thread(primary)}}),
                 "turn/start" => {
                     let params = request.params.as_ref().unwrap();
-                    assert_eq!(params["permissions"], "server-only");
+                    assert_eq!(params["permissions"], serde_json::Value::Null);
                     assert_eq!(params["approvalPolicy"], "on-request");
                     assert_eq!(params["sandboxPolicy"], json!(null));
                     json!({"result": {"turn": {"id": "fresh", "items": [], "status": "inProgress"}}})

@@ -190,7 +190,7 @@ pub(super) async fn start_recording_app_server(
         blocked_thread_list,
         failed_thread_name,
         crate::app_server_session::ThreadParamsMode::Embedded,
-        LoaderOverrides::default(),
+        LoaderOverrides::without_managed_config_for_tests(),
     )
     .await
 }
@@ -1764,8 +1764,11 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             },
         })
         .await?;
-    assert!(source_settings.active_permission_profile.is_none());
-    let source_sandbox = serde_json::to_value(source_settings.sandbox)?;
+    let source_sandbox = if source_settings.active_permission_profile.is_some() {
+        serde_json::Value::Null
+    } else {
+        serde_json::to_value(source_settings.sandbox)?
+    };
     spawn_approved_task_tool_call(
         &app,
         &app_server,
@@ -1830,6 +1833,16 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
             .last()
             .expect("background task creation")["projectId"],
         project.project.id
+    );
+    assert_eq!(
+        recorded_params(&requests, "thread/start")
+            .last()
+            .expect("background task creation")["permissions"],
+        serde_json::json!(
+            source_settings
+                .active_permission_profile
+                .map(|profile| profile.id)
+        )
     );
     let turn = recorded_params(&requests, "turn/start")
         .pop()
@@ -3805,7 +3818,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     let requirements = codex_home.path().join("requirements.toml");
     let rules = "allowed_approval_policies=[\"untrusted\"]\nallowed_sandbox_modes=[\"read-only\"]";
     fs::write(&requirements, rules)?;
-    fs::create_dir_all(unknown.join(".git"))?;
+    fs::create_dir_all(unknown.join(".codex"))?;
     for dir in [&trusted, &untrusted, &mismatch, &failed] {
         let trust = [T::Trusted, T::Untrusted][usize::from(dir == &untrusted)];
         crate::legacy_core::config::set_project_trust_level(codex_home.path(), dir, trust)
@@ -3851,6 +3864,30 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         thread_id,
         requested_cwd: path.into(),
     };
+    let mut stale_config = app.rebuild_config_for_cwd(untrusted.clone()).await?;
+    stale_config.active_project.trust_level = None;
+    app.app_server_target = crate::AppServerTarget::LocalDaemon {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:8765")?,
+        allow_embedded_fallback: false,
+    };
+    history();
+    assert!(
+        app.confirm_directory_trust(
+            &mut tui,
+            &mut server,
+            &mut stale_config,
+            &untrusted,
+            crate::onboarding::DirectoryTrustOptions {
+                cancel: Some(crate::onboarding::TrustCancelAction::CurrentTask),
+                ..Default::default()
+            },
+            /*startup_draft*/ None,
+        )
+        .await
+        .is_err()
+    );
+    assert_snapshot!(history().join(""), @"■ Unable to check folder trust: Folder trust changed. Reopen the destination with its restricted settings.");
+    app.app_server_target = crate::AppServerTarget::Embedded;
     for (path, kind, expected) in [
         ("missing", "local", "Cannot access directory"),
         ("../config.toml", "local", "Not a directory"),
@@ -3860,9 +3897,12 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         ("../trusted", "running", "another agent is running"),
         ("../trusted", "active", "another agent is running"),
         ("../trusted", "mcp", "inventory is still loading"),
+        ("../unknown", "main", "background terminals"),
+        ("../unknown", "child", "background terminals"),
         ("../trusted", "approval", "approval policy override"),
         ("../trusted", "profile", "permission profile override"),
         ("../trusted", "reviewer", "reviewer"),
+        ("../trusted", "standalone_reviewer", "reviewer"),
         ("../p", "named", "different settings"),
         (
             "../trusted",
@@ -3870,19 +3910,22 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
             "Permission profile cannot be preserved",
         ),
         ("../p", "keymap", "open_transcript"),
-        ("../unknown", "local", "This directory is not trusted"),
-        ("../trusted", "main", "background terminals"),
-        ("../trusted", "child", "background terminals"),
     ] {
         app.config.approvals_reviewer = ApprovalsReviewer::User;
-        if kind == "reviewer" {
+        if matches!(kind, "reviewer" | "standalone_reviewer") {
             app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             fs::write(&requirements, "allowed_approvals_reviewers = [\"user\"]")?;
         }
         app.agent_navigation.set_running(child, kind == "running");
         store.lock().await.active_turn_id = (kind == "active").then(|| "active".into());
-        app.loader_overrides.system_requirements_path =
-            matches!(kind, "approval" | "profile" | "reviewer").then_some(requirements.clone());
+        app.loader_overrides.system_requirements_path = matches!(
+            kind,
+            "approval" | "profile" | "reviewer" | "standalone_reviewer"
+        )
+        .then_some(requirements.clone());
+        app.runtime_approvals_reviewer_override =
+            matches!(kind, "reviewer" | "standalone_reviewer")
+                .then_some(ApprovalsReviewer::AutoReview);
         app.harness_overrides.permission_profile =
             (kind != "named").then_some(PermissionProfile::workspace_write());
         app.runtime_approval_policy_override = (kind == "approval").then_some(
@@ -3925,9 +3968,14 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         assert_eq!(app.chat_widget.thread_id(), Some(original));
         assert_eq!(app.config.cwd, current.clone().abs());
         assert!(app.runtime_working_directory_override.is_none());
-        let count = requests.lock().expect("request recorder lock").len();
-        let checked = usize::from(kind == "main") + 2 * usize::from(kind == "child");
-        assert_eq!(count, checked, "{kind}");
+        assert!(
+            recorded_params(&requests, "thread/start").is_empty(),
+            "{kind}"
+        );
+        assert!(
+            recorded_params(&requests, "thread/fork").is_empty(),
+            "{kind}"
+        );
         let listed = recorded_params(&requests, "thread/backgroundTerminals/list");
         let mut ids = listed.iter().zip([original, child]);
         assert!(ids.all(|(p, id)| p["threadId"] == id.to_string()));
@@ -3984,6 +4032,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         child, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
     );
     app.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::AutoReview);
+    app.runtime_approvals_reviewer_override = Some(ApprovalsReviewer::AutoReview);
     app.runtime_permission_profile_override =
         Some(RuntimePermissionProfileOverride::from_config(&app.config));
     for (path, expected) in [(&failed, 0), (&trusted, 2)] {
@@ -4021,6 +4070,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     let configured = app.primary_session_configured.as_ref().expect("session");
     let source = codex_utils_path_uri::PathUri::from_abs_path(&agents.abs());
     assert!(configured.instruction_source_paths.contains(&source));
+    assert_eq!(configured.approvals_reviewer, ApprovalsReviewer::AutoReview);
     let (cwd, result) = (current.clone(), Err("stale skills".into()));
     let skills = AppEvent::SkillsListLoaded { cwd, result };
     let (cwd, plugins) = (current.clone(), Some(vec![]));
@@ -4073,11 +4123,18 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     app.harness_overrides.bypass_hook_trust = Some(true);
     requests.lock().expect("request recorder lock").clear();
-    app.change_working_directory(&mut tui, &mut server, trusted.abs())
+    app.change_working_directory(&mut tui, &mut server, trusted.clone().abs())
         .await;
     assert!(app.config.bypass_hook_trust && !app.chat_widget.has_active_view());
     assert!(recorded_params(&requests, "hooks/list").is_empty());
     app.harness_overrides.bypass_hook_trust = None;
+    app.harness_overrides.permission_profile = None;
+    app.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Restored(
+        AskForApproval::OnRequest,
+    ));
+    app.runtime_permission_profile_override = Some(
+        RuntimePermissionProfileOverride::from_restored_config(&app.config),
+    );
     requests.lock().expect("request recorder lock").clear();
     app.change_working_directory(&mut tui, &mut server, untrusted.clone().abs())
         .await;
@@ -4087,6 +4144,20 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     assert_eq!(rec(req, "thread/fork")[0]["approvalPolicy"], "untrusted");
     let warning = "Project-local config, hooks, and exec policies are disabled";
     assert!(history().iter().any(|line| line.contains(warning)));
+    let untrusted_permissions = app.config.permissions.permission_profile().clone();
+    app.change_working_directory(&mut tui, &mut server, trusted.clone().abs())
+        .await;
+    assert_eq!(app.config.cwd, trusted.abs());
+    assert_eq!(
+        (
+            app.config.permissions.approval_policy.value(),
+            app.config.permissions.permission_profile()
+        ),
+        (
+            AskForApproval::UnlessTrusted.to_core(),
+            &untrusted_permissions
+        )
+    );
     server.shutdown().await?;
     proxy.await??;
     Ok(())
@@ -4679,6 +4750,12 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
         let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
         app.app_event_tx = AppEventSender::new(tx);
 
+        app.runtime_approval_policy_override = Some(RuntimeApprovalPolicyOverride::Restored(
+            AskForApproval::Never,
+        ));
+        app.runtime_permission_profile_override = Some(
+            RuntimePermissionProfileOverride::from_restored_config(&app.config),
+        );
         Box::pin(app.select_agents_overview_thread(&mut tui, &mut server, thread_id)).await?;
         assert_eq!(recorded_params(&requests, "thread/resume").len(), 1);
         assert!(recorded_params(&requests, "turn/start").is_empty());
@@ -4706,6 +4783,13 @@ async fn command_center_read_only_open_requests_and_failure_preservation() -> Re
         } else {
             assert_eq!(app.current_displayed_thread_id(), Some(thread_id));
             assert!(app.chat_widget.is_external_writer_view());
+            assert_eq!(
+                (
+                    app.runtime_approval_policy_override,
+                    app.runtime_permission_profile_override.as_ref()
+                ),
+                (None, None)
+            );
             assert_eq!(
                 app.thread_event_channels[&thread_id].attachment(),
                 ThreadEventAttachment::ExternalWriter

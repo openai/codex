@@ -272,22 +272,24 @@ impl ChatWidget {
     ) {
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", test))]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, show_now: bool) {
         let setup_is_required = !self.windows_sandbox_config.is_enabled()
             || self.elevated_windows_sandbox_setup_required();
         if show_now
             && setup_is_required
-            && let Some(preset) = builtin_approval_presets()
+            && let Some(mut preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")
         {
+            if self.config.active_project.trust_level.is_none()
+                && self.config.config_layer_stack.is_projectless()
+            {
+                preset.approval = self.config.permissions.approval_policy.value();
+            }
             self.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
         }
     }
-
-    #[cfg(all(not(target_os = "windows"), test))]
-    pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self, _show_now: bool) {}
 
     #[cfg(any(target_os = "windows", test))]
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {

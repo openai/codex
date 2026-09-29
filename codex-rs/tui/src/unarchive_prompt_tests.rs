@@ -32,6 +32,7 @@ fn render(screen: &UnarchivePrompt) -> String {
 fn resume_prompt_snapshot() {
     let screen = prompt(SessionStartAction::Resume(
         ResumeModelSettings::RestoreFromThread,
+        crate::resume_permissions::ResumePermissions::default(),
     ));
     insta::assert_snapshot!(render(&screen), @"
     This conversation is archived

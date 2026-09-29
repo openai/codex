@@ -61,6 +61,7 @@ use uuid::Uuid;
 
 #[path = "directory_trust.rs"]
 mod directory_trust;
+pub(crate) use directory_trust::DirectoryTrustOptions;
 pub(crate) use directory_trust::check_directory_trust;
 
 #[allow(clippy::large_enum_variant)]

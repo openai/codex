@@ -571,11 +571,36 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
     );
 }
 
-#[cfg(target_os = "windows")]
 #[tokio::test]
 async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
+    let cwd = tempfile::tempdir().unwrap();
+    chat.config = crate::legacy_core::config::ConfigBuilder::default()
+        .codex_home(chat.config.codex_home.to_path_buf())
+        .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+        .harness_overrides(crate::legacy_core::config::ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .unwrap();
+    assert!(chat.config.config_layer_stack.is_projectless());
+    let approval = codex_protocol::protocol::AskForApproval::Granular(
+        codex_protocol::protocol::GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: false,
+            skill_approval: false,
+            request_permissions: true,
+            mcp_elicitations: true,
+        },
+    );
+    chat.config
+        .permissions
+        .approval_policy
+        .set(approval)
+        .unwrap();
     chat.set_windows_sandbox_mode(/*mode*/ None);
 
     chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
@@ -597,6 +622,15 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         popup.contains("Quit"),
         "expected startup prompt to offer quit action: {popup}"
     );
+    assert_chatwidget_snapshot!("projectless_windows_sandbox_setup", popup);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let preset = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|event| match event {
+            AppEvent::BeginWindowsSandboxElevatedSetup { preset, .. } => Some(preset),
+            _ => None,
+        })
+        .expect("sandbox setup event");
+    assert_eq!(preset.approval, approval);
 }
 
 #[cfg(target_os = "windows")]

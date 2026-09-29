@@ -67,6 +67,19 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
     let read_trust = async |cwd: &Path, host| {
         read_remote_project_trust(app_server.request_handle(), cwd, host).await
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let non_utf8 = project_root.join(std::ffi::OsString::from_vec(vec![0xff]));
+        let error = read_trust(&non_utf8, ProjectTrustHost::Local)
+            .await
+            .expect_err("trust checks must not inspect a lossy replacement path");
+        assert!(
+            error
+                .to_string()
+                .contains("directory path is not valid UTF-8")
+        );
+    }
     let relative_cwd = pathdiff::diff_paths(&project_cwd, std::env::current_dir()?)
         .ok_or_else(|| color_eyre::eyre::eyre!("failed to calculate relative project path"))?;
 
@@ -262,17 +275,28 @@ async fn remote_project_trust_guards_thread_start_and_preserves_repository_decis
         }
         assert_eq!(
             read_trust(&canonical_project_cwd, ProjectTrustHost::Local).await?,
-            Some(RemoteProjectTrust {
-                trust_level: marked_root.then_some(TrustLevel::Untrusted),
+            marked_root.then(|| RemoteProjectTrust {
+                trust_level: Some(TrustLevel::Untrusted),
                 cwd: canonical_project_cwd.clone(),
-                trust_target: if marked_root {
-                    PathBuf::from(project_trust_key(&project_root))
-                } else {
-                    canonical_project_cwd.clone()
-                },
+                trust_target: PathBuf::from(project_trust_key(&project_root)),
             })
         );
     }
+    // A gitfile checkout is still a project when configured markers exclude Git.
+    write_config_batch(
+        app_server.request_handle(),
+        vec![replace_config_value(
+            "project_root_markers",
+            serde_json::json!([]),
+        )],
+    )
+    .await?;
+    std::fs::write(project_cwd.join(".git"), "gitdir: ../separate-git-dir\n")?;
+    assert!(
+        read_trust(&canonical_project_cwd, ProjectTrustHost::Local)
+            .await?
+            .is_some()
+    );
     app_server.shutdown().await?;
     Ok(())
 }
@@ -291,4 +315,25 @@ fn format_config_error_preserves_server_validation_message() {
         "config/batchWrite failed in TUI: config/batchWrite failed: Invalid configuration: \
          features.fast_mode=true violates managed requirements; allowed set [fast_mode=false]"
     );
+}
+
+#[test]
+fn effective_defaults_accept_foreign_layer_paths() -> Result<()> {
+    let layers = serde_json::json!([
+        {"name": {"type": "system", "file": "/etc/codex/config.toml"}, "version": "1", "config": {}},
+        {"name": {"type": "project", "dotCodexFolder": "C:\\work\\.codex"}, "disabledReason": "untrusted", "version": "1", "config": {}}
+    ]);
+    let response: EffectiveConfig = serde_json::from_value(serde_json::json!({
+        "config": {"model": "server-model"},
+        "origins": {"model": {"name": {"type": "user", "file": "C:\\Users\\user\\.codex\\config.toml", "profile": null}, "version": "1"}},
+        "layers": layers,
+    }))?;
+    assert_eq!(
+        (
+            response.config.model.as_deref(),
+            serde_json::to_value(response.layers)?
+        ),
+        (Some("server-model"), layers)
+    );
+    Ok(())
 }

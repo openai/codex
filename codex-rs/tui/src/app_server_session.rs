@@ -2066,6 +2066,7 @@ fn thread_resume_params_from_config(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<&std::path::Path>,
     model_settings: ResumeModelSettings,
+    permission_overrides: crate::resume_permissions::ResumePermissions,
 ) -> ThreadResumeParams {
     if model_settings == ResumeModelSettings::PreserveExistingThread {
         return ThreadResumeParams {
@@ -2118,13 +2119,19 @@ fn thread_resume_params_from_config(
         ),
         ..ThreadResumeParams::default()
     };
-    if thread_params_mode == ThreadParamsMode::Remote {
-        // Resuming restores the server's saved permission settings, including named profiles.
+    if thread_params_mode == ThreadParamsMode::Remote || !permission_overrides.approval_policy {
         params.approval_policy = None;
+    }
+    if thread_params_mode == ThreadParamsMode::Remote || !permission_overrides.approvals_reviewer {
         params.approvals_reviewer = None;
+    }
+    if thread_params_mode == ThreadParamsMode::Remote || !permission_overrides.profile {
         params.sandbox = None;
         params.permissions = None;
         remove_permission_config_overrides(&mut params.config);
+    }
+    if !permission_overrides.workspace_roots {
+        params.runtime_workspace_roots = None;
     }
     params
 }
@@ -2294,23 +2301,14 @@ async fn thread_session_state_from_thread_resume_response(
     response: &ThreadResumeResponse,
     local_settings: &LocalSettings,
     config: &Config,
-    thread_params_mode: ThreadParamsMode,
+    _thread_params_mode: ThreadParamsMode,
 ) -> Result<ThreadSessionState, String> {
-    let permission_profile = if matches!(thread_params_mode, ThreadParamsMode::Embedded)
-        && response.active_permission_profile.is_none()
-    {
-        PermissionProfile::from_legacy_sandbox_policy_for_cwd(
-            &response.sandbox.to_core(),
-            response.cwd.as_path(),
-        )
-    } else {
-        display_permission_profile_from_thread_response(
-            &response.sandbox,
-            response.cwd.as_path(),
-            config,
-            thread_params_mode,
-        )
-    };
+    // The server owns restored rules. This legacy projection is for display only;
+    // normal turns do not send it back as an execution override.
+    let permission_profile = PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+        &response.sandbox.to_core(),
+        response.cwd.as_path(),
+    );
     let mut session = thread_session_state_from_thread_response(
         &response.thread.id,
         crate::windows_sandbox::host_from_environments(response.thread.environments.as_deref()),
@@ -3175,6 +3173,7 @@ mod tests {
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
             ResumeModelSettings::OverrideFromCurrentConfig,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
         let fork = thread_fork_params_from_config(
             config,
@@ -3220,6 +3219,7 @@ mod tests {
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
             ResumeModelSettings::RestoreFromThread,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
 
         assert_eq!(resume.cwd, Some(remote_cwd.to_string_lossy().to_string()));
@@ -3316,6 +3316,7 @@ mod tests {
             ThreadParamsMode::Remote,
             Some(remote_cwd.as_path()),
             ResumeModelSettings::OverrideFromCurrentConfig,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
         let fork = thread_fork_params_from_config(
             config,
@@ -3371,6 +3372,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             ResumeModelSettings::OverrideFromCurrentConfig,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
         let fork = thread_fork_params_from_config(
             config,
@@ -3481,6 +3483,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             ResumeModelSettings::RestoreFromThread,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
 
         assert_eq!(params.model, None);
@@ -3506,6 +3509,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             ResumeModelSettings::PreserveExistingThread,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
 
         assert_eq!(
@@ -3824,6 +3828,7 @@ mod tests {
                 mode,
                 /*remote_cwd_override*/ None,
                 ResumeModelSettings::OverrideFromCurrentConfig,
+                crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
             );
             let fork = thread_fork_params_from_config(
                 config.clone(),
@@ -3935,6 +3940,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             ResumeModelSettings::OverrideFromCurrentConfig,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
         let control_fork = thread_fork_params_from_config(
             config.clone(),
@@ -3965,6 +3971,7 @@ mod tests {
             ThreadParamsMode::Embedded,
             /*remote_cwd_override*/ None,
             ResumeModelSettings::OverrideFromCurrentConfig,
+            crate::resume_permissions::ResumePermissions::CURRENT_CONFIG,
         );
         let treatment_fork = thread_fork_params_from_config(
             config,

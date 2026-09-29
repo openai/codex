@@ -4,6 +4,7 @@ use super::focus_palette::PtyCodex;
 use super::focus_palette::write_test_config;
 use anyhow::Result;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::RequestId;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -19,7 +20,10 @@ use tokio_tungstenite::tungstenite::Message;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> Result<()> {
     for trust_level in [None, Some("untrusted")] {
-        let repo_root = codex_utils_cargo_bin::repo_root()?;
+        let workspace = tempfile::tempdir()?;
+        let repo_root = workspace.path().canonicalize()?;
+        std::fs::create_dir(repo_root.join(".git"))?;
+        std::fs::write(repo_root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
         let codex_home = tempfile::tempdir_in("/tmp")?;
         // The server's trust decision must win over the client's trusted-folder setting.
         write_test_config(codex_home.path(), &repo_root)?;
@@ -80,11 +84,7 @@ async fn connected_trust_cancellation_and_acceptance_control_task_creation() -> 
                                 json!({"account": {"type": "apiKey"}, "requiresOpenaiAuth": false})
                             }
                             "config/read" => {
-                                if request
-                                    .params
-                                    .as_ref()
-                                    .is_some_and(|params| params["includeLayers"] == true)
-                                {
+                                if matches!(&request.id, RequestId::String(id) if id.starts_with("tui-project-trust-read-")) {
                                     trust_reads.fetch_add(1, Ordering::SeqCst);
                                 }
                                 json!({"config": {"model": "gpt-5.6-terra", "projects": {

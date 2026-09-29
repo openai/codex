@@ -58,36 +58,43 @@ pub(super) fn has_explicit_resume_permission_override(
     config: &Config,
     overrides: &ConfigOverrides,
 ) -> bool {
-    overrides.approval_policy.is_some()
-        || overrides.approvals_reviewer.is_some()
-        || overrides.sandbox_mode.is_some()
-        || overrides.permission_profile.is_some()
-        || overrides.default_permissions.is_some()
-        || !overrides.additional_writable_roots.is_empty()
-        || overrides.workspace_roots.is_some()
-        || config.config_layer_stack.layers_high_to_low().any(|layer| {
-            matches!(
-                &layer.name,
-                ConfigLayerSource::SessionFlags
-                    | ConfigLayerSource::User {
-                        profile: Some(_),
-                        ..
-                    }
-            ) && [
-                "approval_policy",
-                "approvals_reviewer",
-                "sandbox_mode",
-                "default_permissions",
-                "permissions",
-                "network",
-                "sandbox_workspace_write",
-            ]
-            .iter()
-            .any(|key| layer.config.get(*key).is_some())
-        })
+    // A directory choice is supported remotely even when permission overrides are not.
+    let selected = crate::resume_permissions::ResumePermissions::from_overrides(
+        config,
+        &ConfigOverrides {
+            cwd: None,
+            ..overrides.clone()
+        },
+    );
+    selected.approval_policy
+        || selected.approvals_reviewer
+        || selected.profile
+        || selected.workspace_roots
 }
 
 impl App {
+    pub(super) fn resume_permission_overrides(
+        &self,
+        config: &Config,
+    ) -> crate::resume_permissions::ResumePermissions {
+        let mut permission_overrides = crate::resume_permissions::ResumePermissions::from_overrides(
+            config,
+            &self.harness_overrides,
+        );
+        permission_overrides.approvals_reviewer |=
+            self.runtime_approvals_reviewer_override.is_some();
+        permission_overrides.approval_policy |= matches!(
+            self.runtime_approval_policy_override,
+            Some(RuntimeApprovalPolicyOverride::Explicit(_))
+        );
+        if let Some(profile) = self.runtime_permission_profile_override.as_ref()
+            && profile.turn_override == RuntimePermissionProfileTurnOverride::LegacySandbox
+        {
+            permission_overrides.profile = true;
+        }
+        permission_overrides
+    }
+
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
         overrides.cwd = Some(cwd.clone());
@@ -227,6 +234,8 @@ impl App {
                 .selected_permission_profiles
                 .insert(thread_id, profile_id.clone());
         }
+        self.runtime_approvals_reviewer_override =
+            approvals_reviewer.or(self.runtime_approvals_reviewer_override);
         self.runtime_permission_profile_override =
             Some(RuntimePermissionProfileOverride::from_config(&self.config));
         self.sync_active_thread_permission_settings_to_cached_session()
@@ -409,7 +418,7 @@ impl App {
         let mut config = self
             .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
-        self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::All);
+        self.apply_runtime_policy_overrides(&mut config, RuntimePolicyOverrideScope::All)?;
         self.local_settings = self.local_settings.reloaded(&config);
         self.refresh_server_version_overview_notice(CODEX_CLI_VERSION);
         // Other preferences have runtime caches and are adopted when the widget is replaced.
@@ -485,7 +494,7 @@ impl App {
         &mut self,
         config: &mut Config,
         scope: RuntimePolicyOverrideScope,
-    ) {
+    ) -> Result<()> {
         if let Some(policy) = self.runtime_approval_policy_override
             && (scope == RuntimePolicyOverrideScope::All
                 || matches!(policy, RuntimeApprovalPolicyOverride::Explicit(_)))
@@ -494,27 +503,38 @@ impl App {
                 .approval_policy
                 .set(policy.policy().to_core())
         {
+            if scope == RuntimePolicyOverrideScope::ExplicitOnly {
+                return Err(err).wrap_err("Failed to carry forward approval policy override");
+            }
             tracing::warn!(%err, "failed to carry forward approval policy override");
             self.chat_widget.add_error_message(format!(
                 "Failed to carry forward approval policy override: {err}"
             ));
         }
-        if let Some(profile_override) = self.runtime_permission_profile_override.as_ref()
-            && (scope == RuntimePolicyOverrideScope::All
-                || profile_override.turn_override
-                    == RuntimePermissionProfileTurnOverride::LegacySandbox)
-        {
-            match config
+        let profile_override =
+            self.runtime_permission_profile_override
+                .as_ref()
+                .filter(|profile| {
+                    scope == RuntimePolicyOverrideScope::All
+                        || profile.turn_override
+                            == RuntimePermissionProfileTurnOverride::LegacySandbox
+                });
+        if let Some(reviewer) = self.runtime_approvals_reviewer_override.or_else(|| {
+            profile_override
+                .filter(|profile| {
+                    profile.turn_override == RuntimePermissionProfileTurnOverride::Preserve
+                })
+                .map(|_| self.config.approvals_reviewer)
+        }) {
+            config
                 .config_layer_stack
                 .requirements()
                 .approvals_reviewer
-                .can_set(&profile_override.approvals_reviewer)
-            {
-                Ok(()) => config.approvals_reviewer = profile_override.approvals_reviewer,
-                Err(error) => self.chat_widget.add_error_message(format!(
-                    "Failed to carry forward approvals reviewer: {error}"
-                )),
-            }
+                .can_set(&reviewer)
+                .wrap_err("Failed to carry forward approvals reviewer")?;
+            config.approvals_reviewer = reviewer;
+        }
+        if let Some(profile_override) = profile_override {
             match config
                 .permissions
                 .set_permission_profile_from_session_snapshot(
@@ -527,6 +547,10 @@ impl App {
                     config.permissions.network = profile_override.network.clone();
                 }
                 Err(err) => {
+                    if scope == RuntimePolicyOverrideScope::ExplicitOnly {
+                        return Err(err)
+                            .wrap_err("Failed to carry forward permission profile override");
+                    }
                     tracing::warn!(%err, "failed to carry forward permission profile override");
                     self.chat_widget.add_error_message(format!(
                         "Failed to carry forward permission profile override: {err}"
@@ -534,6 +558,7 @@ impl App {
                 }
             }
         }
+        Ok(())
     }
 
     pub(super) fn set_approvals_reviewer_in_app_and_widget(&mut self, reviewer: ApprovalsReviewer) {
@@ -770,6 +795,7 @@ impl App {
             self.chat_widget.add_memories_enable_notice();
         }
         if approvals_reviewer_override.is_some() {
+            self.runtime_approvals_reviewer_override = approvals_reviewer_override;
             self.set_approvals_reviewer_in_app_and_widget(self.config.approvals_reviewer);
         }
         if approval_policy_override.is_some() {
@@ -798,6 +824,7 @@ impl App {
                 .add_error_message(format!("Failed to enable Approve for me: {err}"));
         }
         if permission_profile_override.is_some() {
+            self.runtime_approvals_reviewer_override = Some(self.config.approvals_reviewer);
             self.runtime_permission_profile_override =
                 Some(RuntimePermissionProfileOverride::from_config(&self.config));
         }
@@ -1059,6 +1086,7 @@ impl App {
         }
         let explicitly_selected =
             has_explicit_resume_permission_override(config, &self.harness_overrides)
+                || self.runtime_approvals_reviewer_override.is_some()
                 || matches!(
                     self.runtime_approval_policy_override,
                     Some(RuntimeApprovalPolicyOverride::Explicit(_))
@@ -1208,6 +1236,7 @@ impl App {
             return;
         }
 
+        self.runtime_approvals_reviewer_override = Some(self.config.approvals_reviewer);
         self.runtime_permission_profile_override =
             Some(RuntimePermissionProfileOverride::from_config(&self.config));
         self.sync_active_thread_permission_settings_to_cached_session()

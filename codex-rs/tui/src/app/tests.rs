@@ -56,6 +56,8 @@ mod pagination_completion_tests;
 mod patch_approval_tests;
 #[path = "tests/permission_selection_tests.rs"]
 mod permission_selection_tests;
+#[path = "tests/projectless_tests.rs"]
+mod projectless_tests;
 #[path = "tests/unavailable_commands_tests.rs"]
 mod unavailable_commands;
 
@@ -3083,7 +3085,7 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
     let selection = PermissionProfileSelection {
         profile_id: "server-only".into(),
         approval_policy: None,
-        approvals_reviewer: None,
+        approvals_reviewer: Some(ApprovalsReviewer::User),
         display_label: "server-only".into(),
     };
     app.select_permission_profile(&mut server, selection.clone())
@@ -3096,6 +3098,9 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
     let thread_id = started.session.thread_id;
     app.enqueue_primary_thread_session(started.session, started.turns)
         .await?;
+    app.runtime_approvals_reviewer_override = Some(ApprovalsReviewer::AutoReview);
+    app.runtime_permission_profile_override =
+        Some(RuntimePermissionProfileOverride::from_config(&app.config));
     while events.try_recv().is_ok() {}
     app.select_permission_profile(&mut server, selection.clone())
         .await;
@@ -3104,7 +3109,8 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
         @"• Permission selection requested: server-only"
     );
     let mut tui = crate::tui::test_support::make_test_tui()?;
-    app.select_permission_profile(&mut server, selection).await;
+    app.select_permission_profile(&mut server, selection.clone())
+        .await;
     insta::assert_snapshot!(
         next_history_message(&mut events),
         @"■ Wait for permissions to update before changing permissions."
@@ -3134,6 +3140,32 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
     )
     .await?;
     assert!(!app.pending_server_profiles.contains_key(&thread_id));
+    assert_eq!(
+        (
+            app.runtime_approvals_reviewer_override,
+            app.chat_widget.config_ref().approvals_reviewer
+        ),
+        (None, ApprovalsReviewer::User),
+    );
+    app.runtime_approvals_reviewer_override = Some(ApprovalsReviewer::User);
+    app.select_permission_profile(
+        &mut server,
+        PermissionProfileSelection {
+            approvals_reviewer: None,
+            ..selection.clone()
+        },
+    )
+    .await;
+    let settings = next_thread_settings_updated(&mut server, thread_id).await;
+    app.enqueue_thread_notification(
+        thread_id,
+        ServerNotification::ThreadSettingsUpdated(settings),
+    )
+    .await?;
+    assert_eq!(
+        app.runtime_approvals_reviewer_override,
+        Some(ApprovalsReviewer::User),
+    );
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:8765")?;
     app.app_server_target = crate::AppServerTarget::Remote { endpoint };
     while events.try_recv().is_ok() {}
@@ -3190,33 +3222,6 @@ async fn server_only_profile_selection_keeps_turns_on_the_selected_profile() -> 
 }
 
 #[tokio::test]
-async fn resume_rejects_selected_config_profile_permission_definitions() -> Result<()> {
-    let home = tempdir()?;
-    std::fs::write(
-        home.path().join("config.toml"),
-        "default_permissions = \":workspace\"\n",
-    )?;
-    let selected = home.path().join("work.config.toml");
-    std::fs::write(
-        &selected,
-        "default_permissions = \":workspace\"\n[permissions.unused]\nextends = \":read-only\"\n",
-    )?;
-    let mut loader = codex_config::LoaderOverrides::without_managed_config_for_tests();
-    loader.user_config_path = Some(selected.abs());
-    loader.user_config_profile = Some("work".parse()?);
-    let config = ConfigBuilder::default()
-        .codex_home(home.path().to_path_buf())
-        .loader_overrides(loader)
-        .build()
-        .await?;
-    assert!(config_persistence::has_explicit_resume_permission_override(
-        &config,
-        &ConfigOverrides::default()
-    ));
-    Ok(())
-}
-
-#[tokio::test]
 async fn remote_resume_rejects_explicit_permission_override() -> Result<()> {
     let (mut app, mut events, _ops) = make_test_app_with_channels().await;
     let endpoint = crate::resolve_remote_addr("ws://127.0.0.1:8765")?;
@@ -3228,13 +3233,8 @@ async fn remote_resume_rejects_explicit_permission_override() -> Result<()> {
     )?;
     app.config.codex_home = home.path().to_path_buf().abs();
     let mut server = crate::start_embedded_app_server_for_picker(&app.config).await?;
-    let selected = home.path().join("work.config.toml");
-    std::fs::write(
-        &selected,
-        "[permissions.unused]\nextends = \":read-only\"\n",
-    )?;
-    app.loader_overrides.user_config_path = Some(selected.abs());
-    app.loader_overrides.user_config_profile = Some("work".parse()?);
+    app.cli_kv_overrides
+        .push(("default_permissions".into(), ":workspace".into()));
     assert!(
         !config_persistence::has_explicit_resume_permission_override(
             &app.config,
@@ -3294,6 +3294,7 @@ default_permissions = "locked-down"
     app.harness_overrides.sandbox_mode = Some(SandboxMode::WorkspaceWrite);
     app.harness_overrides.permission_profile = Some(PermissionProfile::workspace_write());
 
+    app.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::AutoReview);
     assert!(
         app.apply_permission_profile_selection(PermissionProfileSelection {
             profile_id: "locked-down".to_string(),
@@ -3324,6 +3325,14 @@ default_permissions = "locked-down"
     assert_eq!(
         app.runtime_permission_profile_override,
         Some(RuntimePermissionProfileOverride::from_config(&app.config))
+    );
+    let mut destination = app.config.clone();
+    destination.approvals_reviewer = ApprovalsReviewer::User;
+    app.apply_runtime_policy_overrides(&mut destination, RuntimePolicyOverrideScope::ExplicitOnly)?;
+    assert_eq!(destination.approvals_reviewer, ApprovalsReviewer::User);
+    assert!(
+        !app.resume_permission_overrides(&destination)
+            .approvals_reviewer
     );
     let op = match app_event_rx.try_recv() {
         Ok(AppEvent::CodexOp(op)) => op,
@@ -6001,6 +6010,7 @@ async fn make_test_app() -> Box<App> {
         loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         runtime_approval_policy_override: None,
+        runtime_approvals_reviewer_override: None,
         runtime_permission_profile_override: None,
         file_search,
         transcript_cells: Vec::new(),
@@ -6117,6 +6127,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
             cloud_config_bundle: CloudConfigBundleLoader::default(),
             runtime_approval_policy_override: None,
+            runtime_approvals_reviewer_override: None,
             runtime_permission_profile_override: None,
             file_search,
             transcript_cells: Vec::new(),

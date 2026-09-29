@@ -739,7 +739,7 @@ impl App {
                 cwd,
                 approval_policy,
                 approvals_reviewer,
-                active_permission_profile,
+                active_permission_profile: _,
                 model,
                 effort,
                 summary,
@@ -830,10 +830,6 @@ impl App {
                     let selected_profile = self.pending_server_profiles.get(&thread_id);
                     let selected_active = selected_profile
                         .map(|profile| ActivePermissionProfile::new(profile.profile_id.clone()));
-                    let confirmed_active = (self.app_server_target.thread_params_mode()
-                        == crate::app_server_session::ThreadParamsMode::Remote)
-                        .then(|| config.permissions.active_permission_profile())
-                        .flatten();
                     let (turn_approval_policy, turn_approvals_reviewer) =
                         if let Some(profile) = selected_profile {
                             (
@@ -857,14 +853,21 @@ impl App {
                                 ),
                             )
                         };
+                    // Only explicit choices may override the saved server profile.
+                    let explicit_profile = self
+                        .runtime_permission_profile_override
+                        .as_ref()
+                        .filter(|profile| {
+                            profile.turn_override
+                                == RuntimePermissionProfileTurnOverride::LegacySandbox
+                        });
                     let permissions_override = Self::turn_permissions_override_from_config(
                         config,
-                        selected_active
-                            .as_ref()
-                            .or(confirmed_active.as_ref())
-                            .or(active_permission_profile.as_ref()),
-                        self.runtime_permission_profile_override
-                            .as_ref()
+                        selected_active.as_ref().or_else(|| {
+                            explicit_profile
+                                .and_then(|profile| profile.active_permission_profile.as_ref())
+                        }),
+                        explicit_profile
                             .and_then(RuntimePermissionProfileOverride::turn_permission_profile),
                     );
                     let response = app_server
@@ -1186,7 +1189,7 @@ impl App {
         {
             return Ok(());
         }
-        let mut permission_change_confirmed = false;
+        let mut confirmed_profile = None;
         if let ServerNotification::ThreadSettingsUpdated(notification) = &notification {
             self.apply_thread_settings_to_cached_session(thread_id, &notification.thread_settings)
                 .await;
@@ -1207,8 +1210,7 @@ impl App {
                         })
                 })
             {
-                self.pending_server_profiles.remove(&thread_id);
-                permission_change_confirmed = true;
+                confirmed_profile = self.pending_server_profiles.remove(&thread_id);
             }
         }
         let inferred_session = if let ServerNotification::ThreadStarted(started) = &notification
@@ -1296,7 +1298,13 @@ impl App {
                 .on_thread_settings_updated(settings.clone());
             notification = None;
         }
-        if permission_change_confirmed {
+        if let Some(selected) = confirmed_profile {
+            if self.chat_widget.thread_id() == Some(thread_id) {
+                if selected.approvals_reviewer.is_some() {
+                    self.runtime_approvals_reviewer_override = None;
+                }
+                self.runtime_permission_profile_override = None;
+            }
             if self.chat_widget.thread_id() == Some(thread_id)
                 && let Some(profile) = self
                     .chat_widget
@@ -1322,6 +1330,7 @@ impl App {
                     Some(RuntimeApprovalPolicyOverride::Explicit(
                         self.config.permissions.approval_policy.value().into(),
                     ));
+                self.runtime_approvals_reviewer_override = Some(self.config.approvals_reviewer);
                 self.runtime_permission_profile_override =
                     Some(RuntimePermissionProfileOverride::from_config(&self.config));
             }
@@ -1554,6 +1563,14 @@ impl App {
             tracing::warn!(%err, "failed to sync app permissions from thread session");
         }
         self.config.approvals_reviewer = session.approvals_reviewer;
+        if !self.app_server_target.uses_remote_workspace() {
+            self.config
+                .workspace_roots
+                .clone_from(&session.runtime_workspace_roots);
+            self.config
+                .permissions
+                .set_workspace_roots(session.runtime_workspace_roots.clone());
+        }
 
         let thread_id = session.thread_id;
         self.pending_server_profiles.remove(&thread_id);
