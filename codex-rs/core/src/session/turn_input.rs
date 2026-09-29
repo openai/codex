@@ -202,13 +202,19 @@ impl PreparedTurnInputSettings {
     }
 }
 
+#[tracing::instrument(
+    name = "codex.turn_input",
+    level = "trace",
+    skip_all,
+    fields(conversation.id = %session.thread_id, turn.id)
+)]
 pub(super) async fn handle(
     session: &Arc<Session>,
     request: TurnInputRequest,
     mode: TurnInputMode,
     submission_id: String,
 ) -> CodexResult<TurnInputSubmission> {
-    match mode {
+    let result = match mode {
         TurnInputMode::StartOrSteer => start_or_steer(session, request, submission_id).await,
         TurnInputMode::StartIfIdle => {
             let kind = match &request.input {
@@ -248,9 +254,22 @@ pub(super) async fn handle(
         TurnInputMode::Steer { expected_turn_id } => {
             steer(session, request, expected_turn_id, submission_id).await
         }
+    };
+    // Link this request's trace to the accepted turn, which may have an older trace.
+    if let Ok(TurnInputSubmission::Started { turn_id } | TurnInputSubmission::Steered { turn_id }) =
+        &result
+    {
+        tracing::Span::current().record("turn.id", turn_id);
     }
+    result
 }
 
+#[tracing::instrument(
+    name = "codex.turn_input",
+    level = "trace",
+    skip_all,
+    fields(conversation.id = %session.thread_id, turn.id)
+)]
 pub(super) async fn handle_recovery(
     session: &Arc<Session>,
     thread_settings: ThreadSettingsOverrides,
@@ -263,14 +282,18 @@ pub(super) async fn handle_recovery(
             turn_trigger: Some("retry".to_string()),
             ..start_options
         });
-    start_if_idle(
+    let result = start_if_idle(
         session,
         request,
         submission_id,
         TurnStartKind::Recovery,
         /*expected_previous_turn_id*/ None,
     )
-    .await
+    .await;
+    if let Ok(TurnInputSubmission::Started { turn_id }) = &result {
+        tracing::Span::current().record("turn.id", turn_id);
+    }
+    result
 }
 
 async fn start_or_steer(

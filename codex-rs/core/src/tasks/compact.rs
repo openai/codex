@@ -34,6 +34,12 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> SessionTaskResult {
         let _profile_guard = ctx.turn_timing_state.begin_compaction();
+        let _compaction_span = tracing::trace_span!(
+            "codex.compaction",
+            codex.turn.phase = "compaction",
+            conversation.id = %session.thread_id,
+            turn.id = %ctx.sub_id,
+        );
         if ctx.config.features.enabled(Feature::TokenBudget) {
             crate::compact_token_budget::run_manual_compact_task(session, ctx).await?;
             return Ok(None);
