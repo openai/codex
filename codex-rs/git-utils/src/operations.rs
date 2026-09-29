@@ -2,7 +2,6 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 use codex_protocol::shell_environment::scrub_non_inheritable_env_vars;
 
@@ -130,7 +129,7 @@ where
         args_vec.push(OsString::from(arg.as_ref()));
     }
     let command_string = build_command_string(&args_vec);
-    let mut command = Command::new("git");
+    let mut command = codex_utils_process::background_command("git");
     command.current_dir(dir);
     if let Some(envs) = env {
         for (key, value) in envs {

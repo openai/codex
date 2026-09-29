@@ -838,7 +838,9 @@ fn is_rendezvous_harness_url(websocket_url: &str) -> bool {
 }
 
 fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {
-    let mut command = Command::new(&stdio_command.program);
+    let mut command = Command::from(codex_utils_process::background_command(
+        &stdio_command.program,
+    ));
     command.args(&stdio_command.args);
     command.envs(&stdio_command.env);
     scrub_non_inheritable_env_vars(command.as_std_mut());

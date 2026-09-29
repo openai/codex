@@ -73,8 +73,17 @@ async fn restrictive_launcher_uses_embedded_if_daemon_cannot_start() -> Result<(
             .arg("--no-alt-screen")
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit());
-        let status = job.spawn_contained(&mut command)?.wait().await?;
+            .stderr(std::process::Stdio::inherit())
+            // This interactive CLI must inherit the PTY console rather than use
+            // the background helper's CREATE_NO_WINDOW launch policy.
+            .creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED)
+            .kill_on_drop(true);
+        let mut child = command.spawn()?;
+        ensure!(
+            job.assign_and_resume_process(child.id().context("missing CLI pid")?)?,
+            "CLI job assignment failed"
+        );
+        let status = child.wait().await?;
         ensure!(status.success(), "CLI exited: {status}");
         return Ok(());
     }

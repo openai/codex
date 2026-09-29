@@ -43,10 +43,17 @@ impl AwsAuthRecovery {
             return Ok(());
         }
 
-        let mut command = Command::new(&self.config.command);
+        let interactive = std::io::stdin().is_terminal();
+        let mut command = if interactive {
+            Command::new(&self.config.command)
+        } else {
+            Command::from(codex_utils_process::background_command(
+                &self.config.command,
+            ))
+        };
         command
             .args(self.config.args.iter().map(Deref::deref))
-            .stdin(if std::io::stdin().is_terminal() {
+            .stdin(if interactive {
                 Stdio::inherit()
             } else {
                 Stdio::null()
