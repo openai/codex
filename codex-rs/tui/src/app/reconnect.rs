@@ -254,6 +254,7 @@ impl App {
             bootstrap,
             thread,
         } = connected;
+        session.model_provider_override = self.harness_overrides.model_provider.clone();
         let selected = self
             .chat_widget
             .selected_index_for_present_view(agents_overview::AGENTS_OVERVIEW_VIEW_ID)

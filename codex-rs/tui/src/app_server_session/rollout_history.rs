@@ -172,6 +172,9 @@ impl AppServerSession {
             model_settings,
             permission_overrides,
         );
+        if model_settings == ResumeModelSettings::OverrideFromCurrentConfig {
+            params.model_provider = self.explicit_model_provider(&config);
+        }
         self.thread_tool_transport()
             .configure_mcp(&mut params.config);
         let mut rollout_maintenance_guard = None;

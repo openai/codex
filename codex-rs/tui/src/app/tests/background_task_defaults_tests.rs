@@ -326,6 +326,7 @@ async fn command_center_new_reads_server_defaults_for_actual_destination() -> Re
             },
         )
         .await?;
+        server.model_provider_override = app.harness_overrides.model_provider.clone();
         if launch_override {
             server = server.with_remote_cwd_override(Some(launch.path().to_path_buf()));
         }
@@ -396,12 +397,10 @@ async fn command_center_new_reads_server_defaults_for_actual_destination() -> Re
                     serde_json::json!(cwd)
                 },
                 &serde_json::json!(expected_model),
-                &if mode.starts_with("remote") {
-                    serde_json::Value::Null
-                } else if mode == "local" && !explicit_cwd {
-                    serde_json::json!("ollama")
-                } else {
+                &if mode == "local-cli-provider" || (mode == "local" && explicit_cwd) {
                     serde_json::json!("openai")
+                } else {
+                    serde_json::Value::Null
                 },
                 &serde_json::json!("high"),
                 &serde_json::json!(if mode == "local" && explicit_cwd {

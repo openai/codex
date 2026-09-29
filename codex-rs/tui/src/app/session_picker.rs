@@ -33,7 +33,7 @@ impl App {
             Ok(result) => result,
             Err(err) => Err(err.into()),
         };
-        let picker_app_server = match picker_app_server {
+        let mut picker_app_server = match picker_app_server {
             Ok(app_server) => app_server,
             Err(err) => {
                 self.add_session_picker_error(format!("Failed to start TUI session picker: {err}"));
@@ -41,6 +41,7 @@ impl App {
                 return Ok(AppRunControl::Continue);
             }
         };
+        picker_app_server.model_provider_override = self.harness_overrides.model_provider.clone();
         let selection =
             crate::resume_picker::run_resume_picker_from_existing_session_with_app_server(
                 crate::uses_remote_workspace_or_environment(

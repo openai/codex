@@ -808,15 +808,14 @@ async fn lookup_session_target_with_app_server(
         };
     }
 
-    let model_provider =
-        (!app_server.uses_remote_workspace()).then_some(config.model_provider_id.as_str());
+    let model_provider = app_server.history_model_provider(config).await?;
     Ok(named_session_lookup::lookup(
         app_server,
         config.codex_home.as_path(),
         id_or_name,
         &[named_session_lookup::SessionCollection::Active],
         &[resume_source_kinds(/*include_non_interactive*/ false)],
-        model_provider,
+        model_provider.as_deref(),
     )
     .await?
     .and_then(session_target_from_app_server_thread))
@@ -830,6 +829,7 @@ async fn lookup_latest_session_target_with_app_server(
     include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let uses_remote_workspace = app_server.uses_remote_workspace();
+    let model_provider = app_server.history_model_provider(config).await?;
     for lookup_mode in [
         LatestSessionLookupMode::StateDbOnly,
         LatestSessionLookupMode::ScanAndRepair,
@@ -837,7 +837,7 @@ async fn lookup_latest_session_target_with_app_server(
         let response = app_server
             .thread_list(latest_session_lookup_params(
                 uses_remote_filesystem,
-                uses_remote_workspace,
+                model_provider.clone(),
                 config,
                 cwd_filter,
                 include_non_interactive,
@@ -865,7 +865,7 @@ enum LatestSessionLookupMode {
 
 fn latest_session_lookup_params(
     uses_remote_filesystem: bool,
-    uses_remote_workspace: bool,
+    model_provider: Option<String>,
     config: &Config,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
@@ -877,11 +877,7 @@ fn latest_session_lookup_params(
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
         sort_direction: None,
-        model_providers: if uses_remote_workspace {
-            None
-        } else {
-            Some(vec![config.model_provider_id.clone()])
-        },
+        model_providers: model_provider.map(|provider| vec![provider]),
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         section_id: None,
@@ -1214,7 +1210,7 @@ async fn run_ratatui_app(
         )
         .await;
     launch_telemetry.record(&app_server_target, matches!(&startup_app_server, Ok(Ok(_))));
-    let app_server_session = match startup_app_server {
+    let mut app_server_session = match startup_app_server {
         Ok(Ok(app_server)) => {
             AppServerSession::new(app_server, app_server_target.thread_params_mode())
                 .with_local_codex_home(&initial_config.codex_home)
@@ -1257,6 +1253,7 @@ async fn run_ratatui_app(
             }
         }
     }
+    app_server_session.model_provider_override = overrides.model_provider.clone();
     let mut app_server = Some(app_server_session);
     // Folder consent runs after the picker resolves the actual destination.
     let should_show_trust_screen_flag = false;
@@ -3207,17 +3204,14 @@ requires_openai_auth = {requires_openai_auth}
 
         let params = latest_session_lookup_params(
             /*uses_remote_filesystem*/ false,
-            /*uses_remote_workspace*/ false,
+            /*model_provider*/ None,
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
             LatestSessionLookupMode::StateDbOnly,
         );
 
-        assert_eq!(
-            params.model_providers,
-            Some(vec![config.model_provider_id.clone()])
-        );
+        assert_eq!(params.model_providers, None);
         assert_eq!(
             params.cwd,
             Some(ThreadListCwdFilter::One(cwd.to_string_lossy().to_string()))
@@ -3226,7 +3220,7 @@ requires_openai_auth = {requires_openai_auth}
 
         let scan_params = latest_session_lookup_params(
             /*uses_remote_filesystem*/ false,
-            /*uses_remote_workspace*/ false,
+            /*model_provider*/ None,
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
@@ -3237,28 +3231,23 @@ requires_openai_auth = {requires_openai_auth}
     }
 
     #[tokio::test]
-    async fn latest_session_lookup_params_keep_local_filters_for_local_daemon_sessions()
-    -> color_eyre::Result<()> {
+    async fn latest_session_lookup_params_honor_explicit_provider() -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
-        let target = AppServerTarget::LocalDaemon {
-            allow_embedded_fallback: true,
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
         let params = latest_session_lookup_params(
             /*uses_remote_filesystem*/ false,
-            target.uses_remote_workspace(),
+            Some("selected-provider".to_string()),
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
             LatestSessionLookupMode::StateDbOnly,
         );
 
-        assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
+        assert_eq!(
+            params.model_providers,
+            Some(vec!["selected-provider".to_string()])
+        );
         assert_eq!(
             params.cwd,
             Some(ThreadListCwdFilter::One(cwd.to_string_lossy().to_string()))
@@ -3274,7 +3263,7 @@ requires_openai_auth = {requires_openai_auth}
 
         let params = latest_session_lookup_params(
             /*uses_remote_filesystem*/ true,
-            /*uses_remote_workspace*/ true,
+            /*model_provider*/ None,
             &config,
             /*cwd_filter*/ None,
             /*include_non_interactive*/ false,
@@ -3294,7 +3283,7 @@ requires_openai_auth = {requires_openai_auth}
 
         let params = latest_session_lookup_params(
             /*uses_remote_filesystem*/ true,
-            /*uses_remote_workspace*/ true,
+            /*model_provider*/ None,
             &config,
             /*cwd_filter*/ None,
             /*include_non_interactive*/ true,
@@ -3322,7 +3311,7 @@ requires_openai_auth = {requires_openai_auth}
 
         let params = latest_session_lookup_params(
             /*uses_remote_filesystem*/ true,
-            /*uses_remote_workspace*/ true,
+            /*model_provider*/ None,
             &config,
             Some(cwd),
             /*include_non_interactive*/ false,

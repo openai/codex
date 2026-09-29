@@ -857,6 +857,7 @@ async fn external_transport_registers_dynamic_tools_and_finds_task_mentions() ->
         crate::app_server_session::ThreadParamsMode::Embedded,
         /*remote_cwd_override*/ None,
         app_server.thread_tool_transport(),
+        /*model_provider_override*/ None,
     )
     .await?;
     assert!(startup.task_tools_available);
@@ -1114,6 +1115,7 @@ async fn local_daemon_registers_approval_gated_mcp_tools_for_both_start_paths() 
         crate::app_server_session::ThreadParamsMode::Embedded,
         /*remote_cwd_override*/ None,
         app_server.thread_tool_transport(),
+        /*model_provider_override*/ None,
     )
     .await?;
     assert!(startup.task_tools_available);
@@ -1495,6 +1497,7 @@ async fn older_external_server_starts_without_unsupported_dynamic_tools_or_histo
         crate::app_server_session::ThreadParamsMode::Embedded,
         /*remote_cwd_override*/ None,
         app_server.thread_tool_transport(),
+        /*model_provider_override*/ None,
     )
     .await?;
     assert!(!startup.task_tools_available);
@@ -3567,8 +3570,9 @@ terminal_visualization_instructions = true
                 params[0]["modelProvider"].as_str(),
                 params[0]["config"]["model_reasoning_effort"].as_str(),
             ],
-            [Some("gpt-5.2"), Some("ollama"), Some("high")]
+            [Some("gpt-5.2"), fork.then_some("ollama"), Some("high")]
         );
+        assert_eq!(app.config.model_provider_id, "ollama");
         // Injection flushes and materializes a new thread's otherwise lazy rollout.
         server.thread_inject_items(replacement, vec![serde_json::from_value(serde_json::json!({
             "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": format!("replacement persistence probe {mode:?}")}]

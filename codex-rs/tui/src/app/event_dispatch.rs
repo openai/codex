@@ -529,6 +529,7 @@ impl App {
                             &self.chat_widget.config_ref().workspace_roots,
                         );
                     }
+                    fork_config.model_provider_id.clone_from(&self.chat_widget.config_ref().model_provider_id);
                     fork_config.model = Some(self.chat_widget.current_model().to_string());
                     fork_config.model_reasoning_effort =
                         self.chat_widget.current_reasoning_effort();

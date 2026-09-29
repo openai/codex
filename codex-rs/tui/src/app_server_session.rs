@@ -7,6 +7,10 @@ mod external_agent_config;
 pub(crate) mod fs;
 mod history;
 mod models;
+pub(crate) mod provider_selection;
+#[cfg(test)]
+#[path = "app_server_session/provider_selection_tests.rs"]
+mod provider_selection_tests;
 mod realtime;
 mod rollout_history;
 mod thread_list;
@@ -318,6 +322,8 @@ pub(crate) struct AppServerSession {
     task_search_generation: Arc<AtomicU64>,
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
+    /// Explicit CLI provider selection, distinct from resolved configuration defaults.
+    pub(crate) model_provider_override: Option<String>,
     history_support: ThreadHistorySupport,
     thread_settings_update_supported: bool,
     default_model: Option<String>,
@@ -350,13 +356,6 @@ impl ThreadParamsMode {
             Self::Embedded => Some(config.workspace_roots.clone()),
             // Client config paths belong to the client host. Let the server resolve its
             // defaults or restore the saved roots, then adopt the roots in its response.
-            Self::Remote => None,
-        }
-    }
-
-    fn model_provider_from_config(self, config: &Config) -> Option<String> {
-        match self {
-            Self::Embedded => Some(config.model_provider_id.clone()),
             Self::Remote => None,
         }
     }
@@ -428,6 +427,7 @@ impl AppServerSession {
             task_search_generation: Arc::new(AtomicU64::new(0)),
             remote_cwd_override: None,
             thread_params_mode,
+            model_provider_override: None,
             history_support: ThreadHistorySupport::Paginated,
             thread_settings_update_supported: true,
             default_model: None,
@@ -767,6 +767,10 @@ impl AppServerSession {
             remote_cwd_override.or(self.remote_cwd_override.as_deref()),
             session_start_source,
         );
+        params.model_provider = self
+            .model_provider_override
+            .clone()
+            .or(params.model_provider);
         if let Some(selected_profile) = selected_profile {
             params.runtime_workspace_roots = None;
             params.permissions = Some(selected_profile.profile_id.clone());
@@ -938,6 +942,13 @@ impl AppServerSession {
                 self.thread_params_mode(),
                 self.remote_cwd_override.as_deref(),
             )
+        };
+        params.model_provider = match config_source {
+            ForkConfigSource::Local => self
+                .model_provider_override
+                .clone()
+                .or(params.model_provider),
+            ForkConfigSource::Session => Some(config.model_provider_id.clone()),
         };
         if config_source == ForkConfigSource::Session {
             // Active-session config has already adopted the server's roots. Fork does
@@ -1675,6 +1686,7 @@ pub(crate) async fn start_thread_with_request_handle(
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
     thread_tool_transport: ThreadToolTransport,
+    model_provider_override: Option<String>,
 ) -> Result<AppServerStartedThread> {
     let request_id = RequestId::String(format!("startup-thread-start-{}", Uuid::new_v4()));
     let mut params = thread_start_params_from_config(
@@ -1683,6 +1695,7 @@ pub(crate) async fn start_thread_with_request_handle(
         remote_cwd_override.as_deref(),
         /*session_start_source*/ None,
     );
+    params.model_provider = model_provider_override.or(params.model_provider);
     thread_tool_transport.configure(&mut params);
     let (response, _history_support, task_tools_available) =
         request_thread_start_with_history_fallback(&request_handle, request_id, params)
@@ -2037,7 +2050,7 @@ pub(crate) fn thread_start_params_from_config(
         .flatten();
     ThreadStartParams {
         model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(config),
+        model_provider: provider_selection::explicit_provider(config),
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(config),
@@ -2096,7 +2109,7 @@ fn thread_resume_params_from_config(
     let (model, model_provider) = match model_settings {
         ResumeModelSettings::OverrideFromCurrentConfig => (
             config.model.clone(),
-            thread_params_mode.model_provider_from_config(&config),
+            provider_selection::explicit_provider(&config),
         ),
         ResumeModelSettings::RestoreFromThread | ResumeModelSettings::PreserveExistingThread => {
             (None, None)
@@ -2155,7 +2168,7 @@ fn thread_fork_params_from_config(
     ThreadForkParams {
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(&config),
+        model_provider: provider_selection::explicit_provider(&config),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
         runtime_workspace_roots: thread_params_mode.workspace_roots_from_config(&config),
@@ -2934,7 +2947,7 @@ mod tests {
                 .active_permission_profile()
                 .map(permission_profile_id_from_active_profile)
         );
-        assert_eq!(params.model_provider, Some(config.model_provider_id));
+        assert_eq!(params.model_provider, None);
         assert_eq!(params.thread_source, Some(ThreadSource::User));
         assert_eq!(params.dynamic_tools, None);
     }

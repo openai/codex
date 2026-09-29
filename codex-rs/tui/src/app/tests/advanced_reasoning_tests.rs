@@ -23,6 +23,7 @@ async fn fork_current_session_preserves_conversation_ultra() -> Result<()> {
     app.chat_widget.handle_thread_session(ThreadSessionState {
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         model: "gpt-5.4".to_string(),
+        model_provider_id: app.config.model_provider_id.clone(),
         reasoning_effort: Some(ReasoningEffortConfig::Ultra),
         ..test_thread_session(source_thread_id, test_path_buf("/tmp/project"))
     });
