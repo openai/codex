@@ -3,9 +3,16 @@
 use std::fs;
 use std::path::PathBuf;
 
+use codex_exec_server::ExecServerError;
+use codex_exec_server::HttpRequestParams;
+use codex_exec_server::HttpRequestResponse;
+use codex_exec_server::HttpResponseBodyStream;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use sha2::Digest;
 use sha2::Sha256;
+use tokio::sync::Notify;
 
 use super::*;
 
@@ -45,6 +52,48 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
         })))
         .mount(&server)
         .await;
+
+    // A logout during provider setup must invalidate the in-flight start.
+    let paused_client = Arc::new(PausedSetupHttpClient {
+        inner: Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
+            OutboundProxyPolicy::ReqwestDefault,
+        ))),
+        should_pause: AtomicBool::new(true),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    let starting_client = Arc::clone(&paused_client);
+    let starting_issuer = issuer.clone();
+    let starting = tokio::spawn(async move {
+        perform_enterprise_oauth_login_return_url(EnterpriseOAuthLoginRequest {
+            credential_name: CREDENTIAL_NAME,
+            issuer: &starting_issuer,
+            client_id: "enterprise-client",
+            keyring_backend_kind: AuthKeyringBackendKind::Direct,
+            callback_port: None,
+            callback_url: None,
+            timeout_secs: Some(5),
+            http_client: starting_client,
+            redirect_mode: StreamableHttpRedirectMode::Legacy,
+        })
+        .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        paused_client.entered.notified(),
+    )
+    .await?;
+    delete_enterprise_oauth_tokens(CREDENTIAL_NAME, &issuer, AuthKeyringBackendKind::Direct)
+        .await?;
+    paused_client.release.notify_one();
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), starting)
+        .await??
+        .err()
+        .expect("logout must invalidate a start during provider setup");
+    assert_eq!(
+        error.to_string(),
+        "enterprise login changed during replacement setup"
+    );
 
     // The first logout has no grant to delete. The second deletes the fresh grant
     // from the previous iteration. Both must invalidate pending callbacks and staged grants.
@@ -125,6 +174,46 @@ async fn logout_invalidates_pending_login_across_processes() -> Result<()> {
     assert_eq!(stored(&issuer)?, before);
     assert!(!home.join(".credentials.json").exists());
     Ok(())
+}
+
+struct PausedSetupHttpClient {
+    inner: Arc<dyn HttpClient>,
+    should_pause: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
+impl PausedSetupHttpClient {
+    async fn pause_once(&self) {
+        if self.should_pause.swap(false, Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.release.notified().await;
+        }
+    }
+}
+
+impl HttpClient for PausedSetupHttpClient {
+    fn http_request(
+        &self,
+        params: HttpRequestParams,
+    ) -> BoxFuture<'_, Result<HttpRequestResponse, ExecServerError>> {
+        async move {
+            self.pause_once().await;
+            self.inner.http_request(params).await
+        }
+        .boxed()
+    }
+
+    fn http_request_stream(
+        &self,
+        params: HttpRequestParams,
+    ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
+        async move {
+            self.pause_once().await;
+            self.inner.http_request_stream(params).await
+        }
+        .boxed()
+    }
 }
 
 fn stored(issuer: &str) -> Result<Option<StoredOAuthTokens>> {

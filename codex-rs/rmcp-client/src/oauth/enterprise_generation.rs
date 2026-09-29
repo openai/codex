@@ -1,4 +1,4 @@
-//! Persistent, non-secret logout generations for staged enterprise logins.
+//! Persistent, non-secret generations for staged enterprise logins and logout.
 //! All reads and writes require the credential lock; missing state never admits an old attempt.
 
 use std::fs::File;

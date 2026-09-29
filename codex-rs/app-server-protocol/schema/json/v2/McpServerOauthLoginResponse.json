@@ -3,6 +3,14 @@
   "properties": {
     "authorizationUrl": {
       "type": "string"
+    },
+    "loginId": {
+      "default": null,
+      "description": "Identifies this login attempt across the response and completion notification. Older servers omit this field; current servers always return it.",
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "required": [

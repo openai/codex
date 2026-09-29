@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::string::String;
 use std::sync::Arc;
@@ -282,9 +283,13 @@ fn spawn_callback_server(
     server: Arc<Server>,
     tx: oneshot::Sender<CallbackResult>,
     expected_callback_path: String,
+    closed: tokio_util::sync::CancellationToken,
 ) {
     tokio::task::spawn_blocking(move || {
-        while let Ok(request) = server.recv() {
+        // Drop the listener before publishing closure, including if this task unwinds.
+        let _closed = closed.drop_guard();
+        let listener = server;
+        while let Ok(request) = listener.recv() {
             let path = request.url().to_string();
             match parse_oauth_callback(&path, &expected_callback_path) {
                 CallbackOutcome::Success(OauthCallbackResult {
@@ -442,6 +447,7 @@ pub(crate) struct OauthLoginFlow {
     authorization_server_issuer: Option<String>,
     rx: oneshot::Receiver<CallbackResult>,
     guard: CallbackServerGuard,
+    callback_closed: tokio_util::sync::CancellationToken,
     server_name: String,
     server_url: String,
     store_mode: OAuthCredentialsStoreMode,
@@ -639,7 +645,25 @@ impl OauthLoginFlow {
         // Port zero asks the OS for a free ephemeral port; the resolved
         // redirect receives that port after the listener has been bound.
         let bind_addr = SocketAddr::new(bind_ip, callback_port.unwrap_or(0));
-        let server = Arc::new(Server::http(bind_addr).map_err(|err| anyhow!(err))?);
+        let bind_deadline = tokio::time::Instant::now() + Duration::from_secs(/*secs*/ 1);
+        let server = loop {
+            match Server::http(bind_addr) {
+                Ok(server) => break Arc::new(server),
+                Err(err)
+                    if is_enterprise_idp
+                        && callback_port.is_some()
+                        && err
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|err| err.kind() == std::io::ErrorKind::AddrInUse)
+                        && tokio::time::Instant::now() < bind_deadline =>
+                {
+                    // tiny_http drops its accept loop asynchronously after Server::drop.
+                    // Only retry the fixed listener bind, never OAuth requests or callbacks.
+                    tokio::time::sleep(Duration::from_millis(/*millis*/ 10)).await;
+                }
+                Err(err) => return Err(anyhow!(err)),
+            }
+        };
         let guard = CallbackServerGuard {
             server: Arc::clone(&server),
         };
@@ -701,8 +725,6 @@ impl OauthLoginFlow {
             .await?
         };
         let callback_path = callback_path_from_redirect_uri(&redirect_uri)?;
-        let (tx, rx) = oneshot::channel();
-        spawn_callback_server(server, tx, callback_path);
         let auth_url = append_query_param(
             &oauth_state.get_authorization_url().await?,
             "resource",
@@ -710,6 +732,11 @@ impl OauthLoginFlow {
         );
         let timeout_secs = timeout_secs.unwrap_or(DEFAULT_OAUTH_TIMEOUT_SECS).max(1);
         let timeout = Duration::from_secs(timeout_secs as u64);
+        // No fallible work or suspension after spawning: every callback worker
+        // must be owned by a returned flow, including during constructor cancellation.
+        let (tx, rx) = oneshot::channel();
+        let callback_closed = tokio_util::sync::CancellationToken::new();
+        spawn_callback_server(server, tx, callback_path, callback_closed.clone());
 
         Ok(Self {
             auth_url,
@@ -718,6 +745,7 @@ impl OauthLoginFlow {
             authorization_server_issuer,
             rx,
             guard,
+            callback_closed,
             server_name: server_name.to_string(),
             server_url: server_url.to_string(),
             store_mode,
@@ -729,6 +757,10 @@ impl OauthLoginFlow {
 
     pub(crate) fn authorization_url(&self) -> String {
         self.auth_url.clone()
+    }
+
+    pub(crate) fn callback_closed(&self) -> impl Future<Output = ()> + Send + 'static {
+        self.callback_closed.clone().cancelled_owned()
     }
 
     async fn finish(self, emit_browser_url: bool) -> Result<()> {

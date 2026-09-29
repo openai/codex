@@ -92,6 +92,9 @@ fn expected_workspace_routing(
     })
 }
 
+#[path = "account_enterprise_tests.rs"]
+mod enterprise_tests;
+
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
 struct CreateConfigTomlParams {
@@ -281,23 +284,62 @@ async fn mock_oauth_token(server: &MockServer, id_token: &str) {
         .await;
 }
 
+#[test_case(false; "api_key")]
+#[test_case(true; "enterprise_cleanup_failure")]
 #[tokio::test]
-async fn logout_account_removes_auth_and_notifies() -> Result<()> {
+async fn logout_account_removes_auth_and_notifies(enterprise_cleanup_failure: bool) -> Result<()> {
+    let oauth_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(u64::from(enterprise_cleanup_failure))
+        .mount(&oauth_server)
+        .await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
-    login_with_api_key(
-        codex_home.path(),
-        "sk-test-key",
-        AuthCredentialsStoreMode::File,
-        AuthKeyringBackendKind::default(),
-    )?;
+    if enterprise_cleanup_failure {
+        write_chatgpt_auth(
+            codex_home.path(),
+            ChatGptAuthFixture::new("access-token")
+                .account_id(WORKSPACE_ID_INITIAL)
+                .chatgpt_user_id("enterprise-user"),
+            AuthCredentialsStoreMode::File,
+        )?;
+        let mut config = read_config_toml(codex_home.path())?;
+        config.as_table_mut().expect("config table").insert(
+            "mcp_enterprise_managed_auth".into(),
+            toml::toml! {
+                [idp]
+                issuer = "https://idp.example"
+                client_id = "enterprise-client"
+            }
+            .into(),
+        );
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            toml::to_string(&config)?,
+        )?;
+        // Fail credential cleanup before touching the platform keyring.
+        std::fs::write(codex_home.path().join("mcp-oauth-locks"), "not a directory")?;
+    } else {
+        login_with_api_key(
+            codex_home.path(),
+            "sk-test-key",
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?;
+    }
     assert!(codex_home.path().join("auth.json").exists());
 
+    let refresh_url = format!("{}/oauth/token", oauth_server.uri());
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .without_auto_env()
-        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            (REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, Some(&refresh_url)),
+        ])
         .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
         .await?;
 

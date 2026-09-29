@@ -336,10 +336,14 @@ mod tests {
         handle: JoinHandle<()>,
     }
 
-    fn test_http_client() -> Arc<dyn HttpClient> {
-        Arc::new(RouteAwareHttpClient::new(HttpClientFactory::new(
-            OutboundProxyPolicy::ReqwestDefault,
-        )))
+    async fn test_http_client() -> Arc<dyn HttpClient> {
+        let client: Arc<dyn HttpClient> = Arc::new(RouteAwareHttpClient::new(
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        ));
+        crate::oauth::test_support::warm_http_client(client.as_ref())
+            .await
+            .expect("warm production HTTP client before discovery deadlines");
+        client
     }
 
     impl Drop for TestServer {
@@ -487,7 +491,7 @@ mod tests {
             /*env_http_headers*/ None,
             OAuthCredentialsStoreMode::Keyring,
             AuthKeyringBackendKind::default(),
-            test_http_client(),
+            Arc::new(RecordingHttpClient::default()),
             OAuthDiscoveryTimeout::Requested,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -512,7 +516,7 @@ mod tests {
             )])),
             OAuthCredentialsStoreMode::Keyring,
             AuthKeyringBackendKind::default(),
-            test_http_client(),
+            Arc::new(RecordingHttpClient::default()),
             OAuthDiscoveryTimeout::Requested,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -567,7 +571,7 @@ mod tests {
             &url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -610,7 +614,7 @@ mod tests {
                 "sensitive-key".to_string(),
             )])),
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -632,6 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn determine_auth_status_preserves_transient_http_errors() {
+        let _home = crate::oauth::test_support::TempCodexHome::new();
         for status in [
             StatusCode::REQUEST_TIMEOUT,
             StatusCode::TOO_EARLY,
@@ -653,7 +658,7 @@ mod tests {
                 /*env_http_headers*/ None,
                 OAuthCredentialsStoreMode::File,
                 AuthKeyringBackendKind::default(),
-                test_http_client(),
+                test_http_client().await,
                 OAuthDiscoveryTimeout::LOCAL,
                 StreamableHttpRedirectMode::Legacy,
             )
@@ -685,7 +690,7 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -716,7 +721,7 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -872,7 +877,7 @@ mod tests {
             &resource_server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -899,7 +904,7 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )
@@ -922,7 +927,7 @@ mod tests {
             &server.url,
             /*http_headers*/ None,
             /*env_http_headers*/ None,
-            test_http_client(),
+            test_http_client().await,
             OAuthDiscoveryTimeout::LOCAL,
             StreamableHttpRedirectMode::Legacy,
         )

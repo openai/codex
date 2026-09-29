@@ -373,6 +373,15 @@ async fn oauth_login_validates_callback_issuer_and_uses_http_headers_helper(
     )
     .await??;
     assert_eq!(
+        completed.login_id.as_deref(),
+        Some(
+            response
+                .login_id
+                .as_deref()
+                .expect("login response should contain an ID")
+        )
+    );
+    assert_eq!(
         (
             completed.name.as_str(),
             completed.thread_id,
@@ -630,10 +639,20 @@ async fn oauth_login_automatically_selects_callback_specific_cimd_without_metada
     )
     .await??;
     assert_eq!(
+        completed.login_id.as_deref(),
+        Some(
+            response
+                .login_id
+                .as_deref()
+                .expect("login response should contain an ID")
+        )
+    );
+    assert_eq!(
         completed,
         McpServerOauthLoginCompletedNotification {
             name: "cimd".to_string(),
             thread_id: None,
+            login_id: response.login_id,
             success: true,
             error: None,
         }

@@ -11,12 +11,18 @@ use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountRateLimitsParams;
 use codex_login::LoginOnboardingEntrypoint;
 use codex_login::login_with_bedrock_access_keys;
+use codex_mcp::ema_auth_scope;
 use codex_model_provider::is_supported_amazon_bedrock_region;
+use codex_rmcp_client::EnterpriseOAuthCredentialGuard;
 
 mod bedrock_setup;
+mod enterprise_login;
 mod gateway_oauth;
 mod rate_limit_resets;
 mod workspace_routing;
+
+pub(super) use enterprise_login::EnterpriseLoginCompletion;
+pub(super) use enterprise_login::EnterpriseLoginTarget;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -100,6 +106,7 @@ pub(crate) struct AccountRequestProcessor {
     gateway_login: Arc<std::sync::Mutex<Option<gateway_oauth::ActiveGatewayLogin>>>,
     gateway_client: Arc<std::sync::Mutex<Option<Arc<codex_login::GatewayAuthManager>>>>,
     _gateway_notifications: Arc<tokio_util::task::AbortOnDropHandle<()>>,
+    pub(super) enterprise_login: Arc<enterprise_login::EnterpriseLoginState>,
 }
 
 impl AccountRequestProcessor {
@@ -115,6 +122,11 @@ impl AccountRequestProcessor {
             config_manager.clone(),
             Arc::clone(&outgoing),
         );
+        let enterprise_login = Arc::new(enterprise_login::EnterpriseLoginState::new(
+            Arc::clone(&auth_manager),
+            Arc::clone(&thread_manager),
+            config_manager.clone(),
+        ));
         let processor = Arc::new(Self {
             _gateway_notifications: Arc::new(gateway_notifications),
             auth_manager,
@@ -128,6 +140,7 @@ impl AccountRequestProcessor {
             workspace_routing: Arc::new(Mutex::new(None)),
             workspace_routing_fetches: Arc::new(Mutex::new(HashMap::new())),
             workspace_routing_shutdown: CancellationToken::new(),
+            enterprise_login,
         });
         let resolver: Arc<dyn codex_login::WorkspaceRoutingResolver> = processor.clone();
         processor
@@ -210,6 +223,7 @@ impl AccountRequestProcessor {
 
     pub(crate) async fn cancel_active_login(&self) {
         self.cancel_gateway_login();
+        self.enterprise_login.cancel(/*login_id*/ None).await;
         let mut guard = self.active_login.lock().await;
         if let Some(active_login) = guard.take() {
             drop(active_login);
@@ -318,6 +332,7 @@ impl AccountRequestProcessor {
         if self.auth_manager.is_workload_identity_selected() {
             return Err(self.configured_auth_owned_by_host_error());
         }
+        self.enterprise_login.cancel(/*login_id*/ None).await;
         match params {
             LoginAccountParams::ApiKey { api_key } => {
                 self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
@@ -801,6 +816,11 @@ impl AccountRequestProcessor {
         let login_id = params.login_id;
         let uuid = Uuid::parse_str(&login_id)
             .map_err(|_| invalid_request(format!("invalid login id: {login_id}")))?;
+        if self.enterprise_login.cancel(Some(&login_id)).await {
+            return Ok(CancelLoginAccountResponse {
+                status: CancelLoginAccountStatus::Canceled,
+            });
+        }
         let status = match self.cancel_login_chatgpt_common(uuid).await {
             Ok(()) => CancelLoginAccountStatus::Canceled,
             Err(CancelLoginError::NotFound) => CancelLoginAccountStatus::NotFound,
@@ -884,6 +904,7 @@ impl AccountRequestProcessor {
     }
 
     async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
+        self.thread_manager.invalidate_mcp_runtimes().await;
         self.send_account_login_notifications(AccountLoginCompletedNotification {
             login_id: login_id.map(|id| id.to_string()),
             success: true,
@@ -945,6 +966,7 @@ impl AccountRequestProcessor {
             self.auth_manager.reload().await;
             let auth_changes = self.auth_manager.auth_change_state_receiver();
             let owner_generation = auth_changes.borrow().owner_generation;
+            self.thread_manager.invalidate_mcp_runtimes().await;
             self.config_manager.replace_cloud_config_bundle_loader(
                 self.auth_manager.clone(),
                 self.config.chatgpt_base_url.clone(),
@@ -965,9 +987,56 @@ impl AccountRequestProcessor {
         if self.auth_manager.is_workload_identity_selected() {
             return Err(self.configured_auth_owned_by_host_error());
         }
-        let config = self.load_latest_config().await;
+        // Another process may have changed the persisted workspace. Reload both
+        // account authority and its policy before selecting a grant to remove.
+        self.auth_manager.reload().await;
+        self.config_manager.replace_cloud_config_bundle_loader(
+            Arc::clone(&self.auth_manager),
+            self.config.chatgpt_base_url.clone(),
+            self.config.http_client_factory(),
+        );
+        let config = self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await;
+        let scope = ema_auth_scope(self.auth_manager.auth_cached().as_ref());
+        let enterprise_policy_failed = scope.is_some() && config.is_err();
+        // Startup policy may belong to another workspace. Never use that fallback
+        // to select a credential; a policy failure must not block primary logout.
+        let enterprise_grant = config.as_ref().ok().and_then(|config| {
+            scope
+                .as_ref()
+                .zip(config.mcp_enterprise_managed_auth.as_ref())
+                .map(|(scope, profile)| {
+                    (
+                        profile.idp.credential_name(scope),
+                        profile.idp.issuer.clone(),
+                        config.auth_keyring_backend_kind(),
+                    )
+                })
+        });
+        let config = config.unwrap_or_else(|_| self.config.as_ref().clone());
 
         self.cancel_active_login().await;
+
+        // Retain the credential lock through primary logout. Otherwise a second
+        // process can commit after deletion but before the account is removed.
+        let enterprise_guard =
+            if let Some((credential_name, issuer, keyring_backend)) = enterprise_grant {
+                EnterpriseOAuthCredentialGuard::acquire(&credential_name, &issuer, keyring_backend)
+                    .await
+                    .map(Some)
+            } else {
+                Ok(None)
+            };
+        let cleanup_failed = match &enterprise_guard {
+            Ok(Some(guard)) => guard.delete_tokens().is_err(),
+            Ok(None) => false,
+            Err(_) => true,
+        };
+        if enterprise_policy_failed || cleanup_failed {
+            tracing::warn!("Failed to remove enterprise authorization; continuing account logout");
+        }
 
         match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}
@@ -975,6 +1044,8 @@ impl AccountRequestProcessor {
                 return Err(internal_error(format!("logout failed: {err}")));
             }
         }
+        drop(enterprise_guard);
+        self.thread_manager.invalidate_mcp_runtimes().await;
 
         self.config_manager.clear_cloud_config_bundle_loader();
 

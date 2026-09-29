@@ -171,6 +171,7 @@ pub use marketplace_edit::record_user_marketplace;
 pub use marketplace_edit::remove_user_marketplace;
 pub use marketplace_edit::remove_user_marketplace_config;
 pub use mcp_edit::load_global_mcp_servers;
+pub use mcp_ema::McpEmaAuthScope;
 pub use mcp_ema::McpEmaRegistration;
 pub use mcp_ema::McpEnterpriseManagedAuthConfig;
 pub use mcp_ema::McpServerIdpOAuthConfig;

@@ -1,8 +1,13 @@
+use super::account_processor::EnterpriseLoginCompletion;
+use super::account_processor::EnterpriseLoginTarget;
 use super::thread_input::ensure_direct_input_allowed;
 use super::*;
+use codex_config::types::McpServerAuth;
 use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
+use codex_mcp::ema_auth_scope;
 use codex_mcp::resolve_oauth_callback;
+use codex_rmcp_client::EnterpriseOAuthLoginRequest;
 use std::future::Future;
 
 use crate::thread_state::ThreadStateManager;
@@ -15,6 +20,7 @@ pub(crate) struct McpRequestProcessor {
     thread_manager: Arc<ThreadManager>,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
+    account_processor: Arc<AccountRequestProcessor>,
     pub(super) thread_state_manager: ThreadStateManager,
 }
 
@@ -25,12 +31,14 @@ impl McpRequestProcessor {
         thread_state_manager: ThreadStateManager,
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
+        account_processor: Arc<AccountRequestProcessor>,
     ) -> Self {
         Self {
             auth_manager,
             thread_manager,
             outgoing,
             config_manager,
+            account_processor,
             thread_state_manager,
         }
     }
@@ -134,12 +142,6 @@ impl McpRequestProcessor {
             scopes,
             timeout_secs,
         } = params;
-        let client_registration = match client_registration.unwrap_or_default() {
-            McpServerOauthClientRegistration::Auto => McpOAuthClientRegistration::Auto,
-            McpServerOauthClientRegistration::Cimd => McpOAuthClientRegistration::Cimd,
-            McpServerOauthClientRegistration::Dcr => McpOAuthClientRegistration::Dcr,
-        };
-
         let auth = self.auth_manager.auth().await;
         let (mcp_config, runtime_context) = match thread_id.as_deref() {
             Some(thread_id) => {
@@ -174,84 +176,175 @@ impl McpRequestProcessor {
             StreamableHttpRedirectMode::Legacy
         };
         let server = server.config();
-        if matches!(server.auth, codex_config::McpServerAuth::EmaAuth) {
-            return Err(invalid_request(
-                "EMA MCP connections are not enabled in this version",
-            ));
-        }
-
-        let (url, http_headers, env_http_headers) = match &server.transport {
-            McpServerTransportConfig::StreamableHttp {
-                url,
-                http_headers,
-                env_http_headers,
-                ..
-            } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
-            _ => {
+        let enterprise = matches!(server.auth, McpServerAuth::EmaAuth);
+        let (authorization_url, login_id, completion): (
+            String,
+            String,
+            futures::future::BoxFuture<'static, anyhow::Result<()>>,
+        ) = if enterprise {
+            let thread_id = thread_id.clone().ok_or_else(|| {
+                invalid_request("enterprise MCP login requires a connected thread")
+            })?;
+            if !mcp_config.xaa_enabled {
                 return Err(invalid_request(
-                    "OAuth login is only supported for streamable HTTP servers.",
+                    "enterprise MCP authentication requires `[features].use_xaa = true`",
                 ));
             }
-        };
-
-        let http_client = runtime_context
-            .resolve_http_client(&name, server)
-            .map_err(|err| {
-                internal_error(format!("failed to resolve MCP server runtime: {err}"))
+            if !server.enabled {
+                return Err(invalid_request(format!("MCP server '{name}' is disabled.")));
+            }
+            server
+                .validate_ema_auth_transport()
+                .map_err(|reason| invalid_request(format!("MCP server '{name}' {reason}")))?;
+            if client_registration.is_some() {
+                return Err(invalid_request(
+                    "enterprise MCP login uses the configured enterprise client and does not support clientRegistration overrides",
+                ));
+            }
+            // Resource scopes and per-server callbacks do not alter the shared IdP registration.
+            let scope = ema_auth_scope(auth.as_ref()).ok_or_else(|| {
+                invalid_request(
+                    "enterprise MCP authentication requires a signed-in Codex user and workspace",
+                )
             })?;
+            let idp = server.oauth_idp().ok_or_else(|| {
+                invalid_request(format!(
+                    "MCP server '{name}' has no configured enterprise IdP"
+                ))
+            })?;
+            let registration = server.ema_registration().cloned().ok_or_else(|| {
+                invalid_request(format!(
+                    "MCP server '{name}' has no validated enterprise registration"
+                ))
+            })?;
+            let credential_name = idp.credential_name(&scope);
+            let http_client =
+                runtime_context
+                    .resolve_http_client(&name, server)
+                    .map_err(|err| {
+                        internal_error(format!("failed to resolve MCP server runtime: {err}"))
+                    })?;
+            let login = self
+                .account_processor
+                .enterprise_login
+                .start(
+                    EnterpriseOAuthLoginRequest {
+                        credential_name: &credential_name,
+                        issuer: &idp.issuer,
+                        client_id: &idp.client_id,
+                        keyring_backend_kind: mcp_config.auth_keyring_backend_kind,
+                        callback_port: mcp_config.mcp_oauth_callback_port,
+                        callback_url: mcp_config.mcp_oauth_callback_url.as_deref(),
+                        timeout_secs,
+                        http_client,
+                        redirect_mode,
+                    },
+                    scope,
+                    EnterpriseLoginTarget {
+                        thread_id,
+                        server_name: name.clone(),
+                        registration,
+                    },
+                )
+                .await?;
+            let mut completion = login.completion;
+            (
+                login.authorization_url,
+                login.login_id,
+                Box::pin(async move {
+                    match completion.wait_for(|state| state.is_complete()).await {
+                        Ok(result) if *result == EnterpriseLoginCompletion::Succeeded => Ok(()),
+                        _ => Err(anyhow::anyhow!("Enterprise sign-in failed.")),
+                    }
+                }),
+            )
+        } else {
+            let (url, http_headers, env_http_headers) = match &server.transport {
+                McpServerTransportConfig::StreamableHttp {
+                    url,
+                    http_headers,
+                    env_http_headers,
+                    ..
+                } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
+                _ => {
+                    return Err(invalid_request(
+                        "OAuth login is only supported for streamable HTTP servers.",
+                    ));
+                }
+            };
 
-        let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
-            discover_supported_scopes(
-                &server.transport,
-                Arc::clone(&http_client),
-                codex_rmcp_client::OAuthDiscoveryTimeout::Requested,
+            let http_client =
+                runtime_context
+                    .resolve_http_client(&name, server)
+                    .map_err(|err| {
+                        internal_error(format!("failed to resolve MCP server runtime: {err}"))
+                    })?;
+
+            let discovered_scopes = if scopes.is_none() && server.scopes.is_none() {
+                discover_supported_scopes(
+                    &server.transport,
+                    Arc::clone(&http_client),
+                    codex_rmcp_client::OAuthDiscoveryTimeout::Requested,
+                    redirect_mode,
+                )
+                .await
+            } else {
+                None
+            };
+            let resolved_scopes =
+                resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
+            let oauth_credential_name = server.oauth_credential_name(&name);
+            let client_registration = match client_registration.unwrap_or_default() {
+                McpServerOauthClientRegistration::Auto => McpOAuthClientRegistration::Auto,
+                McpServerOauthClientRegistration::Cimd => McpOAuthClientRegistration::Cimd,
+                McpServerOauthClientRegistration::Dcr => McpOAuthClientRegistration::Dcr,
+            };
+            let callback_url =
+                resolve_oauth_callback(server, &url, mcp_config.mcp_oauth_callback_url.as_deref())
+                    .map_err(|err| {
+                        internal_error(format!("failed to resolve MCP OAuth callback: {err}"))
+                    })?;
+
+            let handle = perform_oauth_login_return_url(
+                oauth_credential_name.as_ref(),
+                &url,
+                mcp_config.mcp_oauth_credentials_store_mode,
+                mcp_config.auth_keyring_backend_kind,
+                http_headers,
+                env_http_headers,
+                &resolved_scopes.scopes,
+                server.oauth.as_ref(),
+                client_registration,
+                server.oauth_resource.as_deref(),
+                timeout_secs,
+                server.oauth_callback_port(mcp_config.mcp_oauth_callback_port),
+                callback_url.as_deref(),
+                mcp_config.mcp_oauth_callback_url.as_deref(),
+                http_client,
                 redirect_mode,
             )
             .await
-        } else {
-            None
+            .map_err(|err| {
+                internal_error(format!("failed to login to MCP server '{name}': {err}"))
+            })?;
+            (
+                handle.authorization_url().to_string(),
+                Uuid::now_v7().to_string(),
+                Box::pin(handle.wait()),
+            )
         };
-        let resolved_scopes =
-            resolve_oauth_scopes(scopes, server.scopes.clone(), discovered_scopes);
-        let oauth_credential_name = server.oauth_credential_name(&name);
-        let callback_url =
-            resolve_oauth_callback(server, &url, mcp_config.mcp_oauth_callback_url.as_deref())
-                .map_err(|err| {
-                    internal_error(format!("failed to resolve MCP OAuth callback: {err}"))
-                })?;
-
-        let handle = perform_oauth_login_return_url(
-            oauth_credential_name.as_ref(),
-            &url,
-            mcp_config.mcp_oauth_credentials_store_mode,
-            mcp_config.auth_keyring_backend_kind,
-            http_headers,
-            env_http_headers,
-            &resolved_scopes.scopes,
-            server.oauth.as_ref(),
-            client_registration,
-            server.oauth_resource.as_deref(),
-            timeout_secs,
-            server.oauth_callback_port(mcp_config.mcp_oauth_callback_port),
-            callback_url.as_deref(),
-            mcp_config.mcp_oauth_callback_url.as_deref(),
-            http_client,
-            redirect_mode,
-        )
-        .await
-        .map_err(|err| internal_error(format!("failed to login to MCP server '{name}': {err}")))?;
-        let authorization_url = handle.authorization_url().to_string();
         let notification_name = name.clone();
         let notification_thread_id = thread_id;
+        let notification_login_id = login_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let thread_manager = Arc::clone(&self.thread_manager);
 
         tokio::spawn(async move {
-            let (success, error) = match handle.wait().await {
+            let (success, error) = match completion.await {
                 Ok(()) => (true, None),
                 Err(err) => (false, Some(err.to_string())),
             };
-            if success {
+            if success && !enterprise {
                 thread_manager.invalidate_mcp_runtimes().await;
             }
 
@@ -259,6 +352,7 @@ impl McpRequestProcessor {
                 McpServerOauthLoginCompletedNotification {
                     name: notification_name,
                     thread_id: notification_thread_id,
+                    login_id: Some(notification_login_id),
                     success,
                     error,
                 },
@@ -266,7 +360,10 @@ impl McpRequestProcessor {
             outgoing.send_server_notification(notification).await;
         });
 
-        Ok(McpServerOauthLoginResponse { authorization_url })
+        Ok(McpServerOauthLoginResponse {
+            authorization_url,
+            login_id: Some(login_id),
+        })
     }
 
     async fn list_mcp_server_status(

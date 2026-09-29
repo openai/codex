@@ -1,13 +1,17 @@
-//! Enterprise MCP configuration and registration provenance.
+//! Enterprise MCP configuration and account-scoped credential names.
 //!
 //! Only host, user, or managed configuration selects the IdP. Plugin declarations
 //! and project settings may not redirect the enterprise credential source.
 
 use std::io;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::Digest;
+use sha2::Sha256;
 
 use codex_features::Feature;
 
@@ -67,6 +71,40 @@ impl McpEmaRegistration {
 
     pub fn scopes(&self) -> &[String] {
         &self.scopes
+    }
+}
+
+/// Account identity that owns an enterprise OAuth credential.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct McpEmaAuthScope {
+    user_id: String,
+    workspace_id: String,
+}
+
+impl McpEmaAuthScope {
+    pub fn new(user_id: String, workspace_id: String) -> Option<Self> {
+        (!user_id.trim().is_empty() && !workspace_id.trim().is_empty()).then_some(Self {
+            user_id,
+            workspace_id,
+        })
+    }
+}
+
+impl McpServerIdpOAuthConfig {
+    /// Shared by allowed MCP resources, but never by another account or IdP client.
+    pub fn credential_name(&self, scope: &McpEmaAuthScope) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"codex-ema-idp-credential-v1\0");
+        for part in [
+            &scope.user_id,
+            &scope.workspace_id,
+            &self.issuer,
+            &self.client_id,
+        ] {
+            digest.update((part.len() as u64).to_be_bytes());
+            digest.update(part.as_bytes());
+        }
+        format!("ema-idp:{}", URL_SAFE_NO_PAD.encode(digest.finalize()))
     }
 }
 

@@ -2038,10 +2038,20 @@ async fn plugin_oauth_login_preserves_registered_callbacks_or_uses_legacy_fallba
     )
     .await??;
     assert_eq!(
+        completed.login_id.as_deref(),
+        Some(
+            response
+                .login_id
+                .as_deref()
+                .expect("login response should contain an ID")
+        )
+    );
+    assert_eq!(
         completed,
         McpServerOauthLoginCompletedNotification {
             name: "sample-mcp".to_string(),
             thread_id: None,
+            login_id: response.login_id,
             success: true,
             error: None,
         }

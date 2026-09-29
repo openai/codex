@@ -183,6 +183,79 @@ fn logout_clears_only_the_selected_bedrock_provider() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn logout_survives_enterprise_cleanup_failure_with_xaa_disabled() -> Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(path("/backend-api/wham/config/bundle"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "config_toml": {"enterprise_managed": []},
+            "requirements_toml": {"enterprise_managed": []},
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/revoke"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let home = TempDir::new()?;
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "cli_auth_credentials_store = \"file\"\nchatgpt_base_url = \"{}/backend-api\"\n[features]\nuse_xaa = false\n[mcp_enterprise_managed_auth.idp]\nissuer = \"https://idp.example\"\nclient_id = \"enterprise-client\"\n[mcp_servers.enterprise]\nurl = \"https://resource.example/mcp\"\nauth = \"ema_auth\"\nbearer_token_env_var = \"UNUSED_TOKEN\"\n",
+            server.uri()
+        ),
+    )?;
+    write_chatgpt_auth(
+        home.path(),
+        ChatGptAuthFixture::new("account-access")
+            .account_id("workspace")
+            .chatgpt_user_id("user"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    // Fail before touching the real keyring; the subprocess owns this isolated home.
+    std::fs::write(home.path().join("mcp-oauth-locks"), "not a directory")?;
+    for enabled in [false, true] {
+        codex_command(home.path())?
+            .current_dir(home.path())
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .env_remove("CODEX_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+            .args([
+                "-c",
+                &format!("features.use_xaa={enabled}"),
+                "mcp",
+                "logout",
+                "enterprise",
+            ])
+            .assert()
+            .failure()
+            .stderr(contains("failed to delete enterprise authorization"));
+        assert!(home.path().join("auth.json").exists());
+    }
+    codex_command(home.path())?
+        .current_dir(home.path())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .env(
+            REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR,
+            format!("{}/oauth/revoke", server.uri()),
+        )
+        .env_remove("CODEX_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .env_remove(CODEX_ACCESS_TOKEN_ENV_VAR)
+        .args(["logout"])
+        .assert()
+        .success()
+        .stderr(contains("continuing account logout"))
+        .stderr(contains("Successfully logged out"));
+    assert!(!home.path().join("auth.json").exists());
+    Ok(())
+}
+
 #[test]
 fn login_with_access_token_rejects_invalid_jwt() -> Result<()> {
     let codex_home = TempDir::new()?;

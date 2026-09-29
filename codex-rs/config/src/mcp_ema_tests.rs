@@ -1,4 +1,4 @@
-//! Enterprise registration provenance checks.
+//! Enterprise registration provenance and credential-boundary checks.
 
 use super::*;
 use crate::AbsolutePathBuf;
@@ -213,6 +213,44 @@ fn xaa_opt_in_requires_a_non_project_source() {
         validate_xaa_opt_in_source(&stack(vec![(project, enabled)]), /*xaa_enabled*/ false,)
             .is_ok()
     );
+}
+
+#[test]
+fn ema_credential_names_bind_user_workspace_issuer_and_client() {
+    let mut names = std::collections::HashSet::new();
+    for user in ["a", "b"] {
+        for workspace in ["a", "b"] {
+            for issuer in ["https://one.example", "https://two.example"] {
+                for client in ["a", "b"] {
+                    let scope = McpEmaAuthScope::new(user.into(), workspace.into()).unwrap();
+                    let idp = McpServerIdpOAuthConfig {
+                        issuer: issuer.into(),
+                        client_id: client.into(),
+                    };
+                    assert!(names.insert(idp.credential_name(&scope)));
+                }
+            }
+        }
+    }
+    assert_eq!(McpEmaAuthScope::new(" ".into(), "workspace".into()), None);
+
+    let identifiers = [
+        "sensitive-user@example.com",
+        "sensitive-workspace-id",
+        "https://sensitive-idp.example",
+        "sensitive-oauth-client",
+    ];
+    let scope = McpEmaAuthScope::new(identifiers[0].into(), identifiers[1].into()).unwrap();
+    let name = McpServerIdpOAuthConfig {
+        issuer: identifiers[2].into(),
+        client_id: identifiers[3].into(),
+    }
+    .credential_name(&scope);
+    assert!(name.starts_with("ema-idp:"));
+    for identifier in identifiers {
+        assert!(!name.contains(identifier));
+        assert!(!name.contains(&URL_SAFE_NO_PAD.encode(identifier)));
+    }
 }
 
 #[test]

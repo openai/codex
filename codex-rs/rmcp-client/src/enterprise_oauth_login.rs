@@ -119,6 +119,12 @@ impl EnterpriseOAuthLoginHandle {
         self.flow.authorization_url()
     }
 
+    /// Capture before waiting; after the handle or wait future is dropped, await
+    /// this to ensure the callback worker released its listener before rebinding.
+    pub fn callback_closed(&self) -> impl Future<Output = ()> + Send + 'static {
+        self.flow.callback_closed()
+    }
+
     pub async fn wait(self) -> Result<EnterpriseOAuthCredentials> {
         let stored = self
             .flow
@@ -187,22 +193,17 @@ impl EnterpriseOAuthCredentials {
 pub async fn perform_enterprise_oauth_login_return_url(
     request: EnterpriseOAuthLoginRequest<'_>,
 ) -> Result<EnterpriseOAuthLoginHandle> {
-    // Capture before discovery or browser setup, then release the lock while the user signs in.
-    let generation = {
+    let observed_generation = {
         let guard = EnterpriseOAuthCredentialGuard::acquire(
             request.credential_name,
             request.issuer,
             request.keyring_backend_kind,
         )
         .await?;
-        match guard.generation_file.current() {
-            Ok(Some(generation)) => generation,
-            Ok(None) => guard
-                .generation_file
-                .replace()
-                .map_err(|_| anyhow!("failed to initialize enterprise login generation"))?,
-            Err(_) => bail!("failed to read enterprise login generation"),
-        }
+        guard
+            .generation_file
+            .current()
+            .map_err(|_| anyhow!("failed to read enterprise login generation"))?
     };
     let flow = OauthLoginFlow::new(
         request.credential_name,
@@ -232,6 +233,37 @@ pub async fn perform_enterprise_oauth_login_return_url(
     .with_subscriber(tracing::subscriber::NoSubscriber::default())
     .await
     .map_err(|_| anyhow!("failed to start enterprise IdP authorization"))?;
+    // Keep the current attempt valid until replacement setup succeeds. A logout
+    // or another completed setup during this work must still invalidate this start.
+    let generation = async {
+        let guard = EnterpriseOAuthCredentialGuard::acquire(
+            request.credential_name,
+            request.issuer,
+            request.keyring_backend_kind,
+        )
+        .await?;
+        let current_generation = guard
+            .generation_file
+            .current()
+            .map_err(|_| anyhow!("failed to read enterprise login generation"))?;
+        if current_generation != observed_generation {
+            bail!("enterprise login changed during replacement setup");
+        }
+        guard
+            .generation_file
+            .replace()
+            .map_err(|_| anyhow!("failed to start enterprise login generation"))
+    }
+    .await;
+    let generation = match generation {
+        Ok(generation) => generation,
+        Err(error) => {
+            let callback_closed = flow.callback_closed();
+            drop(flow);
+            callback_closed.await;
+            return Err(error);
+        }
+    };
     Ok(EnterpriseOAuthLoginHandle {
         flow,
         keyring_backend: request.keyring_backend_kind,

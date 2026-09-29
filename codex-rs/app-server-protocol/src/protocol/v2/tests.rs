@@ -100,6 +100,22 @@ fn managed_hooks_requirements_default_interrupt_to_empty() {
 }
 
 #[test]
+fn mcp_oauth_login_response_accepts_older_servers_without_login_id() {
+    let response = serde_json::from_value::<McpServerOauthLoginResponse>(json!({
+        "authorizationUrl": "https://example.com/authorize",
+    }))
+    .expect("older login response should deserialize");
+
+    assert_eq!(
+        response,
+        McpServerOauthLoginResponse {
+            authorization_url: "https://example.com/authorize".to_string(),
+            login_id: None,
+        }
+    );
+}
+
+#[test]
 fn external_agent_config_detect_response_defaults_connectors_for_older_servers() {
     let response = serde_json::from_value::<ExternalAgentConfigDetectResponse>(json!({
         "items": [],
