@@ -11,6 +11,7 @@ const COMPLETION_MESSAGE_ENVELOPE_TOKEN_RESERVE: usize = 100;
 const ERROR_MAX_TOKENS: usize =
     COMPLETION_MESSAGE_MAX_TOKENS - COMPLETION_MESSAGE_ENVELOPE_TOKEN_RESERVE;
 const ERROR_NEXT_ACTION: &str = "This agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task.";
+const GUARDIAN_NEXT_ACTION: &str = "Tell the user this agent stopped after repeated Guardian denials. Do not resume this agent or retry its blocked work until the user explicitly confirms that it should continue.";
 
 // Helpers for model-visible session state markers that are stored in user-role
 // messages but are not user intent.
@@ -33,6 +34,16 @@ pub(crate) fn format_inter_agent_completion_message(
         AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted => return None,
     };
     Some(InterAgentCompletionMessage::new(task_name, sender, payload).render())
+}
+
+pub(crate) fn format_guardian_interruption_message(
+    task_name: AgentPath,
+    sender: AgentPath,
+    error: &str,
+) -> String {
+    let error = truncate_text(error, TruncationPolicy::Tokens(ERROR_MAX_TOKENS));
+    let payload = format!("Agent interrupted by Guardian: {error}\n\n{GUARDIAN_NEXT_ACTION}");
+    InterAgentCompletionMessage::new(task_name, sender, payload).render()
 }
 
 #[cfg(test)]

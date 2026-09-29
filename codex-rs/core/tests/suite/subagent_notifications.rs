@@ -80,6 +80,9 @@ use super::direct_tool_metadata::tool_call_metadata;
 #[path = "spawn_settings_tests.rs"]
 mod spawn_settings_tests;
 
+#[path = "guardian_subagent_notification_tests.rs"]
+mod guardian_subagent_notification_tests;
+
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";

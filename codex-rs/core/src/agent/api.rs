@@ -19,6 +19,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::error::Result;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
@@ -225,6 +226,8 @@ pub struct AgentTurnOutcome {
     pub parent_turn_id: Option<String>,
     pub initiating_agent_path: Option<AgentPath>,
     pub status: AgentStatus,
+    /// Typed reason used to choose guidance in the parent notification.
+    pub error_info: Option<CodexErrorInfo>,
 }
 
 /// Settings shared by the tree. A service tier of `None` restores the default tier.
