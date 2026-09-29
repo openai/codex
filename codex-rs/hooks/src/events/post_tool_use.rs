@@ -591,7 +591,7 @@ mod tests {
         ConfiguredHandler {
             builtin: false,
             event_name: HookEventName::PostToolUse,
-            matcher: Some("^Bash$".to_string()),
+            matcher: Some(crate::engine::HookMatcher::new("^Bash$").expect("valid matcher")),
             timeout_sec: 5,
             status_message: Some("running post tool use hook".to_string()),
             additional_context_limit: Default::default(),

@@ -60,11 +60,11 @@ pub(crate) fn select_handlers_for_matcher_inputs(
             | HookEventName::PreCompact
             | HookEventName::PostCompact => {
                 if matcher_inputs.is_empty() {
-                    matches_matcher(handler.matcher.as_deref(), /*input*/ None)
+                    matches_matcher(handler.matcher.as_ref(), /*input*/ None)
                 } else {
                     matcher_inputs
                         .iter()
-                        .any(|input| matches_matcher(handler.matcher.as_deref(), Some(input)))
+                        .any(|input| matches_matcher(handler.matcher.as_ref(), Some(input)))
                 }
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop | HookEventName::Interrupt => {
@@ -352,7 +352,8 @@ mod tests {
         ConfiguredHandler {
             builtin: false,
             event_name,
-            matcher: matcher.map(str::to_owned),
+            matcher: matcher
+                .map(|pattern| crate::engine::HookMatcher::new(pattern).expect("valid matcher")),
             timeout_sec: 5,
             status_message: None,
             additional_context_limit: Default::default(),
@@ -609,7 +610,7 @@ mod tests {
             ),
             make_handler(
                 HookEventName::UserPromptSubmit,
-                Some("["),
+                Some("^unmatched$"),
                 "echo second",
                 /*display_order*/ 1,
             ),

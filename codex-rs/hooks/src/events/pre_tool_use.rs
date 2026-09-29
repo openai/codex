@@ -775,7 +775,7 @@ mod tests {
         ConfiguredHandler {
             builtin: false,
             event_name: HookEventName::PreToolUse,
-            matcher: Some("^Bash$".to_string()),
+            matcher: Some(crate::engine::HookMatcher::new("^Bash$").expect("valid matcher")),
             timeout_sec: 5,
             status_message: None,
             additional_context_limit: Default::default(),
