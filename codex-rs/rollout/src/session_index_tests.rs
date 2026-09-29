@@ -394,6 +394,59 @@ async fn find_thread_names_by_ids_prefers_latest_entry() -> std::io::Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn find_thread_names_by_ids_skips_unusable_names_and_reads_across_chunks()
+-> std::io::Result<()> {
+    let temp = TempDir::new()?;
+    let path = session_index_path(temp.path());
+    let renamed = ThreadId::new();
+    let older = ThreadId::new();
+    let missing = ThreadId::new();
+    let mut contents = String::new();
+    for (id, thread_name) in [
+        (renamed, "original".to_string()),
+        (older, "  older name  ".to_string()),
+        (ThreadId::new(), "unrelated".repeat(/*n*/ 10_000)),
+        (renamed, "  最新 café  ".to_string()),
+        (renamed, " \t ".to_string()),
+    ] {
+        let entry = SessionIndexEntry {
+            id,
+            thread_name,
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        contents.push_str(&serde_json::to_string(&entry)?);
+        contents.push_str("\n\nnot json\n");
+    }
+    // A partial final write must not hide the latest complete name.
+    contents.push_str("{\"id\":");
+    std::fs::write(path, contents)?;
+
+    for (ids, expected) in [
+        (
+            HashSet::from([renamed]),
+            HashMap::from([(renamed, "最新 café".to_string())]),
+        ),
+        (
+            HashSet::from([renamed, older]),
+            HashMap::from([
+                (renamed, "最新 café".to_string()),
+                (older, "older name".to_string()),
+            ]),
+        ),
+        (
+            HashSet::from([renamed, older, missing]),
+            HashMap::from([
+                (renamed, "最新 café".to_string()),
+                (older, "older name".to_string()),
+            ]),
+        ),
+    ] {
+        assert_eq!(find_thread_names_by_ids(temp.path(), &ids).await?, expected);
+    }
+    Ok(())
+}
+
 #[test]
 fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
     let temp = TempDir::new()?;

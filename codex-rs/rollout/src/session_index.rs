@@ -16,7 +16,6 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::io::AsyncBufReadExt;
 
 const SESSION_INDEX_FILE: &str = "session_index.jsonl";
 static SESSION_INDEX_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -130,26 +129,27 @@ pub async fn find_thread_names_by_ids(
         return Ok(HashMap::new());
     }
 
-    let file = tokio::fs::File::open(&path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    let mut names = HashMap::with_capacity(thread_ids.len());
-
-    while let Some(line) = lines.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+    let mut remaining_ids = thread_ids.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut scanner = ReverseJsonlScanner::new(File::open(path)?)?;
+        let mut names = HashMap::with_capacity(remaining_ids.len());
+        while let Some(outcome) = scanner.scan_next::<SessionIndexEntry>()? {
+            let ScanOutcome::Parsed(entry) = outcome else {
+                continue;
+            };
+            let name = entry.thread_name.trim();
+            // The first nonempty name seen for an id is its latest usable name.
+            if !name.is_empty() && remaining_ids.remove(&entry.id) {
+                names.insert(entry.id, name.to_string());
+                if remaining_ids.is_empty() {
+                    break;
+                }
+            }
         }
-        let Ok(entry) = serde_json::from_str::<SessionIndexEntry>(trimmed) else {
-            continue;
-        };
-        let name = entry.thread_name.trim();
-        if !name.is_empty() && thread_ids.contains(&entry.id) {
-            names.insert(entry.id, name.to_string());
-        }
-    }
-
-    Ok(names)
+        Ok(names)
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 /// Locate the readable rollout with the newest modification time for a recorded thread name.
