@@ -297,7 +297,6 @@ impl ExecCommandHandler {
         )
         .map_err(FunctionCallError::RespondToModel)?;
         let command = resolved_command.command;
-        let shell_type = resolved_command.shell_type;
         let ExecCommandArgs {
             mut tty,
             yield_time_ms,
@@ -418,7 +417,7 @@ impl ExecCommandHandler {
         let process_id = manager.allocate_process_id().await;
         let request = ExecCommandRequest {
             command,
-            shell_type,
+            shell: resolved_command.shell,
             hook_command: hook_command.clone(),
             process_id,
             yield_time_ms,

@@ -43,7 +43,7 @@ use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
-use crate::shell::ShellType;
+use crate::shell::ShellInvocation;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use codex_core_plugins::PluginMetricsSidecar;
 
@@ -113,7 +113,7 @@ impl UnifiedExecContext {
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
     pub command: Vec<String>,
-    pub shell_type: ShellType,
+    pub shell: ShellInvocation,
     pub hook_command: String,
     pub process_id: i32,
     pub yield_time_ms: u64,

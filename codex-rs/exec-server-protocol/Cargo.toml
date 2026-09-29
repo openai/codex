@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 base64 = { workspace = true }
 codex-file-system = { workspace = true }
+codex-install-context = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }

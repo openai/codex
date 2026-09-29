@@ -1,5 +1,6 @@
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellInvocation;
 use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
@@ -74,7 +75,7 @@ fn default_tty() -> bool {
 #[derive(Debug)]
 pub(crate) struct ResolvedCommand {
     pub(crate) command: Vec<String>,
-    pub(crate) shell_type: ShellType,
+    pub(crate) shell: ShellInvocation,
 }
 
 fn post_unified_exec_tool_use_payload(
@@ -112,35 +113,31 @@ pub(crate) fn get_command(
         None => allow_login_shell,
     };
 
-    match shell_mode {
-        UnifiedExecShellMode::Direct => {
-            let model_shell = args
-                .shell
-                .as_ref()
-                .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)));
-            let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
-            Ok(ResolvedCommand {
-                command: shell.derive_exec_args(&args.cmd, use_login_shell),
-                shell_type: shell.shell_type,
-            })
-        }
+    let shell = match shell_mode {
+        UnifiedExecShellMode::Direct => args
+            .shell
+            .as_ref()
+            .map(|shell_str| get_shell_by_model_provided_path(&PathBuf::from(shell_str)))
+            .unwrap_or_else(|| session_shell.as_ref().clone()),
         UnifiedExecShellMode::ZshFork(zsh_fork_config) => {
             if args.shell.is_some() {
                 return Err(
                     "`shell` is not supported for local zsh-fork exec; omit `shell` to use zsh-fork, or target a remote environment where `shell` is supported.".to_string(),
                 );
             }
-
-            Ok(ResolvedCommand {
-                command: vec![
-                    zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
-                    if use_login_shell { "-lc" } else { "-c" }.to_string(),
-                    args.cmd.clone(),
-                ],
+            Shell {
                 shell_type: ShellType::Zsh,
-            })
+                shell_path: zsh_fork_config.shell_zsh_path.as_path().to_path_buf(),
+            }
         }
-    }
+    };
+    Ok(ResolvedCommand {
+        command: shell.derive_exec_args(&args.cmd, use_login_shell),
+        shell: ShellInvocation {
+            shell,
+            use_login_shell,
+        },
+    })
 }
 
 pub(crate) fn shell_mode_for_environment(

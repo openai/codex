@@ -76,6 +76,23 @@ impl Shell {
     }
 }
 
+/// The shell and startup mode Codex chose for an exec command.
+#[derive(Debug, Clone)]
+pub(crate) struct ShellInvocation {
+    pub(crate) shell: Shell,
+    pub(crate) use_login_shell: bool,
+}
+
+impl ShellInvocation {
+    pub(crate) fn is_posix_login(&self) -> bool {
+        self.use_login_shell
+            && matches!(
+                self.shell.shell_type,
+                ShellType::Bash | ShellType::Zsh | ShellType::Sh
+            )
+    }
+}
+
 #[cfg(all(test, unix))]
 fn ultimate_fallback_shell() -> Shell {
     codex_shell_command::shell_detect::ultimate_fallback_shell().into()

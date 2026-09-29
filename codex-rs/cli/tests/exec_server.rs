@@ -187,6 +187,8 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
     std::fs::create_dir(&bin_dir)?;
     let executable = bin_dir.join(format!("codex{}", std::env::consts::EXE_SUFFIX));
     copy_executable(&codex_utils_cargo_bin::cargo_bin("codex")?, &executable)?;
+    let codex_path_dir = package.path().join("codex-path");
+    std::fs::create_dir(&codex_path_dir)?;
     let manifest = package.path().join("codex-package.json");
     std::fs::write(&manifest, r#"{"version":"1.2.3-alpha.4"}"#)?;
 
@@ -250,10 +252,19 @@ metrics_exporter = {{ otlp-http = {{ endpoint = "{collector_url}/v1/metrics", pr
         .context("remote harness did not connect")???;
 
     let environment_info = client.environment_info().await?;
+    assert_eq!(
+        environment_info
+            .prepend_path_dirs
+            .iter()
+            .map(|path| std::fs::canonicalize(path.inferred_native_path_string()))
+            .collect::<std::io::Result<Vec<_>>>()?,
+        vec![codex_path_dir.canonicalize()?]
+    );
     let expected_info = EnvironmentInfo {
         executor_version: "1.2.3-alpha.4".to_string(),
         // The build identity belongs to the spawned CLI, not this test process.
         provider_id: environment_info.provider_id.clone(),
+        prepend_path_dirs: environment_info.prepend_path_dirs.clone(),
         ..EnvironmentInfo::local()
     };
     assert_eq!(environment_info, expected_info);

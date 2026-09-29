@@ -130,7 +130,7 @@ fn test_get_command_resolves_powershell_by_type() -> anyhow::Result<()> {
         resolved.command,
         expected_shell.derive_exec_args("echo hello", /*use_login_shell*/ true)
     );
-    assert_eq!(resolved.shell_type, expected_shell.shell_type);
+    assert_eq!(resolved.shell.shell, expected_shell);
     Ok(())
 }
 
