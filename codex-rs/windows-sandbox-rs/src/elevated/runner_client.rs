@@ -38,6 +38,7 @@ use windows_sys::Win32::Foundation::ERROR_ACCOUNT_DISABLED;
 use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
 use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+use windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
@@ -58,8 +59,8 @@ const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 const WAIT_OBJECT_0: u32 = 0;
 
 #[derive(Debug)]
-struct RunnerLogonError {
-    code: u32,
+pub(crate) struct RunnerLogonError {
+    pub(crate) code: u32,
 }
 
 impl std::fmt::Display for RunnerLogonError {
@@ -146,8 +147,16 @@ pub(crate) fn retry_runner_spawn_once<T>(
     mut spawn: impl FnMut(SandboxCreds) -> Result<T>,
     refresh: impl FnOnce() -> Result<SandboxCreds>,
 ) -> Result<T> {
-    let result = match spawn(sandbox_creds) {
+    let result = match spawn(sandbox_creds.clone()) {
         Ok(result) => Ok(result),
+        // No runner (and therefore no user command) started. Keep credentials unchanged.
+        Err(err)
+            if err
+                .downcast_ref::<RunnerLogonError>()
+                .is_some_and(|err| err.code == ERROR_SERVICE_ALREADY_RUNNING) =>
+        {
+            spawn(sandbox_creds)
+        }
         Err(err) if is_refreshable_sandbox_creds_error(&err, command) => refresh().and_then(spawn),
         Err(err) => Err(err),
     };
@@ -462,6 +471,8 @@ mod tests {
     use super::RunnerLogonError;
     use super::RunnerStartupError;
     use super::is_refreshable_sandbox_creds_error;
+    use super::retry_runner_spawn_once;
+    use crate::identity::SandboxCreds;
     use crate::ipc_framed::ErrorPayload;
     use crate::ipc_framed::ErrorStage;
     use pretty_assertions::assert_eq;
@@ -469,6 +480,97 @@ mod tests {
     use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
     use windows_sys::Win32::Foundation::ERROR_NO_SUCH_LOGON_SESSION;
     use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows_sys::Win32::Foundation::ERROR_SERVICE_ALREADY_RUNNING;
+
+    #[test]
+    fn logon_service_already_running_retries_once_without_refresh() {
+        let mut attempts = 0;
+        let result = retry_runner_spawn_once(
+            SandboxCreds {
+                username: "sandbox-user".into(),
+                password: "test-only".into(),
+            },
+            &[],
+            |creds| {
+                attempts += 1;
+                assert_eq!(
+                    (creds.username.as_str(), creds.password.as_str()),
+                    ("sandbox-user", "test-only")
+                );
+                if attempts == 1 {
+                    Err(anyhow::Error::new(RunnerLogonError {
+                        code: ERROR_SERVICE_ALREADY_RUNNING,
+                    })
+                    .context("runner launch failed"))
+                } else {
+                    Ok(42)
+                }
+            },
+            || panic!("1056 must not refresh credentials"),
+        );
+        assert_eq!((result.unwrap(), attempts), (42, 2));
+    }
+
+    #[test]
+    fn logon_service_already_running_stops_after_two_failures() {
+        let mut attempts = 0;
+        let err = retry_runner_spawn_once::<()>(
+            SandboxCreds {
+                username: "sandbox-user".into(),
+                password: "test-only".into(),
+            },
+            &[],
+            |_| {
+                attempts += 1;
+                Err(RunnerLogonError {
+                    code: ERROR_SERVICE_ALREADY_RUNNING,
+                }
+                .into())
+            },
+            || panic!("1056 must not refresh credentials"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (
+                attempts,
+                err.downcast_ref::<RunnerLogonError>().unwrap().code
+            ),
+            (2, ERROR_SERVICE_ALREADY_RUNNING)
+        );
+    }
+
+    #[test]
+    fn child_service_already_running_does_not_replay_command() {
+        let mut attempts = 0;
+        let err = retry_runner_spawn_once::<()>(
+            SandboxCreds {
+                username: "sandbox-user".into(),
+                password: "test-only".into(),
+            },
+            &[],
+            |_| {
+                attempts += 1;
+                Err(RunnerStartupError::new(ErrorPayload {
+                    message: "child startup failed".into(),
+                    stage: ErrorStage::SpawnChild,
+                    windows_error_code: Some(ERROR_SERVICE_ALREADY_RUNNING),
+                })
+                .into())
+            },
+            || panic!("1056 must not refresh credentials"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (
+                attempts,
+                err.downcast_ref::<RunnerStartupError>()
+                    .unwrap()
+                    .payload
+                    .windows_error_code,
+            ),
+            (1, Some(ERROR_SERVICE_ALREADY_RUNNING))
+        );
+    }
 
     #[test]
     fn refreshable_sandbox_creds_error_recognizes_credential_and_child_start_failures() {
