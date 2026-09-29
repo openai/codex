@@ -810,7 +810,8 @@ fn native_path_segments_start_with(
 }
 
 fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
-    if path_bytes.starts_with(b"/") {
+    // A UTF-16LE Windows slash starts with `/\0`, unlike a POSIX root.
+    if path_bytes.starts_with(b"/") && !path_bytes.starts_with(b"/\0") {
         return Some(PathConvention::Posix);
     }
     if !path_bytes.len().is_multiple_of(2) {
@@ -824,7 +825,8 @@ fn infer_opaque_path_convention(path_bytes: &[u8]) -> Option<PathConvention> {
     let second = path_wide.next()?;
     let has_drive = u8::try_from(first).is_ok_and(|drive| drive.is_ascii_alphabetic())
         && second == u16::from(b':');
-    let has_unc_prefix = first == u16::from(b'\\') && second == u16::from(b'\\');
+    let is_separator = |character| character == u16::from(b'\\') || character == u16::from(b'/');
+    let has_unc_prefix = is_separator(first) && is_separator(second);
     (has_drive || has_unc_prefix).then_some(PathConvention::Windows)
 }
 

@@ -532,6 +532,38 @@ fn file_uri_round_trips_literal_percent_characters() {
     assert_eq!(uri.basename(), Some("file".to_string()));
 }
 
+#[cfg(windows)]
+#[test]
+fn host_windows_paths_round_trip_through_file_uris() {
+    for native in [
+        r"C:\temp\test-file.txt",
+        r"C:/temp/test-file.txt",
+        r"C:\temp/test-file.txt",
+        r"\\127.0.0.1\c$\temp\test-file.txt",
+        r"//127.0.0.1/c$/temp/test-file.txt",
+        r"\\LOCALHOST\c$\temp\test-file.txt",
+        r"//LOCALHOST/c$/temp/test-file.txt",
+        r"\\.\C:\temp\test-file.txt",
+        r"\\?\C:\temp\test-file.txt",
+        r"\\.\UNC\LOCALHOST\c$\temp\test-file.txt",
+        r"\\?\UNC\server\share\temp\test-file.txt",
+        r"\\.\COM1",
+        r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.txt",
+    ] {
+        let expected =
+            codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path_checked(native)
+                .expect(native);
+        let uri = PathUri::from_host_native_path(native).expect(native);
+        let restored = PathUri::parse(&uri.to_string()).expect("parse URI");
+        assert_eq!(
+            restored.infer_path_convention(),
+            Some(PathConvention::Windows),
+            "{native}"
+        );
+        assert_eq!(restored.to_abs_path().expect(native), expected, "{native}");
+    }
+}
+
 #[test]
 #[cfg(windows)]
 fn file_uri_round_trips_windows_unc_paths() {
@@ -958,6 +990,93 @@ fn join_normalizes_absolute_parent_segments() {
 }
 
 #[test]
+fn absolute_windows_paths_round_trip() {
+    for (native, expected) in [
+        (r"c:\temp\test-file.txt", r"C:\temp\test-file.txt"),
+        (r"C:/temp/test-file.txt", r"C:\temp\test-file.txt"),
+        (r"C:\temp/test-file.txt", r"C:\temp\test-file.txt"),
+        (
+            r"\\127.0.0.1\c$\temp\test-file.txt",
+            r"\\127.0.0.1\c$\temp\test-file.txt",
+        ),
+        (
+            r"//127.0.0.1/c$/temp/test-file.txt",
+            r"\\127.0.0.1\c$\temp\test-file.txt",
+        ),
+        (
+            r"\\server/share\temp/test-file.txt",
+            r"\\server\share\temp\test-file.txt",
+        ),
+        (
+            r"\\LOCALHOST\c$\temp\test-file.txt",
+            r"\\LOCALHOST\c$\temp\test-file.txt",
+        ),
+        (
+            r"//LOCALHOST/c$/temp/test-file.txt",
+            r"//LOCALHOST/c$/temp/test-file.txt",
+        ),
+        (
+            r"/\LOCALHOST/c$/temp/test-file.txt",
+            r"/\LOCALHOST/c$/temp/test-file.txt",
+        ),
+        (
+            r"\/LOCALHOST/c$/temp/test-file.txt",
+            r"\/LOCALHOST/c$/temp/test-file.txt",
+        ),
+        (r"\\.\c:\temp\test-file.txt", r"C:\temp\test-file.txt"),
+        (r"\\?\c:\temp\test-file.txt", r"C:\temp\test-file.txt"),
+        (
+            r"\\.\UNC\server\c$\temp\test-file.txt",
+            r"\\server\c$\temp\test-file.txt",
+        ),
+        (
+            r"\\?\UNC\server\c$\temp\test-file.txt",
+            r"\\server\c$\temp\test-file.txt",
+        ),
+        (
+            r"\\.\UNC\LOCALHOST\c$\temp\test-file.txt",
+            r"\\.\UNC\LOCALHOST\c$\temp\test-file.txt",
+        ),
+        (r"\\.\COM1", r"\\.\COM1"),
+        (
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.txt",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.txt",
+        ),
+        (r"//./COM1", r"//./COM1"),
+        (r"//./C:/temp/test-file.txt", r"//./C:/temp/test-file.txt"),
+        (r"//?/C:/temp/test-file.txt", r"//?/C:/temp/test-file.txt"),
+        (
+            r"//./UNC/server/share/file.txt",
+            r"//./UNC/server/share/file.txt",
+        ),
+        (
+            r"//?/UNC/server/share/file.txt",
+            r"//?/UNC/server/share/file.txt",
+        ),
+        (
+            r"C:/a b/日本語/100%#file.txt:stream",
+            r"C:\a b\日本語\100%#file.txt:stream",
+        ),
+    ] {
+        let uri = LegacyAppPathString::from_string(native)
+            .to_path_uri(PathConvention::Windows)
+            .expect(native);
+        let serialized = serde_json::to_string(&uri).expect("serialize URI");
+        let restored: PathUri = serde_json::from_str(&serialized).expect("deserialize URI");
+        assert_eq!(
+            (
+                restored.infer_path_convention(),
+                restored.inferred_native_path_string()
+            ),
+            (Some(PathConvention::Windows), expected.to_string()),
+            "{native}"
+        );
+        let base = PathUri::parse("file:///D:/workspace").expect("base URI");
+        assert_eq!(base.join(native).expect(native), restored, "{native}");
+    }
+}
+
+#[test]
 fn windows_namespace_normalization_preserves_opaque_paths() {
     let base = PathUri::parse("file:///C:/workspace").expect("valid Windows base URI");
 
@@ -1057,6 +1176,24 @@ fn join_replaces_windows_absolute_path() {
         base.join(r"D:\tmp\test.rs"),
         Ok(PathUri::parse("file:///D:/tmp/test.rs").expect("valid absolute URI"))
     );
+}
+
+#[test]
+fn windows_relative_paths_accept_both_separators() {
+    let base = PathUri::parse("file:///C:/workspace/src").expect("base URI");
+    for (native, expected) in [
+        (r"..\tests/file.rs", "file:///C:/workspace/tests/file.rs"),
+        (r"../tests\file.rs", "file:///C:/workspace/tests/file.rs"),
+        (r"/temp/file.rs", "file:///C:/temp/file.rs"),
+        (r"\temp/file.rs", "file:///C:/temp/file.rs"),
+        (r"c:tests/file.rs", "file:///C:/workspace/src/tests/file.rs"),
+    ] {
+        assert_eq!(
+            base.join(native).expect(native),
+            PathUri::parse(expected).unwrap()
+        );
+    }
+    assert!(base.join("D:tests/file.rs").is_err());
 }
 
 #[test]
