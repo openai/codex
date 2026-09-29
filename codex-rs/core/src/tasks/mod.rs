@@ -641,6 +641,7 @@ impl Session {
                 self.emit_turn_error_lifecycle(
                     turn_context.as_ref(),
                     err.to_codex_protocol_error(),
+                    err.details(),
                 )
                 .await;
                 self.track_turn_codex_error(turn_context.as_ref(), &err);

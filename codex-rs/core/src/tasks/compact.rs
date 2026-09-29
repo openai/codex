@@ -75,7 +75,9 @@ impl SessionTask for CompactTask {
             let error = err.to_codex_protocol_error();
             if matches!(error, CodexErrorInfo::UsageLimitExceeded) {
                 // Compaction already emitted the error; notify extensions without emitting it twice.
-                session.emit_turn_error_lifecycle(ctx.as_ref(), error).await;
+                session
+                    .emit_turn_error_lifecycle(ctx.as_ref(), error, err.details())
+                    .await;
             }
         }
         Ok(None)
