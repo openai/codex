@@ -301,7 +301,7 @@ fn loading_completion_restores_unseen_activity_and_failure_stops_motion() {
     let failed = view
         .footer(/*width*/ 80, MotionMode::Reduced)
         .expect("failed history footer");
-    insta::assert_snapshot!(failed.text.to_string(), @"New activity · Retry history: ⌥+</ctrl+home.  esc latest");
+    insta::assert_snapshot!(failed.text.to_string(), @"New activity · Retry history: ⌥</ctrl+home.  esc latest");
     view.history = TranscriptHistoryState::Complete;
     assert!(!view.is_loading_history());
     assert_eq!(

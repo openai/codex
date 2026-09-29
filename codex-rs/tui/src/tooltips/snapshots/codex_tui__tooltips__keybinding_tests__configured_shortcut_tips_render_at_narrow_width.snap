@@ -1,6 +1,5 @@
 ---
 source: tui/src/tooltips/keybinding_tests.rs
-assertion_line: 42
 expression: "lines.iter().map(|line| format!(\"{line:?}\")).collect::<Vec<_>>().join(\"\\n\")"
 ---
 Line::from("Default")
@@ -24,8 +23,8 @@ Line::from_iter([Span::from("Tip:").bold(), Span::from(" Press "), Span::from("c
 Line::from("entered prompts.")
 Line::default()
 Line::from_iter([Span::from("Tip:").bold(), Span::from(" For models with adjustable")])
-Line::from_iter([Span::from("reasoning, press "), Span::from("⌥+.").fg(Color::Rgb(166, 227, 161)), Span::from(" to increase")])
-Line::from_iter([Span::from("reasoning effort or "), Span::from("⌥+,").fg(Color::Rgb(166, 227, 161)), Span::from(" to decrease it.")])
+Line::from_iter([Span::from("reasoning, press "), Span::from("⌥.").fg(Color::Rgb(166, 227, 161)), Span::from(" to increase")])
+Line::from_iter([Span::from("reasoning effort or "), Span::from("⌥,").fg(Color::Rgb(166, 227, 161)), Span::from(" to decrease it.")])
 Line::default()
 Line::from("Remapped")
 Line::from_iter([Span::from("Tip:").bold(), Span::from(" Press "), Span::from("ctrl+x q").fg(Color::Rgb(166, 227, 161)), Span::from(" to queue a message")])

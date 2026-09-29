@@ -589,8 +589,8 @@ fn pending_hint_skips_whole_oversized_configured_completions() {
     assert_eq!(
         scenes,
         [
-            "80: ctrl+x then · shift+⌥+f11 activity · ctrl+shift+⌥+f12 copy · esc cancel",
-            "32: shift+⌥+f11 inspect · esc cancel",
+            "80: ctrl+x then · shift+⌥f11 activity · ctrl+shift+⌥f12 copy · esc cancel",
+            "32: shift+⌥f11 inspect · esc cancel",
             "12: esc cancel",
         ]
     );

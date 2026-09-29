@@ -24,18 +24,18 @@ expression: text
 
   Session
   tab     Send message
-  ⌥+,     Less reasoning
-  ⌥+.     More reasoning
+  ⌥,      Less reasoning
+  ⌥.      More reasoning
   f4      Inspect activity
   ctrl+c  Quit
 
   Transcript (open first)
-  ctrl+t                 Open transcript
-  f3                     Find text
-  pgup / pgdn            Scroll
-  ctrl+space             Start selection
-  ctrl+home / ctrl+end   Top / latest
-  shift+⌥+, / shift+⌥+.  Top / latest
+  ctrl+t                Open transcript
+  f3                    Find text
+  pgup / pgdn           Scroll
+  ctrl+space            Start selection
+  ctrl+home / ctrl+end  Top / latest
+  shift+⌥, / shift+⌥.   Top / latest
 
   /keymap customize
 

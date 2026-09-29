@@ -89,7 +89,9 @@ impl KeyBinding {
         ] {
             if self.modifiers.contains(modifier) {
                 label.push_str(name);
-                label.push('+');
+                if !matches!(name, "⌥" | "⌘" | "^") {
+                    label.push('+');
+                }
             }
         }
         let key = match self.key {

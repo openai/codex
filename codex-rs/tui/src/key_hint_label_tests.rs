@@ -11,9 +11,9 @@ use ratatui::widgets::Paragraph;
 fn modifier_combinations_stay_compact_inside_chords() {
     let cases = [
         (KeyModifiers::CONTROL, "ctrl+t"),
-        (KeyModifiers::ALT, "⌥+t"),
+        (KeyModifiers::ALT, "⌥t"),
         (KeyModifiers::CONTROL | KeyModifiers::SHIFT, "ctrl+shift+t"),
-        (KeyModifiers::CONTROL | KeyModifiers::ALT, "ctrl+⌥+t"),
+        (KeyModifiers::CONTROL | KeyModifiers::ALT, "ctrl+⌥t"),
     ];
     for (modifiers, expected) in cases {
         let prefix = KeyBinding::new(KeyCode::Char('t'), modifiers);

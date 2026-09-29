@@ -1,6 +1,5 @@
 ---
 source: tui/src/pager_overlay/transcript_tests.rs
-assertion_line: 417
 expression: snapshots
 ---
 --- loading ---
@@ -32,7 +31,7 @@ recent transcript
 
 
 
-Retry history: ⌥+</ctrl+home.
+Retry history: ⌥</ctrl+home.
 
 
 
