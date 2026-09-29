@@ -184,7 +184,8 @@ impl TranscriptOverlay {
                 self.is_done = self.browsing_footer.is_some();
             }
         }
-        if matches!(event, TuiEvent::Resume) {
+        if matches!(event, TuiEvent::Resume | TuiEvent::FocusLost) {
+            self.view.cancel_primary();
             self.view.end_drag();
         }
         // Apply a queued prompt jump before navigation can move away from it.
@@ -220,10 +221,7 @@ impl TranscriptOverlay {
                 self.draw(tui)?;
                 return Ok(());
             }
-            TuiEvent::FocusLost => {
-                self.view.end_drag();
-                None
-            }
+            TuiEvent::FocusLost => None,
         };
         if let Some(action) = action {
             self.apply_action(tui, action);
@@ -443,15 +441,13 @@ impl TranscriptOverlay {
         let copy_on_select = matches!(action, ViewAction::CopyOnSelect(_));
         match action {
             ViewAction::Changed => {}
+            ViewAction::PrimarySelection(text) => self.view.publish_primary(tui, &text),
             ViewAction::Copy(text)
             | ViewAction::CopyOnSelect(text)
             | ViewAction::CopyAndFollow(text) => {
-                let result = self.view.copy_selected_text_with(
-                    &self.cells,
-                    &text,
-                    !copy_on_select,
-                    |text, format| tui.copy_transcript_selection(text, format),
-                );
+                let result = self
+                    .view
+                    .copy_selected_text(tui, &self.cells, &text, !copy_on_select);
                 if resume_following
                     && matches!(result, Ok(crate::clipboard_copy::CopyStatus::Pending(_)))
                 {

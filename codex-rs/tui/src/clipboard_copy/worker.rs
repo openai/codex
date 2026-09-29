@@ -1,8 +1,10 @@
 //! One session-lived worker owns blocking clipboard operations and native leases.
 //! Setup has a five-second budget, but abandoning it cannot interrupt an OS call.
-//! There is no backlog: the worker stays busy until that call returns. Once delivery
-//! starts it must finish. Text reads have the same budget for the whole operation; late
-//! results are discarded. Terminal escape sequences are emitted by the UI.
+//! There is no general backlog: the worker stays busy until that call returns. Only the
+//! latest selection publication and one PRIMARY read can wait, with publication ordered
+//! first. Their UI owners cancel by dropping their scopes. Once delivery starts it must
+//! finish. Text reads have the same budget for the whole operation; late results are
+//! discarded. Terminal escape sequences are emitted by the UI.
 
 use super::ClipboardLease;
 use super::CopyFormat;
@@ -11,6 +13,7 @@ use crate::tui::FrameRequester;
 use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::mpsc;
 use std::time::Duration;
 use std::time::Instant;
@@ -37,6 +40,7 @@ impl Setup {
 struct CopySetup {
     phase: Mutex<Setup>,
     frames: FrameRequester,
+    owner: Option<Weak<()>>,
 }
 
 impl CopySetup {
@@ -47,6 +51,14 @@ impl CopySetup {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if setup.timed_out(Instant::now()) {
             return Err(SETUP_TIMEOUT_MESSAGE.into());
+        }
+        if matches!(*setup, Setup::Pending(_))
+            && self
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.strong_count() == 0)
+        {
+            return Err("selection ended before clipboard delivery".into());
         }
         *setup = Setup::Delivering;
         Ok(())
@@ -69,13 +81,29 @@ impl CopySetup {
 
 pub(crate) type CopyResult = Result<CopyStatus, String>;
 
+/// A mouse selection may also retain the configured automatic clipboard copy.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum CopyDestination {
+    Clipboard,
+    Primary,
+    ClipboardAndPrimary(Arc<str>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PasteSource {
+    Clipboard,
+    Primary,
+}
+
 enum Request {
     Copy {
         text: Arc<str>,
         format: CopyFormat,
+        destination: CopyDestination,
         setup: Arc<CopySetup>,
     },
     Read {
+        source: PasteSource,
         deadline: Instant,
         response: mpsc::Sender<Result<String, String>>,
     },
@@ -84,7 +112,9 @@ enum Request {
 struct PendingRead {
     frames: FrameRequester,
     deadline: Instant,
-    response: mpsc::Receiver<Result<String, String>>,
+    source: PasteSource,
+    owner: Weak<()>,
+    response: Option<mpsc::Receiver<Result<String, String>>>,
     expired: bool,
 }
 
@@ -100,13 +130,18 @@ pub(crate) struct ClipboardWorker {
     pending: Option<(u64, Arc<CopySetup>)>,
     next_id: u64,
     completed: Option<(u64, CopyResult)>,
+    primary: Option<(Arc<str>, Weak<()>)>,
     pending_read: Option<PendingRead>,
-    read_result: Option<(Instant, Result<String, String>)>,
+    read_result: Option<(Instant, Weak<()>, Result<String, String>)>,
 }
 
 impl ClipboardWorker {
     pub(crate) fn is_busy(&self) -> bool {
-        self.pending.is_some() || self.pending_read.is_some()
+        self.pending.is_some()
+            || self
+                .pending_read
+                .as_ref()
+                .is_some_and(|read| read.response.is_some())
     }
 
     pub(crate) fn copy(
@@ -114,6 +149,46 @@ impl ClipboardWorker {
         text: Arc<str>,
         format: CopyFormat,
         frames: FrameRequester,
+    ) -> CopyResult {
+        self.copy_to(
+            text,
+            format,
+            CopyDestination::Clipboard,
+            frames,
+            /*owner*/ None,
+        )
+    }
+
+    /// On a busy automatic copy, retain only PRIMARY, never defer a CLIPBOARD copy.
+    pub(crate) fn select(
+        &mut self,
+        text: Arc<str>,
+        format: CopyFormat,
+        destination: CopyDestination,
+        frames: FrameRequester,
+    ) -> (CopyResult, Arc<()>) {
+        let owner = Arc::new(());
+        let primary = match &destination {
+            CopyDestination::Clipboard => None,
+            CopyDestination::Primary => Some(Arc::clone(&text)),
+            CopyDestination::ClipboardAndPrimary(plain_text) => Some(Arc::clone(plain_text)),
+        };
+        self.primary = None;
+        let scope = primary.as_ref().map(|_| Arc::downgrade(&owner));
+        let result = self.copy_to(text, format, destination, frames, scope);
+        if result == Ok(CopyStatus::Busy) {
+            self.primary = primary.map(|text| (text, Arc::downgrade(&owner)));
+        }
+        (result, owner)
+    }
+
+    fn copy_to(
+        &mut self,
+        text: Arc<str>,
+        format: CopyFormat,
+        destination: CopyDestination,
+        frames: FrameRequester,
+        owner: Option<Weak<()>>,
     ) -> CopyResult {
         if self.is_busy() {
             return Ok(CopyStatus::Busy);
@@ -127,6 +202,7 @@ impl ClipboardWorker {
         let setup = Arc::new(CopySetup {
             phase: Mutex::new(Setup::Pending(Instant::now() + SETUP_TIMEOUT)),
             frames: frames.clone(),
+            owner,
         });
         self.requests
             .as_ref()
@@ -134,6 +210,7 @@ impl ClipboardWorker {
             .send(Request::Copy {
                 text,
                 format,
+                destination,
                 setup: Arc::clone(&setup),
             })
             .map_err(|_| "clipboard worker stopped".to_string())?;
@@ -169,38 +246,98 @@ impl ClipboardWorker {
         Ok(())
     }
 
-    /// Start one text read. A timed-out native call keeps the shared worker occupied.
-    pub(crate) fn read_text(&mut self, frames: FrameRequester) -> Result<bool, String> {
-        if self.is_busy() {
-            return Ok(false);
+    /// Accept one text read. PRIMARY may wait behind its publication; CLIPBOARD never queues.
+    /// The caller must retain the scope until it consumes or cancels the read.
+    pub(crate) fn read_text(
+        &mut self,
+        source: PasteSource,
+        frames: FrameRequester,
+    ) -> Result<Option<Arc<()>>, String> {
+        if self.pending_read.is_some() || (source == PasteSource::Clipboard && self.is_busy()) {
+            return Ok(None);
         }
         self.ensure_started(frames.clone())?;
         let deadline = Instant::now() + SETUP_TIMEOUT;
+        let owner = Arc::new(());
+        let wait = self.is_busy() || (source == PasteSource::Primary && self.primary.is_some());
+        self.pending_read = Some(PendingRead {
+            frames: frames.clone(),
+            deadline,
+            source,
+            owner: Arc::downgrade(&owner),
+            response: None,
+            expired: false,
+        });
+        self.read_result = None;
+        if !wait {
+            self.start_read()?;
+        }
+        frames.schedule_frame_in(SETUP_TIMEOUT);
+        Ok(Some(owner))
+    }
+
+    fn start_read(&mut self) -> Result<(), String> {
+        let read = self
+            .pending_read
+            .as_mut()
+            .ok_or("no clipboard read pending")?;
         let (response, receiver) = mpsc::channel();
         self.requests
             .as_ref()
             .ok_or("clipboard worker stopped")?
-            .send(Request::Read { deadline, response })
+            .send(Request::Read {
+                source: read.source,
+                deadline: read.deadline,
+                response,
+            })
             .map_err(|_| "clipboard worker stopped".to_string())?;
-        self.pending_read = Some(PendingRead {
-            frames: frames.clone(),
-            deadline,
-            response: receiver,
-            expired: false,
-        });
-        self.read_result = None;
-        frames.schedule_frame_in(SETUP_TIMEOUT);
-        Ok(true)
+        read.response = Some(receiver);
+        Ok(())
     }
 
     pub(crate) fn take_text_result(&mut self) -> Option<Result<String, String>> {
-        self.read_result.take().map(|(deadline, result)| {
+        let (deadline, owner, result) = self.read_result.take()?;
+        (owner.strong_count() > 0).then(|| {
             if Instant::now() >= deadline {
                 Err("clipboard read timed out".into())
             } else {
                 result
             }
         })
+    }
+
+    /// Run deferred work only at an idle draw boundary, after the UI validates its owners.
+    /// Polling a completion before a key must never preempt that key with an automatic copy.
+    pub(crate) fn advance(&mut self, frames: FrameRequester) {
+        if self.is_busy() {
+            return;
+        }
+        // Target validation may have dropped the scope after this draw's poll.
+        if self
+            .pending_read
+            .as_ref()
+            .is_some_and(|read| read.owner.strong_count() == 0)
+        {
+            self.pending_read = None;
+        }
+        if let Some((text, owner)) = self.primary.take()
+            && owner.strong_count() > 0
+        {
+            let _ = self.copy_to(
+                text,
+                CopyFormat::PlainText,
+                CopyDestination::Primary,
+                frames,
+                Some(owner),
+            );
+        }
+        if !self.is_busy()
+            && self.pending_read.is_some()
+            && let Err(error) = self.start_read()
+            && let Some(read) = self.pending_read.take()
+        {
+            self.read_result = Some((read.deadline, read.owner, Err(error)));
+        }
     }
 
     fn start(
@@ -222,15 +359,45 @@ impl ClipboardWorker {
             .name("clipboard-copy".into())
             .spawn(move || {
                 let mut lease: Option<ClipboardLease> = None;
+                // An ordinary copy must not relinquish PRIMARY, or vice versa.
+                let mut primary_lease: Option<ClipboardLease> = None;
                 while let Ok(request) = incoming.recv() {
                     let (outcome, terminal_text) = match request {
                         Request::Copy {
                             text,
                             format,
+                            destination,
                             setup,
-                        } => copy(&text, format, &setup),
-                        Request::Read { deadline, response } => {
-                            let _ = response.send(read(deadline));
+                        } => {
+                            let plain_text = match &destination {
+                                CopyDestination::Clipboard => None,
+                                CopyDestination::Primary => Some(&text),
+                                CopyDestination::ClipboardAndPrimary(plain_text) => {
+                                    Some(plain_text)
+                                }
+                            };
+                            let primary = plain_text.map(|text| {
+                                super::primary::copy(text, || setup.begin_delivery())
+                                    .map(|outcome| outcome.store(&mut primary_lease))
+                            });
+                            match primary {
+                                Some(result) if destination == CopyDestination::Primary => {
+                                    (result.map(|_| super::CopyOutcome::Requested), None)
+                                }
+                                // Unavailable PRIMARY must not break configured CLIPBOARD copy.
+                                _ => copy(&text, format, &setup),
+                            }
+                        }
+                        Request::Read {
+                            source,
+                            deadline,
+                            response,
+                        } => {
+                            let result = match source {
+                                PasteSource::Clipboard => read(deadline),
+                                PasteSource::Primary => super::primary::read(deadline),
+                            };
+                            let _ = response.send(result);
                             frames.schedule_frame();
                             continue;
                         }
@@ -249,7 +416,7 @@ impl ClipboardWorker {
                 }
                 // Finish Linux clipboard-manager handoff before disconnecting the response channel.
                 #[cfg(target_os = "linux")]
-                drop(lease);
+                drop((lease, primary_lease));
                 drop(outgoing);
             })
             .map_err(|error| format!("could not start clipboard worker: {error}"))?;
@@ -261,25 +428,36 @@ impl ClipboardWorker {
     /// Poll only while the UI owns the terminal. Retain one result for its original consumer.
     pub(crate) fn poll(&mut self) -> Option<&(u64, CopyResult)> {
         if let Some(read) = &mut self.pending_read {
+            if read.owner.strong_count() == 0 {
+                read.expired = true;
+            }
             if !read.expired && Instant::now() >= read.deadline {
                 read.expired = true;
-                self.read_result = Some((read.deadline, Err("clipboard read timed out".into())));
+                self.read_result = Some((
+                    read.deadline,
+                    read.owner.clone(),
+                    Err("clipboard read timed out".into()),
+                ));
             }
-            match read.response.try_recv() {
-                Ok(result) => {
+            match read.response.as_ref().map(mpsc::Receiver::try_recv) {
+                Some(Ok(result)) => {
                     if !read.expired {
-                        self.read_result = Some((read.deadline, result));
+                        self.read_result = Some((read.deadline, read.owner.clone(), result));
                     }
                     self.pending_read = None;
                 }
-                Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
                     if !read.expired {
-                        self.read_result =
-                            Some((read.deadline, Err("clipboard worker stopped".into())));
+                        self.read_result = Some((
+                            read.deadline,
+                            read.owner.clone(),
+                            Err("clipboard worker stopped".into()),
+                        ));
                     }
                     self.pending_read = None;
                 }
-                Err(mpsc::TryRecvError::Empty) => {
+                None if read.expired => self.pending_read = None,
+                Some(Err(mpsc::TryRecvError::Empty)) | None => {
                     if !read.expired {
                         read.frames.schedule_frame_in(
                             read.deadline.saturating_duration_since(Instant::now()),

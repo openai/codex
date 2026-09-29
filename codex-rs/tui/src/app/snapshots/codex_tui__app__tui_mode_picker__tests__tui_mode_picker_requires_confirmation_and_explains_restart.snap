@@ -6,7 +6,7 @@ fullscreen=false, width=80
   TUI mode for next launch
 
 
-› 1. Scrollback (current)  Use your terminal's scrollback
+› 1. Scrollback (current)  Native terminal copy, paste and scrollback
   2. Fullscreen            Scroll within Codex's fullscreen view
 
   Restart to apply. Launch overrides still apply.
@@ -16,8 +16,10 @@ fullscreen=false, width=40
   TUI mode for next launch
 
 
-› 1. Scrollback (current)  Use your
-                           terminal's
+› 1. Scrollback (current)  Native
+                           terminal
+                           copy, paste
+                           and
                            scrollback
   2. Fullscreen            Scroll within
                            Codex's
@@ -32,7 +34,7 @@ fullscreen=true, width=80
   TUI mode for next launch
 
 
-  1. Scrollback            Use your terminal's scrollback
+  1. Scrollback            Native terminal copy, paste and scrollback
 › 2. Fullscreen (current)  Scroll within Codex's fullscreen view
 
   Restart to apply. Launch overrides still apply.
@@ -42,8 +44,10 @@ fullscreen=true, width=40
   TUI mode for next launch
 
 
-  1. Scrollback            Use your
-                           terminal's
+  1. Scrollback            Native
+                           terminal
+                           copy, paste
+                           and
                            scrollback
 › 2. Fullscreen (current)  Scroll within
                            Codex's

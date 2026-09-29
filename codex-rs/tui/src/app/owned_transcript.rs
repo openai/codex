@@ -42,6 +42,7 @@ impl App {
         let chat_widget = &self.chat_widget;
         let transcript_width = chat_widget.history_wrap_width(width);
         let view = &mut self.transcript_view;
+        view.primary_selection = self.right_click_paste_environment.primary;
         view.copy_on_select = self
             .local_settings
             .copy_on_select(&codex_terminal_detection::terminal_info());
@@ -529,14 +530,15 @@ impl App {
         let copy_on_select = matches!(action, ViewAction::CopyOnSelect(_));
         match action {
             ViewAction::Changed => {}
+            ViewAction::PrimarySelection(text) => self.transcript_view.publish_primary(tui, &text),
             ViewAction::Copy(text)
             | ViewAction::CopyOnSelect(text)
             | ViewAction::CopyAndFollow(text) => {
-                let result = self.transcript_view.copy_selected_text_with(
+                let result = self.transcript_view.copy_selected_text(
+                    tui,
                     &self.transcript_cells,
                     &text,
                     !copy_on_select,
-                    |text, format| tui.copy_transcript_selection(text, format),
                 );
                 self.transcript_view
                     .show_copy_feedback(&result, text.chars().count());

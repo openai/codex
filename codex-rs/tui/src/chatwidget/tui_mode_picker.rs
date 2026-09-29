@@ -10,7 +10,11 @@ use crate::bottom_pane::popup_consts::picker_hint_line_for_keymap;
 impl ChatWidget {
     pub(crate) fn show_tui_mode_picker(&mut self) {
         let items = [
-            (false, "Scrollback", "Use your terminal's scrollback"),
+            (
+                false,
+                "Scrollback",
+                "Native terminal copy, paste and scrollback",
+            ),
             (true, "Fullscreen", "Scroll within Codex's fullscreen view"),
         ]
         .into_iter()

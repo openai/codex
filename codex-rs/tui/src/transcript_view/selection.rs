@@ -6,7 +6,11 @@ use ratatui::layout::Position as ScreenPosition;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
+use crate::clipboard_copy::CopyFormat;
+use crate::clipboard_copy::worker::CopyDestination;
+use crate::clipboard_copy::worker::CopyResult;
 use crate::text_selection::SelectionUnit;
+use crate::tui::Tui;
 
 struct PendingCopy {
     id: u64,
@@ -20,6 +24,7 @@ struct PendingCopy {
 
 pub(super) struct Selection {
     pending_copy: Option<PendingCopy>,
+    primary_owner: Option<Arc<()>>,
     pub(super) snapshot: ViewSnapshot,
     pub(super) start: Anchor,
     pub(super) end: Anchor,
@@ -62,6 +67,7 @@ impl TranscriptView {
         let was_following = self.is_following();
         self.selection = Some(Selection {
             pending_copy: None,
+            primary_owner: None,
             snapshot,
             start,
             end,
@@ -137,6 +143,7 @@ impl TranscriptView {
         let origin = selection.origin;
         let backwards = (self.resolve(&cells, end), end.offset)
             < (self.resolve(&cells, origin.0), origin.0.offset);
+        let previous = (selection.start, selection.end);
         selection.start = if backwards { origin.1 } else { origin.0 };
         selection.end = Anchor {
             offset: if backwards { range.start } else { range.end },
@@ -148,6 +155,9 @@ impl TranscriptView {
         selection.pointer = Some(ScreenPosition::new(column, row));
         selection.preferred_column = None;
         self.pin_selection_range(&cells, &mut selection);
+        if previous != (selection.start, selection.end) {
+            selection.primary_owner = None;
+        }
         self.selection = Some(selection);
     }
 
@@ -212,6 +222,58 @@ impl TranscriptView {
         }
         text.retain(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'));
         Some(text)
+    }
+
+    /// A PRIMARY write is silent: it neither claims CLIPBOARD was copied nor ends selection.
+    pub(crate) fn publish_primary(&mut self, tui: &mut Tui, text: &str) {
+        let (_, owner) = tui.clipboard.select(
+            text.into(),
+            CopyFormat::PlainText,
+            CopyDestination::Primary,
+            tui.frame_requester(),
+        );
+        if let Some(selection) = &mut self.selection {
+            selection.primary_owner = Some(owner);
+        }
+    }
+
+    /// Both transcript surfaces honor the same automatic-copy and plaintext PRIMARY semantics.
+    pub(crate) fn copy_selected_text(
+        &mut self,
+        tui: &mut Tui,
+        cells: &[Arc<dyn HistoryCell>],
+        text: &str,
+        clear_selection: bool,
+    ) -> CopyResult {
+        let publish_primary = !clear_selection && self.primary_selection;
+        let mut primary_owner = None;
+        let result =
+            self.copy_selected_text_with(cells, text, clear_selection, |copy_text, format| {
+                if publish_primary {
+                    let (result, owner) = tui.clipboard.select(
+                        copy_text.into(),
+                        format,
+                        CopyDestination::ClipboardAndPrimary(text.into()),
+                        tui.frame_requester(),
+                    );
+                    primary_owner = Some(owner);
+                    result
+                } else {
+                    tui.clipboard
+                        .copy(copy_text.into(), format, tui.frame_requester())
+                }
+            });
+        if publish_primary && let Some(selection) = &mut self.selection {
+            selection.primary_owner = primary_owner;
+        }
+        result
+    }
+
+    /// Hide or cancel deferred publication without relinquishing the existing X11 selection.
+    pub(crate) fn cancel_primary(&mut self) {
+        if let Some(selection) = &mut self.selection {
+            selection.primary_owner = None;
+        }
     }
 
     /// Track delivery for the current selection. Explicit copies release it on confirmation;
@@ -370,6 +432,9 @@ impl TranscriptView {
             return true;
         };
         if let Some(mut selection) = self.selection.take() {
+            if selection.end != next {
+                selection.primary_owner = None;
+            }
             selection.end = next;
             selection.dragging = false;
             selection.preferred_column = column;

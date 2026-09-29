@@ -839,8 +839,9 @@ impl App {
         tui.link_hover.observe(&event);
         self.refresh_link_hover(tui)?;
         self.invalidate_right_click_paste(&event);
-        self.finish_clipboard(tui);
+        self.finish_clipboard(tui, &event);
         let event = self.finish_right_click_paste(tui, event);
+        let idle_draw = matches!(event, TuiEvent::Draw);
         if matches!(&event, TuiEvent::Key(_))
             && self.handle_composer_copy_event(tui, &event, |tui, text| {
                 tui.copy_transcript_selection(text, crate::clipboard_copy::CopyFormat::PlainText)
@@ -1136,6 +1137,10 @@ impl App {
                 TuiEvent::Mouse(mouse) => self.start_right_click_paste(tui, mouse),
                 TuiEvent::FocusLost => {}
             }
+        }
+        // Both transcript owners must consume completions before automatic work advances.
+        if idle_draw {
+            tui.clipboard.advance(tui.frame_requester());
         }
         Ok(AppRunControl::Continue)
     }

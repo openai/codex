@@ -32,23 +32,25 @@ impl App {
         }
     }
 
-    pub(super) fn finish_clipboard(&mut self, tui: &mut tui::Tui) {
+    pub(super) fn finish_clipboard(&mut self, tui: &mut tui::Tui, event: &TuiEvent) {
         let current = tui.is_owned_screen() && self.overlay.is_none();
-        let Some(completion) = tui.clipboard.poll() else {
-            return;
-        };
-        if let Some(characters) = self.chat_widget.finish_clipboard(completion, current) {
-            self.transcript_view
-                .show_copy_feedback(&completion.1, characters);
-        }
-        let follow = self
-            .transcript_view
-            .finish_copy(&self.transcript_cells, completion, current);
-        if follow == Some(true) {
-            if self.backtrack.overlay_preview_active {
-                self.close_transcript_overlay(tui);
+        if let Some(completion) = tui.clipboard.poll() {
+            if let Some(characters) = self.chat_widget.finish_clipboard(completion, current) {
+                self.transcript_view
+                    .show_copy_feedback(&completion.1, characters);
             }
-            self.transcript_view.jump_to_latest();
+            let follow =
+                self.transcript_view
+                    .finish_copy(&self.transcript_cells, completion, current);
+            if follow == Some(true) {
+                if self.backtrack.overlay_preview_active {
+                    self.close_transcript_overlay(tui);
+                }
+                self.transcript_view.jump_to_latest();
+            }
+        }
+        if !current || matches!(event, TuiEvent::FocusLost | TuiEvent::Resume) {
+            self.transcript_view.cancel_primary();
         }
     }
 }

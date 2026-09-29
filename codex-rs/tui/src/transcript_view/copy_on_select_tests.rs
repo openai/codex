@@ -179,3 +179,36 @@ fn copy_on_select_preserves_link_activation_and_ignores_empty_drags() {
         }
     }
 }
+
+#[test]
+fn x11_release_preserves_primary_when_auto_copy_is_disabled() {
+    let cells = vec![cell("visit the café")];
+    for auto_copy in [false, true] {
+        let mut view = TranscriptView {
+            copy_on_select: auto_copy,
+            primary_selection: true,
+            ..Default::default()
+        };
+        render(&mut view, &cells, /*width*/ 20, /*height*/ 1);
+        for event in [
+            mouse(MouseEventKind::Down(MouseButton::Left), /*column*/ 0),
+            mouse(MouseEventKind::Drag(MouseButton::Left), /*column*/ 14),
+        ] {
+            assert!(matches!(
+                view.handle_mouse(event, &cells),
+                Some(ViewAction::Changed)
+            ));
+        }
+        let release = mouse(MouseEventKind::Up(MouseButton::Left), /*column*/ 14);
+        let text = match (auto_copy, view.handle_mouse(release, &cells)) {
+            (false, Some(ViewAction::PrimarySelection(text)))
+            | (true, Some(ViewAction::CopyOnSelect(text))) => text,
+            _ => panic!("mouse release must publish to PRIMARY regardless of auto-copy"),
+        };
+        assert_eq!(
+            (text.as_str(), view.selected_text(&cells).as_deref()),
+            ("visit the café", Some("visit the café"))
+        );
+        assert!(view.handle_mouse(release, &cells).is_none());
+    }
+}

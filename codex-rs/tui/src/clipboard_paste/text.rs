@@ -22,13 +22,28 @@ pub(crate) fn read(deadline: Instant) -> Result<String, String> {
             .block_on(read_command(command, deadline));
     }
     #[cfg(not(target_os = "android"))]
-    let text = match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+    {
+        native_result(
+            arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text()),
+            deadline,
+        )
+    }
+    #[cfg(target_os = "android")]
+    {
+        validate(String::new(), deadline)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+pub(crate) fn native_result(
+    result: Result<String, arboard::Error>,
+    deadline: Instant,
+) -> Result<String, String> {
+    let text = match result {
         Ok(text) => text,
         Err(arboard::Error::ContentNotAvailable) => String::new(),
         Err(_) => return Err("clipboard text is unavailable".into()),
     };
-    #[cfg(target_os = "android")]
-    let text = String::new();
     validate(text, deadline)
 }
 
