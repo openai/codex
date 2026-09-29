@@ -236,7 +236,7 @@ async fn endpoint_products() -> EndpointInspection {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 async fn product_command(program: impl AsRef<OsStr>, args: &[&str]) -> Option<Output> {
-    let mut command = Command::new(program);
+    let mut command = Command::from(codex_utils_process::background_command(program));
     command
         .args(args)
         .stdin(Stdio::null())

@@ -9,6 +9,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 codex-file-system = { workspace = true }
