@@ -22,6 +22,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::state::ActiveTurn;
 use crate::turn_metadata::ExecutionMetadata;
+use codex_analytics::ThreadProductUpdate;
 use codex_attachment_store::AttachmentStore;
 use codex_extension_api::ExtensionDataInit;
 use codex_http_client::ClientRouteClass;
@@ -1599,6 +1600,9 @@ impl Session {
             }
 
             let analytics_events_client = if config.analytics_enabled == Some(false) {
+                if let Some(client) = &analytics_events_client {
+                    client.update_thread_product_sku(thread_id, ThreadProductUpdate::Clear);
+                }
                 AnalyticsEventsClient::disabled()
             } else {
                 analytics_events_client.unwrap_or_else(|| {
@@ -1609,6 +1613,13 @@ impl Session {
                     )
                 })
             };
+            analytics_events_client.update_thread_product_sku(
+                thread_id,
+                match &config.apps_mcp_product_sku {
+                    Some(product) => ThreadProductUpdate::Set(product.clone()),
+                    None => ThreadProductUpdate::Clear,
+                },
+            );
             for item in initial_history.get_rollout_items() {
                 match item {
                     RolloutItem::Compacted(compacted) => {

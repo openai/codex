@@ -1155,6 +1155,14 @@ impl AnalyticsReducer {
         }
     }
 
+    pub(crate) fn flush_thread(&mut self, thread_id: &str, out: &mut Vec<TrackEventRequest>) {
+        for ((pending_thread_id, _), state) in &mut self.tool_response_states {
+            if pending_thread_id == thread_id {
+                out.extend(state.pending_tool_events.drain(..));
+            }
+        }
+    }
+
     fn ingest_initialize(
         &mut self,
         connection_id: u64,

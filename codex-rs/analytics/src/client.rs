@@ -37,6 +37,10 @@ use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::guardian_v2::GuardianV2Event;
 use crate::now_unix_millis;
+use crate::product_attribution::MAX_THREAD_PRODUCTS;
+use crate::product_attribution::ThreadProductUpdate;
+use crate::product_attribution::ThreadProducts;
+use crate::product_attribution::product_event_batches;
 use crate::reducer::AnalyticsReducer;
 use crate::reducer::MAX_PLUGIN_MEASUREMENTS_PER_BATCH;
 use crate::reducer::tracked_tool_item_id;
@@ -74,6 +78,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -86,12 +92,18 @@ const ANALYTICS_EVENT_DEDUPE_MAX_KEYS: usize = 4096;
 
 pub(crate) enum AnalyticsEventsQueueMessage {
     Fact(Box<AnalyticsFact>),
+    ThreadProduct {
+        thread_id: String,
+        product_sku: Option<String>,
+        generation: u64,
+    },
     Flush(oneshot::Sender<()>),
 }
 
 #[derive(Clone)]
 pub(crate) struct AnalyticsEventsQueue {
     pub(crate) sender: mpsc::Sender<AnalyticsEventsQueueMessage>,
+    pub(crate) product_generation: Arc<AtomicU64>,
     pub(crate) app_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
     pub(crate) plugin_used_emitted_keys: Arc<Mutex<HashSet<(String, String)>>>,
 }
@@ -159,26 +171,63 @@ fn analytics_capture_file_from_env() -> Option<PathBuf> {
 impl AnalyticsEventsQueue {
     fn new(auth_manager: Arc<AuthManager>, destination: AnalyticsEventsDestination) -> Self {
         let (sender, mut receiver) = mpsc::channel(ANALYTICS_EVENTS_QUEUE_SIZE);
+        let product_generation = Arc::new(AtomicU64::new(0));
+        let worker_product_generation = Arc::clone(&product_generation);
         tokio::spawn(async move {
             let mut reducer = AnalyticsReducer::default();
+            let mut thread_products = ThreadProducts::default();
+            let mut registered_generation = 0;
             while let Some(input) = receiver.recv().await {
+                let generation = worker_product_generation.load(Ordering::Acquire);
+                if generation != registered_generation {
+                    // A dropped registration invalidates both current and queued attribution.
+                    thread_products = ThreadProducts::default();
+                    registered_generation = generation;
+                }
                 let input = match input {
                     AnalyticsEventsQueueMessage::Fact(input) => *input,
+                    AnalyticsEventsQueueMessage::ThreadProduct {
+                        thread_id,
+                        product_sku,
+                        generation,
+                    } => {
+                        if generation != registered_generation {
+                            continue;
+                        }
+                        // Pending tool events belong to the configuration that collected them.
+                        let mut events = Vec::new();
+                        if thread_products.get(&thread_id) != product_sku.as_deref() {
+                            reducer.flush_thread(&thread_id, &mut events);
+                        }
+                        if product_sku.is_some()
+                            && !thread_products.products.contains_key(&thread_id)
+                            && thread_products.products.len() >= MAX_THREAD_PRODUCTS
+                            && let Some(evicted) = thread_products.registered_threads.front()
+                        {
+                            reducer.flush_thread(evicted, &mut events);
+                        }
+                        send_track_events(&auth_manager, &destination, events, &thread_products)
+                            .await;
+                        thread_products.register(thread_id, product_sku);
+                        continue;
+                    }
                     AnalyticsEventsQueueMessage::Flush(done_tx) => {
                         let mut events = Vec::new();
                         reducer.flush(&mut events);
-                        send_track_events(&auth_manager, &destination, events).await;
+                        send_track_events(&auth_manager, &destination, events, &thread_products)
+                            .await;
                         let _ = done_tx.send(());
                         continue;
                     }
                 };
                 let mut events = Vec::new();
                 reducer.ingest(input, &mut events).await;
-                send_track_events(&auth_manager, &destination, events).await;
+                send_track_events(&auth_manager, &destination, events, &thread_products).await;
             }
         });
         Self {
             sender,
+            product_generation,
             app_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
             plugin_used_emitted_keys: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -238,6 +287,30 @@ impl AnalyticsEventsQueue {
 }
 
 impl AnalyticsEventsClient {
+    /// Registers this thread's product attribution without changing authentication.
+    /// A full queue clears shared attribution until threads register again, without blocking startup.
+    pub fn update_thread_product_sku(&self, thread_id: ThreadId, update: ThreadProductUpdate) {
+        let product_sku = match update {
+            ThreadProductUpdate::Set(product) => Some(product),
+            ThreadProductUpdate::Clear => None,
+        };
+        let Some(queue) = &self.queue else {
+            return;
+        };
+        if queue
+            .sender
+            .try_send(AnalyticsEventsQueueMessage::ThreadProduct {
+                thread_id: thread_id.to_string(),
+                product_sku,
+                generation: queue.product_generation.load(Ordering::Acquire),
+            })
+            .is_err()
+        {
+            queue.product_generation.fetch_add(1, Ordering::AcqRel);
+            tracing::warn!("clearing analytics product attribution: queue is unavailable");
+        }
+    }
+
     pub fn new(
         auth_manager: Arc<AuthManager>,
         base_url: String,
@@ -861,6 +934,7 @@ async fn send_track_events(
     auth_manager: &AuthManager,
     destination: &AnalyticsEventsDestination,
     mut events: Vec<TrackEventRequest>,
+    thread_products: &ThreadProducts,
 ) {
     if events.is_empty() {
         return;
@@ -879,8 +953,33 @@ async fn send_track_events(
         return;
     }
 
-    for events in track_event_request_batches(events) {
-        send_track_events_request(&auth, destination, events, &http_client_factory).await;
+    // Product streams are capped by product_event_batches. Parallel streams add no
+    // timeout waves to the existing sequential isolated-event request splitting.
+    let mut requests = tokio::task::JoinSet::new();
+    for (product_sku, events) in product_event_batches(events, thread_products) {
+        let (auth, destination, factory) = (
+            auth.clone(),
+            destination.clone(),
+            http_client_factory.clone(),
+        );
+        let product_sku = product_sku.map(str::to_string);
+        requests.spawn(async move {
+            for events in track_event_request_batches(events) {
+                send_track_events_request(
+                    &auth,
+                    &destination,
+                    events,
+                    &factory,
+                    product_sku.as_deref(),
+                )
+                .await;
+            }
+        });
+    }
+    while let Some(result) = requests.join_next().await {
+        if let Err(error) = result {
+            tracing::warn!(%error, "analytics product stream failed");
+        }
     }
 }
 
@@ -912,6 +1011,7 @@ async fn send_track_events_request(
     destination: &AnalyticsEventsDestination,
     events: Vec<TrackEventRequest>,
     http_client_factory: &codex_http_client::HttpClientFactory,
+    product_sku: Option<&str>,
 ) {
     if events.is_empty() {
         return;
@@ -943,14 +1043,16 @@ async fn send_track_events_request(
             return;
         }
     };
-    let response = client
+    let mut request = client
         .post(url)
         .timeout(ANALYTICS_EVENTS_TIMEOUT)
         .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
         .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await;
+        .json(&payload);
+    if let Some(product_sku) = product_sku {
+        request = request.header("X-OpenAI-Product-Sku", product_sku);
+    }
+    let response = request.send().await;
 
     match response {
         Ok(response) if response.status().is_success() => {}
@@ -974,6 +1076,9 @@ fn capture_track_events_request(
         return false;
     };
 
+    use std::sync::PoisonError;
+    static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+    let _capture_guard = CAPTURE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     if let Err(err) = crate::analytics_capture::append_payload(path, payload) {
         tracing::error!(
             path = %path.display(),
