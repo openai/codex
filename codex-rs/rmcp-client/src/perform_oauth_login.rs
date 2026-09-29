@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use codex_config::McpServerOAuthConfig;
 use codex_exec_server::HttpClient;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use rmcp::transport::AuthorizationManager;
 use rmcp::transport::AuthorizationSession;
 use rmcp::transport::auth::AuthorizationMetadata;
@@ -846,14 +847,15 @@ impl OauthLoginFlow {
         let server_name = self.server_name.clone();
         let (tx, rx) = oneshot::channel();
 
-        tokio::spawn(async move {
+        let task = async move {
             let result = self.finish(/*emit_browser_url*/ false).await;
             if let Err(err) = &result {
                 eprintln!("Failed to complete OAuth login for '{server_name}': {err:#}");
             }
 
             let _ = tx.send(result);
-        });
+        };
+        tokio::spawn(AuthStorageOriginator::current().scope(task));
 
         rx
     }

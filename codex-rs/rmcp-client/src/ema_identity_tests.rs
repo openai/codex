@@ -233,7 +233,7 @@ impl KeyringStore for GatedKeyringStore {
 async fn refresh_subject_reread_is_cancellable_and_releases_guard_on_failure() -> Result<()> {
     let _home = TempCodexHome::new();
     let (_server, issuer) = discovery().await;
-    let store = ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct);
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct);
     let stored = credentials(&issuer, "user", /*expires_at*/ 0);
     let snapshot = StoredOAuthCredentialSnapshot::new(stored.clone(), store);
     for outcome in [
@@ -312,7 +312,7 @@ async fn refresh_subject_reread_is_cancellable_and_releases_guard_on_failure() -
 async fn refresh_subject_rereads_pinned_credentials_after_id_token_expiry() -> Result<()> {
     let _home = TempCodexHome::new();
     let (_server, issuer) = discovery().await;
-    let store = ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct);
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct);
     let stored = credentials(&issuer, "user", /*expires_at*/ 0);
     let snapshot = StoredOAuthCredentialSnapshot::new(stored.clone(), store);
     let keyring = MockKeyringStore::default();
@@ -341,7 +341,7 @@ async fn refresh_subject_rejects_removed_replaced_or_missing_credentials() -> Re
     let _home = TempCodexHome::new();
     let (server, issuer) = discovery().await;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let store = ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct);
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct);
     let original = credentials(&issuer, "user", /*expires_at*/ 0);
     for change in [
         "deleted",
@@ -357,7 +357,7 @@ async fn refresh_subject_rejects_removed_replaced_or_missing_credentials() -> Re
         let snapshot = StoredOAuthCredentialSnapshot::new(
             original.clone(),
             if change == "file" {
-                ResolvedOAuthCredentialStore::File
+                ResolvedOAuthCredentialStore::file()
             } else {
                 store
             },

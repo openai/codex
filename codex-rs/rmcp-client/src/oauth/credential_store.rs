@@ -243,9 +243,11 @@ impl<K: KeyringStore + Clone + 'static> CredentialStore for OAuthCredentialStore
                 .map_err(credential_store_error)?;
             let tokens = tokio::task::spawn_blocking(move || -> Result<StoredOAuthTokens> {
                 let _guard = guard;
-                inner
-                    .store
-                    .save(&inner.keyring, &inner.server_name, &tokens)?;
+                inner.store.save_with_refresh_telemetry(
+                    &inner.keyring,
+                    &inner.server_name,
+                    &tokens,
+                )?;
                 Ok(tokens)
             })
             .await

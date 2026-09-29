@@ -4389,6 +4389,7 @@ dependencies = [
  "libc",
  "memchr",
  "oauth2",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "rmcp",
  "serde",

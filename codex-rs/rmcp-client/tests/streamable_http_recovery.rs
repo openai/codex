@@ -1,5 +1,8 @@
 mod streamable_http_test_support;
 
+#[path = "streamable_http_recovery/telemetry_tests.rs"]
+mod telemetry_tests;
+
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;

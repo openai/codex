@@ -25,7 +25,7 @@ async fn keyring_failure_does_not_reuse_the_pinned_refresh_token() -> Result<()>
     let _lock = RefreshCredentialLock::acquire_for_server(&tokens.server_name, &tokens.url).await?;
     let snapshot = StoredOAuthCredentialSnapshot::new(
         tokens,
-        ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct),
+        ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct),
     );
     let keyring = MockKeyringStore::default();
     keyring.set_error(
@@ -64,7 +64,7 @@ fn ordinary_oauth_names_cannot_alias_enterprise_credential_keys() -> Result<()> 
     );
 
     let keyring = MockKeyringStore::default();
-    let store = ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct);
+    let store = ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct);
     let enterprise_tokens: StoredOAuthTokens = serde_json::from_value(json!({
         "server_name": enterprise_name, "url": issuer, "issuer": issuer,
         "client_id": "idp-client", "token_response": {

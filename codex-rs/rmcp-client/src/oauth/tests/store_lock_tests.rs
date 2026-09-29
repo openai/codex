@@ -176,7 +176,7 @@ fn legacy_rmcp_oauth_keyring_credentials_remain_readable() -> Result<()> {
 
     assert_eq!(
         resolved.store,
-        crate::oauth::ResolvedOAuthCredentialStore::Keyring(AuthKeyringBackendKind::Direct)
+        crate::oauth::ResolvedOAuthCredentialStore::keyring(AuthKeyringBackendKind::Direct)
     );
     assert_tokens_match_without_expiry(&resolved.tokens, &expected);
     assert!(crate::oauth::oauth_tokens_are_usable(&resolved.tokens));

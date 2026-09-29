@@ -7,6 +7,7 @@ use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
 use codex_mcp::ema_auth_scope;
 use codex_mcp::resolve_oauth_callback;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_rmcp_client::EnterpriseOAuthLoginRequest;
 use std::future::Future;
 
@@ -379,12 +380,13 @@ impl McpRequestProcessor {
             None => None,
         };
         let processor = self.clone();
-        tokio::spawn(async move {
+        let task = async move {
             let result = processor
                 .list_mcp_server_status_response(params, thread)
                 .await;
             outgoing.send_result(request, result).await;
-        });
+        };
+        tokio::spawn(AuthStorageOriginator::current().scope(task));
         Ok(())
     }
 
@@ -598,7 +600,7 @@ impl McpRequestProcessor {
             let (_, thread) = self.load_thread(&thread_id).await?;
             let request_id = request_id.clone();
 
-            tokio::spawn(async move {
+            let task = async move {
                 let origin_call_id =
                     origin_call_id.filter(|_| server == codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
                 let result = match origin_call_id.as_deref() {
@@ -611,7 +613,8 @@ impl McpRequestProcessor {
                 };
                 Self::send_mcp_resource_read_response(outgoing, request_id, result, origin_call_id)
                     .await;
-            });
+            };
+            tokio::spawn(AuthStorageOriginator::current().scope(task));
             return Ok(());
         }
 
@@ -633,7 +636,7 @@ impl McpRequestProcessor {
             McpRuntimeContext::new(Arc::clone(&environment_manager), config.cwd.to_path_buf());
         let request_id = request_id.clone();
 
-        tokio::spawn(async move {
+        let task = async move {
             let result = read_mcp_resource_without_thread(
                 &mcp_config,
                 auth.as_ref(),
@@ -649,7 +652,8 @@ impl McpRequestProcessor {
                 outgoing, request_id, result, /*origin_call_id*/ None,
             )
             .await;
-        });
+        };
+        tokio::spawn(AuthStorageOriginator::current().scope(task));
         Ok(())
     }
 
@@ -687,14 +691,15 @@ impl McpRequestProcessor {
         let meta = with_mcp_tool_call_thread_id_meta(params.meta, &thread_id);
         let request_id = request_id.clone();
 
-        tokio::spawn(async move {
+        let task = async move {
             let result = thread
                 .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(mcp_operation_error);
             outgoing.send_result(request_id, result).await;
-        });
+        };
+        tokio::spawn(AuthStorageOriginator::current().scope(task));
         Ok(())
     }
 }

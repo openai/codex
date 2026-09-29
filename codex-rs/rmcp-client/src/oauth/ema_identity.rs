@@ -45,7 +45,7 @@ impl StoredOAuthCredentialSnapshot {
         &self,
         keyring_store: &K,
     ) -> Result<StoredOAuthTokens> {
-        if !matches!(self.store, ResolvedOAuthCredentialStore::Keyring(_)) {
+        if self.store == ResolvedOAuthCredentialStore::file() {
             bail!("enterprise IdP credentials require keyring storage");
         }
         let previous = &self.credentials;

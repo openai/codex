@@ -69,6 +69,7 @@ webbrowser = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 codex-http-client = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -94,10 +95,14 @@ windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
 
-# This test is compiled through `#[path]` inside the inline `oauth::tests` module. Cargo-shear
-# cannot resolve that nested module path and otherwise reports the linked file as unlinked.
+# These tests are compiled through `#[path]` inside the inline `oauth::tests` module. Cargo-shear
+# cannot resolve those nested module paths and otherwise reports the linked files as unlinked.
 [package.metadata.cargo-shear]
-ignored-paths = ["src/oauth/tests/persistor_tests.rs", "src/oauth/tests/credential_store_tests.rs"]
+ignored-paths = [
+    "src/oauth/tests/persistor_tests.rs",
+    "src/oauth/tests/credential_store_tests.rs",
+    "src/oauth/tests/telemetry_tests.rs",
+]
 
 [lib]
 doctest = false

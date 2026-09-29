@@ -65,6 +65,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::McpStartupReadiness;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
@@ -772,6 +773,7 @@ impl McpConnectionSet {
 
                 (server_name, outcome)
             };
+            let startup = AuthStorageOriginator::current().scope(startup);
             if defer_startup {
                 // Dormant servers must not hold the initial startup summary open.
                 tokio::spawn(startup);
@@ -893,15 +895,18 @@ impl McpConnectionSet {
             return Vec::new();
         }
 
+        let originator = AuthStorageOriginator::current();
         match tokio::task::spawn_blocking(move || {
-            candidates
-                .into_iter()
-                .filter_map(|(server_name, identity, config)| {
-                    identity
-                        .oauth_credentials_changed(&server_name, &config)
-                        .then_some(server_name)
-                })
-                .collect()
+            originator.sync_scope(|| {
+                candidates
+                    .into_iter()
+                    .filter_map(|(server_name, identity, config)| {
+                        identity
+                            .oauth_credentials_changed(&server_name, &config)
+                            .then_some(server_name)
+                    })
+                    .collect()
+            })
         })
         .await
         {
