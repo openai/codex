@@ -30,10 +30,14 @@ struct SessionEntry {
     attachment: StdMutex<AttachmentState>,
 }
 
-struct AttachmentState {
-    current_connection_id: Option<ConnectionId>,
-    detached_connection_id: Option<ConnectionId>,
-    detached_expires_at: Option<tokio::time::Instant>,
+enum AttachmentState {
+    Attached {
+        connection_id: ConnectionId,
+    },
+    Detached {
+        connection_id: ConnectionId,
+        expires_at: tokio::time::Instant,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -163,11 +167,7 @@ impl SessionEntry {
         Self {
             session_id,
             process,
-            attachment: StdMutex::new(AttachmentState {
-                current_connection_id: Some(connection_id),
-                detached_connection_id: None,
-                detached_expires_at: None,
-            }),
+            attachment: StdMutex::new(AttachmentState::Attached { connection_id }),
         }
     }
 
@@ -176,9 +176,7 @@ impl SessionEntry {
             .attachment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        attachment.current_connection_id = Some(connection_id);
-        attachment.detached_connection_id = None;
-        attachment.detached_expires_at = None;
+        *attachment = AttachmentState::Attached { connection_id };
     }
 
     fn detach(&self, connection_id: ConnectionId) -> bool {
@@ -186,39 +184,39 @@ impl SessionEntry {
             .attachment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if attachment.current_connection_id != Some(connection_id) {
+        if !matches!(*attachment, AttachmentState::Attached { connection_id: current } if current == connection_id)
+        {
             return false;
         }
 
         self.process.set_notification_sender(/*notifications*/ None);
-        attachment.current_connection_id = None;
-        attachment.detached_connection_id = Some(connection_id);
-        attachment.detached_expires_at = Some(tokio::time::Instant::now() + DETACHED_SESSION_TTL);
+        *attachment = AttachmentState::Detached {
+            connection_id,
+            expires_at: tokio::time::Instant::now() + DETACHED_SESSION_TTL,
+        };
         true
     }
 
     fn has_active_connection(&self) -> bool {
-        self.attachment
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .current_connection_id
-            .is_some()
+        matches!(
+            *self
+                .attachment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            AttachmentState::Attached { .. }
+        )
     }
 
     fn is_attached_to(&self, connection_id: ConnectionId) -> bool {
-        self.attachment
+        matches!(*self.attachment
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .current_connection_id
-            == Some(connection_id)
+            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Attached { connection_id: current } if current == connection_id)
     }
 
     fn is_expired(&self, now: tokio::time::Instant) -> bool {
-        self.attachment
+        matches!(*self.attachment
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .detached_expires_at
-            .is_some_and(|deadline| now >= deadline)
+            .unwrap_or_else(std::sync::PoisonError::into_inner), AttachmentState::Detached { expires_at, .. } if now >= expires_at)
     }
 
     fn is_detached_connection_expired(
@@ -230,11 +228,7 @@ impl SessionEntry {
             .attachment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        attachment.current_connection_id.is_none()
-            && attachment.detached_connection_id == Some(connection_id)
-            && attachment
-                .detached_expires_at
-                .is_some_and(|deadline| now >= deadline)
+        matches!(*attachment, AttachmentState::Detached { connection_id: detached, expires_at } if detached == connection_id && now >= expires_at)
     }
 }
 
