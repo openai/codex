@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -181,6 +182,17 @@ impl OpenAiModelsEndpoint {
         })
         .await
         .map_err(|_| CodexErr::RequestTimeout)??;
+        if self.provider_info.model_catalog_url.is_some() {
+            let mut slugs = HashSet::new();
+            if models
+                .iter()
+                .any(|model| model.slug.trim().is_empty() || !slugs.insert(&model.slug))
+            {
+                return Err(CodexErr::InvalidRequest(
+                    "model catalog must contain unique, non-empty model slugs".to_string(),
+                ));
+            }
+        }
         Ok(ModelsEndpointResponse {
             models,
             etag,
@@ -397,6 +409,7 @@ mod tests {
     use codex_models_manager::manager::ModelsManager;
     use codex_models_manager::manager::OpenAiModelsManager;
     use codex_models_manager::manager::RefreshStrategy;
+    use codex_models_manager::model_info::model_info_from_slug;
     use codex_protocol::auth::AuthMode;
     use codex_protocol::config_types::ModelProviderAuthInfo;
     use codex_protocol::error::CodexErrorDetails;
@@ -701,7 +714,7 @@ mod tests {
         .unwrap();
         let model = codex_protocol::openai_models::ModelInfo {
             used_fallback_model_metadata: false,
-            ..codex_models_manager::model_info::model_info_from_slug("command-auth-model")
+            ..model_info_from_slug("command-auth-model")
         };
         Mock::given(method("GET"))
             .and(path("/models"))
@@ -784,8 +797,7 @@ mod tests {
             CodexAuth::from_api_key("test-key"),
         ] {
             let server = MockServer::start().await;
-            let mut model =
-                codex_models_manager::model_info::model_info_from_slug("provider-model");
+            let mut model = model_info_from_slug("provider-model");
             model.visibility = ModelVisibility::List;
             model.supported_in_api = true;
             model.used_fallback_model_metadata = false;
@@ -834,7 +846,8 @@ mod tests {
                 home.path().to_path_buf(),
                 endpoint,
                 Some(auth_manager.clone()),
-            );
+            )
+            .with_provider_catalog();
             // SIWC does not require the API-key rollout flag.
             manager.set_api_key_model_discovery_enabled(
                 auth_manager.auth_mode() == Some(codex_protocol::auth::AuthMode::ApiKey),
@@ -850,6 +863,41 @@ mod tests {
                     expected
                 );
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_catalog_requires_unique_nonempty_slugs() {
+        for slugs in [vec![" \t"], vec!["private-model", "private-model"]] {
+            let server = MockServer::start().await;
+            let catalog = ModelsResponse {
+                models: slugs.into_iter().map(model_info_from_slug).collect(),
+            };
+            Mock::given(method("GET"))
+                .and(path("/codex/models"))
+                .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(catalog))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let endpoint = OpenAiModelsEndpoint::new(
+                ModelProviderInfo {
+                    model_catalog_url: Some(format!("{}/codex/models", server.uri()).into()),
+                    ..ModelProviderInfo::default()
+                },
+                /*auth_manager*/ None,
+                /*gateway_auth_manager*/ None,
+            );
+            let error = endpoint
+                .list_models(
+                    "1.2.3",
+                    HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+                )
+                .await
+                .expect_err("ambiguous model identity must be rejected");
+            assert_eq!(
+                error.to_string(),
+                "model catalog must contain unique, non-empty model slugs"
+            );
         }
     }
 

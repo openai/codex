@@ -131,7 +131,15 @@ requires_openai_auth = true
         })
         .await?;
     let enabled = user_enablement.unwrap_or(app_enablement) && catalog_opt_in;
-    let expected = if enabled { &remote } else { &bundled };
+    let expected: &[ModelPreset] = if enabled {
+        &remote
+    } else if catalog_opt_in {
+        // The rollout gate suppresses discovery, but an explicit catalog still
+        // prevents bundled models from being advertised for this provider.
+        &[]
+    } else {
+        &bundled
+    };
     assert_eq!(
         response,
         ModelListResponse {

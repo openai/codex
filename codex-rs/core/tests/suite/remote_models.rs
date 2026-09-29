@@ -946,6 +946,7 @@ async fn remote_models_apply_legacy_instructions(auth: CodexAuth) -> Result<()> 
         cwd,
         config,
         thread_manager,
+        home: _home,
         ..
     } = builder.build(&server).await?;
 
@@ -1482,6 +1483,51 @@ fn test_remote_model_with_policy(
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
+}
+
+#[test_case(None; "without explicit model")]
+#[test_case(Some("gateway-conversation"); "with explicit model")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_model_catalog_requires_explicit_model(configured_model: Option<&str>) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/codex/models"))
+        .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(ModelsResponse::default()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let catalog_url = format!("{}/codex/models", server.uri());
+    let model = configured_model.map(str::to_string);
+    let result = test_codex()
+        .with_auth(CodexAuth::from_api_key("gateway-api-key"))
+        .with_config(move |config| {
+            config.model = model;
+            config.model_provider.model_catalog_url = Some(catalog_url.into());
+            config
+                .features
+                .enable(Feature::ApiKeyModelDiscovery)
+                .expect("enable API-key discovery");
+        })
+        .build_with_auto_env(&server)
+        .await;
+    if let Some(model) = configured_model {
+        let test = result?;
+        test.submit_turn("hello").await?;
+        assert_eq!(response.single_request().body_json()["model"], model);
+    } else {
+        let error = result.err().expect("startup requires a model");
+        assert_eq!(
+            error.to_string(),
+            "No models are available. Set `model` explicitly or check your model catalog configuration."
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

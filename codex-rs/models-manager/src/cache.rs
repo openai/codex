@@ -64,6 +64,9 @@ pub type ModelsCacheFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelsCacheEntry {
     /// Time when the catalog was fetched or last revalidated with the models endpoint.
+    ///
+    /// `DateTime::<Utc>::MIN_UTC` marks an invalidated catalog, both in memory and in storage.
+    /// The manager rejects it even if the backend uses native TTL.
     pub fetched_at: DateTime<Utc>,
     /// Endpoint ETag used to revalidate the catalog without downloading an unchanged payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]

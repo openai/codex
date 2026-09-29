@@ -649,7 +649,7 @@ impl AppServerSession {
                     .map(|model| model.model.clone())
             })
             .or_else(|| available_models.first().map(|model| model.model.clone()))
-            .wrap_err("model/list returned no models for TUI bootstrap")?;
+            .wrap_err("No models are available. Set `model` explicitly or check your model catalog configuration.")?;
         self.default_model = Some(default_model.clone());
         self.available_models = available_models.clone();
 
@@ -2576,6 +2576,25 @@ mod tests {
         app_server.bootstrap(&config).await?;
 
         assert_eq!(app_server.next_request_id, next_request_id + 3);
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bootstrap_empty_catalog_reports_configuration_error() -> Result<()> {
+        let codex_home = tempfile::tempdir()?;
+        let mut config = build_config(&codex_home).await;
+        config.model = None;
+        config.model_catalog = Some(codex_protocol::openai_models::ModelsResponse::default());
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+
+        let error = app_server
+            .bootstrap(&config)
+            .await
+            .err()
+            .expect("bootstrap requires a model");
+        insta::assert_snapshot!(error.to_string(), @"No models are available. Set `model` explicitly or check your model catalog configuration.");
+
         app_server.shutdown().await?;
         Ok(())
     }
