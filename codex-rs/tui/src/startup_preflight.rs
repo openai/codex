@@ -45,6 +45,10 @@ pub(super) fn should_delay_startup_composer_for_first_login(
     match std::fs::metadata(codex_home) {
         Ok(metadata) if !metadata.is_dir() => return false,
         Ok(_) => {
+            // With file auth as the default, auth.json is a hint of existing credentials.
+            // An existing config.toml may select keyring storage, which need not create
+            // auth.json. Keep the composer visible when any of these files exists;
+            // the normal account lookup decides whether sign-in is required.
             for state_file in ["auth.json", "config.toml", "environments.toml"] {
                 if !matches!(codex_home.join(state_file).try_exists(), Ok(false)) {
                     return false;

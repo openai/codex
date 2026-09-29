@@ -704,7 +704,7 @@ impl AuthModeWidget {
                 "Use your own OpenAI API key for usage-based billing".bold(),
             ]),
             "".into(),
-            "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
+            "  Paste or type your API key below.".into(),
             "".into(),
         ];
         if state.prepopulated_from_env {
@@ -1275,6 +1275,29 @@ mod tests {
             animations_suppressed: std::cell::Cell::new(false),
         };
         (widget, codex_home)
+    }
+
+    #[tokio::test]
+    async fn api_key_entry_snapshots() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        widget.auth_config.forced_login_method = None;
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ApiKeyEntry(ApiKeyInputState::default());
+
+        for (name, width) in [("api_key_entry", 80), ("api_key_entry_narrow", 40)] {
+            let height = 14;
+            let area = Rect::new(/*x*/ 0, /*y*/ 0, width, height);
+            let mut terminal = crate::custom_terminal::Terminal::with_options(
+                crate::test_backend::VT100Backend::new(width, height),
+            )
+            .expect("terminal");
+            terminal.set_viewport_area(area);
+            terminal
+                .draw(|frame| widget.render_ref(area, frame.buffer_mut()))
+                .expect("draw");
+
+            insta::assert_snapshot!(name, terminal.backend().to_string());
+        }
     }
 
     #[tokio::test]

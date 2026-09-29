@@ -1,0 +1,15 @@
+---
+source: tui/src/onboarding/auth.rs
+expression: terminal.backend().to_string()
+---
+> Use your own OpenAI API key for
+usage-based billing
+
+  Paste or type your API key below.
+
+
+╭API key───────────────────────────────╮
+│Paste or type your API key            │
+╰──────────────────────────────────────╯
+  Press enter to save
+  Press esc to go back
