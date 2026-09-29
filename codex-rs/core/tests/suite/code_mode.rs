@@ -2330,11 +2330,11 @@ async fn result_metadata_preserves_results_within_request_budget(
             "payload": "l".repeat(31 * 1024),
             "openai/resource_access": resource_access,
         }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
-        serde_json::json!({ "payload": "m".repeat(20 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
+        serde_json::json!({ "payload": "m".repeat(450 * 1024) }),
         serde_json::json!({
             "payload": "o".repeat(40 * 1024),
             "openai/resource_access": {
@@ -2349,8 +2349,8 @@ async fn result_metadata_preserves_results_within_request_budget(
         .iter()
         .map(|metadata| serde_json::to_vec(metadata).unwrap().len())
         .collect::<Vec<_>>();
-    assert!(metadata_sizes.iter().sum::<usize>() > 128 * 1024);
-    assert!(metadata_sizes.iter().sum::<usize>() < 1024 * 1024);
+    assert!(metadata_sizes.iter().sum::<usize>() > 2 * 1024 * 1024);
+    assert!(metadata_sizes.iter().sum::<usize>() < 15 * 1024 * 1024);
     assert!(serde_json::to_vec(&result_metadata[6]["openai/resource_access"])?.len() > 32 * 1024);
     for (arguments, metadata) in arguments.iter().zip(&result_metadata) {
         let result = serde_json::json!({
@@ -2488,7 +2488,7 @@ async fn result_metadata_preserves_results_within_request_budget(
             .iter()
             .map(codex_protocol::models::executed_tool_call_metadata_bytes)
             .sum::<usize>()
-            <= 2 * 1024 * 1024
+            > 2 * 1024 * 1024
     );
     let captured = serde_json::to_value(captured)?;
     for (input, expected_metadata) in [

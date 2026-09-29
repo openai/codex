@@ -1,6 +1,7 @@
 //! Tests Direct metadata admission and permit lifetimes.
 //! Metadata limits must leave ordinary tool outputs unchanged.
 
+use codex_protocol::ResponseItemId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use pretty_assertions::assert_eq;
@@ -13,6 +14,118 @@ fn output(call_id: &str) -> ResponseItem {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload::from_text("tool result".to_string()),
     })
+}
+
+#[test]
+fn direct_request_uses_live_window_after_persisted_budget_is_exhausted() {
+    let mut features = Features::default();
+    features.enable(Feature::ExecutedToolCallMetadata);
+    let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
+    recorder
+        .retained_direct_metadata_bytes
+        .store(MAX_RETAINED_DIRECT_METADATA_BYTES, Ordering::Relaxed);
+    let metadata = json!({"openai/resource_access": {"connector": "example"}});
+    let make_output = |id: &str| {
+        let mut call = ExecutedToolCall::new("connector_tool".to_string(), json!({}));
+        call.set_tool_result_metadata(ToolResultMetadata::new(&metadata));
+        let mut item = output(id);
+        recorder.attach_direct_call_to_output(
+            &mut item,
+            Some((call, recorder.reserve_direct_call().unwrap())),
+        );
+        item
+    };
+    let old = make_output("old-window");
+    let mut first = vec![old.clone()];
+    recorder.attach_to_prompt(&mut first, &mut HashMap::new());
+    let current = make_output("new-window");
+    assert!(current.executed_tool_call_metadata().is_none());
+    let serialized = serde_json::to_string(&codex_history::RolloutItem::ResponseItem(
+        current.clone().into(),
+    ))
+    .unwrap();
+    assert!(!serialized.contains("example"));
+
+    // The input to the next window no longer contains the old output.
+    let mut next = vec![current.clone()];
+    recorder.attach_to_prompt(&mut next, &mut HashMap::new());
+    for item in [&first[0], &next[0]] {
+        let encoded = serde_json::to_value(item).unwrap();
+        assert_eq!(encoded["output"], "tool result");
+        assert_eq!(
+            encoded["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"],
+            metadata,
+        );
+    }
+    let mut pruned = vec![old];
+    recorder.attach_to_compaction_prompt(&mut pruned);
+    assert!(pruned[0].executed_tool_call_metadata().is_none());
+
+    // Capture toggles must not revive a previous recorder's live-only metadata.
+    recorder.refresh(&Features::default());
+    recorder.refresh(&features);
+    let mut after_refresh = vec![current];
+    recorder.attach_to_prompt(&mut after_refresh, &mut HashMap::new());
+    assert!(after_refresh[0].executed_tool_call_metadata().is_none());
+}
+
+#[test]
+fn direct_metadata_follows_output_ids_with_reused_call_ids_and_reverse_completion() {
+    for supplied_ids in [false, true] {
+        let mut features = Features::default();
+        features.enable(Feature::ExecutedToolCallMetadata);
+        let recorder = ExecutedToolCalls::new(&features, &InitialHistory::New);
+        recorder
+            .retained_direct_metadata_bytes
+            .store(MAX_RETAINED_DIRECT_METADATA_BYTES, Ordering::Relaxed);
+        let metadata = [json!({"result": "first"}), json!({"result": "second"})];
+        let mut prepared = metadata
+            .iter()
+            .map(|metadata| {
+                let mut call = ExecutedToolCall::new("connector_tool".to_string(), json!({}));
+                call.set_tool_result_metadata(ToolResultMetadata::new(metadata));
+                Some((call, recorder.reserve_direct_call().unwrap()))
+            })
+            .collect::<Vec<_>>();
+        let mut outputs = [output("reused"), output("reused")];
+        let expected_ids = [
+            ResponseItemId::with_suffix("fco", "first"),
+            ResponseItemId::with_suffix("fco", "second"),
+        ];
+        if supplied_ids {
+            for (item, id) in outputs.iter_mut().zip(&expected_ids) {
+                item.set_id(Some(id.clone()));
+            }
+        }
+        // Completion order and prompt order must not choose which observation belongs here.
+        for index in [1, 0] {
+            recorder.attach_direct_call_to_output(&mut outputs[index], prepared[index].take());
+            assert!(outputs[index].executed_tool_call_metadata().is_none());
+            if supplied_ids {
+                assert_eq!(outputs[index].id(), Some(&expected_ids[index]));
+            }
+        }
+        let ids = outputs.clone().map(|item| item.id().unwrap().clone());
+        assert_ne!(ids[0], ids[1]);
+        let mut request = outputs;
+        for reversed in [false, true] {
+            if reversed {
+                request.reverse();
+            }
+            recorder.attach_to_prompt(&mut request, &mut HashMap::new());
+            for item in &request {
+                let index = usize::from(item.id() == Some(&ids[1]));
+                let encoded = serde_json::to_value(item).unwrap();
+                assert_eq!(encoded["call_id"], "reused");
+                assert_eq!(encoded["output"], "tool result");
+                assert_eq!(
+                    encoded["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
+                        ["tool_result_metadata"],
+                    metadata[index],
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -50,6 +163,7 @@ fn direct_budget_keeps_an_omission_marker_when_it_fits() {
             Some((call, recorder.reserve_direct_call().unwrap())),
         );
 
+        expected.set_id(item.id().cloned());
         assert_eq!(item, expected);
         assert_eq!(
             recorder

@@ -1,6 +1,9 @@
 //! Direct-call metadata coverage, including malformed calls and metadata budgets.
 
 use anyhow::Result;
+use codex_core::ForkSnapshot;
+use codex_core::StartThreadOptions;
+use codex_core::TurnInputRequest;
 use codex_features::Feature;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_model_provider::RemoteCompactionSupport;
@@ -23,6 +26,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::configure_search_capable_model;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -495,7 +499,6 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let request_budget = 2 * 1024 * 1024;
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         configure_search_capable_model(config);
@@ -620,25 +623,27 @@ async fn direct_function_and_tool_search_mark_complete_attempts(
             })
         );
     }
-    assert!(metadata_bytes <= request_budget);
     if budget_calls > 0 {
         assert!(metadata_bytes > 128 * 1024);
     }
     Ok(())
 }
 
+#[test_case(false; "ungranted_provider")]
+#[test_case(true; "granted_provider")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provider() -> Result<()>
-{
+async fn direct_metadata_limit_respects_provider_support(
+    include_internal_metadata: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let apps = AppsTestServer::mount(&server).await?;
-    let raw_metadata = json!({"openai/resource_access": {"payload": "x".repeat(600 * 1024)}});
-    let raw_bytes = serde_json::to_vec(&raw_metadata)?.len();
+    fn metadata_for_query(query: &str) -> Value {
+        json!({"openai/resource_access": {"payload": "x".repeat(600 * 1024), "query": query}})
+    }
+    let raw_bytes = serde_json::to_vec(&metadata_for_query("first"))?.len();
     assert!(raw_bytes < 1024 * 1024);
     assert!(raw_bytes * 2 > 1024 * 1024);
-    assert!(raw_bytes * 2 < 2 * 1024 * 1024);
-    let fixture_metadata = raw_metadata.clone();
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/ps/mcp/?$"))
         .and(body_partial_json(json!({"method": "tools/call"})))
@@ -651,7 +656,7 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
                 "jsonrpc": "2.0", "id": body["id"],
                 "result": {
                     "content": [{"type": "text", "text": format!("result for {query}")}],
-                    "_meta": fixture_metadata,
+                    "_meta": metadata_for_query(query),
                     "isError": false
                 }
             }))
@@ -664,35 +669,56 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
         .respond_with(ResponseTemplate::new(/*s*/ 200))
         .mount(&server)
         .await;
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-1"),
+    let mut events = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call_with_namespace(
+                "first",
+                SEARCH_CALENDAR_NAMESPACE,
+                SEARCH_CALENDAR_LIST_TOOL,
+                r#"{"query":"first"}"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call_with_namespace(
+                "second",
+                SEARCH_CALENDAR_NAMESPACE,
+                SEARCH_CALENDAR_LIST_TOOL,
+                r#"{"query":"second"}"#,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
+    ];
+    if include_internal_metadata {
+        for query in ["fork", "resume"] {
+            events.push(sse(vec![
+                ev_response_created(&format!("resp-{query}")),
                 ev_function_call_with_namespace(
-                    "first",
+                    query,
                     SEARCH_CALENDAR_NAMESPACE,
                     SEARCH_CALENDAR_LIST_TOOL,
-                    r#"{"query":"first"}"#,
+                    &json!({"query": query}).to_string(),
                 ),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-2"),
-                ev_function_call_with_namespace(
-                    "second",
-                    SEARCH_CALENDAR_NAMESPACE,
-                    SEARCH_CALENDAR_LIST_TOOL,
-                    r#"{"query":"second"}"#,
-                ),
-                ev_completed("resp-2"),
-            ]),
-            sse(vec![ev_response_created("resp-3"), ev_completed("resp-3")]),
-        ],
-    )
-    .await;
-    let mut builder = search_capable_apps_builder(apps.chatgpt_base_url).with_config(|config| {
-        config.model_provider.include_internal_metadata = false;
+                ev_completed(&format!("resp-{query}")),
+            ]));
+            events.push(sse(vec![
+                ev_response_created(&format!("resp-{query}-done")),
+                ev_completed(&format!("resp-{query}-done")),
+            ]));
+        }
+    }
+    let responses = mount_sse_sequence(&server, events).await;
+    let mock_url = server.uri();
+    let configure_metadata = move |config: &mut codex_core::config::Config| {
+        assert_eq!(config.chatgpt_base_url, mock_url);
+        assert_eq!(
+            config.model_provider.base_url.as_deref(),
+            Some(format!("{mock_url}/v1").as_str())
+        );
+        config.model_provider.include_internal_metadata = include_internal_metadata;
         config.analytics_enabled = Some(true);
         config
             .features
@@ -706,7 +732,9 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
             .features
             .disable(Feature::CodeModeOnly)
             .expect("disable code-mode-only tools");
-    });
+    };
+    let mut builder = search_capable_apps_builder(apps.chatgpt_base_url.clone())
+        .with_config(configure_metadata.clone());
     // build() always selects the local test environment; all network destinations are the mock.
     let test = builder.build(&server).await?;
     assert!(test.codex.analytics_enabled());
@@ -762,18 +790,20 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
             recorded_metadata["executed_tool_calls"][0]["arguments"],
             json!({"query": query})
         );
-        // An ungranted custom Responses provider must not receive internal result metadata.
-        assert!(
-            wire_metadata["executed_tool_calls"][0]
-                .get("tool_result_metadata")
-                .is_none()
-        );
+        let wire_result_metadata =
+            wire_metadata["executed_tool_calls"][0].get("tool_result_metadata");
+        if include_internal_metadata {
+            assert_eq!(wire_result_metadata, Some(&metadata_for_query(query)));
+        } else {
+            // An ungranted provider must not receive internal result metadata.
+            assert!(wire_result_metadata.is_none());
+        }
     }
     let first_metadata = tool_call_metadata(recorded_outputs[0].clone());
     let second_metadata = tool_call_metadata(recorded_outputs[1].clone());
     assert_eq!(
         first_metadata["executed_tool_calls"][0]["tool_result_metadata"],
-        raw_metadata
+        metadata_for_query("first")
     );
     let marker = second_metadata["executed_tool_calls"][0]["tool_result_metadata"]
         .as_str()
@@ -784,5 +814,117 @@ async fn direct_metadata_limit_retains_marker_without_sending_it_to_custom_provi
         .and_then(|value| value.parse::<usize>().ok())
         .expect("marker should report omitted bytes");
     assert!(overage > 0);
+    if !include_internal_metadata {
+        return Ok(());
+    }
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    test.codex.shutdown_and_wait().await?;
+    let rollout = tokio::fs::read_to_string(&rollout_path).await?;
+    let rollout = rollout
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    for (call_id, expected) in [("first", &first_metadata), ("second", &second_metadata)] {
+        let item = rollout
+            .iter()
+            .find(|line| {
+                line["type"] == "response_item"
+                    && line["payload"]["type"] == "function_call_output"
+                    && line["payload"]["call_id"] == call_id
+            })
+            .expect("persisted tool output");
+        assert_eq!(tool_call_metadata(item["payload"].clone()), *expected);
+    }
+    let forked = test
+        .thread_manager
+        .fork_legacy_thread(
+            ForkSnapshot::Interrupted,
+            StartThreadOptions::new(test.config.clone()),
+            rollout_path.clone(),
+        )
+        .await?;
+    wait_for_mcp_server(&forked.thread, CODEX_APPS_MCP_SERVER_NAME).await?;
+    forked
+        .thread
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "List events in the fork.".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&forked.thread, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    forked
+        .thread
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown fork");
+
+    let resumed = search_capable_apps_builder(apps.chatgpt_base_url)
+        .with_config(configure_metadata)
+        .resume(&server, test.home.clone(), rollout_path)
+        .await
+        .expect("resume original thread");
+    wait_for_mcp_server(&resumed.codex, CODEX_APPS_MCP_SERVER_NAME)
+        .await
+        .expect("start resumed MCP server");
+    resumed
+        .submit_text_turn("List events after resume.")
+        .await
+        .expect("run resumed turn");
+    resumed
+        .codex
+        .shutdown_and_wait()
+        .await
+        .expect("shutdown resumed thread");
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 7);
+    for request in &requests[3..] {
+        for original in [&first_output, &second_output] {
+            let call_id = original["call_id"].as_str().expect("call ID");
+            let output = request.function_call_output(call_id);
+            assert_eq!(output["output"], original["output"]);
+            let passthrough = output.get("internal_chat_message_metadata_passthrough");
+            assert!(
+                passthrough
+                    .and_then(|meta| meta.get("executed_tool_calls"))
+                    .is_none()
+            );
+            assert!(
+                passthrough
+                    .and_then(|meta| meta.get("tool_calls_complete"))
+                    .is_none()
+            );
+        }
+    }
+    for (request, query) in [(&requests[4], "fork"), (&requests[6], "resume")] {
+        let output = request.function_call_output(query);
+        assert!(
+            output["output"]
+                .to_string()
+                .contains(&format!("result for {query}"))
+        );
+        let metadata = tool_call_metadata(output);
+        assert_eq!(metadata["tool_calls_complete"], true);
+        assert_eq!(
+            metadata["executed_tool_calls"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            metadata["executed_tool_calls"][0]["name"],
+            format!("{SEARCH_CALENDAR_NAMESPACE}{SEARCH_CALENDAR_LIST_TOOL}")
+        );
+        assert_eq!(
+            metadata["executed_tool_calls"][0]["arguments"],
+            json!({"query": query})
+        );
+        assert_eq!(
+            metadata["executed_tool_calls"][0]["tool_result_metadata"],
+            metadata_for_query(query)
+        );
+    }
     Ok(())
 }

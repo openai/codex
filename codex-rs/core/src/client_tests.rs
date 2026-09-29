@@ -523,10 +523,14 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
         recorder.attach_direct_call_to_output(&mut item, Some((recorded, permit)));
         outputs.push(item);
     }
-    let original_outputs = outputs.clone();
+    let persisted_outputs = outputs.clone();
     recorder.attach_to_prompt(&mut outputs, &mut Default::default());
-    assert_eq!(outputs, original_outputs);
-    let recorded = serde_json::to_value(&outputs)?;
+    let restored = serde_json::to_value(&outputs)?;
+    assert_eq!(
+        restored[1]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"],
+        resource_metadata,
+    );
+    let recorded = serde_json::to_value(&persisted_outputs)?;
     assert_eq!(
         recorded[0]["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]["tool_result_metadata"],
         resource_metadata,
@@ -537,11 +541,12 @@ async fn responses_request_includes_internal_metadata_for_provider_grant_or_firs
             .as_str()
             .is_some_and(|value| value.starts_with("omitted_due_to_size_limit (overage_bytes="))
     );
-    let omitted_output = outputs.pop().expect("second direct output");
+    let omitted_output = persisted_outputs[1].clone();
     let mut without_omitted_metadata = ResponseItem::from(ResponseInputItem::FunctionCallOutput {
         call_id: "second".to_string(),
         output: FunctionCallOutputPayload::from_text("result for second".to_string()),
     });
+    without_omitted_metadata.set_id(omitted_output.id().cloned());
     without_omitted_metadata.append_executed_tool_calls(vec![ExecutedToolCall::new(
         "mcp__apps__read".to_string(),
         json!({"query": "second"}),
@@ -801,7 +806,6 @@ fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
     let metadata_bytes =
         serde_json::to_vec(&body)?.len() - serde_json::to_vec(&without_metadata)?.len();
     assert!(metadata_bytes > 128 * 1024);
-    assert!(metadata_bytes <= 2 * 1024 * 1024);
     assert_eq!(serde_json::to_value(&history)?, original_history);
     Ok(())
 }

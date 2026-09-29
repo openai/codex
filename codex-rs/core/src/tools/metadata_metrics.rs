@@ -11,20 +11,6 @@ const BYTE_BUCKETS: &[f64] = &[
     4194304.0, 8388608.0, 16777216.0,
 ];
 
-pub(super) fn bound_prompt_metadata(
-    items: &mut [ResponseItem],
-    bound: fn(&mut [ResponseItem]),
-    stage: &'static str,
-    metrics: Option<&MetricsClient>,
-) {
-    let before = metrics.map(|_| metadata_bytes(items));
-    bound(items);
-    if let Some(before) = before {
-        // Measure only the budget operation: attaching observations can itself add bytes.
-        record_shedding(stage, before, metadata_bytes(items), metrics);
-    }
-}
-
 pub(crate) fn metadata_bytes(items: &[ResponseItem]) -> usize {
     items.iter().fold(0_usize, |bytes, item| {
         bytes.saturating_add(executed_tool_call_metadata_bytes(item))

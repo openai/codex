@@ -13,8 +13,6 @@ const MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES: usize = 8 * 1024;
 const MAX_TOOL_RESULT_SOURCES: usize = 32;
 /// Maximum UTF-8 bytes for each source's `type` and `id` separately, not the source list.
 pub const MAX_TOOL_RESULT_SOURCE_FIELD_BYTES: usize = 128;
-/// Maximum serialized warehouse-only attempted-tool metadata in one request.
-const MAX_EXECUTED_TOOL_CALL_METADATA_BYTES: usize = 2 * 1024 * 1024;
 const RESOURCE_ACCESS_METADATA_KEY: &str = "openai/resource_access";
 const EXECUTED_TOOL_CALL_METADATA_FIELD_BYTES: usize = b"\"executed_tool_calls\":".len();
 const INTERNAL_CHAT_MESSAGE_METADATA_PASSTHROUGH_FIELD_BYTES: usize =
@@ -75,23 +73,12 @@ impl InternalChatMessageMetadataPassthrough {
     }
 }
 
-/// Bounds attempted-tool metadata fairly across the complete serialized request.
-pub fn bound_executed_tool_calls_for_prompt(items: &mut [ResponseItem]) {
-    bound_executed_tool_calls_for_prompt_with_priority(items, /*prioritize_recent*/ false);
-}
-
-/// Bounds retained history without letting older calls displace the newest calls.
-pub fn bound_executed_tool_calls_for_prompt_prioritizing_recent(items: &mut [ResponseItem]) {
-    items.reverse();
-    bound_executed_tool_calls_for_prompt_with_priority(items, /*prioritize_recent*/ true);
-    items.reverse();
-}
-
-fn bound_executed_tool_calls_for_prompt_with_priority(
-    items: &mut [ResponseItem],
-    prioritize_recent: bool,
-) {
+/// Bounds recorded arguments and clears completion when any call in a cell is truncated.
+/// Returns cells whose arguments were newly truncated. Ordinary tool-call arguments and
+/// outputs are not changed.
+pub fn normalize_executed_tool_call_arguments(items: &mut [ResponseItem]) -> HashSet<String> {
     let mut damaged_cells = HashSet::new();
+    let mut newly_truncated_cells = HashSet::new();
     for item in items.iter_mut() {
         let Some(metadata) = item
             .internal_chat_message_metadata_passthrough_mut()
@@ -100,6 +87,7 @@ fn bound_executed_tool_calls_for_prompt_with_priority(
             continue;
         };
         let mut truncated = false;
+        let mut newly_truncated = false;
         for call in metadata.executed_tool_calls.iter_mut().flatten() {
             let argument_bytes = serde_json::to_vec(&call.arguments)
                 .map(|bytes| bytes.len())
@@ -111,6 +99,7 @@ fn bound_executed_tool_calls_for_prompt_with_priority(
                     MAX_EXECUTED_TOOL_CALL_ARGUMENT_BYTES,
                     /*omitted_calls*/ None,
                 );
+                newly_truncated = true;
             }
             truncated |= call.truncation().is_some();
         }
@@ -118,15 +107,12 @@ fn bound_executed_tool_calls_for_prompt_with_priority(
             metadata.tool_calls_complete = None;
             damaged_cells.extend(metadata.cell_id.clone());
         }
+        if newly_truncated {
+            newly_truncated_cells.extend(metadata.cell_id.clone());
+        }
     }
     clear_damaged_cell_completeness(items, &damaged_cells);
-
-    bound_executed_tool_calls_with_metadata_budget(
-        items,
-        MAX_EXECUTED_TOOL_CALL_METADATA_BYTES,
-        prioritize_recent,
-        /*whole_message*/ false,
-    );
+    newly_truncated_cells
 }
 
 /// Bounds optional observations to the space left in the actual outgoing message.
@@ -135,39 +121,18 @@ pub fn bound_executed_tool_calls_for_message(
     items: &mut [ResponseItem],
     max_metadata_bytes: usize,
 ) {
-    bound_executed_tool_calls_with_metadata_budget(
-        items,
-        max_metadata_bytes,
-        /*prioritize_recent*/ false,
-        /*whole_message*/ true,
-    );
-}
-
-fn bound_executed_tool_calls_with_metadata_budget(
-    items: &mut [ResponseItem],
-    max_metadata_bytes: usize,
-    prioritize_recent: bool,
-    whole_message: bool,
-) {
     let mut damaged_cells = HashSet::new();
 
     let total_metadata_bytes = metadata_bytes(items);
     if total_metadata_bytes <= max_metadata_bytes {
         return;
     }
-    let mut remaining_bytes = shed_generic_result_metadata(
-        items,
-        max_metadata_bytes,
-        prioritize_recent,
-        whole_message,
-        total_metadata_bytes,
-    );
+    let mut remaining_bytes =
+        shed_generic_result_metadata(items, max_metadata_bytes, total_metadata_bytes);
 
-    // At the message limit, shed optional sources and recorded arguments before
-    // resource-access evidence. The prompt budget keeps its existing order.
-    if whole_message && metadata_bytes(items) > max_metadata_bytes {
-        let overage_bytes =
-            shed_result_sources(items, max_metadata_bytes, /*whole_message*/ true);
+    // Shed optional sources and recorded arguments before resource-access evidence.
+    if metadata_bytes(items) > max_metadata_bytes {
+        let overage_bytes = shed_result_sources(items, max_metadata_bytes);
         if overage_bytes > 0 {
             truncate_call_arguments_to_fit(
                 items,
@@ -178,13 +143,7 @@ fn bound_executed_tool_calls_with_metadata_budget(
         }
         remaining_bytes = metadata_bytes(items);
     }
-    shed_remaining_result_metadata(
-        items,
-        max_metadata_bytes,
-        prioritize_recent,
-        whole_message,
-        remaining_bytes,
-    );
+    shed_remaining_result_metadata(items, max_metadata_bytes, remaining_bytes);
 
     // Recheck the serialized request rather than relying on the incremental size accounting.
     if metadata_bytes(items) <= max_metadata_bytes {
@@ -198,21 +157,7 @@ fn bound_executed_tool_calls_with_metadata_budget(
     if metadata_bytes(items) <= max_metadata_bytes {
         return;
     }
-    // The whole-message path already handled sources and arguments before resources.
-    if !whole_message {
-        shed_result_sources(items, max_metadata_bytes, /*whole_message*/ false);
-    }
-
-    if metadata_bytes(items) <= max_metadata_bytes {
-        return;
-    }
-
-    distribute_remaining_budget(
-        items,
-        max_metadata_bytes,
-        prioritize_recent,
-        &mut damaged_cells,
-    );
+    distribute_remaining_budget(items, max_metadata_bytes, &mut damaged_cells);
     clear_damaged_cell_completeness(items, &damaged_cells);
 }
 
@@ -224,23 +169,13 @@ fn metadata_bytes(items: &[ResponseItem]) -> usize {
 
 type ResultMetadataEntry<'a> = (usize, usize, usize, &'a mut ToolResultMetadata);
 
-fn result_metadata_by_size(
-    items: &mut [ResponseItem],
-    prioritize_recent: bool,
-) -> Vec<ResultMetadataEntry<'_>> {
+fn result_metadata_by_size(items: &mut [ResponseItem]) -> Vec<ResultMetadataEntry<'_>> {
     let mut result_metadata = Vec::new();
     for (item_index, item) in items.iter_mut().enumerate() {
         if let Some(metadata) = item
             .internal_chat_message_metadata_passthrough_mut()
             .and_then(Option::as_mut)
         {
-            // The retained-history entry point has already reversed the items. Break size ties
-            // by evicting older outputs, while keeping the original call order within an output.
-            let eviction_order = if prioritize_recent {
-                usize::MAX - item_index
-            } else {
-                item_index
-            };
             for (call_index, call) in metadata
                 .executed_tool_calls
                 .iter_mut()
@@ -252,7 +187,7 @@ fn result_metadata_by_size(
                         .map_or(usize::MAX, |value| value.len());
                     result_metadata.push((
                         bytes,
-                        eviction_order,
+                        item_index,
                         call_index,
                         &mut call.tool_result_metadata,
                     ));
@@ -269,12 +204,10 @@ fn result_metadata_by_size(
 fn shed_generic_result_metadata(
     items: &mut [ResponseItem],
     max_metadata_bytes: usize,
-    prioritize_recent: bool,
-    whole_message: bool,
     mut total_metadata_bytes: usize,
 ) -> usize {
     // Shed the largest values first so one large result does not discard unrelated small results.
-    let mut result_metadata = result_metadata_by_size(items, prioritize_recent);
+    let mut result_metadata = result_metadata_by_size(items);
     for (bytes, _, _, metadata) in &mut result_metadata {
         if total_metadata_bytes <= max_metadata_bytes {
             break;
@@ -294,19 +227,17 @@ fn shed_generic_result_metadata(
     }
     // Tiny generic values and markers can be cheaper than replacing them with a
     // new marker. Remove their complete fields before sacrificing resource evidence.
-    if whole_message {
-        for (bytes, _, _, metadata) in &mut result_metadata {
-            if total_metadata_bytes <= max_metadata_bytes {
-                break;
-            }
-            if metadata.retain_resource_access() {
-                continue;
-            }
-            **metadata = ToolResultMetadata::default();
-            total_metadata_bytes = total_metadata_bytes
-                .saturating_sub(bytes.saturating_add(b",\"tool_result_metadata\":".len()));
-            *bytes = 0;
+    for (bytes, _, _, metadata) in &mut result_metadata {
+        if total_metadata_bytes <= max_metadata_bytes {
+            break;
         }
+        if metadata.retain_resource_access() {
+            continue;
+        }
+        **metadata = ToolResultMetadata::default();
+        total_metadata_bytes = total_metadata_bytes
+            .saturating_sub(bytes.saturating_add(b",\"tool_result_metadata\":".len()));
+        *bytes = 0;
     }
     total_metadata_bytes
 }
@@ -314,11 +245,9 @@ fn shed_generic_result_metadata(
 fn shed_remaining_result_metadata(
     items: &mut [ResponseItem],
     max_metadata_bytes: usize,
-    prioritize_recent: bool,
-    whole_message: bool,
     mut total_metadata_bytes: usize,
 ) {
-    let mut result_metadata = result_metadata_by_size(items, prioritize_recent);
+    let mut result_metadata = result_metadata_by_size(items);
     // Resource evidence is optional too; it must not displace the call inventory.
     for (bytes, _, _, metadata) in &mut result_metadata {
         if total_metadata_bytes <= max_metadata_bytes {
@@ -333,9 +262,8 @@ fn shed_remaining_result_metadata(
     // Use the updated sizes: markers should be removed before smaller provider metadata.
     result_metadata.sort_by_key(|(bytes, order, call_index, metadata)| {
         (
-            whole_message && !metadata.is_omitted_due_to_size_limit(),
-            std::cmp::Reverse(*bytes),
             !metadata.is_omitted_due_to_size_limit(),
+            std::cmp::Reverse(*bytes),
             *order,
             *call_index,
         )
@@ -354,11 +282,7 @@ fn shed_remaining_result_metadata(
     }
 }
 
-fn shed_result_sources(
-    items: &mut [ResponseItem],
-    max_metadata_bytes: usize,
-    whole_message: bool,
-) -> usize {
+fn shed_result_sources(items: &mut [ResponseItem], max_metadata_bytes: usize) -> usize {
     // Source evidence is optional; dropping it must not discard calls or their completion proof.
     let mut overage_bytes = metadata_bytes(items).saturating_sub(max_metadata_bytes);
     for item in items.iter_mut() {
@@ -367,7 +291,7 @@ fn shed_result_sources(
             .and_then(Option::as_mut)
         {
             for call in metadata.executed_tool_calls.iter_mut().flatten() {
-                if whole_message && overage_bytes == 0 {
+                if overage_bytes == 0 {
                     break;
                 }
                 if let Some(sources) = call.tool_result_sources.take() {
@@ -439,7 +363,6 @@ fn truncate_call_arguments_to_fit(
 fn distribute_remaining_budget(
     items: &mut [ResponseItem],
     max_metadata_bytes: usize,
-    prioritize_recent: bool,
     damaged_cells: &mut HashSet<String>,
 ) {
     let mut remaining_items = items
@@ -452,11 +375,7 @@ fn distribute_remaining_budget(
         if item_bytes == 0 {
             continue;
         }
-        let item_budget = if prioritize_recent {
-            remaining_bytes
-        } else {
-            remaining_bytes / remaining_items
-        };
+        let item_budget = remaining_bytes / remaining_items;
         if item_bytes > item_budget {
             // Remember the cell before a too-small share removes its metadata entirely.
             damaged_cells.extend(

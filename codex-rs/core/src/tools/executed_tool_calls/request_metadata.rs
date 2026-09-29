@@ -1,59 +1,74 @@
-//! Attaches host observations to request metadata and applies its byte budget.
-//! Final request budgeting runs after the recorder lock is released; it never changes tool execution.
+//! Attaches host observations to request metadata without changing tool execution.
 
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum MetadataBudgetScope {
-    AllCalls,
-    CodeModeOnly,
+enum RequestKind {
+    Sampling,
+    Compaction,
 }
 
 impl ExecutedToolCalls {
-    /// Attaches Code Mode observations while preserving Direct records captured in history.
     pub(crate) fn attach_to_compaction_prompt(&self, items: &mut [ResponseItem]) {
-        let mut state = self.lock_state();
-        let Some(state) = state.as_mut() else {
-            clear_direct_call_metadata(items);
-            return;
-        };
-        Self::attach_pending_to_prompt_with_state(
-            state,
-            items,
-            &mut HashMap::new(),
-            MetadataBudgetScope::CodeModeOnly,
-        );
+        self.attach_to_request(items, &mut HashMap::new(), RequestKind::Compaction);
     }
 
-    /// Attaches trusted completeness; request budgeting only revokes damaged inventories.
     pub(crate) fn attach_to_prompt(
         &self,
         items: &mut [ResponseItem],
         retry_cache: &mut ExecutedToolCallCache,
     ) {
-        let attached = {
+        self.attach_to_request(items, retry_cache, RequestKind::Sampling);
+    }
+
+    fn attach_to_request(
+        &self,
+        items: &mut [ResponseItem],
+        retry_cache: &mut ExecutedToolCallCache,
+        request_kind: RequestKind,
+    ) {
+        let recording = {
             let mut state = self.lock_state();
-            state.as_mut().map(|state| {
-                Self::attach_pending_to_prompt_with_state(
-                    state,
-                    items,
-                    retry_cache,
-                    MetadataBudgetScope::AllCalls,
-                )
-            })
+            let Some(state) = state.as_mut() else {
+                // Disabling capture also stops replaying Direct records from history.
+                clear_direct_call_metadata(items);
+                return;
+            };
+            for item in items.iter_mut() {
+                if let Some(call) = item.id().and_then(|id| state.direct_calls.get(id)) {
+                    item.clear_executed_tool_calls();
+                    item.append_executed_tool_calls(vec![call.clone()]);
+                    if matches!(call.arguments(), ExecutedToolCallArguments::Raw(_)) {
+                        item.mark_tool_calls_complete();
+                    }
+                }
+            }
+            // A shortened compaction attempt is not an installed history window.
+            // Only ordinary sampling can discard observations absent from the window.
+            if request_kind == RequestKind::Sampling && !state.direct_calls.is_empty() {
+                let output_ids = items
+                    .iter()
+                    .filter_map(ResponseItem::id)
+                    .collect::<HashSet<_>>();
+                state.direct_calls.retain(|id, _| output_ids.contains(id));
+            }
+            Self::attach_pending_to_prompt_with_state(state, items, retry_cache, request_kind);
+            Arc::downgrade(&state.recording)
         };
-        let Some(attached) = attached else {
-            // Direct records now live in history; disabling capture also stops replaying them.
-            clear_direct_call_metadata(items);
-            return;
-        };
-        if attached || items.iter().any(has_direct_call_metadata) {
-            metadata_metrics::bound_prompt_metadata(
-                items,
-                bound_executed_tool_calls_for_prompt,
-                "request",
-                codex_otel::global().as_ref(),
-            );
+
+        // Existing history can contain arguments recorded by an older client. Keep the
+        // per-call limit, and prevent newly truncated cells from claiming completeness
+        // on a later wait. Do the serialization outside the recorder lock.
+        let truncated_origins = normalize_executed_tool_call_arguments(items);
+        if !truncated_origins.is_empty() {
+            let mut state = self.lock_state();
+            if let Some(state) = state.as_mut()
+                && recording.ptr_eq(&Arc::downgrade(&state.recording))
+            {
+                for origin in truncated_origins {
+                    state.invalidate_origin(&origin);
+                }
+            }
         }
     }
 
@@ -61,7 +76,7 @@ impl ExecutedToolCalls {
         state: &mut ExecutedToolCallRecorderState,
         items: &mut [ResponseItem],
         retry_cache: &mut ExecutedToolCallCache,
-        budget_scope: MetadataBudgetScope,
+        request_kind: RequestKind,
     ) -> bool {
         // Failed wrappers have no callback; only their bounded bitmap observation survives.
         state.pending_wrapper_origins.clear();
@@ -317,7 +332,7 @@ impl ExecutedToolCalls {
         }
         // Compaction may retry with a shortened history without installing that history.
         // Keep absent observations until a normal sampling request confirms the live window.
-        if budget_scope == MetadataBudgetScope::AllCalls && !pending_outputs.is_empty() {
+        if request_kind == RequestKind::Sampling && !pending_outputs.is_empty() {
             state
                 .retained_calls
                 .retain(|key, _| !pending_outputs.contains(key));
@@ -378,6 +393,7 @@ impl ExecutedToolCalls {
                     .is_some_and(|cell_id| invalid_cells.contains(cell_id))
                 {
                     retained.complete = false;
+                    retained.call_index_by_id.clear();
                     retained.clear_late_truncated_metadata();
                 }
             }
@@ -397,122 +413,6 @@ impl ExecutedToolCalls {
                 item.mark_tool_calls_complete();
             } else {
                 item.clear_tool_calls_complete();
-            }
-        }
-
-        let metadata_bytes = items
-            .iter()
-            .filter(|item| {
-                budget_scope == MetadataBudgetScope::AllCalls || !has_direct_call_metadata(item)
-            })
-            .fold(0_usize, |bytes, item| {
-                bytes.saturating_add(executed_tool_call_metadata_bytes(item))
-            });
-        if metadata_bytes > MAX_EXECUTED_TOOL_CALL_FULL_ARGUMENT_BYTES_PER_OUTPUT {
-            match budget_scope {
-                MetadataBudgetScope::AllCalls => {
-                    metadata_metrics::bound_prompt_metadata(
-                        items,
-                        bound_executed_tool_calls_for_prompt_prioritizing_recent,
-                        "retained",
-                        codex_otel::global().as_ref(),
-                    );
-                }
-                MetadataBudgetScope::CodeModeOnly => {
-                    // Validate bindings against the complete history above, but do not make
-                    // captured Direct records compete with Code Mode's bounded recorder.
-                    let (indices, mut bounded): (Vec<_>, Vec<_>) = items
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, item)| {
-                            !has_direct_call_metadata(item)
-                                && item.executed_tool_call_metadata().is_some()
-                        })
-                        .map(|(index, item)| (index, item.clone()))
-                        .unzip();
-                    metadata_metrics::bound_prompt_metadata(
-                        &mut bounded,
-                        bound_executed_tool_calls_for_prompt_prioritizing_recent,
-                        "compaction",
-                        codex_otel::global().as_ref(),
-                    );
-                    for (index, item) in indices.into_iter().zip(bounded) {
-                        items[index] = item;
-                    }
-                }
-            }
-            let retained_before_bounding = std::mem::take(&mut state.retained_calls);
-            let mut bounded_outputs = HashSet::new();
-            for item in items.iter_mut() {
-                if has_direct_call_metadata(item) {
-                    continue;
-                }
-                let Some(call_id) = output_call_id(item) else {
-                    continue;
-                };
-                let key = (std::mem::discriminant(&*item), call_id.to_string());
-                // History already carries unmanaged records; retaining them would append them again.
-                let Some(previous) = retained_before_bounding.get(&key) else {
-                    continue;
-                };
-                let metadata = item.executed_tool_call_metadata();
-                let unique_output = bounded_outputs.insert(key.clone());
-                if !unique_output && let Some(retained) = state.retained_calls.get_mut(&key) {
-                    retained.call_index_by_id.clear();
-                    retained.clear_late_truncated_metadata();
-                }
-                if let Some(runtime_cell_id) = &previous.runtime_cell_id
-                    && metadata
-                        .is_none_or(|metadata| !metadata.has_same_tool_calls(&previous.calls))
-                    && let Some(cell) = state.cells.get_mut(runtime_cell_id)
-                {
-                    cell.completion = CellCompletion::Incomplete;
-                }
-                if let Some(metadata) = metadata
-                    && (metadata
-                        .executed_tool_calls
-                        .as_ref()
-                        .is_some_and(|calls| !calls.is_empty())
-                        || metadata.tool_calls_complete.is_some())
-                {
-                    // Metadata-only shedding preserves slots; changed calls or duplicate outputs do not.
-                    let same_calls = unique_output && metadata.has_same_tool_calls(&previous.calls);
-                    let call_index_by_id = if same_calls {
-                        previous.call_index_by_id.clone()
-                    } else {
-                        HashMap::new()
-                    };
-                    let retained = state.retained_calls.entry(key).or_default();
-                    retained.runtime_cell_id = previous.runtime_cell_id.clone();
-                    retained.calls = metadata.executed_tool_calls.clone().unwrap_or_default();
-                    if let Some(cell_id) = metadata.cell_id.as_ref() {
-                        retained.cell_id = Some(cell_id.clone());
-                    }
-                    retained.complete |= metadata.tool_calls_complete == Some(true);
-                    retained.call_index_by_id = call_index_by_id;
-                    // Budgeting preserves call order; changed inventories lose their indices.
-                    if same_calls {
-                        retained.truncated_call_index_by_id =
-                            previous.truncated_call_index_by_id.clone();
-                        retained.late_truncated_indices = previous.late_truncated_indices.clone();
-                    } else {
-                        // The budgeter never reorders calls. Remove only the new late
-                        // evidence before losing the indices that identify it.
-                        for index in &previous.late_truncated_indices {
-                            if let Some(call) = retained.calls.get_mut(*index) {
-                                call.set_tool_result_metadata(ToolResultMetadata::default());
-                            }
-                        }
-                    }
-                    retained.result_metadata_updated = previous.result_metadata_updated;
-                }
-            }
-            if budget_scope == MetadataBudgetScope::CodeModeOnly {
-                state.retained_calls.extend(
-                    retained_before_bounding
-                        .into_iter()
-                        .filter(|(key, _)| pending_outputs.contains(key)),
-                );
             }
         }
 
