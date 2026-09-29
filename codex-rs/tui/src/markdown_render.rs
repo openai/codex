@@ -997,8 +997,9 @@ impl<'a, 'policy> Writer<'a, 'policy> {
             let index = self.text.len();
             self.push_blank_line();
             if let Some(line) = self.text.get_mut(index) {
-                let mut source =
-                    crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line);
+                let mut source = line.source.clone().unwrap_or_else(|| {
+                    crate::terminal_hyperlinks::LogicalLineSource::from_line(&line.line)
+                });
                 let mut copy = crate::markdown_copy::CopyLine::default();
                 copy.omit = true;
                 source.copy = Some(std::sync::Arc::new(copy));

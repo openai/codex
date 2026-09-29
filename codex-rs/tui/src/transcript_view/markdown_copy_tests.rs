@@ -423,7 +423,7 @@ fn complete_rules_keep_structure_and_partial_rules_keep_selected_text() {
     let mut copies = Vec::new();
     for (source, partial) in [
         ("Before\n\n---\n\nAfter", "—"),
-        ("Before\n\n> ---\n\nAfter", "> —"),
+        ("Before\n\n> ---\n\nAfter", "—"),
     ] {
         let layout = markdown_layout(source, /*width*/ 80);
         let copied = payload(&layout, 0..layout.text().len()).0;
@@ -461,7 +461,11 @@ fn partial_prose_keeps_leading_whitespace_outside_code_blocks() {
     ] {
         let layout = markdown_layout(source, /*width*/ 80);
         let start = layout.text().find("prefix").unwrap() + "prefix".len();
-        let copied = payload(&layout, start..layout.text().len()).0;
+        let (copied, format) = payload(&layout, start..layout.text().len());
+        if format == CopyFormat::PlainText {
+            copies.push(format!("{copied}\n{format:?}"));
+            continue;
+        }
         copies.push(format!(
             "{copied}\n{}",
             crate::clipboard_html::render_markdown(&copied)
@@ -711,7 +715,14 @@ fn selected_list_and_code_containers_keep_their_structure() {
         let layout = markdown_layout(source, /*width*/ 80);
         let start = layout.text().find(start).expect(source);
         let end = layout.text().rfind(end).expect(source) + end.len();
-        let copied = payload(&layout, start..end).0;
+        let (copied, format) = payload(&layout, start..end);
+        if source.starts_with('>') {
+            assert_eq!(
+                (copied.as_str(), format),
+                (&layout.text()[start..end], CopyFormat::PlainText)
+            );
+            continue;
+        }
         assert_eq!(
             crate::clipboard_html::render_markdown(&copied),
             crate::clipboard_html::render_markdown(expected),

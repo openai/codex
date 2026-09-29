@@ -271,6 +271,55 @@ pub(crate) fn selection(lines: &[SelectedLine], plain: &str) -> (String, CopyFor
     {
         return (plain.to_owned(), CopyFormat::PlainText);
     }
+    // Quote-only selections omit quote markers. Tables and task lists still need their
+    // semantic metadata to reconstruct cell fragments and preserve checkbox state.
+    let mut content = lines
+        .iter()
+        .filter(|line| {
+            !line.range.is_empty() && !line.source.copy.as_ref().is_some_and(|copy| copy.omit)
+        })
+        .peekable();
+    let quote_only = content.peek().is_some()
+        && content.all(|line| {
+            line.source
+                .copy
+                .as_ref()
+                .is_some_and(|copy| copy.prefix.contains("> "))
+        });
+    let unquoted;
+    let lines = if quote_only {
+        if !lines.iter().any(|line| {
+            (!line.range.is_empty() || line.source.text.is_empty())
+                && line.source.copy.as_ref().is_some_and(|copy| {
+                    !copy.omit
+                        && (copy.table.is_some()
+                            || copy.item_prefix.contains("[x] ")
+                            || copy.item_prefix.contains("[ ] "))
+                })
+        }) {
+            return (plain.to_owned(), CopyFormat::PlainText);
+        }
+        unquoted = lines
+            .iter()
+            .map(|line| {
+                let mut source = line.source.clone();
+                if let Some(copy) = source.copy.as_mut() {
+                    let copy = Arc::make_mut(copy);
+                    copy.prefix = copy.prefix.replace("> ", "");
+                    copy.continuation = copy.continuation.replace("> ", "");
+                    copy.item_prefix = copy.item_prefix.replace("> ", "");
+                }
+                SelectedLine {
+                    source,
+                    range: line.range.clone(),
+                    separator: line.separator.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        &unquoted
+    } else {
+        lines
+    };
     let rich = lines.iter().any(|line| {
         !line.range.is_empty()
             && line
