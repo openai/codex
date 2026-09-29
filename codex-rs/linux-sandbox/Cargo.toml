@@ -37,6 +37,7 @@ url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 codex-core = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-case = "3.3.1"
