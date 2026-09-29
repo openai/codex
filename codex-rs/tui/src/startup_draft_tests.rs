@@ -29,15 +29,8 @@ where
 {
     let (tx, rx) = unbounded_channel();
     let mut blossom = crate::empty_state_animation::EmptyStateAnimation::default();
-    blossom
-        .greeting
-        .set(crate::empty_state_animation::Greeting {
-            phrase: "Pull up a prompt.",
-        })
-        .expect("initial greeting");
     blossom.start_fresh();
-    let mut header = startup_session_header(/*config*/ None);
-    crate::history_cell::set_session_greeting(header.as_mut(), &blossom.greeting);
+    let header = startup_session_header(/*config*/ None);
     StartupDraftPump {
         header,
         blossom: std::cell::RefCell::new(blossom),
@@ -100,13 +93,6 @@ fn startup_draft_renders_full_empty_and_multiline_composer_frames() {
     ] {
         let mut pump = startup_test_pump(std::iter::empty());
         pump.session_action = session_action;
-        // Resume and fork have no fresh-thread greeting. Exercise the real initial state.
-        if matches!(
-            session_action,
-            StartupDraftSessionAction::Resume | StartupDraftSessionAction::Fork
-        ) {
-            pump.header = startup_session_header(/*config*/ None);
-        }
         pump.bottom_pane
             .set_composer_text(text.to_string(), Vec::new(), Vec::new());
         let renderable =
@@ -314,15 +300,15 @@ async fn startup_draft_hydrates_its_header_without_moving_the_composer() {
         startup_draft_renderable(&pump.header, &pump.bottom_pane, pump.session_action)
             .desired_height(width);
 
-    assert_eq!(pump.header.raw_lines()[2].to_string().trim(), "loading");
+    assert_eq!(pump.header.raw_lines()[2].to_string(), "directory: loading");
     pump.apply_config(&config);
     let expected_directory = crate::history_cell::SessionHeaderHistoryCell::format_directory_inner(
         config.cwd.as_path(),
         /*max_width*/ None,
     );
     assert_eq!(
-        pump.header.raw_lines()[2].to_string().trim(),
-        expected_directory
+        pump.header.raw_lines()[2].to_string(),
+        format!("directory: {expected_directory}")
     );
     assert_eq!(
         startup_draft_renderable(&pump.header, &pump.bottom_pane, pump.session_action)

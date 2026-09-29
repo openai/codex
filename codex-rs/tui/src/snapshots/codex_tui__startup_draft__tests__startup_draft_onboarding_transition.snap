@@ -1,6 +1,5 @@
 ---
 source: tui/src/startup_draft_tests.rs
-assertion_line: 802
 expression: frames
 ---
 before onboarding: hidden (0x0 viewport)
@@ -9,8 +8,6 @@ after onboarding:
 
   >_ OpenAI Codex (v<VERSION>)
      loading
-
-  Pull up a prompt.
 
 
 › Ask Codex to do anything
